@@ -105,7 +105,7 @@ setInterval(async () => {
 async function startServer(transport) {
     const server = new McpServer({
         name: "switchboard-mcp",
-        version: "1.4.0"
+        version: "1.4.1"
     });
     registerTools(server);
     await server.connect(transport);
@@ -120,7 +120,7 @@ if (require.main === module) {
     // 1. Start Stdio transport
     const stdioServer = new McpServer({
         name: "switchboard-mcp",
-        version: "1.4.0"
+        version: "1.4.1"
     });
     registerTools(stdioServer);
 

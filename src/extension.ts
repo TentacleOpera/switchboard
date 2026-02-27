@@ -85,23 +85,14 @@ async function ensureWorkspaceMcpServerFiles(extensionPath: string, workspaceRoo
         throw new Error('Could not locate bundled mcp-server source directory in extension package.');
     }
 
-    // F-02 SECURITY: Check if workspace runtime mode is explicitly enabled (dev only)
-    const workspaceMode = isWorkspaceRuntimeModeEnabled();
-
-    if (!workspaceMode) {
-        // Production default: execute directly from the immutable extension bundle
-        const bundledEntry = path.join(sourceDir, 'mcp-server.js');
-        if (!fs.existsSync(bundledEntry)) {
-            throw new Error('Bundled MCP server entry not found in extension package.');
-        }
-        return bundledEntry;
+    const bundledEntry = path.join(sourceDir, 'mcp-server.js');
+    if (!fs.existsSync(bundledEntry)) {
+        throw new Error('Bundled MCP server entry not found in extension package.');
     }
 
-    // Dev mode: copy to workspace and warn
-    console.warn('[Switchboard] WARNING: runtime.workspaceMode is enabled — running MCP server from mutable workspace copy. Do NOT use in production.');
+    // Always copy to workspace so IDEs can discover and launch it via their MCP config.
+    // The extension internally spawns from the immutable bundle (see spawnBundledMcpServer).
     const workspaceMcpDir = getWorkspaceMcpDirectory(workspaceRoot);
-
-    // Always overwrite — never trust workspace mtime
     await copyDirectoryRecursive(sourceDir, workspaceMcpDir);
     return path.join(workspaceMcpDir, 'mcp-server.js');
 }
@@ -1407,6 +1398,22 @@ async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskVi
         if (serverPath) break;
     }
 
+    // 1b. Fallback: Extension-bundled MCP server (marketplace installs)
+    // context.extensionPath points to the immutable extension install directory
+    // (e.g. ~/.vscode/extensions/turnzero.switchboard-1.4.0/), NOT the workspace.
+    // The VSIX always contains dist/mcp-server/mcp-server.js.
+    if (!serverPath && workspaceRoot) {
+        try {
+            serverPath = await ensureWorkspaceMcpServerFiles(context.extensionPath, workspaceRoot);
+        } catch {
+            // ensureWorkspaceMcpServerFiles failed — try direct bundle path
+            const bundledCandidate = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
+            if (await fileExists(bundledCandidate)) {
+                serverPath = bundledCandidate;
+            }
+        }
+    }
+
     // 2. Fallback: Manual File Picker
     if (!serverPath) {
         const selected = await vscode.window.showOpenDialog({
@@ -1771,36 +1778,30 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         );
     }
 
-    // 4. VS Code workspace MCP config (dev-only).
-    // In secure mode we avoid scaffolding mutable workspace runtime paths for external discovery.
-    const workspaceMode = isWorkspaceRuntimeModeEnabled();
-    if (workspaceMode) {
-        const vscodeDirUri = vscode.Uri.joinPath(workspaceUri, '.vscode');
-        const mcpConfigUri = vscode.Uri.joinPath(vscodeDirUri, 'mcp.json');
+    // 4. VS Code workspace MCP config
+    const vscodeDirUri = vscode.Uri.joinPath(workspaceUri, '.vscode');
+    const mcpConfigUri = vscode.Uri.joinPath(vscodeDirUri, 'mcp.json');
+    try {
+        await vscode.workspace.fs.stat(mcpConfigUri);
+        // Already exists — don't overwrite user customizations
+    } catch {
         try {
-            await vscode.workspace.fs.stat(mcpConfigUri);
-            // Already exists — don't overwrite user customizations
-        } catch {
-            try {
-                await vscode.workspace.fs.createDirectory(vscodeDirUri);
-            } catch { /* already exists */ }
-            const mcpConfig = {
-                servers: {
-                    switchboard: {
-                        type: 'stdio',
-                        command: 'node',
-                        args: ['${workspaceFolder}/.switchboard/MCP/mcp-server.js']
-                    }
+            await vscode.workspace.fs.createDirectory(vscodeDirUri);
+        } catch { /* already exists */ }
+        const mcpConfig = {
+            servers: {
+                switchboard: {
+                    type: 'stdio',
+                    command: 'node',
+                    args: ['${workspaceFolder}/.switchboard/MCP/mcp-server.js']
                 }
-            };
-            await vscode.workspace.fs.writeFile(
-                mcpConfigUri,
-                Buffer.from(JSON.stringify(mcpConfig, null, 2), 'utf8')
-            );
-            mcpOutputChannel?.appendLine('[Setup] Created .vscode/mcp.json for workspace MCP discovery (dev mode).');
-        }
-    } else {
-        mcpOutputChannel?.appendLine('[Setup] Skipped .vscode/mcp.json scaffolding in secure runtime mode.');
+            }
+        };
+        await vscode.workspace.fs.writeFile(
+            mcpConfigUri,
+            Buffer.from(JSON.stringify(mcpConfig, null, 2), 'utf8')
+        );
+        mcpOutputChannel?.appendLine('[Setup] Created .vscode/mcp.json for workspace MCP discovery.');
     }
 }
 
