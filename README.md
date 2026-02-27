@@ -4,7 +4,7 @@
 
 Switchboard adds a **sidebar panel to VS Code** where you create, manage, and dispatch plans to AI agents. It bridges IDE-based agents (Antigravity, Windsurf, Copilot Chat) and CLI agents (Copilot CLI, Qwen, Codex, Gemini CLI) so they can collaborate on the same plans inside your repo. Each agent uses its own subscription so you don't need to enter any API keys. You coordinate them from the sidebar.
 
-![Switchboard](https://raw.githubusercontent.com/TentacleOpera/switchboard/main/icon.png)
+![Switchboard](https://raw.githubusercontent.com/TentacleOpera/switchboard/main/docs/switchboardui.png)
 
 ## Why
 
