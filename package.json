@@ -1,0 +1,230 @@
+{
+  "name": "switchboard",
+  "displayName": "Switchboard",
+  "description": "Cross-IDE agent orchestration \u2014 workflow routing, terminal targeting, and multi-agent coordination via MCP.",
+  "icon": "icon.png",
+  "keywords": [
+    "switchboard",
+    "ai agents",
+    "orchestration",
+    "mcp",
+    "multi-agent"
+  ],
+  "version": "1.4.0",
+  "main": "./dist/extension.js",
+  "publisher": "TurnZero",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/TentacleOpera/switchboard.git"
+  },
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "AI"
+  ],
+  "activationEvents": [
+    "onStartupFinished",
+    "onCommand:antigravity.getChromeDevtoolsMcpUrl"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "switchboard-sidebar",
+          "title": "Switchboard",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "switchboard-sidebar": [
+        {
+          "type": "webview",
+          "id": "switchboard-view",
+          "name": "Switchboard",
+          "icon": "icon.svg"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "switchboard.setup",
+        "title": "Switchboard: Setup AI Protocol Files"
+      },
+      {
+        "command": "switchboard.connectMcp",
+        "title": "Switchboard: Connect MCP"
+      },
+      {
+        "command": "switchboard.createAgentGrid",
+        "title": "Switchboard: Open Agent Terminals"
+      },
+      {
+        "command": "switchboard.deregisterAllTerminals",
+        "title": "Switchboard: Reset Agent Terminals"
+      },
+      {
+        "command": "switchboard.cleanWorkspace",
+        "title": "Switchboard: Clean Working Memory"
+      },
+      {
+        "command": "antigravity.getChromeDevtoolsMcpUrl",
+        "title": "Switchboard: Get MCP Inspector URL"
+      }
+    ],
+    "configuration": {
+      "title": "Switchboard",
+      "properties": {
+        "switchboard.defaultMode": {
+          "type": "string",
+          "enum": [
+            "action",
+            "plan"
+          ],
+          "default": "action",
+          "description": "Default mode for switchboard commands"
+        },
+        "switchboard.cli.command": {
+          "type": "string",
+          "default": "",
+          "description": "CLI command to launch for handoff workflows (e.g. gemini, claude)"
+        },
+        "switchboard.cli.args": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Default arguments for CLI agent"
+        },
+        "switchboard.cli.yolo": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable auto-approve mode (appends yolo flags)"
+        },
+        "switchboard.cli.yoloFlags": {
+          "type": "object",
+          "default": {
+            "gemini": [
+              "--sandbox"
+            ],
+            "claude": [
+              "--dangerously-skip-permissions"
+            ],
+            "codex": [
+              "--approve-mode",
+              "full-auto"
+            ]
+          },
+          "description": "Auto-approve flags per CLI provider"
+        },
+        "switchboard.polling.initialWait": {
+          "type": "integer",
+          "default": 120,
+          "description": "Initial wait duration (seconds) before the first check in workflows"
+        },
+        "switchboard.polling.interval": {
+          "type": "integer",
+          "default": 60,
+          "description": "Subsequent polling interval (seconds) for workflow checks"
+        },
+        "switchboard.accurateCoding.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "When enabled, coder prompts from sidebar actions include instructions to follow the accuracy.md workflow."
+        },
+        "switchboard.team.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Unified team prompt rigor. When enabled, both planner and reviewer prompts use strict mode. Default is light mode."
+        },
+        "switchboard.review.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use team.strictPrompts instead. Kept for backward compatibility.",
+          "deprecationMessage": "Use switchboard.team.strictPrompts instead."
+        },
+        "switchboard.planner.strictPrompts": {
+          "type": "boolean",
+          "default": false,
+          "description": "Deprecated: use team.strictPrompts instead. Kept for backward compatibility.",
+          "deprecationMessage": "Use switchboard.team.strictPrompts instead."
+        },
+        "switchboard.cliAgents": {
+          "type": "object",
+          "default": {},
+          "description": "CLI agent role-to-command mappings. Keys are role names (lead, coder, analyst, reviewer), values are command paths.",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "switchboard.plans.defaultOpenMode": {
+          "type": "string",
+          "enum": [
+            "preview",
+            "edit"
+          ],
+          "default": "preview",
+          "description": "Default mode for opening plans from the sidebar."
+        },
+        "switchboard.security.strictInboxAuth": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require session token authentication for all inbox dispatch messages. Disable only for development.",
+          "scope": "application"
+        },
+        "switchboard.runtime.workspaceMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "(Dev only) Allow MCP server to run from mutable workspace copy instead of immutable extension bundle.",
+          "scope": "application"
+        },
+        "mcpServers": {
+          "type": "object",
+          "default": {},
+          "description": "Configuration for Model Context Protocol (MCP) servers",
+          "scope": "resource"
+        }
+      }
+    }
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run package",
+    "compile": "webpack",
+    "watch": "webpack --watch",
+    "package": "webpack --mode production --devtool hidden-source-map",
+    "compile-tests": "tsc -p . --outDir out",
+    "watch-tests": "tsc -p . -w --outDir out",
+    "pretest": "npm run compile-tests && npm run compile && npm run lint",
+    "lint": "eslint src",
+    "test": "vscode-test",
+    "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
+  },
+  "devDependencies": {
+    "@types/mocha": "^10.0.10",
+    "@types/node": "22.x",
+    "@types/vscode": "^1.90.0",
+    "@vscode/test-cli": "^0.0.12",
+    "@vscode/test-electron": "^2.5.2",
+    "copy-webpack-plugin": "^12.0.2",
+    "ts-loader": "^9.5.4",
+    "typescript-eslint": "^8.54.0",
+    "webpack": "^5.94.0",
+    "webpack-cli": "^6.0.1"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.3",
+    "@types/dompurify": "^3.0.5",
+    "@types/jsdom": "^27.0.0",
+    "@types/proper-lockfile": "^4.1.4",
+    "@types/uuid": "^10.0.0",
+    "@vscode/codicons": "^0.0.44",
+    "chrome-devtools-mcp": "^0.17.1",
+    "dompurify": "^3.3.1",
+    "jsdom": "^28.0.0",
+    "proper-lockfile": "^4.1.2",
+    "uuid": "^9.0.1",
+    "zod": "^3.23.8"
+  }
+}

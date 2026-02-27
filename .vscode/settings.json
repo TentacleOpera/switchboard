@@ -1,0 +1,17 @@
+{
+	"switchboard.silentScaffolding": false,
+	"mcpServers": {
+		"switchboard": {
+			"command": "node",
+			"args": [
+				"c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
+			],
+			"env": {},
+			"disabled": false,
+			"alwaysAllow": []
+		}
+	},
+	"switchboard.accurateCoding.enabled": true,
+	"switchboard.review.strictPrompts": false,
+	"switchboard.planner.strictPrompts": false,
+}

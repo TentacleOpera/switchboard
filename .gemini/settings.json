@@ -1,0 +1,10 @@
+{
+  "mcpServers": {
+    "switchboard": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\patvu\\Documents\\GitHub\\ai-product-manager\\.switchboard\\MCP\\mcp-server.js"
+      ]
+    }
+  }
+}

@@ -1,0 +1,50 @@
+# VS Code specific
+.vscode/**
+.vscode-test/**
+out/**
+node_modules/**
+
+# Source files
+src/**
+!dist/**
+dist/templates/**
+**/dist/templates/**
+
+# Build files
+*.map
+**/.vscode-test.*
+webpack.config.js
+**/tsconfig.json
+**/eslint.config.mjs
+
+# AI configs (user-generated, not part of extension)
+.ai-specs/**
+.github/**
+.gemini/**
+.jules/**
+# Keep .agent/ — workflow assets are shipped with the extension
+!.agent/**
+
+# Runtime artifacts
+.switchboard/**
+switchboard/**
+
+# Documentation (keep README + AGENTS)
+*.md
+!README.md
+!AGENTS.md
+
+# Misc
+*.patch
+*.txt
+*.vsix
+.gitignore
+
+# Dev utilities (not extension runtime)
+docs/**
+old skills/**
+old\ skills/**
+
+# Test artifacts
+.test-workspace/**
+.tmp-codex-home/**

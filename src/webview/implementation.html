@@ -1,0 +1,2610 @@
+<!-- Cache bust: 2026-02-19-industrial-ui -->
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard</title>
+    <style>
+        :root {
+            /* Industrial / Cyber Theme - Glowing Green Edition */
+            --bg-color: #0a0e13;
+            --panel-bg: #0f1419;
+            --panel-bg2: #131920;
+            --border-color: #1e2830;
+            --border-bright: #2a3a48;
+            --text-primary: #c9d1d9;
+            --text-secondary: #6b7c8d;
+
+            --accent-cyan: #2f81f7;
+            --accent-green: #3fb950;
+            /* Muted success green aligned with dark editor themes */
+            --accent-green-dim: #238636;
+            --accent-red: #da3633;
+            --accent-orange: #d29922;
+
+            --glow-green: 0 0 6px rgba(63, 185, 80, 0.3), 0 0 12px rgba(63, 185, 80, 0.1);
+            --glow-green-btn: 0 0 4px rgba(63, 185, 80, 0.25), inset 0 1px 0 rgba(63, 185, 80, 0.1);
+            --glow-cyan: 0 0 8px rgba(47, 129, 247, 0.4);
+
+            --font-family: 'Segoe UI', 'Roboto', sans-serif;
+            --font-mono: 'Consolas', 'Courier New', monospace;
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: var(--font-family);
+            padding: 0;
+            margin: 0;
+            color: var(--text-primary);
+            background: var(--bg-color);
+            font-size: 13px;
+            overflow-x: hidden;
+            background-image:
+                linear-gradient(rgba(63, 185, 80, 0.01) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(63, 185, 80, 0.01) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        /* Utility Classes */
+        .hidden {
+            display: none !important;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .flex-col {
+            flex-direction: column;
+        }
+
+        .items-center {
+            align-items: center;
+        }
+
+        .justify-between {
+            justify-content: space-between;
+        }
+
+        .gap-2 {
+            gap: 8px;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        /* Container */
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+        }
+
+        /* Header / Plan Select Section */
+        .header-section {
+            padding: 12px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        }
+
+        .section-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-green);
+            margin-bottom: 8px;
+            font-weight: 600;
+            opacity: 0.7;
+        }
+
+        .tooltip-icon {
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            margin-left: 5px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            opacity: 0.5;
+            cursor: default;
+            vertical-align: middle;
+            font-style: normal;
+        }
+
+        .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .section-header .section-label {
+            margin-bottom: 0;
+        }
+
+        .icon-btn {
+            min-width: 20px;
+            height: 20px;
+            border: 1px solid var(--border-bright);
+            border-radius: 2px;
+            background: #0b1116;
+            color: var(--text-secondary);
+            cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            line-height: 1;
+            transition: all 0.2s ease;
+            padding: 0 4px;
+        }
+
+        .icon-btn:hover:not(:disabled) {
+            color: var(--text-primary);
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .icon-btn:disabled {
+            opacity: 0.35;
+            cursor: not-allowed;
+        }
+
+        .icon-btn.success {
+            color: var(--accent-green);
+            border-color: rgba(63, 185, 80, 0.4);
+            box-shadow: 0 0 6px rgba(63, 185, 80, 0.2);
+        }
+
+        .icon-btn.error {
+            color: var(--accent-red);
+            border-color: rgba(218, 54, 51, 0.45);
+            box-shadow: 0 0 10px rgba(218, 54, 51, 0.3);
+        }
+
+        .dropdown-container {
+            position: relative;
+        }
+
+        .plan-select {
+            width: 100%;
+            background: #060a0e;
+            color: var(--text-primary);
+            border: 1px solid var(--border-bright);
+            padding: 7px 10px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            outline: none;
+            cursor: pointer;
+            appearance: none;
+            letter-spacing: 0.5px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
+        }
+
+        .plan-select:focus {
+            border-color: var(--accent-green);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(63, 185, 80, 0.12);
+        }
+
+        .select-arrow {
+            position: absolute;
+            right: 10px;
+            top: 50%;
+            transform: translateY(-50%);
+            pointer-events: none;
+            font-size: 10px;
+            color: var(--text-secondary);
+        }
+
+        /* Agent List Section */
+        .tab-bar {
+            display: flex;
+            gap: 6px;
+            padding: 8px 10px 0 10px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tab-btn {
+            flex: 1;
+            background: #0b1116;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 2px 2px 0 0;
+        }
+
+        .tab-btn.is-active {
+            color: var(--accent-green);
+            border-color: rgba(63, 185, 80, 0.35);
+            box-shadow: inset 0 -1px 0 rgba(63, 185, 80, 0.2);
+        }
+
+        .sub-tab-bar {
+            display: flex;
+            gap: 4px;
+            padding: 6px 10px 4px 10px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .sub-tab-btn {
+            flex: 1;
+            background: #0b1116;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 6px;
+            cursor: pointer;
+            border-radius: 2px 2px 0 0;
+        }
+
+        .sub-tab-btn:hover {
+            color: var(--text-primary);
+            border-color: var(--border-bright);
+        }
+
+        .sub-tab-btn.is-active {
+            color: var(--accent-green);
+            border-color: rgba(63, 185, 80, 0.35);
+            box-shadow: inset 0 -1px 0 rgba(63, 185, 80, 0.2);
+        }
+
+        .tab-panel {
+            flex: 1;
+            min-height: 0;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #panel-agents {
+            flex: 2;
+            min-height: 0;
+        }
+
+        #panel-activity {
+            flex: 1;
+            min-height: 140px;
+        }
+
+        .agent-list {
+            flex: 1;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            overflow-y: auto;
+        }
+
+        .activity-list {
+            flex: 1;
+            overflow-y: auto;
+            padding: 10px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .activity-row {
+            border: 1px solid var(--border-color);
+            border-left: 2px solid var(--accent-cyan);
+            background: var(--panel-bg);
+            padding: 8px;
+            border-radius: 2px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .activity-time {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--accent-green);
+            letter-spacing: 0.7px;
+        }
+
+        .activity-type {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.8px;
+        }
+
+        .activity-type.summary {
+            color: var(--accent-green);
+            font-weight: 700;
+        }
+
+        .activity-payload {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        .activity-row.summary {
+            border-left-color: var(--accent-green);
+            border-color: rgba(63, 185, 80, 0.3);
+            background: linear-gradient(180deg, rgba(7, 18, 12, 0.95) 0%, rgba(9, 23, 15, 0.9) 100%);
+            box-shadow: 0 0 6px rgba(63, 185, 80, 0.08);
+        }
+
+        .activity-summary-message {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+            line-height: 1.4;
+            letter-spacing: 0.2px;
+        }
+
+        .activity-summary-plan {
+            color: var(--accent-green);
+            font-weight: 800;
+        }
+
+        .activity-load-more {
+            margin: 0 10px 10px 10px;
+        }
+
+        /* Agent Row */
+        .agent-row {
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-left: 2px solid var(--border-bright);
+            padding: 8px 10px;
+            border-radius: 2px;
+            transition: border-color 0.3s ease;
+        }
+
+        .agent-row:has(.status-dot.green) {
+            border-left-color: var(--accent-green);
+            box-shadow: -2px 0 6px rgba(63, 185, 80, 0.1);
+        }
+
+        .agent-row:has(.status-dot.green-pulse) {
+            border-left-color: var(--accent-green);
+            box-shadow: -2px 0 8px rgba(63, 185, 80, 0.16);
+        }
+
+        .row-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+        }
+
+        .agent-identity {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        /* Status Dot */
+        .status-dot {
+            width: 9px;
+            height: 9px;
+            border-radius: 50%;
+            background: #1e2830;
+            border: 1px solid #2a3a48;
+            box-shadow: none;
+            transition: all 0.3s ease;
+            flex-shrink: 0;
+        }
+
+        .status-dot.green {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            box-shadow: var(--glow-green);
+        }
+
+        .status-dot.green-pulse {
+            background: var(--accent-green);
+            border-color: var(--accent-green);
+            box-shadow: var(--glow-green);
+            animation: pulse-green 1.5s infinite;
+        }
+
+        .status-dot.orange {
+            background: var(--accent-orange);
+            border-color: var(--accent-orange);
+        }
+
+        @keyframes pulse-green {
+            0% {
+                opacity: 1;
+                box-shadow: 0 0 6px rgba(63, 185, 80, 0.35), 0 0 12px rgba(63, 185, 80, 0.15);
+            }
+
+            50% {
+                opacity: 0.7;
+                box-shadow: 0 0 3px rgba(63, 185, 80, 0.2);
+            }
+
+            100% {
+                opacity: 1;
+                box-shadow: 0 0 6px rgba(63, 185, 80, 0.35), 0 0 12px rgba(63, 185, 80, 0.15);
+            }
+        }
+
+        .agent-name {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+        }
+
+        .agent-row:has(.status-dot.green) .agent-name,
+        .agent-row:has(.status-dot.green-pulse) .agent-name {
+            color: var(--text-primary);
+        }
+
+        .locate-btn {
+            background: none;
+            border: none;
+            color: #3a5a7a;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            text-decoration: none;
+            letter-spacing: 0.5px;
+            padding: 0;
+            opacity: 0.7;
+            transition: all 0.2s;
+        }
+
+        .locate-btn:hover {
+            opacity: 1;
+            color: var(--accent-cyan);
+            text-shadow: 0 0 5px rgba(47, 129, 247, 0.5);
+        }
+
+        .locate-btn:disabled {
+            color: var(--text-secondary);
+            cursor: default;
+            opacity: 0.25;
+        }
+
+        /* Action Buttons - Glowing Green Tactile Style */
+        .action-btn {
+            width: 100%;
+            background: linear-gradient(180deg, #0e1e16 0%, #0a1610 100%);
+            border: 1px solid #1a3a28;
+            border-bottom-color: #0d2018;
+            color: #3a7a55;
+            padding: 9px;
+            font-size: 11px;
+            font-weight: 600;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1.5px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            text-align: center;
+            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
+            border-radius: 2px;
+        }
+
+        .action-btn:hover:not(:disabled) {
+            background: linear-gradient(180deg, #122a1e 0%, #0e1e16 100%);
+            border-color: rgba(63, 185, 80, 0.35);
+            color: var(--accent-green);
+            box-shadow: 0 0 8px rgba(63, 185, 80, 0.15), inset 0 1px 0 rgba(63, 185, 80, 0.08);
+        }
+
+        .action-btn:active:not(:disabled) {
+            transform: translateY(1px);
+            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 2px 4px rgba(0, 0, 0, 0.3);
+        }
+
+        .action-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            color: #2a3a30;
+            border-color: var(--border-color);
+        }
+
+        .jules-history {
+            margin-top: 6px;
+            border-top: 1px solid var(--border-color);
+            padding-top: 6px;
+        }
+
+        .jules-history-item {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            letter-spacing: 0.4px;
+            padding: 2px 0;
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 8px;
+            white-space: nowrap;
+        }
+
+        .jules-history-name {
+            flex: 1 1 auto;
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .jules-history-status {
+            flex: 0 0 auto;
+            white-space: nowrap;
+        }
+
+        .mini-action-btn {
+            background: #0b1116;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            padding: 3px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            letter-spacing: 0.6px;
+        }
+
+        .mini-action-btn:hover:not(:disabled) {
+            color: var(--text-primary);
+            border-color: var(--accent-cyan);
+            box-shadow: var(--glow-cyan);
+        }
+
+        .mini-action-btn.is-active {
+            color: var(--accent-cyan);
+            border-color: rgba(47, 129, 247, 0.55);
+            box-shadow: 0 0 8px rgba(47, 129, 247, 0.25);
+        }
+
+        .mini-action-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Standby Input Area */
+        .agent-input {
+            width: 100%;
+            background: #060a0e;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            padding: 6px 8px;
+            resize: none;
+            height: 40px;
+            margin-bottom: 4px;
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
+            border-radius: 2px;
+        }
+
+        .agent-input:focus {
+            outline: none;
+            border-color: rgba(63, 185, 80, 0.35);
+            color: var(--text-primary);
+            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 4px rgba(63, 185, 80, 0.08);
+        }
+
+        /* Scrollbar Styling */
+        ::-webkit-scrollbar {
+            width: 4px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--bg-color);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #1e2830;
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #2a3a48;
+        }
+
+        /* Status Bar (Bottom) */
+        .status-footer {
+            padding: 6px 12px;
+            background: #060a0e;
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            justify-content: space-between;
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+        }
+
+        .status-indicator {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .tiny-dot {
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--text-secondary);
+        }
+
+        .tiny-dot.green {
+            background: var(--accent-green);
+            box-shadow: 0 0 4px rgba(63, 185, 80, 0.35);
+        }
+
+        .tiny-dot.orange {
+            background: var(--accent-orange);
+        }
+
+        .tiny-dot.red {
+            background: var(--accent-red);
+        }
+
+        /* Setup / System Section */
+        .system-section {
+            padding: 10px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .panel-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .panel-toggle .chevron {
+            font-size: 10px;
+            color: var(--text-secondary);
+            transition: transform 0.15s;
+        }
+
+        .panel-toggle .chevron.open {
+            transform: rotate(90deg);
+        }
+
+        .panel-fields {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .panel-fields.open {
+            display: flex;
+        }
+
+        .secondary-btn {
+            background: linear-gradient(180deg, #0f1419 0%, #0a1014 100%);
+            border: 1px solid var(--border-bright);
+            border-bottom-color: #0d1419;
+            color: var(--text-secondary);
+            padding: 6px;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            border-radius: 2px;
+        }
+
+        .secondary-btn:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+            background: #131920;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.65);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 100;
+            padding: 10px;
+        }
+
+        .modal-card {
+            width: 100%;
+            max-width: 420px;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            border-radius: 4px;
+            padding: 12px;
+        }
+
+        .modal-title {
+            font-family: var(--font-mono);
+            letter-spacing: 1px;
+            font-size: 12px;
+            color: var(--accent-green);
+            margin-bottom: 10px;
+        }
+
+        .modal-label {
+            display: block;
+            margin-bottom: 4px;
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--font-mono);
+        }
+
+        .modal-input,
+        .modal-textarea {
+            width: 100%;
+            background: #060a0e;
+            color: var(--text-primary);
+            border: 1px solid var(--border-bright);
+            padding: 7px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+
+        .modal-textarea {
+            min-height: 90px;
+            resize: vertical;
+        }
+
+        /* Agent Startup Config */
+        .startup-section {
+            padding: 10px;
+            background: var(--panel-bg);
+            border-top: 1px solid var(--border-color);
+        }
+
+        .startup-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+        }
+
+        .startup-toggle .chevron {
+            font-size: 10px;
+            color: var(--text-secondary);
+            transition: transform 0.15s;
+        }
+
+        .startup-toggle .chevron.open {
+            transform: rotate(90deg);
+        }
+
+        .startup-fields {
+            display: none;
+            flex-direction: column;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .startup-fields.open {
+            display: flex;
+        }
+
+        .startup-row label {
+            display: block;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--font-mono);
+            margin-bottom: 2px;
+        }
+
+        .startup-row input {
+            width: 100%;
+            background: #060a0e;
+            color: var(--text-primary);
+            border: 1px solid var(--border-bright);
+            padding: 5px 7px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .startup-row input:focus {
+            outline: none;
+            border-color: var(--accent-green);
+        }
+
+        /* Action Button Feedback Animations */
+        @keyframes success-glow {
+            0% {
+                box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.3);
+            }
+
+            50% {
+                box-shadow: 0 0 8px 3px rgba(63, 185, 80, 0.2);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 rgba(63, 185, 80, 0);
+            }
+        }
+
+        @keyframes sweep {
+            0% {
+                background-position: -200% 0;
+            }
+
+            100% {
+                background-position: 200% 0;
+            }
+        }
+
+        @keyframes error-shake {
+
+            0%,
+            100% {
+                transform: translateX(0);
+            }
+
+            20%,
+            60% {
+                transform: translateX(-3px);
+            }
+
+            40%,
+            80% {
+                transform: translateX(3px);
+            }
+        }
+
+        .action-btn.dispatching {
+            opacity: 0.7;
+            cursor: wait;
+        }
+
+        .action-btn.success {
+            border-color: var(--accent-green) !important;
+            color: var(--accent-green) !important;
+            animation: success-glow 1.2s ease-out;
+            background: linear-gradient(90deg, transparent 0%, rgba(63, 185, 80, 0.06) 50%, transparent 100%);
+            background-size: 200% 100%;
+            animation: success-glow 1.2s ease-out, sweep 1s ease-out;
+        }
+
+        .action-btn.error {
+            border-color: #ff5252 !important;
+            color: #ff5252 !important;
+            animation: error-shake 0.4s ease-out;
+        }
+
+        /* Orchestrator Card */
+        .orchestrator-card {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 10px 12px;
+            margin: 0 8px 8px 8px;
+        }
+
+        .orchestrator-card.hidden {
+            display: none !important;
+        }
+
+        .orchestrator-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 8px;
+        }
+
+        .orchestrator-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 700;
+            letter-spacing: 1.5px;
+            color: var(--accent-green);
+            text-transform: uppercase;
+        }
+
+        .orchestrator-timer {
+            font-family: var(--font-mono);
+            font-size: 18px;
+            font-weight: 700;
+            color: var(--accent-green);
+            text-align: center;
+            padding: 6px 0;
+            letter-spacing: 2px;
+            text-shadow: var(--glow-green);
+        }
+
+        .orchestrator-timer.idle {
+            color: var(--text-secondary);
+            text-shadow: none;
+            font-size: 11px;
+        }
+
+        .orchestrator-next-stage {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            text-align: center;
+            margin-bottom: 8px;
+            letter-spacing: 0.5px;
+        }
+
+        .orchestrator-controls {
+            display: flex;
+            gap: 6px;
+        }
+
+        .orchestrator-controls .action-btn {
+            flex: 1;
+        }
+
+        .orchestrator-controls .action-btn.stop-btn {
+            color: var(--accent-red);
+            border-color: rgba(218, 54, 51, 0.4);
+            flex: 0 0 auto;
+            width: 70px;
+        }
+
+        .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled) {
+            border-color: var(--accent-red);
+            box-shadow: 0 0 8px rgba(218, 54, 51, 0.3);
+        }
+
+        .orchestrator-interval {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            margin-top: 6px;
+        }
+
+        .orchestrator-interval label {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+            white-space: nowrap;
+        }
+
+        .orchestrator-interval input {
+            width: 60px;
+            background: #060a0e;
+            border: 1px solid var(--border-bright);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            padding: 3px 6px;
+            text-align: center;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="container">
+        <!-- HEADER: PLAN SELECTION -->
+        <div class="header-section">
+            <div class="section-header">
+                <div class="section-label">PLAN SELECT <span class="tooltip-icon" title="If the dropdown is incorrect, ask an agent to run the 'fix plans dropdown' skill.">ⓘ</span></div>
+                <div class="flex gap-2" style="align-items: center;">
+                    <button id="btn-delete-plan" class="icon-btn" style="color: var(--accent-red);"
+                        title="Delete active plan" aria-label="Delete plan">DELETE</button>
+                    <button id="btn-copy-plan-link" class="icon-btn" title="Copy Markdown link for active plan"
+                        aria-label="Copy plan link"
+                        style="color: var(--accent-cyan); border-color: rgba(47, 129, 247, 0.5); font-weight: 600; opacity: 1;">COPY PLAN</button>
+                </div>
+            </div>
+            <div class="dropdown-container">
+                <select id="run-sheet-select" class="plan-select">
+                    <option value="">Loading plans...</option>
+                </select>
+                <div class="select-arrow">▼</div>
+            </div>
+            <div class="flex gap-2" style="margin-top: 6px;">
+                <button id="btn-complete-plan" class="secondary-btn w-full">MARK COMPLETE</button>
+                <button id="btn-merge-all-plans" class="secondary-btn w-full">MERGE ALL</button>
+            </div>
+            <div style="margin-top: 6px;">
+                <button id="btn-create-plan" class="secondary-btn w-full">CREATE PLAN</button>
+            </div>
+        </div>
+
+        <!-- PINNED DASHBOARD: AGENT LIST (includes Auto-agent) -->
+        <div id="panel-agents" class="tab-panel">
+            <div class="sub-tab-bar">
+                <button class="sub-tab-btn is-active" data-tab="agents">Agents</button>
+                <button class="sub-tab-btn" data-tab="auto">Auto</button>
+                <button class="sub-tab-btn" data-tab="cloud">Cloud</button>
+            </div>
+            <div id="agent-list-standard" class="agent-list">
+                <div style="text-align: center; padding: 20px; color: var(--text-secondary);">
+                    Initializing...
+                </div>
+            </div>
+            <div id="agent-list-auto" class="agent-list hidden"></div>
+            <div id="agent-list-cloud" class="agent-list hidden"></div>
+        </div>
+
+        <!-- LIVE ACTIVITY FEED -->
+        <div class="panel-toggle" id="live-feed-toggle" style="padding: 8px 10px 4px 10px;">
+            <div class="section-label" style="margin:0; font-size: 9px; letter-spacing: 1.5px;">LIVE FEED</div>
+            <span class="chevron" id="live-feed-chevron">▶</span>
+        </div>
+        <div id="panel-activity" class="tab-panel panel-fields" aria-hidden="true">
+            <div id="activity-list" class="activity-list">
+                <div
+                    style="text-align: center; padding: 20px; color: var(--text-secondary); font-family: var(--font-mono);">
+                    No activity loaded yet.
+                </div>
+            </div>
+            <button id="btn-activity-load-more" class="secondary-btn w-full activity-load-more hidden">LOAD
+                MORE</button>
+        </div>
+
+        <!-- TERMINAL OPERATIONS -->
+        <div class="system-section">
+            <div class="panel-toggle" id="terminal-operations-toggle">
+                <div class="section-label" style="margin:0">TERMINAL OPERATIONS</div>
+                <span class="chevron open" id="terminal-operations-chevron">▶</span>
+            </div>
+            <div class="panel-fields open" id="terminal-operations-fields">
+                <button id="createAgentGrid" class="secondary-btn w-full">OPEN AGENT TERMINALS</button>
+                <button id="btn-deregister-all" class="secondary-btn w-full"
+                    style="color: var(--accent-red); border-color: rgba(218, 54, 51, 0.3);">RESET ALL AGENTS</button>
+            </div>
+        </div>
+
+        <!-- SETUP -->
+        <div class="startup-section">
+            <div class="startup-toggle" id="startup-toggle">
+                <div class="section-label" style="margin:0">SETUP</div>
+                <span class="chevron" id="startup-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="startup-fields">
+                <div class="flex gap-2">
+                    <button id="btn-initialize" class="secondary-btn w-full">INIT PROTOCOLS</button>
+                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
+                </div>
+                <div class="startup-row"><label>Lead Coder</label><input type="text" data-role="lead"
+                        placeholder="e.g. copilot --allow-all-tools"></div>
+                <div class="startup-row"><label>Coder</label><input type="text" data-role="coder"
+                        placeholder="e.g. codex --full-auto"></div>
+                <div class="startup-row"><label>Reviewer</label><input type="text" data-role="reviewer"
+                        placeholder="e.g. gemini"></div>
+                <div class="startup-row"><label>Planner</label><input type="text" data-role="planner"
+                        placeholder="e.g. gemini"></div>
+                <div class="startup-row"><label>Analyst</label><input type="text" data-role="analyst"
+                        placeholder="e.g. qwen"></div>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                    <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
+                    <span>Accurate coding mode for Coder prompts</span>
+                </label>
+                <button id="btn-save-startup" class="secondary-btn w-full"
+                    style="margin-top:4px; color: var(--accent-green); border-color: rgba(63,185,80,0.25);">SAVE STARTUP
+                    COMMANDS</button>
+                <button id="btn-archive-all-completed" class="secondary-btn w-full" style="margin-top:4px;">🗄 Archive
+                    All Completed</button>
+            </div>
+        </div>
+
+        <!-- STATUS FOOTER -->
+        <div class="status-footer">
+            <div class="status-indicator" id="system-status">
+                <div class="tiny-dot green"></div>
+                <span>SYSTEM ONLINE</span>
+            </div>
+            <div class="status-indicator" id="mcp-status-footer">
+                <div class="tiny-dot" id="mcp-dot"></div>
+                <span id="mcp-text">MCP: CHECKING</span>
+            </div>
+        </div>
+    </div>
+
+    <div id="initiate-plan-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-title">INITIATE PLAN</div>
+            <label class="modal-label" for="init-plan-title">Plan title</label>
+            <input id="init-plan-title" class="modal-input" type="text"
+                placeholder="e.g. Improve onboarding conversion">
+            <label class="modal-label" for="init-plan-idea">Feature idea or bug</label>
+            <textarea id="init-plan-idea" class="modal-textarea"
+                placeholder="Describe what should be fixed or built..."></textarea>
+            <div class="flex gap-2">
+                <button id="btn-send-planner" class="secondary-btn w-full">SEND TO PLANNER</button>
+                <button id="btn-copy-prompt" class="secondary-btn w-full">COPY TO CLIPBOARD</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        // DOM Elements
+        const runSheetSelect = document.getElementById('run-sheet-select');
+        const agentListStandard = document.getElementById('agent-list-standard');
+        const agentListAuto = document.getElementById('agent-list-auto');
+        const agentListCloud = document.getElementById('agent-list-cloud');
+        const agentList = agentListStandard; // backward compat alias
+        const activityList = document.getElementById('activity-list');
+        const activityLoadMoreBtn = document.getElementById('btn-activity-load-more');
+        const tabAgentsBtn = document.getElementById('tab-agents');
+        const tabActivityBtn = document.getElementById('tab-activity');
+        const panelAgents = document.getElementById('panel-agents');
+        const panelActivity = document.getElementById('panel-activity');
+        const liveFeedToggle = document.getElementById('live-feed-toggle');
+        const liveFeedChevron = document.getElementById('live-feed-chevron');
+        const liveFeedFields = panelActivity;
+        const mcpDot = document.getElementById('mcp-dot');
+        const mcpText = document.getElementById('mcp-text');
+        const copyPlanLinkBtn = document.getElementById('btn-copy-plan-link');
+        const mergeAllPlansBtn = document.getElementById('btn-merge-all-plans');
+        const archiveAllCompletedBtn = document.getElementById('btn-archive-all-completed');
+        const initiatePlanModal = document.getElementById('initiate-plan-modal');
+        const initiatePlanTitleInput = document.getElementById('init-plan-title');
+        const initiatePlanIdeaInput = document.getElementById('init-plan-idea');
+        let copyPlanLinkTimer = null;
+        let analystButtonFeedback = null; // { text, className, expiresAt }
+        let analystButtonFeedbackTimer = null;
+        let analystMapFeedback = null; // { text, className, expiresAt }
+        let analystMapFeedbackTimer = null;
+
+        function formatOrchestratorTime(totalSeconds) {
+            const m = Math.floor(totalSeconds / 60);
+            const s = totalSeconds % 60;
+            return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        }
+
+        function updateOrchestratorUI(state) {
+            lastOrchestratorState = state || null;
+            if (state && Number.isFinite(Number(state.intervalSeconds))) {
+                orchIntervalSeconds = Number(state.intervalSeconds);
+            }
+            renderAgentList();
+        }
+
+        function updatePipelineUI(state) {
+            lastPipelineState = state || null;
+            renderAgentList();
+        }
+
+        function isPlanSelected() {
+            return Boolean(runSheetSelect && runSheetSelect.value);
+        }
+
+        function updatePlanActionStates() {
+            const hasPlan = isPlanSelected();
+            if (copyPlanLinkBtn) {
+                copyPlanLinkBtn.disabled = !hasPlan;
+            }
+            if (mergeAllPlansBtn) {
+                mergeAllPlansBtn.disabled = !currentRunSheets || currentRunSheets.length === 0;
+            }
+        }
+
+        function showCopyPlanLinkFeedback(success) {
+            if (!copyPlanLinkBtn) return;
+            if (copyPlanLinkTimer) {
+                clearTimeout(copyPlanLinkTimer);
+                copyPlanLinkTimer = null;
+            }
+
+            copyPlanLinkBtn.classList.toggle('success', success);
+            copyPlanLinkBtn.classList.toggle('error', !success);
+
+            copyPlanLinkTimer = setTimeout(() => {
+                copyPlanLinkBtn.classList.remove('success', 'error');
+                copyPlanLinkTimer = null;
+            }, 1500);
+        }
+
+        function openInitiatePlanModal() {
+            initiatePlanModal.classList.remove('hidden');
+            setTimeout(() => initiatePlanTitleInput.focus(), 0);
+        }
+
+        function closeInitiatePlanModal() {
+            initiatePlanModal.classList.add('hidden');
+        }
+
+        function submitInitiatePlan(action) {
+            const title = initiatePlanTitleInput.value.trim();
+            const idea = initiatePlanIdeaInput.value.trim();
+            if (!title || !idea) {
+                return;
+            }
+
+            vscode.postMessage({
+                type: 'initiatePlan',
+                title,
+                idea,
+                mode: action
+            });
+            closeInitiatePlanModal();
+            initiatePlanTitleInput.value = '';
+            initiatePlanIdeaInput.value = '';
+        }
+
+        document.getElementById('btn-send-planner').addEventListener('click', () => submitInitiatePlan('send'));
+        document.getElementById('btn-copy-prompt').addEventListener('click', () => submitInitiatePlan('copy'));
+        document.getElementById('btn-create-plan').addEventListener('click', () => openInitiatePlanModal());
+
+        initiatePlanModal.addEventListener('click', (event) => {
+            if (event.target === initiatePlanModal) {
+                closeInitiatePlanModal();
+            }
+        });
+
+        // Setup Buttons
+        document.getElementById('btn-initialize').addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
+        document.getElementById('btn-connect-mcp').addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
+        document.getElementById('createAgentGrid').addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
+        document.getElementById('btn-deregister-all').addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
+        document.getElementById('terminal-operations-toggle').addEventListener('click', () => {
+            const fields = document.getElementById('terminal-operations-fields');
+            const chevron = document.getElementById('terminal-operations-chevron');
+            const isOpen = fields.classList.toggle('open');
+            chevron.classList.toggle('open', isOpen);
+        });
+        if (liveFeedToggle && liveFeedFields && liveFeedChevron) {
+            liveFeedToggle.addEventListener('click', () => {
+                const isOpen = liveFeedFields.classList.toggle('open');
+                liveFeedChevron.classList.toggle('open', isOpen);
+                liveFeedFields.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
+            });
+        }
+
+        // Startup Commands
+        document.getElementById('startup-toggle').addEventListener('click', () => {
+            const fields = document.getElementById('startup-fields');
+            const chevron = document.getElementById('startup-chevron');
+            const isOpen = fields.classList.toggle('open');
+            chevron.classList.toggle('open', isOpen);
+            if (isOpen) vscode.postMessage({ type: 'getStartupCommands' });
+            if (isOpen) vscode.postMessage({ type: 'getAccurateCodingSetting' });
+        });
+        document.getElementById('btn-save-startup').addEventListener('click', () => {
+            const commands = { ...lastStartupCommands };
+            document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
+                const role = input.dataset.role;
+                const value = input.value.trim();
+                if (!role) return;
+                if (value) commands[role] = value;
+                else delete commands[role];
+            });
+            const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
+            vscode.postMessage({ type: 'saveStartupCommands', commands, accurateCodingEnabled });
+            const btn = document.getElementById('btn-save-startup');
+            btn.textContent = 'SAVED ✓';
+            setTimeout(() => { btn.textContent = 'SAVE STARTUP COMMANDS'; }, 1500);
+        });
+        document.getElementById('btn-complete-plan').addEventListener('click', () => {
+            const sessionId = runSheetSelect.value;
+            if (!sessionId) return;
+            vscode.postMessage({ type: 'completePlan', sessionId });
+        });
+        document.getElementById('btn-delete-plan').addEventListener('click', () => {
+            const sessionId = runSheetSelect.value;
+            if (!sessionId) return;
+            vscode.postMessage({ type: 'deletePlan', sessionId });
+        });
+        mergeAllPlansBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'mergeAllPlans' });
+        });
+        archiveAllCompletedBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'archiveAllCompleted' });
+        });
+        copyPlanLinkBtn.addEventListener('click', () => {
+            const sessionId = runSheetSelect.value;
+            if (!sessionId) return;
+            vscode.postMessage({ type: 'copyPlanLink', sessionId });
+        });
+
+        // State
+        let currentRunSheets = [];
+        let lastTerminals = {};
+        let lastAllOpenTerminals = [];
+        let lastTeamReady = false;
+        let lastDispatchReadiness = {};
+        let lastJulesActivePlans = [];
+        let lastJulesSessions = [];
+        let lastStartupCommands = {};
+        let lastOrchestratorState = null;
+        let lastPipelineState = null;
+        let orchIntervalSeconds = 300;
+        // Maps for Coder→Reviewer workflow UI state.
+        const coderReviewerPhases = {};
+        const coderReviewerPhaseSinceMs = {};
+        let coderReviewerPollingTicker = null;
+        let userInitiatedChange = false;
+        let activeTab = 'agents';
+        let recentActivityEvents = [];
+        let recentActivityCursor = undefined;
+        let recentActivityHasMore = false;
+        const pendingDispatches = new Set();
+
+        function getDispatchKey(role) {
+            const sessionId = runSheetSelect.value || '';
+            return `${sessionId}::${role}`;
+        }
+
+        function markDispatchPending(role) {
+            pendingDispatches.add(getDispatchKey(role));
+        }
+
+        function clearDispatchPending(role) {
+            const suffix = `::${role}`;
+            for (const key of Array.from(pendingDispatches)) {
+                if (key.endsWith(suffix)) {
+                    pendingDispatches.delete(key);
+                }
+            }
+        }
+
+        function isDispatchPending(role) {
+            return pendingDispatches.has(getDispatchKey(role));
+        }
+
+        function setActiveTab(tab, persist = true) {
+            // Tabs removed — both panels are always visible.
+            // Still request activity data when switching context.
+            if (persist) {
+                vscode.postMessage({ type: 'setActiveTab', tab: 'agents' });
+            }
+            requestRecentActivity(false);
+        }
+
+        function requestRecentActivity(loadMore) {
+            const payload = {
+                type: 'getRecentActivity',
+                limit: 50
+            };
+            if (loadMore && recentActivityCursor) {
+                payload.before = recentActivityCursor;
+            }
+            vscode.postMessage(payload);
+        }
+
+        function roleLabel(role) {
+            const roleMap = {
+                lead: 'Lead coder',
+                coder: 'Coder',
+                reviewer: 'Reviewer',
+                planner: 'Planner',
+                team: 'Team',
+                analyst: 'Analyst',
+                jules: 'Jules'
+            };
+            return roleMap[role] || 'Agent';
+        }
+
+        function formatActivitySummary(event) {
+            const payload = event && event.payload ? event.payload : {};
+            if (payload.message && payload.message.toString().trim().length > 0) {
+                return payload.message.toString();
+            }
+            const role = roleLabel(payload.role);
+            const dispatchEvent = (payload.event || '').toString().toLowerCase();
+            const verb = dispatchEvent.includes('failed') ? 'failed for' : 'started for';
+            const planTitle = (payload.planTitle || payload.sessionId || 'Unknown plan').toString();
+            return `${role} ${verb}: ${planTitle}`;
+        }
+
+        function formatActivityDetail(event) {
+            const payload = event && event.payload ? event.payload : {};
+            if (event.type === 'dispatch') {
+                const kind = (payload.event || 'dispatch').toString().replace(/_/g, ' ');
+                const role = payload.role ? ` (${roleLabel(payload.role)})` : '';
+                return `${kind}${role}`;
+            }
+            if (event.type === 'ui_action') {
+                const action = (payload.action || 'ui action').toString().replace(/_/g, ' ');
+                const role = payload.role ? ` (${roleLabel(payload.role)})` : '';
+                return `${action}${role}`;
+            }
+            if (event.type === 'plan_management') {
+                const operation = (payload.operation || 'plan update').toString().replace(/_/g, ' ');
+                const target = payload.topic || payload.planFile || '';
+                return target ? `${operation}: ${target}` : operation;
+            }
+            return (event.type || 'event').toString();
+        }
+
+        function renderRecentActivity() {
+            if (!activityList) return;
+            activityList.innerHTML = '';
+            // Only show summary events (human-readable "SENT TO" / "RECEIVED FROM" messages)
+            const summaryEvents = (recentActivityEvents || []).filter(e => (e.type || '').toString().toLowerCase() === 'summary');
+            if (summaryEvents.length === 0) {
+                const empty = document.createElement('div');
+                empty.style.textAlign = 'center';
+                empty.style.padding = '20px';
+                empty.style.color = 'var(--text-secondary)';
+                empty.style.fontFamily = 'var(--font-mono)';
+                empty.innerText = 'No activity events yet.';
+                activityList.appendChild(empty);
+            } else {
+                for (const event of summaryEvents) {
+                    const row = document.createElement('div');
+                    row.className = 'activity-row summary';
+
+                    const time = document.createElement('div');
+                    time.className = 'activity-time';
+                    time.innerText = new Date(event.timestamp || Date.now()).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+                    const payload = document.createElement('div');
+                    payload.className = 'activity-payload';
+                    const text = formatActivitySummary(event);
+                    const summaryMessage = document.createElement('div');
+                    summaryMessage.className = 'activity-summary-message';
+                    summaryMessage.innerText = text;
+                    payload.appendChild(summaryMessage);
+
+                    row.appendChild(time);
+                    row.appendChild(payload);
+                    activityList.appendChild(row);
+                }
+            }
+
+            activityLoadMoreBtn.classList.toggle('hidden', !recentActivityHasMore);
+        }
+
+
+        // --- Event Listeners ---
+
+        if (tabAgentsBtn) tabAgentsBtn.addEventListener('click', () => setActiveTab('agents'));
+        if (tabActivityBtn) tabActivityBtn.addEventListener('click', () => setActiveTab('activity'));
+        activityLoadMoreBtn.addEventListener('click', () => requestRecentActivity(true));
+
+        runSheetSelect.addEventListener('change', () => {
+            renderAgentList();
+            updatePlanActionStates();
+            const sessionId = runSheetSelect.value;
+            vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: sessionId || null });
+            if (userInitiatedChange && sessionId) {
+                vscode.postMessage({ type: 'viewPlan', sessionId });
+            }
+            userInitiatedChange = false;
+        });
+        runSheetSelect.addEventListener('mousedown', () => {
+            userInitiatedChange = true;
+        });
+        runSheetSelect.addEventListener('keydown', () => {
+            userInitiatedChange = true;
+        });
+        runSheetSelect.addEventListener('blur', () => {
+            userInitiatedChange = false;
+        });
+
+        // --- Message Handling ---
+
+        window.addEventListener('message', event => {
+            const message = event.data;
+            switch (message.type) {
+                case 'initialState':
+                case 'mcpStatus':
+                    updateMcpStatus(message);
+                    setActiveTab(message.activeTab || 'agents', false);
+                    break;
+                case 'terminalStatuses':
+                    lastTerminals = message.terminals || {};
+                    lastAllOpenTerminals = message.allOpenTerminals || [];
+                    if (message.teamReady !== undefined) { lastTeamReady = message.teamReady; }
+                    if (message.dispatchReadiness !== undefined) { lastDispatchReadiness = message.dispatchReadiness || {}; }
+                    renderAgentList();
+                    break;
+                case 'julesStatus':
+                    lastJulesActivePlans = message.activePlans || [];
+                    lastJulesSessions = message.sessions || [];
+                    renderAgentList();
+                    break;
+                case 'runSheets':
+                    currentRunSheets = message.sheets || [];
+                    renderRunSheetDropdown(currentRunSheets);
+                    break;
+                case 'selectSession':
+                    if (message.sessionId && runSheetSelect) {
+                        runSheetSelect.value = message.sessionId;
+                        updatePlanActionStates();
+                        vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
+                    }
+                    break;
+                case 'copyPlanLinkResult':
+                    showCopyPlanLinkFeedback(message.success === true);
+                    break;
+                case 'startupCommands':
+                    if (message.commands) {
+                        lastStartupCommands = message.commands;
+                        document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
+                            input.value = message.commands[input.dataset.role] || '';
+                        });
+                    }
+                    break;
+                case 'accurateCodingSetting': {
+                    const toggle = document.getElementById('accurate-coding-toggle');
+                    if (toggle) {
+                        toggle.checked = message.enabled !== false;
+                    }
+                    break;
+                }
+                case 'recentActivity': {
+                    const incoming = Array.isArray(message.events) ? message.events : [];
+                    if (message.append) {
+                        recentActivityEvents = [...recentActivityEvents, ...incoming];
+                    } else {
+                        recentActivityEvents = incoming;
+                    }
+                    recentActivityHasMore = message.hasMore === true;
+                    recentActivityCursor = message.nextCursor;
+                    renderRecentActivity();
+                    break;
+                }
+                case 'actionTriggered': {
+                    const role = message.role;
+                    const success = message.success;
+                    clearDispatchPending(role);
+                    if (role === 'analyst') {
+                        analystButtonFeedback = {
+                            text: success ? 'DISPATCHED ✓' : 'FAILED ✗',
+                            className: success ? 'success' : 'error',
+                            expiresAt: Date.now() + 2000
+                        };
+                        if (analystButtonFeedbackTimer) {
+                            clearTimeout(analystButtonFeedbackTimer);
+                            analystButtonFeedbackTimer = null;
+                        }
+                        analystButtonFeedbackTimer = setTimeout(() => {
+                            analystButtonFeedback = null;
+                            analystButtonFeedbackTimer = null;
+                            renderAgentList();
+                        }, 2000);
+                        renderAgentList();
+                        break;
+                    }
+                    if (role === 'analystMap') {
+                        analystMapFeedback = {
+                            text: success ? 'DISPATCHED ✓' : 'FAILED ✗',
+                            className: success ? 'success' : 'error',
+                            expiresAt: Date.now() + 2000
+                        };
+                        if (analystMapFeedbackTimer) {
+                            clearTimeout(analystMapFeedbackTimer);
+                            analystMapFeedbackTimer = null;
+                        }
+                        analystMapFeedbackTimer = setTimeout(() => {
+                            analystMapFeedback = null;
+                            analystMapFeedbackTimer = null;
+                            renderAgentList();
+                        }, 2000);
+                        renderAgentList();
+                        break;
+                    }
+                    const btn = document.querySelector(`.action-btn[data-role="${role}"]`);
+                    if (btn && document.body.contains(btn)) {
+                        btn.classList.remove('dispatching');
+                        if (success) {
+                            btn.classList.add('success');
+                            btn.innerText = 'DISPATCHED ✓';
+                        } else {
+                            btn.classList.add('error');
+                            btn.innerText = 'FAILED ✗';
+                        }
+                        setTimeout(() => {
+                            if (document.body.contains(btn)) {
+                                // Recompute card state from source-of-truth (plan selection + readiness + pending state)
+                                // instead of blindly enabling the previous button instance.
+                                renderAgentList();
+                            }
+                        }, 2000);
+                    }
+                    break;
+                }
+                case 'orchestratorState':
+                    updateOrchestratorUI(message.state);
+                    break;
+                case 'pipelineState':
+                    updatePipelineUI(message.state);
+                    break;
+                case 'coderReviewerPhase':
+                    if (message.sessionId) {
+                        const nextPhase = message.phase || 'idle';
+                        if (coderReviewerPhases[message.sessionId] !== nextPhase) {
+                            coderReviewerPhaseSinceMs[message.sessionId] = message.timestamp || Date.now();
+                        }
+                        coderReviewerPhases[message.sessionId] = nextPhase;
+                        if (nextPhase === 'idle' || nextPhase === 'done' || nextPhase === 'timeout') {
+                            delete coderReviewerPhaseSinceMs[message.sessionId];
+                        }
+                        updateCoderReviewerPollingTicker();
+                        renderAgentList();
+                    }
+                    break;
+            }
+        });
+
+        // --- Rendering ---
+
+        function renderRunSheetDropdown(sheets) {
+            const lastSelected = runSheetSelect.value;
+            runSheetSelect.innerHTML = '';
+            if (archiveAllCompletedBtn) {
+                archiveAllCompletedBtn.disabled = false;
+                archiveAllCompletedBtn.title = '';
+            }
+
+            if (!sheets || sheets.length === 0) {
+                const opt = document.createElement('option');
+                opt.value = '';
+                opt.text = 'NO ACTIVE PLANS';
+                runSheetSelect.appendChild(opt);
+                updatePlanActionStates();
+                vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: null });
+                return;
+            }
+
+            const collisionTotals = new Map();
+            const collisionSeen = new Map();
+
+            const getDayKey = (value) => {
+                const date = new Date(value);
+                if (isNaN(date.getTime())) return 'UNKNOWN';
+                return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+            };
+            const getDisplayDate = (value) => {
+                const date = new Date(value);
+                if (isNaN(date.getTime())) return 'UNKNOWN';
+                return date.toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase();
+            };
+            const toTopic = (value) => (value || 'UNTITLED').toUpperCase().trim();
+            const toCollisionKey = (sheet) => `${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
+
+            sheets.forEach(sheet => {
+                const key = toCollisionKey(sheet);
+                collisionTotals.set(key, (collisionTotals.get(key) || 0) + 1);
+            });
+
+            sheets.forEach(sheet => {
+                const opt = document.createElement('option');
+                opt.value = sheet.sessionId;
+                const key = toCollisionKey(sheet);
+                const seen = (collisionSeen.get(key) || 0) + 1;
+                collisionSeen.set(key, seen);
+                const total = collisionTotals.get(key) || 0;
+                const counterSuffix = total > 1 ? ` (${seen})` : '';
+                const dateLabel = getDisplayDate(sheet.createdAt);
+                opt.text = `${toTopic(sheet.topic)}${counterSuffix} (${dateLabel})`;
+                runSheetSelect.appendChild(opt);
+            });
+
+            if (lastSelected && sheets.find(s => s.sessionId === lastSelected)) {
+                runSheetSelect.value = lastSelected;
+            } else {
+                runSheetSelect.selectedIndex = 0;
+            }
+            updatePlanActionStates();
+            vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
+        }
+
+        let currentAgentTab = 'agents';
+        function switchAgentTab(tab) {
+            currentAgentTab = tab;
+            const tabs = { agents: agentListStandard, auto: agentListAuto, cloud: agentListCloud };
+            document.querySelectorAll('.sub-tab-btn').forEach(btn => {
+                btn.classList.toggle('is-active', btn.dataset.tab === tab);
+            });
+            Object.entries(tabs).forEach(([key, el]) => {
+                el.classList.toggle('hidden', key !== tab);
+            });
+        }
+
+        document.querySelectorAll('.sub-tab-btn').forEach(btn => {
+            btn.addEventListener('click', () => switchAgentTab(btn.dataset.tab));
+        });
+
+        function updateCoderReviewerPollingTicker() {
+            const hasActiveSession = Object.values(coderReviewerPhases).some(phase => phase === 'polling' || phase === 'coder_dispatched');
+            if (hasActiveSession && !coderReviewerPollingTicker) {
+                coderReviewerPollingTicker = setInterval(() => {
+                    renderAgentList();
+                }, 1000);
+            } else if (!hasActiveSession && coderReviewerPollingTicker) {
+                clearInterval(coderReviewerPollingTicker);
+                coderReviewerPollingTicker = null;
+            }
+        }
+
+        function renderAgentList() {
+            // Preserve stateful analyst input across re-renders
+            const existingInput = document.getElementById('analyst-input');
+            const analystSnapshot = {
+                value: existingInput ? existingInput.value : '',
+                focused: document.activeElement === existingInput,
+                selStart: existingInput ? existingInput.selectionStart : 0,
+                selEnd: existingInput ? existingInput.selectionEnd : 0
+            };
+
+            agentListStandard.innerHTML = '';
+            agentListAuto.innerHTML = '';
+            agentListCloud.innerHTML = '';
+
+            // === AGENTS TAB: Lead Coder, Coder, Planner, Reviewer, Analyst ===
+
+            // 1. Lead Coder
+            agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
+                'START CODING',
+                terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+            ));
+
+            // 2. Coder
+            agentListStandard.appendChild(createAgentRow('CODER', 'coder',
+                'START CODING',
+                terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+            ));
+
+            // 3. Planner
+            agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
+                'IMPROVE PLAN',
+                terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
+            ));
+
+            // 4. Reviewer
+            agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
+                'REVIEW CODE',
+                terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
+            ));
+
+            // 5. Analyst
+            agentListStandard.appendChild(createAnalystRow());
+            // Restore analyst input state after re-render
+            if (analystSnapshot.value || analystSnapshot.focused) {
+                const inp = document.getElementById('analyst-input');
+                if (inp) {
+                    inp.value = analystSnapshot.value;
+                    if (analystSnapshot.focused) {
+                        inp.focus();
+                        inp.selectionStart = analystSnapshot.selStart;
+                        inp.selectionEnd = analystSnapshot.selEnd;
+                    }
+                }
+            }
+
+            // === AUTO TAB: Auto-Agent, Lead Coder + Coder (Team) ===
+
+            agentListAuto.appendChild(createAutoAgentRow());
+
+            agentListAuto.appendChild(createPipelineRow());
+
+            const leadExists = Object.values(lastTerminals).some(t => t.role === 'lead');
+            const coderExists = Object.values(lastTerminals).some(t => t.role === 'coder');
+
+            agentListAuto.appendChild(createCompositeRow('LEAD CODER + CODER', 'START TEAM CODING', () => { }));
+
+            agentListAuto.appendChild(createCoderReviewerRow());
+
+            // === CLOUD TAB: Jules ===
+
+            agentListCloud.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
+                'START CLOUD CODING',
+                terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
+                true
+            ));
+
+            // Restore active tab visibility after re-render
+            switchAgentTab(currentAgentTab);
+        }
+
+
+        function createJulesHistoryList() {
+            const container = document.createElement('div');
+            container.className = 'jules-history';
+            // Defensive filter: exclude completed sessions from UI (backend should already filter, but this ensures immediate UI responsiveness)
+            const sessions = (lastJulesSessions || [])
+                .filter(session => session && typeof session.planName === 'string' && session.planName.trim().length > 0)
+                .filter(session => {
+                    const status = session.switchboardStatus;
+                    return status !== 'Completed' && status !== 'Completed (No Changes)';
+                })
+                .slice(0, 15);
+            if (sessions.length === 0) return container;
+
+            for (const session of sessions) {
+                const item = document.createElement('div');
+                item.className = 'jules-history-item';
+                const name = session.planName.trim();
+                const status = session.switchboardStatus || session.julesStatus || 'Unknown';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'jules-history-name';
+                nameSpan.innerText = name;
+                const statusSpan = document.createElement('span');
+                statusSpan.className = 'jules-history-status';
+                statusSpan.innerText = status;
+                item.appendChild(nameSpan);
+                item.appendChild(statusSpan);
+                item.title = `Session: ${session.sessionId || 'unknown'}`;
+                container.appendChild(item);
+            }
+            return container;
+        }
+
+        function createPipelineRow() {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            const isRoleOnline = (role) => {
+                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
+                if (!termData) return false;
+                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const lastSeenMs = Date.parse(termData.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
+            };
+
+            // Pipeline readiness mirrors Auto baseline: planner + reviewer + lead
+            const pipelineReady = isRoleOnline('lead') && isRoleOnline('planner') && isRoleOnline('reviewer');
+            const ps = lastPipelineState || {};
+            const isRunning = !!ps.running;
+            const isPaused = !!ps.paused;
+
+            // Header: dot + title + timer
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot' + (isRunning ? (isPaused ? ' orange' : ' green-pulse') : (pipelineReady ? ' green' : ''));
+            identity.appendChild(dot);
+
+            const name = document.createElement('span');
+            name.className = 'agent-name';
+            name.innerText = 'PIPELINE';
+            identity.appendChild(name);
+
+            header.appendChild(identity);
+
+            if (isRunning && typeof ps.secondsRemaining === 'number') {
+                const timerColor = isPaused ? 'var(--accent-orange)' : 'var(--accent-green)';
+                const timer = document.createElement('span');
+                timer.style.cssText = `font-family:var(--font-mono);font-size:11px;color:${timerColor};letter-spacing:1px;`;
+                timer.innerText = formatOrchestratorTime(ps.secondsRemaining);
+                header.appendChild(timer);
+            }
+
+            if (isPaused) {
+                const pausedLabel = document.createElement('span');
+                pausedLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--accent-orange);letter-spacing:1.5px;';
+                pausedLabel.innerText = 'PAUSED';
+                header.appendChild(pausedLabel);
+            }
+
+            container.appendChild(header);
+
+            // Info line
+            if (isRunning) {
+                const info = document.createElement('div');
+                info.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-secondary);letter-spacing:0.5px;margin:4px 0;';
+                const count = `${ps.pendingCount || 0} plan(s) pending`;
+                info.innerText = ps.lastAction
+                    ? `${count} · Last: ${ps.lastAction.planTitle} → ${ps.lastAction.role}`
+                    : count;
+                container.appendChild(info);
+            }
+
+            // Interval input row (always visible when stopped)
+            if (!isRunning) {
+                const intervalRow = document.createElement('div');
+                intervalRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);';
+                const lbl = document.createElement('span');
+                lbl.innerText = 'INTERVAL (MIN):';
+                const inp = document.createElement('input');
+                inp.id = 'pipeline-interval-input';
+                inp.type = 'number';
+                inp.min = '1';
+                inp.max = '60';
+                inp.value = String(Math.round((ps.intervalSeconds || 600) / 60));
+                inp.style.cssText = 'width:48px;background:var(--panel-bg2);border:1px solid var(--border-color);color:var(--text-primary);font-family:var(--font-mono);font-size:10px;padding:2px 4px;border-radius:3px;';
+                inp.addEventListener('change', () => {
+                    const mins = parseInt(inp.value, 10) || 10;
+                    vscode.postMessage({ type: 'pipelineSetInterval', intervalSeconds: mins * 60 });
+                });
+                intervalRow.appendChild(lbl);
+                intervalRow.appendChild(inp);
+                container.appendChild(intervalRow);
+            }
+
+            // Button row
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;gap:6px;';
+
+            if (isRunning) {
+                const pauseBtn = document.createElement('button');
+                pauseBtn.className = 'action-btn';
+                pauseBtn.style.cssText = isPaused
+                    ? 'color:var(--accent-green);border-color:rgba(63,185,80,0.35);flex:0 0 auto;width:80px;'
+                    : 'color:var(--accent-orange);border-color:rgba(210,153,34,0.4);flex:0 0 auto;width:80px;';
+                pauseBtn.innerText = isPaused ? 'RESUME' : 'PAUSE';
+                pauseBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: isPaused ? 'pipelineUnpause' : 'pipelinePause' });
+                });
+                actions.appendChild(pauseBtn);
+
+                const stopBtn = document.createElement('button');
+                stopBtn.className = 'action-btn';
+                stopBtn.style.cssText = 'color:var(--accent-red);border-color:rgba(218,54,51,0.4);flex:1;';
+                stopBtn.innerText = 'STOP';
+                stopBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'pipelineStop' });
+                });
+                actions.appendChild(stopBtn);
+            } else {
+                const startBtn = document.createElement('button');
+                startBtn.className = 'action-btn';
+                startBtn.style.flex = '1';
+                startBtn.innerText = 'START';
+                startBtn.disabled = !isPlanSelected();
+                startBtn.addEventListener('click', () => {
+                    const pipelineIntervalEl = document.getElementById('pipeline-interval-input');
+                    const mins = parseInt((pipelineIntervalEl || {}).value, 10) || 10;
+                    vscode.postMessage({ type: 'pipelineStart', intervalSeconds: mins * 60 });
+                });
+                actions.appendChild(startBtn);
+            }
+
+            container.appendChild(actions);
+            return container;
+        }
+
+        function createAutoAgentRow() {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            const isRoleOnline = (role) => {
+                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
+                if (!termData) return false;
+                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const lastSeenMs = Date.parse(termData.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
+            };
+
+            // Availability: green when planner, reviewer, and lead are online
+            const allReady = isRoleOnline('lead') && isRoleOnline('planner') && isRoleOnline('reviewer');
+            const isRunning = lastOrchestratorState && lastOrchestratorState.running;
+            const isPaused = lastOrchestratorState && lastOrchestratorState.paused;
+
+            // Header row
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot' + (isRunning ? (isPaused ? '' : ' green-pulse') : (allReady ? ' green' : ''));
+            identity.appendChild(dot);
+
+            const name = document.createElement('span');
+            name.className = 'agent-name';
+            name.innerText = 'AUTO-AGENT';
+            identity.appendChild(name);
+
+            header.appendChild(identity);
+
+            // Timer display (when running)
+            if (isRunning && lastOrchestratorState) {
+                const timer = document.createElement('span');
+                const timerColor = isPaused ? 'var(--accent-orange)' : 'var(--accent-green)';
+                timer.style.cssText = `font-family:var(--font-mono);font-size:11px;color:${timerColor};letter-spacing:1px;`;
+                timer.innerText = formatOrchestratorTime(lastOrchestratorState.secondsRemaining);
+                header.appendChild(timer);
+            }
+
+            // PAUSED status indicator
+            if (isPaused) {
+                const pausedLabel = document.createElement('span');
+                pausedLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--accent-orange);letter-spacing:1.5px;text-transform:uppercase;';
+                pausedLabel.innerText = 'PAUSED';
+                header.appendChild(pausedLabel);
+            }
+
+            // Show badge when orchestrator is running on a different plan than currently viewed
+            if (isRunning && lastOrchestratorState && runSheetSelect && lastOrchestratorState.sessionId !== runSheetSelect.value) {
+                const badge = document.createElement('span');
+                badge.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--accent-orange);letter-spacing:1px;';
+                badge.innerText = 'RUNNING ON OTHER PLAN';
+                header.appendChild(badge);
+            }
+
+            container.appendChild(header);
+
+            // Stage info (when running): show current dispatched stage and next scheduled stage
+            if (isRunning && lastOrchestratorState && lastOrchestratorState.stages) {
+                const stages = Array.isArray(lastOrchestratorState.stages) ? lastOrchestratorState.stages : [];
+                const currentStageIndex = Number(lastOrchestratorState.currentStageIndex) || 0;
+                const currentStage = currentStageIndex > 0 ? stages[currentStageIndex - 1] : null;
+                const nextStage = currentStageIndex < stages.length ? stages[currentStageIndex] : null;
+
+                if (currentStage || nextStage) {
+                    const stageInfo = document.createElement('div');
+                    stageInfo.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-secondary);letter-spacing:0.5px;display:flex;flex-direction:column;gap:2px;margin:4px 0;';
+
+                    if (currentStage && typeof currentStage.label === 'string') {
+                        const currentLine = document.createElement('div');
+                        const currentPrefix = document.createElement('span');
+                        currentPrefix.innerText = 'STAGE: ';
+                        const currentValue = document.createElement('span');
+                        currentValue.style.cssText = 'color:var(--accent-green);font-weight:bold;';
+                        currentValue.innerText = currentStage.label.toUpperCase();
+                        currentLine.appendChild(currentPrefix);
+                        currentLine.appendChild(currentValue);
+                        stageInfo.appendChild(currentLine);
+                    }
+
+                    if (nextStage && typeof nextStage.label === 'string') {
+                        const nextLine = document.createElement('div');
+                        nextLine.innerText = 'NEXT → ' + nextStage.label.toUpperCase();
+                        stageInfo.appendChild(nextLine);
+                    }
+
+                    container.appendChild(stageInfo);
+                }
+            }
+
+            // Interval input row (always visible when stopped)
+            if (!isRunning) {
+                const intervalRow = document.createElement('div');
+                intervalRow.className = 'orchestrator-interval';
+                const intervalLabel = document.createElement('label');
+                intervalLabel.htmlFor = 'orch-interval-input';
+                intervalLabel.innerText = 'Interval (s)';
+                const intervalInput = document.createElement('input');
+                intervalInput.id = 'orch-interval-input';
+                intervalInput.type = 'number';
+                intervalInput.value = String(orchIntervalSeconds);
+                intervalInput.min = '10';
+                intervalInput.max = '3600';
+                intervalInput.addEventListener('change', () => {
+                    const interval = parseInt(intervalInput.value, 10) || 300;
+                    orchIntervalSeconds = interval;
+                    vscode.postMessage({ type: 'orchestratorSetInterval', intervalSeconds: interval });
+                });
+                intervalRow.appendChild(intervalLabel);
+                intervalRow.appendChild(intervalInput);
+                container.appendChild(intervalRow);
+            }
+
+            // Button row
+            const actions = document.createElement('div');
+            actions.style.cssText = 'display:flex;gap:6px;';
+
+            if (isRunning) {
+                // RUNNING: show PAUSE/RESUME + ADVANCE + STOP
+                const pauseBtn = document.createElement('button');
+                pauseBtn.className = 'action-btn';
+                pauseBtn.style.flex = '0 0 auto';
+                pauseBtn.style.width = '70px';
+                pauseBtn.innerText = isPaused ? 'RESUME' : 'PAUSE';
+                if (isPaused) {
+                    pauseBtn.style.cssText = 'color:var(--accent-green);border-color:rgba(63,185,80,0.35);';
+                } else {
+                    pauseBtn.style.cssText = 'color:var(--accent-orange);border-color:rgba(210,153,34,0.4);';
+                }
+                pauseBtn.addEventListener('click', () => {
+                    if (isPaused) {
+                        vscode.postMessage({ type: 'orchestratorUnpause' });
+                    } else {
+                        vscode.postMessage({ type: 'orchestratorPause' });
+                    }
+                });
+                actions.appendChild(pauseBtn);
+
+                const advanceBtn = document.createElement('button');
+                advanceBtn.className = 'action-btn';
+                advanceBtn.style.flex = '1';
+                advanceBtn.innerText = 'ADVANCE';
+                advanceBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'orchestratorAdvance' });
+                });
+                actions.appendChild(advanceBtn);
+
+                const stopBtn = document.createElement('button');
+                stopBtn.className = 'action-btn stop-btn';
+                stopBtn.style.cssText = 'color:var(--accent-red);border-color:rgba(218,54,51,0.4);width:70px;flex:0 0 auto;';
+                stopBtn.innerText = 'STOP';
+                stopBtn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'orchestratorStop' });
+                });
+                actions.appendChild(stopBtn);
+            } else {
+                // STOPPED: show only START
+                const startBtn = document.createElement('button');
+                startBtn.className = 'action-btn';
+                startBtn.style.flex = '1';
+                startBtn.innerText = 'START';
+                startBtn.disabled = !isPlanSelected();
+                startBtn.addEventListener('click', () => {
+                    const sessionId = runSheetSelect.value;
+                    if (!sessionId) return;
+                    const currentIntervalInput = document.getElementById('orch-interval-input');
+                    const interval = parseInt((currentIntervalInput || {}).value, 10) || orchIntervalSeconds || 300;
+                    orchIntervalSeconds = interval;
+                    vscode.postMessage({ type: 'orchestratorStart', sessionId, intervalSeconds: interval });
+                });
+                actions.appendChild(startBtn);
+            }
+
+            container.appendChild(actions);
+            return container;
+        }
+
+        function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate) {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            const termName = findTerminalFn ? findTerminalFn(lastTerminals) : null;
+            const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
+            const dispatchState = dispatchInfo && dispatchInfo.state ? dispatchInfo.state : null;
+            const routedTermName = (dispatchInfo && dispatchInfo.terminalName) ? dispatchInfo.terminalName : null;
+            const resolvedTermName = termName || routedTermName;
+            const termData = resolvedTermName ? lastTerminals[resolvedTermName] : null;
+
+            // Status Logic
+            let isReady = false;
+            let isWorking = false;
+            let isRecoverable = false;
+
+            if (roleId === 'jules') {
+                isReady = true;
+                if (lastJulesActivePlans && lastJulesActivePlans.length > 0) {
+                    isWorking = true;
+                }
+            } else if (dispatchState === 'ready') {
+                isReady = true;
+            } else if (dispatchState === 'recoverable') {
+                isReady = true;
+                isRecoverable = true;
+            } else if (dispatchState === 'not_ready') {
+                isReady = false;
+            } else if (termData) {
+                // Check liveliness
+                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const lastSeenMs = Date.parse(termData.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+                const isAlive = termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
+
+                if (isAlive) {
+                    isReady = true;
+                    // For terminals, check statusState. For chat agents, check status.
+                    const currentStatus = termData.statusState || termData.status;
+                    if (currentStatus === 'working' || currentStatus === 'thinking' || currentStatus === 'active' || currentStatus === 'planning') {
+                        isWorking = true;
+                    }
+                }
+            }
+
+            // Row Header
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            // Identity (Dot + Name)
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot';
+            if (isWorking) dot.classList.add('green-pulse');
+            else if (isReady) dot.classList.add(isRecoverable ? 'orange' : 'green');
+
+            const name = document.createElement('div');
+            name.className = 'agent-name';
+            if (roleId !== 'jules' && lastStartupCommands[roleId]) {
+                const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
+                name.innerText = `${label} - ${cmd} CLI`;
+            } else {
+                name.innerText = label;
+            }
+
+            identity.appendChild(dot);
+            identity.appendChild(name);
+
+            header.appendChild(identity);
+
+            if (roleId === 'jules') {
+                const locateBtn = document.createElement('button');
+                locateBtn.className = 'locate-btn';
+                locateBtn.innerText = 'locate';
+                locateBtn.onclick = () => {
+                    vscode.postMessage({ type: 'focusTerminal', terminalName: 'Jules Monitor' });
+                };
+                header.appendChild(locateBtn);
+            } else if (!hideLocate) {
+                // Locate Button
+                const locateBtn = document.createElement('button');
+                locateBtn.className = 'locate-btn';
+                locateBtn.innerText = 'locate';
+                // Disable/Hide for chat-only agents that are not locals
+                const isChatOnly = termData && termData._isChat && !termData._isLocal;
+                locateBtn.disabled = !resolvedTermName || isChatOnly;
+                if (isChatOnly) locateBtn.style.opacity = '0.3';
+
+                locateBtn.onclick = () => {
+                    if (resolvedTermName) vscode.postMessage({ type: 'focusTerminal', terminalName: resolvedTermName });
+                };
+                header.appendChild(locateBtn);
+            }
+
+            // Action Button
+            const btn = document.createElement('button');
+            btn.className = 'action-btn';
+            const pendingDispatch = isDispatchPending(roleId);
+            btn.innerText = pendingDispatch ? 'DISPATCHING...' : actionLabel;
+            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
+            btn.dataset.role = roleId;
+            if (pendingDispatch) {
+                btn.classList.add('dispatching');
+            }
+            if (isRecoverable && dispatchInfo && dispatchInfo.source) {
+                btn.title = `Recoverable route (${dispatchInfo.source})`;
+            } else if (dispatchState === 'not_ready') {
+                btn.title = 'No executable terminal route in this window';
+            }
+
+            // Special click handlers based on role
+            btn.onclick = () => {
+                const sessionId = runSheetSelect.value;
+                if (!sessionId) return;
+                markDispatchPending(roleId);
+                btn.disabled = true;
+                btn.classList.add('dispatching');
+                btn.innerText = 'DISPATCHING...';
+
+                if (roleId === 'planner') {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'planner', sessionFile: sessionId, instruction: 'enhance' });
+                } else if (roleId === 'reviewer') {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'reviewer', sessionFile: sessionId });
+                } else if (roleId === 'coder') {
+                    // Coder: Action -> Implement
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'coder', sessionFile: sessionId });
+                } else if (roleId === 'lead') {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'lead', sessionFile: sessionId });
+                } else if (roleId === 'jules') {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'jules', sessionFile: sessionId, instruction: 'execute' });
+                }
+            };
+
+            container.appendChild(header);
+            container.appendChild(btn);
+
+            if (roleId === 'jules') {
+                container.appendChild(createJulesHistoryList());
+            }
+
+            return container;
+        }
+
+        function createCompositeRow(label, actionLabel, clickHandler) {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            // Use backend-computed teamReady: requires both lead and coder terminal agents alive
+            const isReady = lastTeamReady;
+
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot';
+            if (isReady) dot.classList.add('green');
+
+            const name = document.createElement('div');
+            name.className = 'agent-name';
+            name.innerText = label;
+
+            identity.appendChild(dot);
+            identity.appendChild(name);
+
+            const locateBtn = document.createElement('button');
+            locateBtn.className = 'locate-btn';
+            locateBtn.innerText = 'locate';
+            locateBtn.style.visibility = 'hidden'; // No single terminal to locate
+
+            header.appendChild(identity);
+            header.appendChild(locateBtn);
+
+            const btn = document.createElement('button');
+            btn.className = 'action-btn';
+            const pendingDispatch = isDispatchPending('team');
+            btn.innerText = pendingDispatch ? 'DISPATCHING...' : actionLabel;
+            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
+            btn.dataset.role = 'team';
+            if (pendingDispatch) {
+                btn.classList.add('dispatching');
+            }
+            btn.onclick = () => {
+                const sessionId = runSheetSelect.value;
+                if (!sessionId) return;
+                markDispatchPending('team');
+                btn.disabled = true;
+                btn.classList.add('dispatching');
+                btn.innerText = 'DISPATCHING...';
+                vscode.postMessage({ type: 'triggerAgentAction', role: 'team', sessionFile: sessionId });
+            };
+
+            container.appendChild(header);
+            container.appendChild(btn);
+            return container;
+        }
+
+        function createCoderReviewerRow() {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            const isRoleOnline = (role) => {
+                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
+                if (!termData) return false;
+                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const lastSeenMs = Date.parse(termData.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
+            };
+
+            const sessionId = runSheetSelect ? runSheetSelect.value : '';
+            const phase = (sessionId && coderReviewerPhases[sessionId]) || 'idle';
+            const isActive = phase !== 'idle' && phase !== 'done' && phase !== 'timeout';
+            const bothReady = isRoleOnline('coder') && isRoleOnline('reviewer');
+
+            // Header
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot' + (isActive ? ' green-pulse' : (bothReady ? ' green' : ''));
+            identity.appendChild(dot);
+
+            const name = document.createElement('span');
+            name.className = 'agent-name';
+            name.innerText = 'CODER → REVIEWER';
+            identity.appendChild(name);
+
+            header.appendChild(identity);
+
+            // Phase label
+            const phaseLabels = {
+                idle: 'Idle',
+                coder_dispatched: 'Dispatching Coder...',
+                polling: 'Waiting for signal...',
+                reviewer_dispatched: 'Dispatching Reviewer...',
+                done: 'Done',
+                timeout: 'Timed Out'
+            };
+            const phaseLabel = document.createElement('span');
+            phaseLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);letter-spacing:0.5px;';
+            let phaseText = phaseLabels[phase] || phase;
+            if (phase === 'coder_dispatched') {
+                const sinceMs = coderReviewerPhaseSinceMs[sessionId] || Date.now();
+                const elapsedSeconds = Math.floor((Date.now() - sinceMs) / 1000);
+                const remainingSeconds = Math.max(0, 120 - elapsedSeconds); // 2 minutes = 120 seconds
+                const minutes = Math.floor(remainingSeconds / 60);
+                const seconds = remainingSeconds % 60;
+                phaseText = `Sending signal file instruction in ${minutes}m ${seconds}s`;
+            } else if (phase === 'polling') {
+                const sinceMs = coderReviewerPhaseSinceMs[sessionId] || Date.now();
+                const elapsedSeconds = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
+                const minutes = Math.floor(elapsedSeconds / 60);
+                const seconds = elapsedSeconds % 60;
+                phaseText = `Waiting for signal (${minutes}m ${seconds}s)`;
+            }
+            phaseLabel.innerText = phaseText;
+            header.appendChild(phaseLabel);
+
+            container.appendChild(header);
+
+            // Start button
+            const startBtn = document.createElement('button');
+            startBtn.className = 'action-btn';
+            startBtn.innerText = 'START';
+            startBtn.disabled = !isPlanSelected() || !bothReady || isActive;
+            startBtn.addEventListener('click', () => {
+                const sid = runSheetSelect ? runSheetSelect.value : '';
+                if (!sid) return;
+                vscode.postMessage({ type: 'startCoderReviewerWorkflow', sessionId: sid });
+            });
+            container.appendChild(startBtn);
+
+            // Stop button (visible only while active)
+            if (isActive) {
+                const stopBtn = document.createElement('button');
+                stopBtn.className = 'action-btn';
+                stopBtn.style.marginTop = '4px';
+                stopBtn.innerText = 'STOP';
+                stopBtn.addEventListener('click', () => {
+                    const sid = runSheetSelect ? runSheetSelect.value : '';
+                    if (!sid) return;
+                    vscode.postMessage({ type: 'stopCoderReviewerWorkflow', sessionId: sid });
+                });
+                container.appendChild(stopBtn);
+            }
+
+            return container;
+        }
+
+        function createAnalystRow() {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+
+            const termName = Object.keys(lastTerminals).find(key => lastTerminals[key].role === 'analyst');
+            const termData = termName ? lastTerminals[termName] : null;
+
+            let isReady = false;
+            if (termData) {
+                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const lastSeenMs = Date.parse(termData.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+                const isAlive = termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
+                isReady = !!isAlive;
+            }
+
+            const header = document.createElement('div');
+            header.className = 'row-header';
+
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+
+            const dot = document.createElement('div');
+            dot.className = 'status-dot';
+            if (isReady) dot.classList.add('green');
+
+            const name = document.createElement('div');
+            name.className = 'agent-name';
+            if (lastStartupCommands['analyst']) {
+                const cmd = lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase();
+                name.innerText = `ANALYST - ${cmd} CLI`;
+            } else {
+                name.innerText = 'ANALYST';
+            }
+
+            identity.appendChild(dot);
+            identity.appendChild(name);
+            header.appendChild(identity);
+
+            const locateBtn = document.createElement('button');
+            locateBtn.className = 'locate-btn';
+            locateBtn.innerText = 'locate';
+            locateBtn.disabled = !termName;
+            locateBtn.onclick = () => {
+                if (termName) vscode.postMessage({ type: 'focusTerminal', terminalName: termName });
+            };
+            header.appendChild(locateBtn);
+
+            const input = document.createElement('textarea');
+            input.className = 'agent-input';
+            input.id = 'analyst-input';
+            input.placeholder = 'Ask analyst a question...';
+
+            const btn = document.createElement('button');
+            btn.className = 'action-btn';
+            btn.id = 'analyst-send-btn';
+            const pendingDispatch = isDispatchPending('analyst');
+            btn.innerText = pendingDispatch ? 'DISPATCHING...' : 'SEND QUESTION';
+            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
+            btn.dataset.role = 'analyst';
+            if (pendingDispatch) {
+                btn.classList.add('dispatching');
+            }
+            if (analystButtonFeedback && Date.now() < analystButtonFeedback.expiresAt) {
+                btn.classList.add(analystButtonFeedback.className);
+                btn.innerText = analystButtonFeedback.text;
+                btn.disabled = true;
+            } else {
+                analystButtonFeedback = null;
+            }
+            btn.onclick = () => {
+                const text = input.value.trim();
+                if (!text) return;
+                markDispatchPending('analyst');
+                btn.disabled = true;
+                btn.classList.add('dispatching');
+                btn.innerText = 'DISPATCHING...';
+                vscode.postMessage({
+                    type: 'sendAnalystMessage',
+                    instruction: text
+                });
+                input.value = '';
+            };
+
+            container.appendChild(header);
+            container.appendChild(input);
+            container.appendChild(btn);
+
+            const mapBtn = document.createElement('button');
+            mapBtn.className = 'action-btn';
+            mapBtn.id = 'analyst-generate-map-btn';
+            const pendingMapDispatch = isDispatchPending('analystMap');
+            mapBtn.innerText = pendingMapDispatch ? 'GENERATING...' : 'GENERATE CONTEXT MAP';
+            mapBtn.disabled = !isReady || pendingMapDispatch || !isPlanSelected();
+            mapBtn.dataset.role = 'analystMap';
+            if (pendingMapDispatch) {
+                mapBtn.classList.add('dispatching');
+            }
+            if (analystMapFeedback && Date.now() < analystMapFeedback.expiresAt) {
+                mapBtn.classList.add(analystMapFeedback.className);
+                mapBtn.innerText = analystMapFeedback.text;
+                mapBtn.disabled = true;
+            } else {
+                analystMapFeedback = null;
+            }
+            mapBtn.onclick = () => {
+                const text = input.value.trim();
+                if (!text) return;
+                markDispatchPending('analystMap');
+                mapBtn.disabled = true;
+                mapBtn.classList.add('dispatching');
+                mapBtn.innerText = 'GENERATING...';
+                vscode.postMessage({
+                    type: 'generateContextMap',
+                    featureDescription: text
+                });
+            };
+            container.appendChild(mapBtn);
+
+            return container;
+        }
+
+        function updateMcpStatus(msg) {
+            if (msg.connected) {
+                mcpDot.className = 'tiny-dot green';
+                mcpText.innerText = 'MCP: ONLINE';
+            } else if (msg.serverRunning) {
+                mcpDot.className = 'tiny-dot orange';
+                mcpText.innerText = 'MCP: CONNECTING';
+            } else {
+                mcpDot.className = 'tiny-dot red';
+                mcpText.innerText = 'MCP: OFFLINE';
+            }
+        }
+
+        // Notify extension we are ready to receive data
+        updatePlanActionStates();
+        setActiveTab(activeTab, false);
+        vscode.postMessage({ type: 'getRecentActivity', limit: 50 });
+        vscode.postMessage({ type: 'ready' });
+
+    </script>
+</body>
+
+</html>
