@@ -1,101 +1,85 @@
 # Switchboard
 
-**The subscription-based alternative to API frameworks like OpenCode. Combine your existing AI subscriptions to get more premium model output for less — without a single API key.**
+**The subscription-based alternative to API frameworks like OpenCode. Coordinate all your AI subscriptions, local LLMs, and CLI agents into a single team without a single API key.**
 
-Switchboard adds a **sidebar panel to VS Code** where you create, manage, and dispatch plans to AI agents. It bridges IDE-based agents (Antigravity, Windsurf, Copilot Chat) and CLI agents (Copilot CLI, Qwen, Codex, Gemini CLI) so they can collaborate on the same plans inside your repo. Each agent uses its own subscription so you don't need to enter any API keys. You coordinate them from the sidebar.
+Switchboard adds a **sidebar panel to VS Code** where you create, manage, and dispatch plans to AI agents. It bridges IDE-based agents (Antigravity, Windsurf, Copilot Chat) and CLI agents (Copilot CLI, Qwen, Codex, Gemini CLI) so they can collaborate on the same plans inside your repo. 
+
+Instead of paying for expensive all-in-one API tiers, you get dramatically more AI usage by load-balancing your existing consumer subscriptions (e.g., Google Pro, Copilot, Codex) from the sidebar.
 
 ![Switchboard](https://raw.githubusercontent.com/TentacleOpera/switchboard/main/docs/switchboardui.png)
 
-## Why
+## Why Switchboard?
 
-Different AI subscriptions have wildly different pricing structures. Claude Opus is powerful but token-heavy. Copilot CLI charges per-prompt with no upper limit per session. Qwen, Codex, and Gemini Flash are cheap. By combining this you can dramatically optimise your token use. For example, plan a large feature with Antigravity. Then send it to Copilot Opus to one-shot using their per-prompt pricing. Then send it to Codex CLI for code review. 
+Different AI subscriptions have wildly different pricing and limit structures. Switchboard lets you exploit these differences:
 
-Result: You achieve Opus-level results without thrashing Opus in one subscription. 
+* **Avoid Fair Use Penalties:** Stop thrashing a single subscription's hidden compute budget and getting hit with week-long lockouts. Plan with Antigravity, improve the plan with Codex, then implement with Copilot.
+* **Extend Premium Models:** Tell Antigravity Opus to offload routine boilerplate to a cheaper CLI agent so your high-tier message limits last longer.
+* **Exploit Per-Prompt Pricing:** Plan a massive feature epic in Antigravity. Then, send it to Copilot Opus to execute using their per-prompt pricing (which has no upper work limit per session), rather than burning your Antigravity token quota.
 
-## Trust and Account Safety
+## Trust, Account Safety & The ToS
 
-The coordination layer is file-based and local — no API keys, no third-party servers, no ToS violations. You use your own subscriptions throughout. This makes it very different to OpenCode and other proxy services that have been banned by Google. Switchboard happens entirely on your machine, without touching anyone else's backend servers. [I asked Claude to analyse the architecture and confirm this.](docs/ToS_COMPLIANCE.md)
+Due to recent ToS bans hitting proxy services like OpenCode, Switchboard was built to be completely local. **There are no proxy servers, no external API keys, and no ToS violations.**
 
-## What it does
+The coordination layer is strictly file-based. Switchboard uses the official VS Code `terminal.sendText` API to automate the agents running in your own terminals, under your own standard authentication. It happens entirely on your machine. [Read the architectural analysis here.](docs/ToS_COMPLIANCE.md)
 
-- **Mirrors plans** from the Antigravity brain into your repo — CLI agents can't access the Antigravity brain folder directly, so Switchboard copies plans into your workspace where any terminal agent can read them (skipped automatically if not using Antigravity)
-- **Sends plans to terminals** using the official VS Code `terminal.sendText` API
-- **Coordinates agents automatically** by logging the current state of your active plans and assigning different terminals to work on them
-- **Works across IDEs** — install in both Antigravity and Windsurf; they share the same plan files
+## Core Features
 
-## Quick start
+* **Antigravity Brain Mirroring:** Automatically copies plans from the Antigravity brain into your workspace so any external CLI agent can read them.
+* **Cross-IDE Workflows:** Since it uses standard VS Code APIs, you can install it in any fork. Have Antigravity on one monitor and Windsurf on another; they seamlessly share the same plan files.
+* **State-Tracking:** Logs the current state of your active plans, knowing exactly which agents have or haven't worked on them.
 
-1. Open the **Switchboard sidebar** (click the icon in the activity bar)
-2. Click **Setup** → **Initialise** — this auto-configures the MCP for Antigravity, Windsurf, and VS Code-compatible IDEs in one click
-3. Enter your CLI startup commands in Setup (e.g. `copilot chat`, `qwen`), save, then click **Open Terminals**
-4. Authenticate in each terminal and choose your models
-5. Draft a plan using `/chat` in your AI chat, refine with `/enhance` or `/challenge`, or click **Create Plan**
-6. Use the sidebar **Send** buttons to dispatch the plan to your agents
+## Quick Start
 
+1. Open the **Switchboard sidebar** (click the icon in the activity bar).
+2. Click **Setup** → **Initialise**. This auto-configures the MCP for Antigravity, Windsurf, and VS Code-compatible IDEs in one click.
+3. Enter your CLI startup commands in Setup (e.g., `copilot chat`, `qwen`), save, then click **Open Terminals**.
+4. Authenticate in each terminal and choose your models.
+5. Draft a plan using `/chat` in your AI chat, refine it, or click **Create Plan**.
+6. Use the sidebar **Send** buttons to dispatch the plan to your agents.
 
-
-## Agent roles
+## Agent Roles
 
 | Role | Recommended tool | Purpose |
-|:-----|:-----------------|:--------|
-| Lead Coder | Copilot CLI (Opus) | Large feature implementation |
-| Coder | Qwen, Gemini Flash, Codex Low | Boilerplate and routine work |
-| Planner | Codex High | Plan hardening and edge cases |
-| Reviewer | Codex High | Bug finding and verification |
-| Analyst | Qwen, Gemini | Research and investigation |
-
+| :--- | :--- | :--- |
+| Lead Coder | Copilot CLI (Opus 4.6) | Large feature implementation |
+| Coder | Qwen, Gemini Flash 3, Codex 5.3 | Boilerplate and routine work |
+| Planner | Codex 5.3, Gemini Flash 3 | Plan hardening and edge cases |
+| Reviewer | Codex 5.3 | Bug finding and verification |
+| Analyst | Qwen, Gemini Flash 3 | Research and investigation |
 
 ## IDE Chat Workflows
 
+*Note: The handoff workflows are secondary controls to the sidebar buttons.*
+
 | Command | What it does |
-|:--------|:------------|
-| `/chat` | Ideation mode — discuss requirements before any plan is written |
-| `/enhance` | Deepen and stress-test an existing plan |
-| `/challenge` | Adversarial review — a grumpy persona finds flaws, then synthesizes fixes |
-| `/handoff` | Route simple work to a CLI agent, keep complex work in the current session |
-| `/handoff-lead` | Send everything to your Lead Coder agent in one shot |
-| `/handoff-chat` | Copy the plan to clipboard for pasting into Windsurf or another IDE |
-| `/handoff-relay` | Current model does the complex work, then pauses for a model switch |
-| `/accuracy` | High-precision implementation mode with mandatory self-review gates |
+| :--- | :--- |
+| `/chat` | Ideation mode — discuss requirements before any plan is written. |
+| `/enhance` | Deepen and stress-test an existing plan. |
+| `/challenge` | Adversarial review — a grumpy persona finds flaws, then synthesizes fixes. |
+| `/handoff` | Route sanity-checking for micro-specs to a CLI agent; ends at spec decomposition. |
+| `/handoff-lead` | Send everything to your Lead Coder agent in one shot. |
+| `/handoff-chat` | Copy the plan to the clipboard for pasting into Windsurf or another IDE. |
+| `/handoff-relay` | Current model does the complex work, then pauses for a model switch. |
+| `/accuracy` | High-precision implementation mode with mandatory self-review gates. |
 
-Use `--all` with any handoff to skip complexity splitting and send the whole plan.
-
-NOTE: the handoff workflows are secondary controls to the sidebar buttons. 
-
-## Example workflow (Antigravity)
-
-```
-1. /chat in Antigravity Flash → get a rough plan
-2. Switch to Sonnet → type /enhance → deepen the plan with edge cases
-3. Type /challenge → adversarial review catches the gaps
-4. Press 'Start Coding' in the sidebar → Copilot Opus implements the hardened plan for a few Copilot credits
-```
-
+> Use `--all` with any handoff to skip complexity splitting and send the whole plan.
 
 ## Team Automation
 
-The sidebar includes a panel for team automation.
+The sidebar includes a panel for "dumb but effective" asynchronous team automation, removing the mental load of managing a backlog.
 
 | Command | What it does |
-|:--------|:------------|
-| `Pipeline` | Every 10 minutes, the plugin scans the list of active plans and sends one to the next stage of Planner, Coder or Review depending on its log history |
-| `Auto Agent` | Sends the active plan to the Planner, Lead Coder and Reviewer agents on a 7 minute timer between stages |
-| `Lead + Coder` | Once you have made an enhanced plan with a complexity split, sends the high complexity work to the Lead Coder and the low complexity work to the Coder |
-| `Coder + Reviewer` | Sends the plan to the Coder, and asks them to notify the Reviewer once done — lifts cheap coding quality without needing Opus |
+| :--- | :--- |
+| `Pipeline` | A state-tracking loop. Every 10 minutes, it picks an open plan and blindly passes it to the next agent in your chain (Planner → Coder → Reviewer). |
+| `Auto Agent` | Sends the active plan to the Planner, Lead Coder, and Reviewer agents on a 7-minute timer between stages. |
+| `Lead + Coder` | Reads your enhanced plan's complexity split (low, medium, or lazy). Routes the lazy/medium work to the standard Coder, and the rest to the Lead Coder. |
+| `Coder + Reviewer` | Sends the plan to the Coder, and asks them to notify the Reviewer once done — lifts cheap coding quality without needing Opus 4.6. |
 
+## Architecture
 
+* **VS Code Extension:** Manages terminals, sidebar UI, plan watcher, and inbox watcher.
+* **Bundled MCP Server:** Exposes tools to agents (`send_message`, `check_inbox`, `start_workflow`, `run_in_terminal`, etc.).
+* **File Protocol:** All coordination happens via `.switchboard/` in your workspace — transparent, auditable, and entirely local.
 
-## How it works
-
-- **VS Code Extension**: Manages terminals, sidebar UI, plan watcher, and inbox watcher
-- **Bundled MCP Server**: Exposes tools to agents (`send_message`, `check_inbox`, `start_workflow`, `run_in_terminal`, etc.)
-- **File protocol**: All coordination happens via `.switchboard/` in your workspace — transparent, auditable, no lock-in
-
-## Privacy
-
-No telemetry. No external servers. All coordination data is workspace-local.
-
-
-## License
-
-MIT
+## Privacy & License
+No telemetry. No external servers. All coordination data is workspace-local. MIT License.
