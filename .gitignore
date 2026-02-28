@@ -6,7 +6,8 @@ out/
 dist/
 
 # Packaged extensions
-*.vsix
+# *.vsix
+
 
 # TypeScript cache
 *.tsbuildinfo
