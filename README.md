@@ -32,7 +32,7 @@ The coordination layer is strictly file-based. Switchboard uses the official VS 
 
 1. Open the **Switchboard sidebar** (click the icon in the activity bar).
 2. Click **Setup** → **Initialise**. This auto-configures the MCP for Antigravity, Windsurf, and VS Code-compatible IDEs in one click.
-3. Enter your CLI startup commands in Setup (e.g., `copilot chat`, `qwen`), save, then click **Open Terminals**.
+3. Enter your CLI startup commands in Setup (e.g., `copilot chat`, `qwen`), save, then click **Open Terminals** in the Terminal Operations panel.
 4. Authenticate in each terminal and choose your models.
 5. Draft a plan using `/chat` in your AI chat, refine it, or click **Create Plan**.
 6. Use the sidebar **Send** buttons to dispatch the plan to your agents.
