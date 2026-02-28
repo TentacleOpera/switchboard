@@ -24,6 +24,11 @@ describe('workspace scope enforcement regressions', () => {
             /Auto-registered new brain plan to workspace/,
             'Expected _mirrorBrainPlan to auto-register new plans (no runsheet) to the workspace.'
         );
+        assert.match(
+            source,
+            /if \(this\._historicalBrainBaseline\.has\(stablePath\)\) \{[\s\S]*Mirror skipped \(historical_baseline\)/,
+            'Expected _mirrorBrainPlan to skip historical baseline plans before auto-registration.'
+        );
         assert.doesNotMatch(
             source,
             /const hasExistingScopeData = knownPaths\.size > 0;/,
@@ -85,6 +90,24 @@ describe('workspace scope enforcement regressions', () => {
             source,
             /if \(!sheet\.brainSourcePath\) return true;/,
             'Expected local plans (no brainSourcePath) to bypass registry check.'
+        );
+    });
+
+    it('captures baseline before watcher registration', () => {
+        assert.match(
+            source,
+            /private _historicalBrainBaseline = new Set<string>\(\);/,
+            'Expected TaskViewerProvider to store a historical brain baseline set.'
+        );
+        assert.match(
+            source,
+            /this\._populateBrainBaseline\(brainDir\);[\s\S]*createFileSystemWatcher\(brainPattern\)/,
+            'Expected startup baseline capture to happen before brain watcher registration.'
+        );
+        assert.match(
+            source,
+            /private _populateBrainBaseline\(brainDir: string\): void \{[\s\S]*this\._isBrainMirrorCandidate\(brainDir, fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*this\._historicalBrainBaseline\.add\(stableKey\)/,
+            'Expected baseline population to use mirror candidate filtering and stable base-brain keys.'
         );
     });
 });

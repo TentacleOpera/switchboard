@@ -70,6 +70,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _tombstonesReady: Promise<void> | null = null;
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
+    // Session baseline: stable-path keys of brain plans that existed at extension startup.
+    // Plans in this set are treated as historical and skip auto-registration to new workspaces.
+    private _historicalBrainBaseline = new Set<string>();
 
     // Session Tracking
     private _lastSessionId: string | null = null;
@@ -1007,6 +1010,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             console.error('[TaskViewerProvider] Failed to initialize tombstones in brain watcher setup:', e);
         });
 
+        // Capture baseline snapshot of existing brain plans before registering watchers.
+        // Plans present at startup are treated as historical and will not be auto-registered.
+        this._populateBrainBaseline(brainDir);
+
         // Brain → Mirror: VS Code-managed watcher (cross-platform, lifecycle-safe)
         try {
             const brainUri = vscode.Uri.file(brainDir);
@@ -1379,6 +1386,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (TaskViewerProvider.EXCLUDED_BRAIN_FILENAMES.has(baseFilename.toLowerCase())) return false;
 
         return true;
+    }
+
+    /**
+     * One-time startup scan: snapshot all pre-existing brain plans into
+     * _historicalBrainBaseline so they are not auto-registered to new workspaces.
+     * Must run before any watcher callbacks can invoke _mirrorBrainPlan.
+     */
+    private _populateBrainBaseline(brainDir: string): void {
+        this._historicalBrainBaseline.clear();
+        let sessionDirs: string[];
+        try {
+            sessionDirs = fs.readdirSync(brainDir, { withFileTypes: true })
+                .filter(d => d.isDirectory())
+                .map(d => d.name);
+        } catch {
+            return;
+        }
+        for (const session of sessionDirs) {
+            const sessionPath = path.join(brainDir, session);
+            let files: string[];
+            try {
+                files = fs.readdirSync(sessionPath);
+            } catch {
+                continue;
+            }
+            for (const file of files) {
+                const fullPath = path.join(sessionPath, file);
+                if (!this._isBrainMirrorCandidate(brainDir, fullPath)) continue;
+                const baseBrainPath = this._getBaseBrainPath(fullPath);
+                const stableKey = this._getStablePath(baseBrainPath);
+                this._historicalBrainBaseline.add(stableKey);
+            }
+        }
+        console.log(`[TaskViewerProvider] Brain baseline captured: ${this._historicalBrainBaseline.size} pre-existing plan(s)`);
     }
 
     private async _isLikelyPlanFile(filePath: string): Promise<boolean> {
@@ -1770,6 +1811,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (runSheetKnown) {
                     // Existing plan from another workspace — do not adopt
                     console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}): ${path.basename(brainFilePath)}`);
+                    return;
+                }
+                // Historical baseline gate: plans that existed at extension startup
+                // are not auto-registered to prevent flooding new workspaces.
+                if (this._historicalBrainBaseline.has(stablePath)) {
+                    console.log(`[TaskViewerProvider] Mirror skipped (historical_baseline): ${path.basename(brainFilePath)}`);
                     return;
                 }
                 // New plan: register to this workspace so it appears in the sidebar
