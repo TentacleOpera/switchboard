@@ -70,9 +70,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _tombstonesReady: Promise<void> | null = null;
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
-    // Session baseline: stable-path keys of brain plans that existed at extension startup.
-    // Plans in this set are treated as historical and skip auto-registration to new workspaces.
-    private _historicalBrainBaseline = new Set<string>();
+    // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
+    // Blacklisted plans are never auto-registered and never shown in the run sheet dropdown.
+    private _brainPlanBlacklist = new Set<string>();
 
     // Session Tracking
     private _lastSessionId: string | null = null;
@@ -1010,9 +1010,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             console.error('[TaskViewerProvider] Failed to initialize tombstones in brain watcher setup:', e);
         });
 
-        // Capture baseline snapshot of existing brain plans before registering watchers.
-        // Plans present at startup are treated as historical and will not be auto-registered.
-        this._populateBrainBaseline(brainDir);
+        this._loadBrainPlanBlacklist(workspaceRoot);
 
         // Brain → Mirror: VS Code-managed watcher (cross-platform, lifecycle-safe)
         try {
@@ -1388,20 +1386,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    /**
-     * One-time startup scan: snapshot all pre-existing brain plans into
-     * _historicalBrainBaseline so they are not auto-registered to new workspaces.
-     * Must run before any watcher callbacks can invoke _mirrorBrainPlan.
-     */
-    private _populateBrainBaseline(brainDir: string): void {
-        this._historicalBrainBaseline.clear();
+    private _collectBrainPlanBlacklistEntries(brainDir: string): Set<string> {
+        const entries = new Set<string>();
         let sessionDirs: string[];
         try {
             sessionDirs = fs.readdirSync(brainDir, { withFileTypes: true })
                 .filter(d => d.isDirectory())
                 .map(d => d.name);
         } catch {
-            return;
+            return entries;
         }
         for (const session of sessionDirs) {
             const sessionPath = path.join(brainDir, session);
@@ -1416,10 +1409,67 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (!this._isBrainMirrorCandidate(brainDir, fullPath)) continue;
                 const baseBrainPath = this._getBaseBrainPath(fullPath);
                 const stableKey = this._getStablePath(baseBrainPath);
-                this._historicalBrainBaseline.add(stableKey);
+                entries.add(stableKey);
             }
         }
-        console.log(`[TaskViewerProvider] Brain baseline captured: ${this._historicalBrainBaseline.size} pre-existing plan(s)`);
+        return entries;
+    }
+
+    private _getBrainPlanBlacklistPath(workspaceRoot: string): string {
+        return path.join(workspaceRoot, '.switchboard', 'brain_plan_blacklist.json');
+    }
+
+    private _loadBrainPlanBlacklist(workspaceRoot: string): void {
+        const filePath = this._getBrainPlanBlacklistPath(workspaceRoot);
+        if (!fs.existsSync(filePath)) {
+            this._brainPlanBlacklist = new Set();
+            return;
+        }
+        try {
+            const parsed = JSON.parse(fs.readFileSync(filePath, 'utf8'));
+            const rawEntries = Array.isArray(parsed)
+                ? parsed
+                : Array.isArray(parsed?.entries)
+                    ? parsed.entries
+                    : [];
+            this._brainPlanBlacklist = new Set(
+                rawEntries
+                    .filter((entry: unknown): entry is string => typeof entry === 'string' && entry.trim().length > 0)
+                    .map((entry: string) => this._getStablePath(entry))
+            );
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to load brain plan blacklist:', e);
+            this._brainPlanBlacklist = new Set();
+        }
+    }
+
+    private _saveBrainPlanBlacklist(workspaceRoot: string, entries: Set<string>): void {
+        const filePath = this._getBrainPlanBlacklistPath(workspaceRoot);
+        const dir = path.dirname(filePath);
+        if (!fs.existsSync(dir)) {
+            fs.mkdirSync(dir, { recursive: true });
+        }
+        const payload = {
+            version: 1,
+            generatedAt: new Date().toISOString(),
+            entries: [...entries].sort()
+        };
+        const tempPath = `${filePath}.tmp`;
+        fs.writeFileSync(tempPath, JSON.stringify(payload, null, 2), 'utf8');
+        fs.renameSync(tempPath, filePath);
+    }
+
+    public async seedBrainPlanBlacklistFromCurrentBrainSnapshot(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+        const entries = fs.existsSync(brainDir)
+            ? this._collectBrainPlanBlacklistEntries(brainDir)
+            : new Set<string>();
+        this._saveBrainPlanBlacklist(workspaceRoot, entries);
+        this._brainPlanBlacklist = entries;
+        console.log(`[TaskViewerProvider] Brain plan blacklist seeded: ${entries.size} entr${entries.size === 1 ? 'y' : 'ies'}`);
     }
 
     private async _isLikelyPlanFile(filePath: string): Promise<boolean> {
@@ -1770,6 +1820,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const baseBrainPath = this._getBaseBrainPath(brainFilePath);
             const stablePath = this._getStablePath(baseBrainPath);
 
+            if (this._brainPlanBlacklist.has(stablePath)) {
+                console.log(`[TaskViewerProvider] Mirror skipped (brain_plan_blacklist): ${path.basename(brainFilePath)}`);
+                return;
+            }
+
             // Guard: skip archived plans
             const archivedSet = new Set(
                 this._context.workspaceState.get<string[]>('switchboard.archivedBrainPaths', [])
@@ -1809,14 +1864,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const eligibility = this._isPlanEligibleForWorkspace(stablePath, workspaceRoot);
             if (!eligibility.eligible) {
                 if (runSheetKnown) {
-                    // Existing plan from another workspace — do not adopt
+                    // Existing plan from another workspace - do not adopt
                     console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}): ${path.basename(brainFilePath)}`);
-                    return;
-                }
-                // Historical baseline gate: plans that existed at extension startup
-                // are not auto-registered to prevent flooding new workspaces.
-                if (this._historicalBrainBaseline.has(stablePath)) {
-                    console.log(`[TaskViewerProvider] Mirror skipped (historical_baseline): ${path.basename(brainFilePath)}`);
                     return;
                 }
                 // New plan: register to this workspace so it appears in the sidebar
@@ -2682,6 +2731,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         try {
             await this._ensureTombstonesLoaded(workspaceRoot);
+            this._loadBrainPlanBlacklist(workspaceRoot);
             const allSheets = await this._getSessionLog(workspaceRoot).getRunSheets();
 
             // Registry-first: only show plans registered in workspaceBrainPaths
@@ -2700,6 +2750,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                 // Exclude tombstoned plans
                 if (this._tombstones.has(pathHash)) return false;
+                // Exclude setup blacklisted plans
+                if (this._brainPlanBlacklist.has(stablePath)) return false;
 
                 // Only show if explicitly registered
                 return registry.has(stablePath);

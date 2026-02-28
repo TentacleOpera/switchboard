@@ -26,8 +26,8 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
-            /if \(this\._historicalBrainBaseline\.has\(stablePath\)\) \{[\s\S]*Mirror skipped \(historical_baseline\)/,
-            'Expected _mirrorBrainPlan to skip historical baseline plans before auto-registration.'
+            /if \(this\._brainPlanBlacklist\.has\(stablePath\)\) \{[\s\S]*Mirror skipped \(brain_plan_blacklist\)/,
+            'Expected _mirrorBrainPlan to skip blacklisted brain plans before any mirroring.'
         );
         assert.doesNotMatch(
             source,
@@ -80,6 +80,11 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
+            /if \(this\._brainPlanBlacklist\.has\(stablePath\)\) return false;/,
+            'Expected _refreshRunSheets to exclude setup-blacklisted brain plans.'
+        );
+        assert.match(
+            source,
             /return registry\.has\(stablePath\);/,
             'Expected _refreshRunSheets to require registry membership for brain-sourced plans.'
         );
@@ -93,21 +98,31 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
-    it('captures baseline before watcher registration', () => {
+    it('loads and seeds persisted brain plan blacklist', () => {
         assert.match(
             source,
-            /private _historicalBrainBaseline = new Set<string>\(\);/,
-            'Expected TaskViewerProvider to store a historical brain baseline set.'
+            /private _brainPlanBlacklist = new Set<string>\(\);/,
+            'Expected TaskViewerProvider to store a persisted brain plan blacklist set.'
         );
         assert.match(
             source,
-            /this\._populateBrainBaseline\(brainDir\);[\s\S]*createFileSystemWatcher\(brainPattern\)/,
-            'Expected startup baseline capture to happen before brain watcher registration.'
+            /this\._loadBrainPlanBlacklist\(workspaceRoot\);[\s\S]*createFileSystemWatcher\(brainPattern\)/,
+            'Expected brain watcher setup to load blacklist before processing events.'
         );
         assert.match(
             source,
-            /private _populateBrainBaseline\(brainDir: string\): void \{[\s\S]*this\._isBrainMirrorCandidate\(brainDir, fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*this\._historicalBrainBaseline\.add\(stableKey\)/,
-            'Expected baseline population to use mirror candidate filtering and stable base-brain keys.'
+            /private _collectBrainPlanBlacklistEntries\(brainDir: string\): Set<string> \{[\s\S]*this\._isBrainMirrorCandidate\(brainDir, fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*entries\.add\(stableKey\)/,
+            'Expected blacklist seeding scan to use mirror candidate filtering and stable base-brain keys.'
+        );
+        assert.match(
+            source,
+            /private _getBrainPlanBlacklistPath\(workspaceRoot: string\): string \{[\s\S]*brain_plan_blacklist\.json/,
+            'Expected persisted blacklist file path to be defined.'
+        );
+        assert.match(
+            source,
+            /public async seedBrainPlanBlacklistFromCurrentBrainSnapshot\(\): Promise<void> \{[\s\S]*_saveBrainPlanBlacklist\(workspaceRoot, entries\)/,
+            'Expected setup-facing API to seed and persist blacklist entries.'
         );
     });
 });

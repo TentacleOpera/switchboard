@@ -1979,6 +1979,13 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
 
         // Run unified setup first (Project structure and .agent assets)
         await performSetup(vscode.Uri.file(workspaceRoot), context.extensionUri, { silent: false });
+        if (taskViewerProvider) {
+            try {
+                await taskViewerProvider.seedBrainPlanBlacklistFromCurrentBrainSnapshot();
+            } catch (e) {
+                mcpOutputChannel?.appendLine(`[Setup] Brain blacklist seeding failed (non-fatal): ${e}`);
+            }
+        }
 
         const templatesBaseUri = vscode.Uri.joinPath(context.extensionUri, 'templates');
         const results = { success: [] as string[], skipped: [] as string[], errors: [] as string[] };
