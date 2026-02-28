@@ -42,9 +42,9 @@ The coordination layer is strictly file-based. Switchboard uses the official VS 
 | Role | Recommended tool | Purpose |
 | :--- | :--- | :--- |
 | Lead Coder | Copilot CLI (Opus 4.6) | Large feature implementation |
-| Coder | Qwen, Gemini Flash 3, Codex 5.3 | Boilerplate and routine work |
-| Planner | Codex 5.3, Gemini Flash 3 | Plan hardening and edge cases |
-| Reviewer | Codex 5.3 | Bug finding and verification |
+| Coder | Qwen, Gemini Flash 3, Codex 5.3 Low | Boilerplate and routine work |
+| Planner | Codex 5.3 High, Gemini 3.1 CLI | Plan hardening and edge cases |
+| Reviewer | Codex 5.3 High | Bug finding and verification |
 | Analyst | Qwen, Gemini Flash 3 | Research and investigation |
 
 ## IDE Chat Workflows
