@@ -1,4 +1,4 @@
-# Why Switchboard Does Not Trigger Google's Proxy Ban
+# Switchboard and Google ToS Compliance
 
 > **Context:** In February 2026, Google mass-banned developers who used tools like OpenCode and OpenClaw to route their Antigravity subscription tokens into third-party CLI environments. Switchboard is also designed to let you work across multiple AI subscriptions to stretch your budget — but it achieves this in a fundamentally different way. This document explains why that difference matters.
 

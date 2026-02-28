@@ -1,6 +1,6 @@
 # Switchboard Technical Documentation (Comprehensive Audit)
 
-Last audited against runtime code: February 27, 2026
+Last audited against runtime code: February 28, 2026
 
 This document describes how the plugin currently works in code, not how older docs or prompts describe it.
 
@@ -33,6 +33,8 @@ At runtime:
 - `sessions/`: run sheets and `activity.jsonl` audit stream
 - `plans/features/`: locally created feature plans
 - `plans/antigravity_plans/`: mirrored Antigravity brain plans
+- `brain_plan_blacklist.json`: setup-seeded blacklist of pre-existing Antigravity brain plan stable paths (hard excluded from mirror adoption and sidebar visibility)
+  - persisted schema: `{ version, generatedAt, entries[] }` where `entries` are stable canonical base-plan paths
 - `context-maps/`: analyst-generated context map artifacts for planner handoff
 - `plan_tombstones.json`: deterministic hash tombstones used to block resurrecting archived/deleted Antigravity plan sessions
 - `handoff/`: staged delegation artifacts
@@ -72,6 +74,7 @@ Setup wizard behavior (current):
   - `switchboard.team.strictPrompts = false`
   - `switchboard.planner.strictPrompts = false`
   - `switchboard.review.strictPrompts = false`
+- Setup seeds `.switchboard/brain_plan_blacklist.json` by scanning `~/.gemini/antigravity/brain` using the same mirror-candidate rules and stable base-path normalization used by runtime mirroring.
 
 ## 4) Extension <-> MCP IPC contract
 
@@ -296,11 +299,15 @@ Run sheets (`.switchboard/sessions/*.json`) track:
 
 Brain mirror subsystem includes:
 
-- startup scanning and mirror candidate filtering
+- setup-time blacklist seeding of pre-existing global brain plans into `.switchboard/brain_plan_blacklist.json`
+- runtime blacklist load gate in watcher/mirror flow (`_loadBrainPlanBlacklist(workspaceRoot)` in brain watcher setup)
+- hard blacklist mirror skip before any adoption/mirroring (`Mirror skipped (brain_plan_blacklist)`)
+- run-sheet visibility blacklist exclusion in `_refreshRunSheets` (blacklisted brain sources never populate the dropdown)
+- mirror candidate filtering for scan/seeding (`brainDir/<session>/<file>.md` + supported `.resolved` sidecars)
 - deterministic SHA-256 path-based mirror IDs (`brain_<hash>.md`)
 - deduplication and migration of legacy run-sheet formats
 - bidirectional sync with sidecar support (`.resolved`, `.resolved.N`)
-- tombstone seed/load gate (`_ensureTombstonesLoaded`) used before startup scans and mirror events
+- tombstone seed/load gate (`_ensureTombstonesLoaded`) used before mirror events
 - atomic tombstone writes (`.tmp` + rename) and hash validation before accepting entries
 - hard-stop resurrection guard: skips mirror/session recreation when a completed archived sibling exists for deterministic `antigravity_<hash>`
 - duplicate-pruning pass removes stale active runsheets shadowed by archived completed runsheets
