@@ -34,6 +34,24 @@ type JulesCliError = Error & {
     args?: string[];
 };
 
+type PlanRegistryEntry = {
+    planId: string;
+    ownerWorkspaceId: string;
+    sourceType: 'local' | 'brain';
+    localPlanPath?: string;
+    brainSourcePath?: string;
+    mirrorPath?: string;
+    topic: string;
+    createdAt: string;
+    updatedAt: string;
+    status: 'active' | 'archived' | 'deleted' | 'orphan';
+};
+
+type PlanRegistry = {
+    version: number;
+    entries: Record<string, PlanRegistryEntry>;
+};
+
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'switchboard-view';
     private static readonly ACTIVE_TAB_STATE_KEY = 'switchboard.activeTab';
@@ -73,6 +91,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
     // Blacklisted plans are never auto-registered and never shown in the run sheet dropdown.
     private _brainPlanBlacklist = new Set<string>();
+
+    // Hard workspace ownership scoping
+    private _workspaceId: string | null = null;
+    private _planRegistry: PlanRegistry = { version: 1, entries: {} };
 
     // Session Tracking
     private _lastSessionId: string | null = null;
@@ -123,10 +145,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         );
         this._setupStateWatcher();
         this._setupPlanWatcher();
-        this._setupBrainWatcher();
+        // Initialize ownership registry before brain watcher (async, fire-and-forget)
+        this._initializeOwnershipRegistry().then(() => {
+            this._setupBrainWatcher();
+        }).catch(e => {
+            console.error('[TaskViewerProvider] Registry initialization failed, starting brain watcher anyway:', e);
+            this._setupBrainWatcher();
+        });
         this._julesStatusPollTimer = setInterval(() => {
             this._refreshJulesStatus();
         }, 30000);
+    }
+
+    private async _initializeOwnershipRegistry(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+        await this._ensureTombstonesLoaded(workspaceRoot);
+        await this._getOrCreateWorkspaceId(workspaceRoot);
+        await this._migrateLegacyToRegistry(workspaceRoot);
+        await this._loadPlanRegistry(workspaceRoot);
+        console.log(`[TaskViewerProvider] Ownership registry initialized: ${Object.keys(this._planRegistry.entries).length} entries, workspaceId=${this._workspaceId}`);
     }
 
     /**
@@ -753,6 +793,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             await this._handleCompletePlan(data.sessionId);
                         }
                         break;
+                    case 'claimPlan':
+                        if (data.brainSourcePath) {
+                            await this._handleClaimPlan(data.brainSourcePath);
+                        }
+                        break;
                     case 'initiatePlan':
                         if (data.title && data.idea && data.mode) {
                             await this._handleInitiatePlan(data.title, data.idea, data.mode);
@@ -1022,6 +1067,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const fullPath = uri.fsPath;
                 if (!this._isBrainMirrorCandidate(brainDir, fullPath)) return;
 
+                // Early registry check: skip events for plans not owned by this workspace
+                const baseBrainPath = this._getBaseBrainPath(fullPath);
+                const stableBrainPath = this._getStablePath(baseBrainPath);
+                const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
+                if (!this._isPlanInRegistry(planId)) return;
+
                 const stablePath = this._getStablePath(fullPath);
                 // Debounce: Windows fires multiple events per save (rename + change)
                 const existing = this._brainDebounceTimers.get(stablePath);
@@ -1058,6 +1109,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
                     const fullPath = path.join(brainDir, filename);
                     if (!this._isBrainMirrorCandidate(brainDir, fullPath)) return;
+
+                    // Early registry check: skip events for plans not owned by this workspace
+                    const baseBrainPath = this._getBaseBrainPath(fullPath);
+                    const stableBrainPath = this._getStablePath(baseBrainPath);
+                    const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
+                    if (!this._isPlanInRegistry(planId)) return;
 
                     const stablePath = this._getStablePath(fullPath);
                     const existing = this._brainDebounceTimers.get(stablePath);
@@ -1206,23 +1263,171 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return normalizedFile === normalizedParent || normalizedFile.startsWith(normalizedParent + path.sep);
     }
 
-    /**
-     * Centralized eligibility check for plan mirroring.
-     * A plan is mirror-eligible only if its brain source path is explicitly known to this workspace.
-     * Shared brain directory activity alone is never sufficient to create local workspace ownership.
-     */
-    private _isPlanEligibleForWorkspace(stableBrainPath: string, workspaceRoot: string): { eligible: boolean; reason: string } {
-        // Registry-only authority: workspaceBrainPaths is the sole trust source.
-        const knownPaths = new Set(
-            this._context.workspaceState
-                .get<string[]>('switchboard.workspaceBrainPaths', [])
-                .map((entry) => this._getStablePath(entry))
+    // ── Workspace Identity ──────────────────────────────────────────────
+
+    private _getWorkspaceIdentityPath(workspaceRoot: string): string {
+        return path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
+    }
+
+    private async _getOrCreateWorkspaceId(workspaceRoot: string): Promise<string> {
+        if (this._workspaceId) return this._workspaceId;
+        const identityPath = this._getWorkspaceIdentityPath(workspaceRoot);
+        try {
+            if (fs.existsSync(identityPath)) {
+                const data = JSON.parse(await fs.promises.readFile(identityPath, 'utf8'));
+                if (typeof data?.workspaceId === 'string' && data.workspaceId.length > 0) {
+                    this._workspaceId = data.workspaceId;
+                    return data.workspaceId as string;
+                }
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to read workspace identity:', e);
+        }
+        // Create new identity
+        const { v4: uuidv4 } = await import('uuid');
+        const newId = uuidv4();
+        const dir = path.dirname(identityPath);
+        if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+        const tmpPath = identityPath + '.tmp';
+        await fs.promises.writeFile(tmpPath, JSON.stringify({ workspaceId: newId, createdAt: new Date().toISOString() }, null, 2));
+        await fs.promises.rename(tmpPath, identityPath);
+        this._workspaceId = newId;
+        console.log(`[TaskViewerProvider] Created workspace identity: ${newId}`);
+        return newId;
+    }
+
+    // ── Plan Registry ───────────────────────────────────────────────────
+
+    private _getPlanRegistryPath(workspaceRoot: string): string {
+        return path.join(workspaceRoot, '.switchboard', 'plan_registry.json');
+    }
+
+    private async _loadPlanRegistry(workspaceRoot: string): Promise<PlanRegistry> {
+        const registryPath = this._getPlanRegistryPath(workspaceRoot);
+        try {
+            if (fs.existsSync(registryPath)) {
+                const data = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
+                if (data && typeof data.entries === 'object') {
+                    this._planRegistry = { version: data.version || 1, entries: data.entries };
+                    return this._planRegistry;
+                }
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to load plan registry:', e);
+        }
+        this._planRegistry = { version: 1, entries: {} };
+        return this._planRegistry;
+    }
+
+    private async _savePlanRegistry(workspaceRoot: string): Promise<void> {
+        const registryPath = this._getPlanRegistryPath(workspaceRoot);
+        const dir = path.dirname(registryPath);
+        if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
+        const tmpPath = registryPath + `.${Date.now()}.tmp`;
+        try {
+            await fs.promises.writeFile(tmpPath, JSON.stringify(this._planRegistry, null, 2));
+            await fs.promises.rename(tmpPath, registryPath);
+        } catch (e) {
+            try { await fs.promises.unlink(tmpPath); } catch { }
+            throw e;
+        }
+    }
+
+    private async _registerPlan(workspaceRoot: string, entry: PlanRegistryEntry): Promise<void> {
+        this._planRegistry.entries[entry.planId] = entry;
+        await this._savePlanRegistry(workspaceRoot);
+        console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
+    }
+
+    private async _updatePlanRegistryStatus(workspaceRoot: string, planId: string, status: PlanRegistryEntry['status']): Promise<void> {
+        const entry = this._planRegistry.entries[planId];
+        if (!entry) return;
+        entry.status = status;
+        entry.updatedAt = new Date().toISOString();
+        await this._savePlanRegistry(workspaceRoot);
+    }
+
+    private _isPlanInRegistry(planId: string): boolean {
+        const entry = this._planRegistry.entries[planId];
+        return !!entry && entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active';
+    }
+
+    private _getPlanIdFromStableBrainPath(stableBrainPath: string): string {
+        return crypto.createHash('sha256').update(stableBrainPath).digest('hex');
+    }
+
+    private async _migrateLegacyToRegistry(workspaceRoot: string): Promise<void> {
+        const registryPath = this._getPlanRegistryPath(workspaceRoot);
+        if (fs.existsSync(registryPath)) return; // already migrated
+
+        const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+        const registry: PlanRegistry = { version: 1, entries: {} };
+        const now = new Date().toISOString();
+
+        // Migrate from workspaceBrainPaths
+        const legacyPaths = this._context.workspaceState.get<string[]>('switchboard.workspaceBrainPaths', []);
+        const archivedPaths = new Set(
+            this._context.workspaceState.get<string[]>('switchboard.archivedBrainPaths', [])
+                .map(p => this._getStablePath(p))
         );
-        if (knownPaths.has(stableBrainPath)) {
-            return { eligible: true, reason: 'in_workspace_scope' };
+
+        for (const rawPath of legacyPaths) {
+            const stablePath = this._getStablePath(rawPath);
+            const planId = this._getPlanIdFromStableBrainPath(stablePath);
+            const isArchived = archivedPaths.has(stablePath) || this._tombstones.has(planId);
+            registry.entries[planId] = {
+                planId,
+                ownerWorkspaceId: wsId,
+                sourceType: 'brain',
+                brainSourcePath: rawPath,
+                mirrorPath: `brain_${planId}.md`,
+                topic: '',
+                createdAt: now,
+                updatedAt: now,
+                status: isArchived ? 'archived' : 'active'
+            };
         }
 
-        return { eligible: false, reason: 'not_in_workspace_scope' };
+        // Migrate local plans from runsheets
+        const log = this._getSessionLog(workspaceRoot);
+        try {
+            const sheets = await log.getRunSheets();
+            for (const sheet of sheets) {
+                if (sheet.brainSourcePath) continue; // already handled above
+                if (!sheet.sessionId || !sheet.planFile) continue;
+                const planId = sheet.sessionId;
+                if (registry.entries[planId]) continue;
+                registry.entries[planId] = {
+                    planId,
+                    ownerWorkspaceId: wsId,
+                    sourceType: 'local',
+                    localPlanPath: sheet.planFile,
+                    topic: sheet.topic || '',
+                    createdAt: sheet.createdAt || now,
+                    updatedAt: now,
+                    status: 'active'
+                };
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to migrate local plans:', e);
+        }
+
+        this._planRegistry = registry;
+        await this._savePlanRegistry(workspaceRoot);
+        console.log(`[TaskViewerProvider] Migrated ${Object.keys(registry.entries).length} plans to registry`);
+    }
+
+    /**
+     * Centralized eligibility check for plan mirroring.
+     * A plan is mirror-eligible only if it is registered in plan_registry.json with active status
+     * and owned by this workspace. Shared brain directory activity alone never creates ownership.
+     */
+    private _isPlanEligibleForWorkspace(stableBrainPath: string, _workspaceRoot: string): { eligible: boolean; reason: string } {
+        const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
+        if (this._isPlanInRegistry(planId)) {
+            return { eligible: true, reason: 'in_plan_registry' };
+        }
+        return { eligible: false, reason: 'not_in_plan_registry' };
     }
 
     /** Strip .resolved (and optional trailing index) from sidecar paths, returning the base .md path. */
@@ -1858,24 +2063,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             // Guard: workspace scoping — strict registry check.
-            // Plans must be explicitly registered in workspaceBrainPaths to be mirrored.
-            // Exception: truly new plans (no existing runsheet) are auto-registered to the
-            // current workspace so they appear in the sidebar immediately.
+            // Plans must be explicitly registered in plan_registry.json to be mirrored.
+            // Unknown brain files are ignored; use explicit claim action to adopt.
             const eligibility = this._isPlanEligibleForWorkspace(stablePath, workspaceRoot);
             if (!eligibility.eligible) {
-                if (runSheetKnown) {
-                    // Existing plan from another workspace - do not adopt
-                    console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}): ${path.basename(brainFilePath)}`);
-                    return;
-                }
-                // New plan: register to this workspace so it appears in the sidebar
-                const currentPaths = this._context.workspaceState.get<string[]>('switchboard.workspaceBrainPaths', []);
-                if (!currentPaths.includes(stablePath)) {
-                    await this._context.workspaceState.update(
-                        'switchboard.workspaceBrainPaths', [...currentPaths, stablePath]
-                    );
-                }
-                console.log(`[TaskViewerProvider] Auto-registered new brain plan to workspace: ${path.basename(brainFilePath)}`);
+                console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}): ${path.basename(brainFilePath)}`);
+                return;
             }
 
             // Dedupe guard: skip if this exact path+mtime was already processed recently (5s window)
@@ -1942,14 +2135,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 events: existingEvents
             };
             await fs.promises.writeFile(runSheetPath, JSON.stringify(runSheet, null, 2));
-
-            // Register this plan as belonging to this workspace
-            const known = this._context.workspaceState.get<string[]>('switchboard.workspaceBrainPaths', []);
-            if (!known.includes(stablePath)) {
-                await this._context.workspaceState.update(
-                    'switchboard.workspaceBrainPaths', [...known, stablePath]
-                );
-            }
 
             console.log(`[TaskViewerProvider] Mirrored brain plan: ${topic}`);
             await this._refreshRunSheets();
@@ -2040,6 +2225,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             await log.createRunSheet(sessionId, runSheet);
             console.log(`[TaskViewerProvider] Created Run Sheet for session ${sessionId}: ${topic}`);
+
+            // Register local plan in ownership registry
+            const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+            await this._registerPlan(workspaceRoot, {
+                planId: sessionId,
+                ownerWorkspaceId: wsId,
+                sourceType: 'local',
+                localPlanPath: normalizedPlanFileRelative,
+                topic,
+                createdAt: new Date(fileCreationTimeMs).toISOString(),
+                updatedAt: new Date().toISOString(),
+                status: 'active'
+            });
 
             await this._refreshRunSheets();
             // Auto-focus the new plan in the dropdown
@@ -2177,6 +2375,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
                 const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
                 await this._addTombstone(workspaceRoot, pathHash);
+                // Update plan registry status
+                await this._updatePlanRegistryStatus(workspaceRoot, pathHash, 'archived');
+            } else {
+                // Local plan: use sessionId as planId
+                await this._updatePlanRegistryStatus(workspaceRoot, sessionId, 'archived');
             }
 
             const orchestratorState = this._orchestrator.getState();
@@ -2192,6 +2395,67 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._refreshRunSheets();
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to mark plan complete: ${e}`);
+        }
+    }
+
+    private async _handleClaimPlan(brainSourcePath: string): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+        try {
+            const resolvedPath = path.resolve(brainSourcePath);
+            const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+            if (!this._isPathWithin(brainDir, resolvedPath)) {
+                vscode.window.showErrorMessage('Brain source path is outside the expected brain directory.');
+                return;
+            }
+
+            const baseBrainPath = this._getBaseBrainPath(resolvedPath);
+            const stablePath = this._getStablePath(baseBrainPath);
+            const planId = this._getPlanIdFromStableBrainPath(stablePath);
+
+            // Check if already registered
+            if (this._isPlanInRegistry(planId)) {
+                vscode.window.showInformationMessage('This plan is already claimed by this workspace.');
+                return;
+            }
+
+            // Extract topic from brain file
+            let topic = '';
+            try {
+                const content = await fs.promises.readFile(resolvedPath, 'utf8');
+                const h1Match = content.match(/^#\s+(.+)$/m);
+                topic = h1Match ? h1Match[1].trim() : path.basename(resolvedPath, '.md');
+            } catch {
+                topic = path.basename(resolvedPath, '.md');
+            }
+
+            const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+            const now = new Date().toISOString();
+            await this._registerPlan(workspaceRoot, {
+                planId,
+                ownerWorkspaceId: wsId,
+                sourceType: 'brain',
+                brainSourcePath: baseBrainPath,
+                mirrorPath: `brain_${planId}.md`,
+                topic,
+                createdAt: now,
+                updatedAt: now,
+                status: 'active'
+            });
+
+            // Trigger mirror to create local artifacts
+            await this._mirrorBrainPlan(resolvedPath);
+            await this._logEvent('plan_management', {
+                operation: 'claim_plan',
+                planId,
+                brainSourcePath: baseBrainPath,
+                topic
+            });
+            vscode.window.showInformationMessage(`Claimed plan: ${topic}`);
+        } catch (e) {
+            vscode.window.showErrorMessage(`Failed to claim plan: ${e}`);
         }
     }
 
@@ -2485,6 +2749,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                         const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
                         await this._addTombstone(workspaceRoot, pathHash);
+                        // Update plan registry status
+                        await this._updatePlanRegistryStatus(workspaceRoot, pathHash, 'archived');
+                    } else if (sheet.sessionId) {
+                        // Local plan: use sessionId as planId
+                        await this._updatePlanRegistryStatus(workspaceRoot, sheet.sessionId, 'archived');
                     }
 
                     const results = await this._archiveCompletedSession(sheet.sessionId, log, workspaceRoot);
@@ -2633,17 +2902,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await log.deleteRunSheet(sessionId);
             await log.deleteDispatchLog(sessionId);
 
-            // Clean up workspaceState sets so deleted plans can be re-created
+            // Update plan registry status to deleted
             if (brainSourcePath) {
                 const stablePath = this._getStablePath(this._getBaseBrainPath(brainSourcePath));
-                const removeFromSet = async (key: string) => {
-                    const list = this._context.workspaceState.get<string[]>(key, []);
-                    const filtered = list.filter(p => p !== stablePath);
-                    if (filtered.length !== list.length) {
-                        await this._context.workspaceState.update(key, filtered);
-                    }
-                };
-                await removeFromSet('switchboard.workspaceBrainPaths');
+                const planId = this._getPlanIdFromStableBrainPath(stablePath);
+                await this._updatePlanRegistryStatus(workspaceRoot, planId, 'deleted');
+            } else {
+                // Local plan: use sessionId as planId
+                await this._updatePlanRegistryStatus(workspaceRoot, sessionId, 'deleted');
             }
 
             await this._logEvent('plan_management', {
@@ -2731,33 +2997,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         try {
             await this._ensureTombstonesLoaded(workspaceRoot);
-            this._loadBrainPlanBlacklist(workspaceRoot);
             const allSheets = await this._getSessionLog(workspaceRoot).getRunSheets();
 
-            // Registry-first: only show plans registered in workspaceBrainPaths
-            // or local plans (no brainSourcePath). Tombstoned plans are excluded.
-            const registry = new Set(
-                this._context.workspaceState
-                    .get<string[]>('switchboard.workspaceBrainPaths', [])
-                    .map((entry) => this._getStablePath(entry))
-            );
+            // Registry-based visibility: only show plans owned by this workspace
             const visible = allSheets.filter((sheet: any) => {
-                // Local plans (created in this workspace, no brain source) are always visible
-                if (!sheet.brainSourcePath) return true;
+                if (!sheet.brainSourcePath) {
+                    // Local plans: check registry by sessionId
+                    const entry = this._planRegistry.entries[sheet.sessionId];
+                    if (entry) {
+                        return entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active';
+                    }
+                    // Unregistered local plans visible for backward compat (pre-migration)
+                    return true;
+                }
 
                 const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
-
-                // Exclude tombstoned plans
-                if (this._tombstones.has(pathHash)) return false;
-                // Exclude setup blacklisted plans
-                if (this._brainPlanBlacklist.has(stablePath)) return false;
-
-                // Only show if explicitly registered
-                return registry.has(stablePath);
+                const planId = this._getPlanIdFromStableBrainPath(stablePath);
+                return this._isPlanInRegistry(planId);
             });
 
-            this._view.webview.postMessage({ type: 'runSheets', sheets: this._sortSheets(visible) });
+            // Deduplicate: if local + brain entries map to same planId, keep only one
+            const seenPlanIds = new Set<string>();
+            const deduped = visible.filter((sheet: any) => {
+                let planId: string;
+                if (sheet.brainSourcePath) {
+                    const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
+                    planId = this._getPlanIdFromStableBrainPath(stablePath);
+                } else {
+                    planId = sheet.sessionId;
+                }
+                if (seenPlanIds.has(planId)) return false;
+                seenPlanIds.add(planId);
+                return true;
+            });
+
+            this._view.webview.postMessage({ type: 'runSheets', sheets: this._sortSheets(deduped) });
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets:', e);
             this._view.webview.postMessage({ type: 'runSheets', sheets: [] });
@@ -4024,6 +4298,20 @@ ${focusDirective}`);
                 }]
             };
             await fs.promises.writeFile(runSheetPath, JSON.stringify(runSheet, null, 2));
+
+            // Register local plan in ownership registry
+            const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+            await this._registerPlan(workspaceRoot, {
+                planId: sessionId,
+                ownerWorkspaceId: wsId,
+                sourceType: 'local',
+                localPlanPath: planFileRelative.replace(/\\/g, '/'),
+                topic: title,
+                createdAt: now.toISOString(),
+                updatedAt: now.toISOString(),
+                status: 'active'
+            });
+
             await this._logEvent('plan_management', {
                 operation: 'create_plan',
                 sessionId,
