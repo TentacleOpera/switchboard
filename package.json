@@ -71,6 +71,10 @@
       {
         "command": "antigravity.getChromeDevtoolsMcpUrl",
         "title": "Switchboard: Get MCP Inspector URL"
+      },
+      {
+        "command": "switchboard.openKanban",
+        "title": "Switchboard: Open Kanban Board"
       }
     ],
     "configuration": {

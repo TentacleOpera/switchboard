@@ -8,31 +8,39 @@ const providerPath = path.join(__dirname, '..', 'services', 'TaskViewerProvider.
 const source = fs.readFileSync(providerPath, 'utf8');
 
 describe('workspace scope enforcement regressions', () => {
-    it('enforces mirror eligibility with auto-registration for new plans in _mirrorBrainPlan', () => {
+    it('auto-claims newly created brain plans and mirrors owned plans in _mirrorBrainPlan', () => {
         assert.match(
             source,
-            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, workspaceRoot\);[\s\S]*if \(!eligibility\.eligible\) \{/,
+            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, workspaceRoot\);[\s\S]*const existingEntry = this\._planRegistry\.entries\[pathHash\];[\s\S]*const shouldAutoClaim = !eligibility\.eligible && allowAutoClaim && !existingEntry;/,
             'Expected _mirrorBrainPlan to check workspace eligibility.'
         );
         assert.match(
             source,
-            /if \(runSheetKnown\) \{[\s\S]*Mirror skipped/,
-            'Expected _mirrorBrainPlan to skip existing plans from other workspaces.'
+            /if \(!eligibility\.eligible && !shouldAutoClaim\) \{[\s\S]*Mirror skipped/,
+            'Expected _mirrorBrainPlan to skip non-owned plans unless auto-claim is allowed.'
         );
         assert.match(
             source,
-            /Auto-registered new brain plan to workspace/,
-            'Expected _mirrorBrainPlan to auto-register new plans (no runsheet) to the workspace.'
+            /if \(shouldAutoClaim\) \{[\s\S]*await this\._registerPlan\(workspaceRoot, \{[\s\S]*sourceType: 'brain'[\s\S]*status: 'active'[\s\S]*\}\);[\s\S]*Auto-claimed new brain plan:/,
+            'Expected _mirrorBrainPlan to auto-claim newly created brain plans.'
         );
         assert.match(
             source,
             /if \(this\._brainPlanBlacklist\.has\(stablePath\)\) \{[\s\S]*Mirror skipped \(brain_plan_blacklist\)/,
             'Expected _mirrorBrainPlan to skip blacklisted brain plans before any mirroring.'
         );
-        assert.doesNotMatch(
+    });
+
+    it('mirror write-back resolves brain path via runsheet lookup with active registry fallback', () => {
+        assert.match(
             source,
-            /const hasExistingScopeData = knownPaths\.size > 0;/,
-            'Expected legacy empty-scope bypass to be removed.'
+            /const resolvedBrainPath = await this\._resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash, brainDir\);[\s\S]*if \(!resolvedBrainPath\) return;/,
+            'Expected staging watcher to resolve brain path through helper before mirror write-back.'
+        );
+        assert.match(
+            source,
+            /private async _resolveBrainSourcePathForMirrorHash\(workspaceRoot: string, hash: string, brainDir: string\): Promise<string \| undefined> \{[\s\S]*await this\._findExistingRunSheetPath\(workspaceRoot, sessionId\)[\s\S]*const entry = this\._planRegistry\.entries\[hash\];[\s\S]*entry\.sourceType === 'brain'[\s\S]*entry\.status === 'active'[\s\S]*this\._isPathWithin\(brainDir, resolvedBrainPath\)/,
+            'Expected helper to use runsheet resolution, active registry fallback, and brain-root containment.'
         );
     });
 
@@ -67,34 +75,78 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
-    it('_refreshRunSheets filters by registry and tombstones', () => {
+    it('_refreshRunSheets derives visibility from owned active registry entries', () => {
         assert.match(
             source,
-            /const registry = new Set\(\s*this\._context\.workspaceState[\s\S]*get<string\[\]>\('switchboard\.workspaceBrainPaths'[\s\S]*\.map\(\(entry\) => this\._getStablePath\(entry\)\)/,
-            'Expected _refreshRunSheets to load the workspace registry.'
+            /const ownedActiveEntries = Object\.values\(this\._planRegistry\.entries\)\.filter\(\(entry\) =>[\s\S]*entry\.ownerWorkspaceId === this\._workspaceId && entry\.status === 'active'/,
+            'Expected _refreshRunSheets to use plan_registry ownership as the visibility source.'
         );
         assert.match(
             source,
-            /if \(this\._tombstones\.has\(pathHash\)\) return false;/,
-            'Expected _refreshRunSheets to exclude tombstoned plans.'
+            /const bestSheetByPlanId = new Map<string, any>\(\);[\s\S]*if \(!this\._isOwnedActiveRunSheet\(sheet\)\) continue;/,
+            'Expected _refreshRunSheets to include only owned active runsheets.'
         );
         assert.match(
             source,
-            /if \(this\._brainPlanBlacklist\.has\(stablePath\)\) return false;/,
-            'Expected _refreshRunSheets to exclude setup-blacklisted brain plans.'
-        );
-        assert.match(
-            source,
-            /return registry\.has\(stablePath\);/,
-            'Expected _refreshRunSheets to require registry membership for brain-sourced plans.'
+            /for \(const entry of ownedActiveEntries\) \{[\s\S]*if \(entry\.sourceType === 'brain' && entry\.brainSourcePath\) \{[\s\S]*if \(this\._tombstones\.has\(pathHash\)\) continue;[\s\S]*if \(this\._brainPlanBlacklist\.has\(stablePath\)\) continue;/,
+            'Expected _refreshRunSheets to apply tombstone/blacklist checks while enumerating owned entries.'
         );
     });
 
-    it('local plans without brainSourcePath are always visible', () => {
+    it('does not allow unregistered local plan fallback visibility', () => {
+        assert.doesNotMatch(
+            source,
+            /Unregistered local plans visible for backward compat/,
+            'Expected strict ownership mode to remove unregistered local fallback visibility.'
+        );
+    });
+
+    it('stores hard ownership metadata in workspace identity and plan registry files', () => {
         assert.match(
             source,
-            /if \(!sheet\.brainSourcePath\) return true;/,
-            'Expected local plans (no brainSourcePath) to bypass registry check.'
+            /private _workspaceId: string \| null = null;/,
+            'Expected workspace identity to be tracked in TaskViewerProvider state.'
+        );
+        assert.match(
+            source,
+            /private _getWorkspaceIdentityPath\(workspaceRoot: string\): string \{[\s\S]*workspace_identity\.json/,
+            'Expected workspace identity path helper.'
+        );
+        assert.match(
+            source,
+            /private _getPlanRegistryPath\(workspaceRoot: string\): string \{[\s\S]*plan_registry\.json/,
+            'Expected plan registry path helper.'
+        );
+        assert.match(
+            source,
+            /ownerWorkspaceId: string;/,
+            'Expected plan registry entry schema to include ownerWorkspaceId.'
+        );
+        assert.doesNotMatch(
+            source,
+            /Migrate from workspaceBrainPaths/,
+            'Expected strict ownership mode to avoid implicit ownership migration from workspaceBrainPaths.'
+        );
+    });
+
+    it('does not mutate ownership state during startup initialization', () => {
+        assert.doesNotMatch(
+            source,
+            /_sanitizeLegacyBrainOwnershipEntries/,
+            'Expected startup initialization to avoid ownership reclassification scans.'
+        );
+    });
+
+    it('registers merged local plans and archives merged source plan ownership entries', () => {
+        assert.match(
+            source,
+            /await log\.createRunSheet\(mergedSessionId, mergedRunSheet\);[\s\S]*await this\._registerPlan\(workspaceRoot, \{[\s\S]*planId: mergedSessionId,[\s\S]*sourceType: 'local'/,
+            'Expected merged plan output to be registered in ownership registry.'
+        );
+        assert.match(
+            source,
+            /const sourcePlanId = this\._getPlanIdForRunSheet\(sheet\);[\s\S]*await this\._updatePlanRegistryStatus\(workspaceRoot, sourcePlanId, 'archived'\);/,
+            'Expected merged source plans to be archived in ownership registry.'
         );
     });
 

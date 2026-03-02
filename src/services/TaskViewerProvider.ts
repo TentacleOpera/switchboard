@@ -9,6 +9,16 @@ import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog
 import { sendRobustText } from './terminalUtils';
 import { InteractiveOrchestrator } from './InteractiveOrchestrator';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
+const { syncMirrorToBrain } = require('./mirrorSync') as {
+    syncMirrorToBrain: (options: {
+        mirrorPath: string;
+        resolvedBrainPath: string;
+        getStablePath: (p: string) => string;
+        getResolvedSidecarPaths: (baseBrainPath: string) => string[];
+        recentBrainWrites: Map<string, NodeJS.Timeout>;
+        writeTtlMs?: number;
+    }) => Promise<{ updatedBase: boolean; sidecarWrites: number; changed: boolean }>;
+};
 
 type DispatchReadinessState = 'ready' | 'recoverable' | 'not_ready';
 type DispatchReadinessEntry = {
@@ -95,6 +105,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Hard workspace ownership scoping
     private _workspaceId: string | null = null;
     private _planRegistry: PlanRegistry = { version: 1, entries: {} };
+    private _ownershipInitPromise: Promise<void> | null = null;
 
     // Session Tracking
     private _lastSessionId: string | null = null;
@@ -146,15 +157,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupStateWatcher();
         this._setupPlanWatcher();
         // Initialize ownership registry before brain watcher (async, fire-and-forget)
-        this._initializeOwnershipRegistry().then(() => {
+        this._ensureOwnershipRegistryInitialized().then(() => {
             this._setupBrainWatcher();
+            void this._refreshRunSheets();
         }).catch(e => {
             console.error('[TaskViewerProvider] Registry initialization failed, starting brain watcher anyway:', e);
             this._setupBrainWatcher();
+            void this._refreshRunSheets();
         });
         this._julesStatusPollTimer = setInterval(() => {
             this._refreshJulesStatus();
         }, 30000);
+    }
+
+    private _ensureOwnershipRegistryInitialized(): Promise<void> {
+        if (this._ownershipInitPromise) return this._ownershipInitPromise;
+        this._ownershipInitPromise = this._initializeOwnershipRegistry().catch((e) => {
+            this._ownershipInitPromise = null;
+            throw e;
+        });
+        return this._ownershipInitPromise;
     }
 
     private async _initializeOwnershipRegistry(): Promise<void> {
@@ -490,6 +512,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({ type: 'loading', value: loading });
     }
 
+    /** Called by the Kanban board to trigger an agent action on a plan session. */
+    public async handleKanbanTrigger(role: string, sessionId: string) {
+        await this._handleTriggerAgentAction(role, sessionId);
+    }
+
+    /** Called by the Kanban board to mark a plan as complete. */
+    public async handleKanbanCompletePlan(sessionId: string) {
+        await this._handleCompletePlan(sessionId);
+    }
+
     public async getStartupCommands(): Promise<Record<string, string>> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return {};
@@ -659,6 +691,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'runSetupIDEs':
                         vscode.commands.executeCommand('switchboard.setupIDEs');
                         break;
+                    case 'openKanban':
+                        vscode.commands.executeCommand('switchboard.openKanban');
+                        break;
+                    case 'initializeProtocols':
+                        await this._handleInitializeProtocols();
+                        break;
+                    case 'saveCliAgents':
+                        if (data.agents && typeof data.agents === 'object') {
+                            await this._handleSaveCliAgents(data.agents);
+                        }
+                        break;
+                    case 'finishOnboarding':
+                        await this._handleFinishOnboarding();
+                        break;
                     case 'openExternalUrl':
                         if (data.url && typeof data.url === 'string' && data.url.startsWith('https://')) {
                             vscode.env.openExternal(vscode.Uri.parse(data.url));
@@ -809,6 +855,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'archiveAllCompleted':
                         await this._handleArchiveAllCompleted();
                         break;
+                    case 'getRecoverablePlans': {
+                        const plans = this._getRecoverablePlans();
+                        this._view?.webview.postMessage({ type: 'recoverablePlans', plans });
+                        break;
+                    }
+                    case 'restorePlan': {
+                        if (data.planId) {
+                            const success = await this._handleRestorePlan(data.planId);
+                            if (success) {
+                                const plans = this._getRecoverablePlans();
+                                this._view?.webview.postMessage({ type: 'recoverablePlans', plans });
+                            }
+                        }
+                        break;
+                    }
                     case 'saveStartupCommands':
                         if (data.commands) {
                             await this.updateState(async (state: any) => {
@@ -1063,15 +1124,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const brainPattern = new vscode.RelativePattern(brainUri, '**/*.md{,.*}');
             this._brainWatcher = vscode.workspace.createFileSystemWatcher(brainPattern);
 
-            const handleBrainEvent = (uri: vscode.Uri) => {
+            const handleBrainEvent = (uri: vscode.Uri, allowAutoClaim: boolean) => {
                 const fullPath = uri.fsPath;
                 if (!this._isBrainMirrorCandidate(brainDir, fullPath)) return;
-
-                // Early registry check: skip events for plans not owned by this workspace
-                const baseBrainPath = this._getBaseBrainPath(fullPath);
-                const stableBrainPath = this._getStablePath(baseBrainPath);
-                const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
-                if (!this._isPlanInRegistry(planId)) return;
 
                 const stablePath = this._getStablePath(fullPath);
                 // Debounce: Windows fires multiple events per save (rename + change)
@@ -1084,7 +1139,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (this._recentBrainWrites.has(stablePath)) return;
                         if (fs.existsSync(fullPath)) {
                             await this._ensureTombstonesLoaded(workspaceRoot);
-                            await this._mirrorBrainPlan(fullPath);
+                            await this._mirrorBrainPlan(fullPath, allowAutoClaim);
                         }
                     } catch (e) {
                         console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
@@ -1092,8 +1147,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }, 300));
             };
 
-            this._brainWatcher.onDidCreate(handleBrainEvent);
-            this._brainWatcher.onDidChange(handleBrainEvent);
+            this._brainWatcher.onDidCreate((uri) => handleBrainEvent(uri, true));
+            this._brainWatcher.onDidChange((uri) => handleBrainEvent(uri, false));
         } catch (e) {
             console.error('[TaskViewerProvider] Brain watcher failed:', e);
         }
@@ -1110,12 +1165,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const fullPath = path.join(brainDir, filename);
                     if (!this._isBrainMirrorCandidate(brainDir, fullPath)) return;
 
-                    // Early registry check: skip events for plans not owned by this workspace
-                    const baseBrainPath = this._getBaseBrainPath(fullPath);
-                    const stableBrainPath = this._getStablePath(baseBrainPath);
-                    const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
-                    if (!this._isPlanInRegistry(planId)) return;
-
                     const stablePath = this._getStablePath(fullPath);
                     const existing = this._brainDebounceTimers.get(stablePath);
                     if (existing) clearTimeout(existing);
@@ -1125,7 +1174,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             if (this._recentBrainWrites.has(stablePath)) return;
                             if (fs.existsSync(fullPath)) {
                                 await this._ensureTombstonesLoaded(workspaceRoot);
-                                await this._mirrorBrainPlan(fullPath);
+                                // fs.watch "rename" is the closest signal to create/delete.
+                                await this._mirrorBrainPlan(fullPath, _eventType === 'rename');
                             }
                         } catch (e) {
                             console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
@@ -1166,75 +1216,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // Skip if we wrote this mirror file ourselves (brain→mirror direction)
                     if (this._recentMirrorWrites.has(stableMirrorPath)) return;
 
-                    // Security: look up brain source path from runsheet (SHA-256 is one-way; no decoding)
+                    // Resolve brain source path from runsheet first, then registry fallback.
                     const hash = filename.replace(/^brain_/, '').replace(/\.md$/, '');
-                    const runSheetPath = path.join(workspaceFolders[0].uri.fsPath, '.switchboard', 'sessions', `antigravity_${hash}.json`);
-                    let resolvedBrainPath: string;
-                    try {
-                        const rs = JSON.parse(await fs.promises.readFile(runSheetPath, 'utf8'));
-                        resolvedBrainPath = rs.brainSourcePath;
-                        if (!resolvedBrainPath) return;
-                    } catch { return; }
-                    // Security: confirm the resolved path is within brainDir
-                    if (!this._isPathWithin(brainDir, resolvedBrainPath)) return;
+                    const resolvedBrainPath = await this._resolveBrainSourcePathForMirrorHash(workspaceRoot, hash, brainDir);
+                    if (!resolvedBrainPath) return;
 
                     try {
-                        const mirrorContent = await fs.promises.readFile(mirrorPath, 'utf8');
-                        const brainContent = fs.existsSync(resolvedBrainPath)
-                            ? await fs.promises.readFile(resolvedBrainPath, 'utf8')
-                            : null;
+                        const syncResult = await syncMirrorToBrain({
+                            mirrorPath,
+                            resolvedBrainPath,
+                            getStablePath: (p: string) => this._getStablePath(p),
+                            getResolvedSidecarPaths: (baseBrainPath: string) => this._getResolvedSidecarPaths(baseBrainPath),
+                            recentBrainWrites: this._recentBrainWrites,
+                            writeTtlMs: 2000
+                        });
 
-                        const resolvedSidecars = this._getResolvedSidecarPaths(resolvedBrainPath);
-                        let sidecarWrites = 0;
-                        let sidecarNeedsUpdate = false;
-                        for (const sidecarPath of resolvedSidecars) {
-                            try {
-                                const sidecarContent = await fs.promises.readFile(sidecarPath, 'utf8');
-                                if (sidecarContent !== mirrorContent) {
-                                    sidecarNeedsUpdate = true;
-                                    break;
-                                }
-                            } catch {
-                                sidecarNeedsUpdate = true;
-                                break;
-                            }
-                        }
-
-                        const baseNeedsUpdate = mirrorContent !== brainContent;
-                        // Skip only when both base file and all sidecars are already identical.
-                        if (!baseNeedsUpdate && !sidecarNeedsUpdate) return;
-
-                        await fs.promises.mkdir(path.dirname(resolvedBrainPath), { recursive: true });
-
-                        if (baseNeedsUpdate) {
-                            const stableBrainPath = this._getStablePath(resolvedBrainPath);
-                            // Mark brain path as recently written (2s TTL) before writing.
-                            const existing = this._recentBrainWrites.get(stableBrainPath);
-                            if (existing) clearTimeout(existing);
-                            this._recentBrainWrites.set(stableBrainPath, setTimeout(() => this._recentBrainWrites.delete(stableBrainPath), 2000));
-                            await fs.promises.writeFile(resolvedBrainPath, mirrorContent);
+                        if (syncResult.updatedBase) {
                             console.log(`[TaskViewerProvider] Synced mirror → brain: ${path.basename(resolvedBrainPath)}`);
                         }
-
-                        // Sidecar sync: update any existing sidecar variant (.resolved, .resolved.N, ...)
-                        for (const sidecarPath of resolvedSidecars) {
-                            let sidecarContent: string | undefined;
-                            try {
-                                sidecarContent = await fs.promises.readFile(sidecarPath, 'utf8');
-                            } catch {
-                                sidecarContent = undefined;
-                            }
-                            if (sidecarContent === mirrorContent) continue;
-
-                            const stableSidecarPath = this._getStablePath(sidecarPath);
-                            const existingSidecar = this._recentBrainWrites.get(stableSidecarPath);
-                            if (existingSidecar) clearTimeout(existingSidecar);
-                            this._recentBrainWrites.set(stableSidecarPath, setTimeout(() => this._recentBrainWrites.delete(stableSidecarPath), 2000));
-                            await fs.promises.writeFile(sidecarPath, mirrorContent);
-                            sidecarWrites++;
-                        }
-                        if (sidecarWrites > 0) {
-                            console.log(`[TaskViewerProvider] Synced mirror → brain sidecars: ${sidecarWrites}`);
+                        if (syncResult.sidecarWrites > 0) {
+                            console.log(`[TaskViewerProvider] Synced mirror → brain sidecars: ${syncResult.sidecarWrites}`);
                         }
                     } catch (e) {
                         console.error('[TaskViewerProvider] Mirror → brain sync failed:', e);
@@ -1347,9 +1348,318 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await this._savePlanRegistry(workspaceRoot);
     }
 
+    // ── Plan Recovery ──────────────────────────────────────────────────────
+
+
+
+    private _inferTopicFromPath(filePath: string | undefined): string {
+        if (!filePath) return '(untitled)';
+        let name = path.basename(filePath, path.extname(filePath));
+        name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
+        // Strip leading hex hash (32+ hex chars)
+        name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
+        if (!name) return '(untitled)';
+        return name
+            .replace(/[_-]+/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase())
+            .trim() || '(untitled)';
+    }
+
+    private _isGenericTopic(s: string): boolean {
+        return !s || s === '(untitled)' || /^(simple\s+)?implementation\s+plan$/i.test(s.trim());
+    }
+
+    private _getRecoverablePlans(): Array<{ planId: string; topic: string; sourceType: string; status: string; brainSourcePath?: string; localPlanPath?: string; updatedAt: string }> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        const workspaceRoot = workspaceFolders ? workspaceFolders[0].uri.fsPath : '';
+        const mirrorDir = workspaceRoot ? path.join(workspaceRoot, '.switchboard', 'plans', 'antigravity_plans') : '';
+
+        // Pre-scan archive plans directory once for efficiency
+        const archivePlansDir = workspaceRoot ? path.join(workspaceRoot, '.switchboard', 'archive', 'plans') : '';
+        const archivePlanFiles: string[] = [];
+        if (archivePlansDir) {
+            try { archivePlanFiles.push(...fs.readdirSync(archivePlansDir)); } catch { }
+        }
+        // Build a set of planIds that have archive plan files for quick lookup
+        const archivePlanIds = new Set<string>();
+        for (const f of archivePlanFiles) {
+            const m = f.match(/^brain_([0-9a-f]{40,})/i);
+            if (m) archivePlanIds.add(m[1]);
+        }
+
+        const switchboardDir = workspaceRoot ? path.join(workspaceRoot, '.switchboard') : '';
+        const recoverable: Array<{ planId: string; topic: string; sourceType: string; status: string; brainSourcePath?: string; localPlanPath?: string; updatedAt: string }> = [];
+        for (const entry of Object.values(this._planRegistry.entries)) {
+            if (entry.status === 'archived' || entry.status === 'orphan') {
+                // Skip orphan brain plans with no restorable data (brain file gone, no archive plan, no session)
+                if (entry.status === 'orphan' && entry.sourceType === 'brain') {
+                    const brainExists = entry.brainSourcePath && fs.existsSync(path.resolve(entry.brainSourcePath));
+                    if (!brainExists && !archivePlanIds.has(entry.planId)) {
+                        const sessFile = switchboardDir
+                            ? path.join(switchboardDir, 'archive', 'sessions', `antigravity_${entry.planId}.json`)
+                            : '';
+                        if (!sessFile || !fs.existsSync(sessFile)) continue;
+                    }
+                }
+
+                let topic = entry.topic;
+
+                if (this._isGenericTopic(topic)) {
+                    let filePathsToTry: string[] = [];
+                    const sourcePath = entry.brainSourcePath || entry.localPlanPath;
+                    if (sourcePath) {
+                        filePathsToTry.push(sourcePath);
+                        if (entry.sourceType === 'brain') {
+                            filePathsToTry.push(path.join(path.dirname(sourcePath), 'completed', path.basename(sourcePath)));
+                        }
+                    }
+                    if (entry.mirrorPath && mirrorDir) {
+                        filePathsToTry.push(path.join(mirrorDir, entry.mirrorPath));
+                    }
+                    // Check archived mirror files using pre-scanned list
+                    if (entry.sourceType === 'brain' && archivePlansDir) {
+                        const prefix = `brain_${entry.planId}`;
+                        const archived = archivePlanFiles.filter(f => f.startsWith(prefix) && f.endsWith('.md'));
+                        for (const f of archived) { filePathsToTry.push(path.join(archivePlansDir, f)); }
+                    }
+
+                    for (const fp of filePathsToTry) {
+                        if (fs.existsSync(fp)) {
+                            try {
+                                const content = fs.readFileSync(fp, 'utf8');
+                                const h1Match = content.match(/^#\s+(.+)$/m);
+                                if (h1Match) {
+                                    const candidate = h1Match[1].trim();
+                                    if (!this._isGenericTopic(candidate)) {
+                                        topic = candidate;
+                                        break;
+                                    }
+                                    if (!topic) {
+                                        topic = candidate; // store as last-resort fallback, keep trying
+                                    }
+                                }
+                            } catch { } // Ignore read errors, try next or fall back
+                        }
+                    }
+                }
+
+                // Try session log for topic when file-based lookup returned nothing useful
+                if (this._isGenericTopic(topic) && switchboardDir) {
+                    const sessionId = `antigravity_${entry.planId}`;
+                    const sessionFilePaths = [
+                        path.join(switchboardDir, 'sessions', `${sessionId}.json`),
+                        path.join(switchboardDir, 'archive', 'sessions', `${sessionId}.json`),
+                    ];
+                    for (const sp of sessionFilePaths) {
+                        if (fs.existsSync(sp)) {
+                            try {
+                                const sheet = JSON.parse(fs.readFileSync(sp, 'utf8'));
+                                if (sheet.topic && !this._isGenericTopic(sheet.topic)) {
+                                    topic = sheet.topic;
+                                    break;
+                                }
+                            } catch { }
+                        }
+                    }
+                }
+
+                if (this._isGenericTopic(topic)) {
+                    topic = this._inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
+                }
+
+                // Get the best available date from the session file (fixes migration-corrupted dates)
+                let updatedAt = entry.updatedAt;
+                if (switchboardDir) {
+                    const sessionIds = entry.sourceType === 'brain'
+                        ? [`antigravity_${entry.planId}`]
+                        : [entry.planId, `antigravity_${entry.planId}`];
+                    let foundDate = false;
+                    for (const sid of sessionIds) {
+                        if (foundDate) break;
+                        for (const subdir of ['sessions', path.join('archive', 'sessions')]) {
+                            const sp = path.join(switchboardDir, subdir, `${sid}.json`);
+                            if (fs.existsSync(sp)) {
+                                try {
+                                    const sheet = JSON.parse(fs.readFileSync(sp, 'utf8'));
+                                    const sheetDate = sheet.completedAt || sheet.createdAt;
+                                    if (sheetDate) { updatedAt = sheetDate; foundDate = true; break; }
+                                } catch { }
+                            }
+                        }
+                    }
+                }
+
+                recoverable.push({
+                    planId: entry.planId,
+                    topic,
+                    sourceType: entry.sourceType,
+                    status: entry.status,
+                    brainSourcePath: entry.brainSourcePath,
+                    localPlanPath: entry.localPlanPath,
+                    updatedAt
+                });
+            }
+        }
+        recoverable.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
+        return recoverable;
+    }
+
+    private async _handleRestorePlan(planId: string): Promise<boolean> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return false;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+        const entry = this._planRegistry.entries[planId];
+        if (!entry) {
+            vscode.window.showErrorMessage('Plan not found in registry.');
+            return false;
+        }
+        if (entry.status !== 'archived' && entry.status !== 'orphan') {
+            vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
+            return false;
+        }
+
+        // For brain plans that are orphaned, claim to current workspace
+        if (entry.status === 'orphan') {
+            entry.ownerWorkspaceId = this._workspaceId || await this._getOrCreateWorkspaceId(workspaceRoot);
+        }
+
+        // Verify underlying file still exists for brain plans
+        if (entry.sourceType === 'brain' && entry.brainSourcePath) {
+            const resolvedBrain = path.resolve(entry.brainSourcePath);
+            if (!fs.existsSync(resolvedBrain)) {
+                vscode.window.showWarningMessage(`Cannot restore: brain file no longer exists at ${entry.brainSourcePath}`);
+                return false;
+            }
+        }
+
+        entry.status = 'active';
+        entry.updatedAt = new Date().toISOString();
+        await this._savePlanRegistry(workspaceRoot);
+
+        // Remove tombstone if one was placed for this plan
+        if (entry.sourceType === 'brain' && entry.brainSourcePath) {
+            const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(entry.brainSourcePath)));
+            const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
+            if (this._tombstones.has(pathHash)) {
+                this._tombstones.delete(pathHash);
+                try {
+                    const tombstonePath = this._getTombstonePath(workspaceRoot);
+                    const arr = Array.from(this._tombstones);
+                    await fs.promises.writeFile(tombstonePath, JSON.stringify(arr, null, 2));
+                } catch (e) {
+                    console.error('[TaskViewerProvider] Failed to persist tombstone removal:', e);
+                }
+            }
+            // Remove from archivedBrainPaths so _mirrorBrainPlan can re-mirror this plan
+            const archivedPaths = this._context.workspaceState.get<string[]>('switchboard.archivedBrainPaths', []);
+            const filteredPaths = archivedPaths.filter(p => p !== stablePath);
+            if (filteredPaths.length !== archivedPaths.length) {
+                await this._context.workspaceState.update('switchboard.archivedBrainPaths', filteredPaths);
+            }
+            // Restore the run sheet so the plan re-appears in the dropdown
+            const runSheetId = `antigravity_${pathHash}`;
+            await this._restoreRunSheet(workspaceRoot, runSheetId, path.resolve(entry.brainSourcePath));
+            // Trigger re-mirror
+            await this._mirrorBrainPlan(path.resolve(entry.brainSourcePath));
+        } else if (entry.sourceType === 'local') {
+            // Restore the run sheet for local plans so the plan re-appears in the dropdown
+            await this._restoreRunSheet(workspaceRoot, planId);
+        }
+
+        await this._logEvent('plan_management', {
+            operation: 'restore_plan',
+            planId,
+            topic: entry.topic
+        });
+        await this._refreshRunSheets();
+        vscode.window.showInformationMessage(`Restored plan: ${entry.topic || planId}`);
+        return true;
+    }
+
+    private async _restoreRunSheet(workspaceRoot: string, sessionId: string, brainSourcePath?: string): Promise<void> {
+        const sessionsDir = path.join(workspaceRoot, '.switchboard', 'sessions');
+        const archiveSessionsDir = path.join(workspaceRoot, '.switchboard', 'archive', 'sessions');
+        const activeRunSheetPath = path.join(sessionsDir, `${sessionId}.json`);
+        const archivedRunSheetPath = path.join(archiveSessionsDir, `${sessionId}.json`);
+        try {
+            let sheet: any | null = null;
+            if (fs.existsSync(activeRunSheetPath)) {
+                const raw = await fs.promises.readFile(activeRunSheetPath, 'utf8');
+                sheet = JSON.parse(raw);
+                if (sheet.completed !== true && !brainSourcePath) return;
+            } else if (fs.existsSync(archivedRunSheetPath)) {
+                const raw = await fs.promises.readFile(archivedRunSheetPath, 'utf8');
+                sheet = JSON.parse(raw);
+            }
+            if (!sheet) return;
+            delete sheet.completed;
+            delete sheet.completedAt;
+            if (brainSourcePath) {
+                sheet.brainSourcePath = brainSourcePath;
+                // Also restore the mirror file from archive so planFile remains valid
+                if (typeof sheet.planFile === 'string') {
+                    const mirrorAbsPath = path.isAbsolute(sheet.planFile)
+                        ? sheet.planFile
+                        : path.join(workspaceRoot, sheet.planFile);
+                    if (!fs.existsSync(mirrorAbsPath)) {
+                        const archivedMirrorPath = path.join(workspaceRoot, '.switchboard', 'archive', 'plans', path.basename(mirrorAbsPath));
+                        if (fs.existsSync(archivedMirrorPath)) {
+                            await fs.promises.mkdir(path.dirname(mirrorAbsPath), { recursive: true });
+                            await fs.promises.copyFile(archivedMirrorPath, mirrorAbsPath);
+                            console.log(`[TaskViewerProvider] Restored mirror file from archive: ${path.basename(mirrorAbsPath)}`);
+                        }
+                    }
+                }
+            }
+            await fs.promises.mkdir(sessionsDir, { recursive: true });
+            await fs.promises.writeFile(activeRunSheetPath, JSON.stringify(sheet, null, 2));
+            console.log(`[TaskViewerProvider] Restored run sheet: ${sessionId}`);
+        } catch (e) {
+            console.error(`[TaskViewerProvider] Failed to restore run sheet ${sessionId}:`, e);
+        }
+    }
+
     private _isPlanInRegistry(planId: string): boolean {
         const entry = this._planRegistry.entries[planId];
         return !!entry && entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active';
+    }
+
+    private _getPlanIdForRunSheet(sheet: any): string | undefined {
+        if (!sheet || typeof sheet !== 'object') return undefined;
+        if (sheet.brainSourcePath) {
+            const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
+            return this._getPlanIdFromStableBrainPath(stablePath);
+        }
+        if (typeof sheet.sessionId === 'string' && sheet.sessionId.length > 0) {
+            return sheet.sessionId;
+        }
+        return undefined;
+    }
+
+    private _isOwnedActiveRunSheet(sheet: any): boolean {
+        const planId = this._getPlanIdForRunSheet(sheet);
+        if (!planId) return false;
+        if (!this._isPlanInRegistry(planId)) return false;
+        if (sheet?.brainSourcePath) {
+            const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
+            const pathHash = this._getPlanIdFromStableBrainPath(stablePath);
+            if (this._tombstones.has(pathHash)) return false;
+            if (this._brainPlanBlacklist.has(stablePath)) return false;
+        }
+        return true;
+    }
+
+    private _getSheetActivityTimestamp(sheet: any): number {
+        let ts = new Date(sheet?.createdAt || 0).getTime();
+        if (!isNaN(ts) && ts < 0) ts = 0;
+        if (Array.isArray(sheet?.events)) {
+            for (const e of sheet.events) {
+                const et = new Date(e?.timestamp || 0).getTime();
+                if (!isNaN(et) && et > ts) ts = et;
+            }
+        }
+        return Number.isFinite(ts) ? ts : 0;
     }
 
     private _getPlanIdFromStableBrainPath(stableBrainPath: string): string {
@@ -1363,30 +1673,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
         const registry: PlanRegistry = { version: 1, entries: {} };
         const now = new Date().toISOString();
-
-        // Migrate from workspaceBrainPaths
-        const legacyPaths = this._context.workspaceState.get<string[]>('switchboard.workspaceBrainPaths', []);
-        const archivedPaths = new Set(
-            this._context.workspaceState.get<string[]>('switchboard.archivedBrainPaths', [])
-                .map(p => this._getStablePath(p))
-        );
-
-        for (const rawPath of legacyPaths) {
-            const stablePath = this._getStablePath(rawPath);
-            const planId = this._getPlanIdFromStableBrainPath(stablePath);
-            const isArchived = archivedPaths.has(stablePath) || this._tombstones.has(planId);
-            registry.entries[planId] = {
-                planId,
-                ownerWorkspaceId: wsId,
-                sourceType: 'brain',
-                brainSourcePath: rawPath,
-                mirrorPath: `brain_${planId}.md`,
-                topic: '',
-                createdAt: now,
-                updatedAt: now,
-                status: isArchived ? 'archived' : 'active'
-            };
-        }
 
         // Migrate local plans from runsheets
         const log = this._getSessionLog(workspaceRoot);
@@ -1404,7 +1690,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     localPlanPath: sheet.planFile,
                     topic: sheet.topic || '',
                     createdAt: sheet.createdAt || now,
-                    updatedAt: now,
+                    updatedAt: sheet.completedAt || sheet.createdAt || now,
                     status: 'active'
                 };
             }
@@ -1962,6 +2248,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return [...new Set(candidates)];
     }
 
+    private async _resolveBrainSourcePathForMirrorHash(workspaceRoot: string, hash: string, brainDir: string): Promise<string | undefined> {
+        const sessionId = `antigravity_${hash}`;
+
+        let resolvedBrainPath: string | undefined;
+        try {
+            const runSheetPath = await this._findExistingRunSheetPath(workspaceRoot, sessionId);
+            if (runSheetPath && fs.existsSync(runSheetPath)) {
+                const rs = JSON.parse(await fs.promises.readFile(runSheetPath, 'utf8'));
+                if (typeof rs?.brainSourcePath === 'string' && rs.brainSourcePath.trim()) {
+                    resolvedBrainPath = path.resolve(rs.brainSourcePath.trim());
+                }
+            }
+        } catch {
+            // Fall through to registry fallback.
+        }
+
+        if (!resolvedBrainPath) {
+            const entry = this._planRegistry.entries[hash];
+            if (
+                entry &&
+                entry.sourceType === 'brain' &&
+                entry.status === 'active' &&
+                typeof entry.brainSourcePath === 'string' &&
+                entry.brainSourcePath.trim()
+            ) {
+                resolvedBrainPath = path.resolve(entry.brainSourcePath.trim());
+            }
+        }
+
+        if (!resolvedBrainPath) return undefined;
+        // Security: mirror write-back may only target files within the expected brain root.
+        if (!this._isPathWithin(brainDir, resolvedBrainPath)) return undefined;
+        return resolvedBrainPath;
+    }
+
     private async _findExistingRunSheetPath(workspaceRoot: string, sessionId: string): Promise<string | undefined> {
         const candidates = this._getRunSheetPathCandidates(workspaceRoot, sessionId);
         for (const candidate of candidates) {
@@ -2007,7 +2328,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return false;
     }
 
-    private async _mirrorBrainPlan(brainFilePath: string): Promise<void> {
+    private async _mirrorBrainPlan(brainFilePath: string, allowAutoClaim: boolean = false): Promise<void> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return;
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
@@ -2062,11 +2383,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            // Guard: workspace scoping — strict registry check.
-            // Plans must be explicitly registered in plan_registry.json to be mirrored.
-            // Unknown brain files are ignored; use explicit claim action to adopt.
+            // Guard: workspace scoping via registry ownership.
+            // New runtime-created plans may auto-claim so they appear immediately in dropdown.
             const eligibility = this._isPlanEligibleForWorkspace(stablePath, workspaceRoot);
-            if (!eligibility.eligible) {
+            const existingEntry = this._planRegistry.entries[pathHash];
+            const shouldAutoClaim = !eligibility.eligible && allowAutoClaim && !existingEntry;
+            if (!eligibility.eligible && !shouldAutoClaim) {
                 console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}): ${path.basename(brainFilePath)}`);
                 return;
             }
@@ -2088,9 +2410,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const content = await fs.promises.readFile(brainFilePath, 'utf8');
 
             // Extract H1 topic from full content
+            let topic = '';
             const h1Match = content.match(/^#\s+(.+)$/m);
-            if (!h1Match) return;
-            const topic = h1Match[1].trim();
+            if (h1Match) {
+                topic = h1Match[1].trim();
+            }
+            if (!topic) {
+                topic = this._inferTopicFromPath(brainFilePath);
+            }
+
+            if (shouldAutoClaim) {
+                const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+                const now = new Date().toISOString();
+                await this._registerPlan(workspaceRoot, {
+                    planId: pathHash,
+                    ownerWorkspaceId: wsId,
+                    sourceType: 'brain',
+                    brainSourcePath: baseBrainPath,
+                    mirrorPath: mirrorFilename,
+                    topic,
+                    createdAt: new Date(fileCreationTimeMs).toISOString(),
+                    updatedAt: now,
+                    status: 'active'
+                });
+                console.log(`[TaskViewerProvider] Auto-claimed new brain plan: ${topic}`);
+            }
 
             // Content check: skip write if mirror already has identical content AND runsheet exists
             if (fs.existsSync(mirrorPath)) {
@@ -2197,15 +2541,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             // Extract H1 title from full file content; fall back to filename-based topic
-            let topic: string;
+            let topic = '';
             try {
-                const fileContent = await fs.promises.readFile(uri.fsPath, 'utf8');
-                const h1Match = fileContent.match(/^#\s+(.+)$/m);
+                const content = await fs.promises.readFile(uri.fsPath, 'utf8');
+                const h1Match = content.match(/^#\s+(.+)$/m);
                 topic = h1Match ? h1Match[1].trim() : '';
             } catch { topic = ''; }
             if (!topic) {
-                const filename = path.basename(uri.fsPath);
-                topic = filename.replace(/^feature_plan_/, '').replace(/\.md$/, '').replace(/_/g, ' ');
+                topic = this._inferTopicFromPath(uri.fsPath);
             }
 
             const fileStat = await fs.promises.stat(uri.fsPath);
@@ -2310,11 +2653,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
-     * Moves a brain plan file into a `completed/` subfolder within its session directory.
-     * Files in `completed/` are ignored by `_isBrainMirrorCandidate` (depth check), so the
-     * plan will never reappear as "Active" even after a fresh extension install or re-clone.
-     * Returns the new archived path, or undefined if the path was falsy or the move failed.
-     * Uses rename with an EXDEV fallback (copy + delete) for cross-device scenarios.
+     * Copies a brain plan file into a `completed/` subfolder within its session directory.
+     * The original file is preserved in place. The plan will not reappear as "Active" because
+     * `_handleCompletePlan` also registers tombstones and archivedBrainPaths to suppress it.
+     * Returns the new archived copy path, or undefined if the path was falsy or the copy failed.
      */
     private async _archiveBrainPlan(brainFilePath: string | undefined): Promise<string | undefined> {
         if (!brainFilePath) return undefined;
@@ -2324,17 +2666,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             fs.mkdirSync(completedDir, { recursive: true });
         }
         const destPath = path.join(completedDir, path.basename(brainFilePath));
-        try {
-            await fs.promises.rename(brainFilePath, destPath);
-        } catch (e: any) {
-            if (e?.code === 'EXDEV') {
-                // Cross-device move: copy then delete
-                await fs.promises.copyFile(brainFilePath, destPath);
-                await fs.promises.unlink(brainFilePath);
-            } else {
-                throw e;
-            }
-        }
+        await fs.promises.copyFile(brainFilePath, destPath);
         console.log(`[TaskViewerProvider] Archived brain plan to: ${destPath}`);
         return destPath;
     }
@@ -2423,12 +2755,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             // Extract topic from brain file
             let topic = '';
-            try {
+            if (fs.existsSync(resolvedPath)) {
                 const content = await fs.promises.readFile(resolvedPath, 'utf8');
                 const h1Match = content.match(/^#\s+(.+)$/m);
-                topic = h1Match ? h1Match[1].trim() : path.basename(resolvedPath, '.md');
-            } catch {
-                topic = path.basename(resolvedPath, '.md');
+                if (h1Match) {
+                    topic = h1Match[1].trim();
+                }
+            }
+            if (!topic) {
+                topic = this._inferTopicFromPath(resolvedPath);
             }
 
             const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
@@ -2478,6 +2813,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             for (const sheet of activeSheetsData) {
                 if (sheet.completed === true) continue;
                 if (!sheet.sessionId || !sheet.events) continue;
+                if (!this._isOwnedActiveRunSheet(sheet)) continue;
 
                 let sourcePath: string | undefined;
                 if (typeof sheet.planFile === 'string' && sheet.planFile.trim()) {
@@ -2546,6 +2882,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             };
 
             await log.createRunSheet(mergedSessionId, mergedRunSheet);
+            const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+            await this._registerPlan(workspaceRoot, {
+                planId: mergedSessionId,
+                ownerWorkspaceId: wsId,
+                sourceType: 'local',
+                localPlanPath: mergedRelativePath.replace(/\\/g, '/'),
+                topic: mergedRunSheet.topic,
+                createdAt: mergedRunSheet.createdAt,
+                updatedAt: new Date().toISOString(),
+                status: 'active'
+            });
 
             const completedAt = new Date().toISOString();
             for (const { sheet } of activeSheets) {
@@ -2554,6 +2901,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 sheet.events = Array.isArray(sheet.events) ? sheet.events : [];
                 sheet.events.push({ workflow: 'batch-merge', timestamp: completedAt, action: 'stop', outcome: 'merged' });
                 await log.updateRunSheet(sheet.sessionId, () => sheet);
+                const sourcePlanId = this._getPlanIdForRunSheet(sheet);
+                if (sourcePlanId) {
+                    await this._updatePlanRegistryStatus(workspaceRoot, sourcePlanId, 'archived');
+                }
             }
 
             await this._refreshRunSheets();
@@ -2944,6 +3295,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     if (sheetRelPath === relPath && sheet.topic !== newTopic) {
                         sheet.topic = newTopic;
                         await fs.promises.writeFile(sheetPath, JSON.stringify(sheet, null, 2));
+                        const planId = this._getPlanIdForRunSheet(sheet);
+                        if (planId) {
+                            const entry = this._planRegistry.entries[planId];
+                            if (entry && entry.topic !== newTopic) {
+                                entry.topic = newTopic;
+                                entry.updatedAt = new Date().toISOString();
+                                await this._savePlanRegistry(workspaceRoot);
+                            }
+                        }
                         await this._refreshRunSheets();
                         return;
                     }
@@ -2996,42 +3356,37 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
         try {
+            await this._ensureOwnershipRegistryInitialized();
             await this._ensureTombstonesLoaded(workspaceRoot);
             const allSheets = await this._getSessionLog(workspaceRoot).getRunSheets();
+            const ownedActiveEntries = Object.values(this._planRegistry.entries).filter((entry) =>
+                entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active'
+            );
 
-            // Registry-based visibility: only show plans owned by this workspace
-            const visible = allSheets.filter((sheet: any) => {
-                if (!sheet.brainSourcePath) {
-                    // Local plans: check registry by sessionId
-                    const entry = this._planRegistry.entries[sheet.sessionId];
-                    if (entry) {
-                        return entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active';
-                    }
-                    // Unregistered local plans visible for backward compat (pre-migration)
-                    return true;
+            const bestSheetByPlanId = new Map<string, any>();
+            for (const sheet of allSheets) {
+                if (!this._isOwnedActiveRunSheet(sheet)) continue;
+                const planId = this._getPlanIdForRunSheet(sheet);
+                if (!planId) continue;
+                const existing = bestSheetByPlanId.get(planId);
+                if (!existing || this._getSheetActivityTimestamp(sheet) > this._getSheetActivityTimestamp(existing)) {
+                    bestSheetByPlanId.set(planId, sheet);
                 }
+            }
 
-                const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                const planId = this._getPlanIdFromStableBrainPath(stablePath);
-                return this._isPlanInRegistry(planId);
-            });
-
-            // Deduplicate: if local + brain entries map to same planId, keep only one
-            const seenPlanIds = new Set<string>();
-            const deduped = visible.filter((sheet: any) => {
-                let planId: string;
-                if (sheet.brainSourcePath) {
-                    const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                    planId = this._getPlanIdFromStableBrainPath(stablePath);
-                } else {
-                    planId = sheet.sessionId;
+            const visible: any[] = [];
+            for (const entry of ownedActiveEntries) {
+                if (entry.sourceType === 'brain' && entry.brainSourcePath) {
+                    const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(entry.brainSourcePath)));
+                    const pathHash = this._getPlanIdFromStableBrainPath(stablePath);
+                    if (this._tombstones.has(pathHash)) continue;
+                    if (this._brainPlanBlacklist.has(stablePath)) continue;
                 }
-                if (seenPlanIds.has(planId)) return false;
-                seenPlanIds.add(planId);
-                return true;
-            });
+                const sheet = bestSheetByPlanId.get(entry.planId);
+                if (sheet) visible.push(sheet);
+            }
 
-            this._view.webview.postMessage({ type: 'runSheets', sheets: this._sortSheets(deduped) });
+            this._view.webview.postMessage({ type: 'runSheets', sheets: this._sortSheets(visible) });
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets:', e);
             this._view.webview.postMessage({ type: 'runSheets', sheets: [] });
@@ -4433,6 +4788,58 @@ ${focusDirective}`);
     public setSetupStatus(needsSetup: boolean) {
         this._needsSetup = needsSetup;
         this._view?.webview.postMessage({ type: 'setupStatus', needsSetup });
+    }
+
+    /**
+     * Sidebar onboarding: run performSetup via the setup command (auto-detect mode).
+     */
+    private async _handleInitializeProtocols() {
+        try {
+            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'initializing' });
+            await vscode.commands.executeCommand('switchboard.setup');
+            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'initialized' });
+        } catch (e) {
+            console.error('[TaskViewerProvider] initializeProtocols failed:', e);
+            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'error', message: String(e) });
+        }
+    }
+
+    /**
+     * Sidebar onboarding: batch-save CLI agent commands from the onboarding form.
+     */
+    private async _handleSaveCliAgents(agents: Record<string, string>) {
+        try {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const sanitized: Record<string, string> = {};
+            const basicCommandPattern = /^[A-Za-z0-9._:/\\\- ]+$/;
+            for (const [role, cmd] of Object.entries(agents)) {
+                const trimmed = (cmd || '').trim();
+                if (!trimmed) continue;
+                if (!basicCommandPattern.test(trimmed) || /(^|[\\/])\.\.([\\/]|$)/.test(trimmed) || /[\r\n\t]/.test(trimmed)) {
+                    this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'error', message: `Invalid command for ${role}` });
+                    return;
+                }
+                sanitized[role] = trimmed;
+            }
+            await config.update('cliAgents', sanitized, vscode.ConfigurationTarget.Workspace);
+            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
+        } catch (e) {
+            console.error('[TaskViewerProvider] saveCliAgents failed:', e);
+            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'error', message: String(e) });
+        }
+    }
+
+    /**
+     * Sidebar onboarding: re-check setup status and switch to normal UI.
+     */
+    private async _handleFinishOnboarding() {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        // Re-evaluate needsSetup by checking if configs now exist
+        // We delegate to the extension command that re-checks and calls setSetupStatus
+        this._needsSetup = false;
+        this._view?.webview.postMessage({ type: 'setupStatus', needsSetup: false });
+        this.refresh();
     }
 
     public updateTerminalStatuses(terminals: any) {

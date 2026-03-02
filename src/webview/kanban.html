@@ -1,0 +1,447 @@
+<!-- Switchboard Kanban Board -->
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard Kanban</title>
+    <style>
+        :root {
+            --bg-color: #0a0e13;
+            --panel-bg: #0f1419;
+            --panel-bg2: #131920;
+            --border-color: #1e2830;
+            --border-bright: #2a3a48;
+            --text-primary: #c9d1d9;
+            --text-secondary: #6b7c8d;
+            --accent-cyan: #2f81f7;
+            --accent-green: #3fb950;
+            --accent-green-dim: #238636;
+            --accent-red: #da3633;
+            --accent-orange: #d29922;
+            --glow-green: 0 0 6px rgba(63, 185, 80, 0.3), 0 0 12px rgba(63, 185, 80, 0.1);
+            --font-family: 'Segoe UI', 'Roboto', sans-serif;
+            --font-mono: 'Consolas', 'Courier New', monospace;
+        }
+
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+
+        body {
+            font-family: var(--font-family);
+            background: var(--bg-color);
+            color: var(--text-primary);
+            height: 100vh;
+            overflow: hidden;
+            background-image:
+                linear-gradient(rgba(63, 185, 80, 0.01) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(63, 185, 80, 0.01) 1px, transparent 1px);
+            background-size: 20px 20px;
+        }
+
+        .kanban-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 12px 20px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+
+        .kanban-title {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 2px;
+            text-transform: uppercase;
+            color: var(--accent-green);
+            text-shadow: var(--glow-green);
+        }
+
+        .btn-refresh {
+            background: none;
+            border: 1px solid var(--border-bright);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+        .btn-refresh:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+        }
+
+        .kanban-board {
+            display: flex;
+            gap: 12px;
+            padding: 16px;
+            height: calc(100vh - 50px);
+            overflow-x: auto;
+        }
+
+        .kanban-column {
+            flex: 1;
+            min-width: 220px;
+            max-width: 320px;
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+        }
+
+        .column-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+
+        .column-name {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 1.5px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .column-count {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            background: var(--bg-color);
+            padding: 1px 6px;
+            border-radius: 8px;
+            min-width: 20px;
+            text-align: center;
+        }
+
+        .column-body {
+            flex: 1;
+            padding: 8px;
+            overflow-y: auto;
+            min-height: 120px;
+            transition: background 0.15s;
+        }
+
+        .column-body.drag-over {
+            background: rgba(63, 185, 80, 0.06);
+            outline: 1px dashed var(--accent-green-dim);
+            outline-offset: -4px;
+        }
+
+        .kanban-card {
+            background: linear-gradient(180deg, var(--panel-bg2) 0%, var(--panel-bg) 100%);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 10px 12px;
+            margin-bottom: 8px;
+            cursor: grab;
+            transition: all 0.15s;
+            position: relative;
+        }
+
+        .kanban-card:active { cursor: grabbing; }
+
+        .kanban-card:hover {
+            border-color: var(--border-bright);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
+        }
+
+        .kanban-card.dragging {
+            opacity: 0.4;
+            border-color: var(--accent-green-dim);
+        }
+
+        /* During drag, prevent child elements from interfering with drop targets */
+        .column-body.drag-over .kanban-card,
+        .column-body.drag-over .empty-state {
+            pointer-events: none;
+        }
+
+        .card-topic {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            margin-bottom: 4px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .card-meta {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        .card-actions {
+            display: flex;
+            gap: 6px;
+            margin-top: 8px;
+        }
+
+        .card-btn {
+            background: none;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+        .card-btn:hover {
+            border-color: var(--text-secondary);
+            color: var(--text-primary);
+        }
+        .card-btn.complete:hover {
+            border-color: var(--accent-green-dim);
+            color: var(--accent-green);
+        }
+
+        .empty-state {
+            text-align: center;
+            padding: 20px 10px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            letter-spacing: 0.5px;
+        }
+
+        /* Scrollbar styling */
+        ::-webkit-scrollbar { width: 6px; height: 6px; }
+        ::-webkit-scrollbar-track { background: transparent; }
+        ::-webkit-scrollbar-thumb { background: var(--border-bright); border-radius: 3px; }
+        ::-webkit-scrollbar-thumb:hover { background: var(--text-secondary); }
+    </style>
+</head>
+<body>
+    <div class="kanban-header">
+        <div class="kanban-title">⚡ Kanban Board</div>
+        <button class="btn-refresh" id="btn-refresh">Refresh</button>
+    </div>
+    <div class="kanban-board" id="kanban-board">
+        <div class="kanban-column" data-column="CREATED">
+            <div class="column-header">
+                <span class="column-name">Created</span>
+                <span class="column-count" id="count-CREATED">0</span>
+            </div>
+            <div class="column-body" id="col-CREATED"></div>
+        </div>
+        <div class="kanban-column" data-column="REVIEWED">
+            <div class="column-header">
+                <span class="column-name">Reviewed</span>
+                <span class="column-count" id="count-REVIEWED">0</span>
+            </div>
+            <div class="column-body" id="col-REVIEWED"></div>
+        </div>
+        <div class="kanban-column" data-column="CODED">
+            <div class="column-header">
+                <span class="column-name">Coded</span>
+                <span class="column-count" id="count-CODED">0</span>
+            </div>
+            <div class="column-body" id="col-CODED"></div>
+        </div>
+        <div class="kanban-column" data-column="CODE REVIEWED">
+            <div class="column-header">
+                <span class="column-name">Code Reviewed</span>
+                <span class="column-count" id="count-CODE REVIEWED">0</span>
+            </div>
+            <div class="column-body" id="col-CODE REVIEWED"></div>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+        const columns = ['CREATED', 'REVIEWED', 'CODED', 'CODE REVIEWED'];
+        let currentCards = [];
+
+        function renderBoard(cards) {
+            currentCards = cards;
+            const buckets = {};
+            columns.forEach(c => buckets[c] = []);
+
+            cards.forEach(card => {
+                const col = columns.includes(card.column) ? card.column : 'CREATED';
+                buckets[col].push(card);
+            });
+
+            columns.forEach(col => {
+                const container = document.getElementById('col-' + col);
+                const countEl = document.getElementById('count-' + col);
+                const items = buckets[col];
+                countEl.textContent = items.length;
+
+                if (items.length === 0) {
+                    container.innerHTML = '<div class="empty-state">No plans</div>';
+                } else {
+                    container.innerHTML = items.map(card => createCardHtml(card)).join('');
+                }
+
+                // Drag & drop target
+                container.addEventListener('dragover', handleDragOver);
+                container.addEventListener('dragenter', handleDragEnter);
+                container.addEventListener('dragleave', handleDragLeave);
+                container.addEventListener('drop', (e) => handleDrop(e, col));
+            });
+
+            // Attach card-level event listeners
+            document.querySelectorAll('.kanban-card').forEach(el => {
+                el.addEventListener('dragstart', handleDragStart);
+                el.addEventListener('dragend', handleDragEnd);
+            });
+
+            document.querySelectorAll('.card-btn.view').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'viewPlan', sessionId: btn.dataset.session });
+                });
+            });
+
+            document.querySelectorAll('.card-btn.complete').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'completePlan', sessionId: btn.dataset.session });
+                });
+            });
+        }
+
+        function createCardHtml(card) {
+            const timeAgo = formatTimeAgo(card.lastActivity);
+            const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
+            return `
+                <div class="kanban-card" draggable="true" data-session="${card.sessionId}">
+                    <div class="card-topic" title="${escapeHtml(card.topic)}">${escapeHtml(shortTopic)}</div>
+                    <div class="card-meta">${timeAgo}</div>
+                    <div class="card-actions">
+                        <button class="card-btn view" data-session="${card.sessionId}">View</button>
+                        <button class="card-btn complete" data-session="${card.sessionId}">Complete</button>
+                    </div>
+                </div>`;
+        }
+
+        function escapeHtml(str) {
+            const div = document.createElement('div');
+            div.textContent = str;
+            return div.innerHTML;
+        }
+
+        function formatTimeAgo(iso) {
+            if (!iso) return '';
+            const diff = Date.now() - new Date(iso).getTime();
+            const mins = Math.floor(diff / 60000);
+            if (mins < 1) return 'just now';
+            if (mins < 60) return mins + 'm ago';
+            const hrs = Math.floor(mins / 60);
+            if (hrs < 24) return hrs + 'h ago';
+            return Math.floor(hrs / 24) + 'd ago';
+        }
+
+        // Drag & Drop handlers
+        let draggedSessionId = null;
+
+        function handleDragStart(e) {
+            draggedSessionId = e.target.dataset.session;
+            e.target.classList.add('dragging');
+            e.dataTransfer.effectAllowed = 'move';
+            e.dataTransfer.setData('text/plain', draggedSessionId);
+        }
+
+        function handleDragEnd(e) {
+            e.target.classList.remove('dragging');
+            document.querySelectorAll('.column-body').forEach(el => el.classList.remove('drag-over'));
+            draggedSessionId = null;
+        }
+
+        function handleDragOver(e) {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'move';
+        }
+
+        function handleDragEnter(e) {
+            e.preventDefault();
+            const body = e.currentTarget;
+            body.classList.add('drag-over');
+        }
+
+        function handleDragLeave(e) {
+            const body = e.currentTarget;
+            // Only remove drag-over when actually leaving the column-body,
+            // not when entering a child element within it.
+            const related = e.relatedTarget;
+            if (!related || !body.contains(related)) {
+                body.classList.remove('drag-over');
+            }
+        }
+
+        function handleDrop(e, targetColumn) {
+            e.preventDefault();
+            e.currentTarget.classList.remove('drag-over');
+            const sessionId = e.dataTransfer.getData('text/plain');
+            if (!sessionId) return;
+
+            // Find current column of the card
+            const card = currentCards.find(c => c.sessionId === sessionId);
+            if (!card || card.column === targetColumn) return;
+
+            // Optimistic UI: move the card DOM element immediately
+            const cardEl = document.querySelector(`.kanban-card[data-session="${sessionId}"]`);
+            const targetBody = document.getElementById('col-' + targetColumn);
+            if (cardEl && targetBody) {
+                // Remove empty-state placeholder if present
+                const emptyState = targetBody.querySelector('.empty-state');
+                if (emptyState) emptyState.remove();
+                targetBody.appendChild(cardEl);
+
+                // Update source column: show empty-state if now empty
+                const sourceBody = document.getElementById('col-' + card.column);
+                if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
+                    sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
+                }
+
+                // Update counts
+                const srcCount = document.getElementById('count-' + card.column);
+                const tgtCount = document.getElementById('count-' + targetColumn);
+                if (srcCount) srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent) - 1));
+                if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
+
+                // Update in-memory state
+                card.column = targetColumn;
+            }
+
+            // Post message to extension to trigger the appropriate agent
+            vscode.postMessage({
+                type: 'triggerAction',
+                sessionId: sessionId,
+                targetColumn: targetColumn
+            });
+        }
+
+        // Listen for messages from the extension
+        window.addEventListener('message', (event) => {
+            const msg = event.data;
+            switch (msg.type) {
+                case 'updateBoard':
+                    renderBoard(msg.cards || []);
+                    break;
+            }
+        });
+
+        document.getElementById('btn-refresh').addEventListener('click', () => {
+            vscode.postMessage({ type: 'refresh' });
+        });
+
+        // Initial empty state
+        renderBoard([]);
+    </script>
+</body>
+</html>

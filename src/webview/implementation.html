@@ -779,6 +779,59 @@
             resize: vertical;
         }
 
+        .recover-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+        .recover-item-info {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+        .recover-item-topic {
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .recover-item-meta {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+        .recover-status-chip {
+            display: inline-block;
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: var(--font-mono);
+        }
+        .recover-status-chip.archived { background: rgba(130,80,223,0.2); color: #b590f0; }
+        .recover-status-chip.orphan { background: rgba(210,153,34,0.2); color: #e8b84a; }
+        .recover-restore-btn {
+            flex-shrink: 0;
+            margin-left: 8px;
+            padding: 3px 10px;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            background: transparent;
+            color: var(--accent-green);
+            border: 1px solid rgba(63,185,80,0.4);
+            border-radius: 2px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .recover-restore-btn:hover { background: rgba(63,185,80,0.12); }
+
         /* Agent Startup Config */
         .startup-section {
             padding: 10px;
@@ -1004,16 +1057,59 @@
             padding: 3px 6px;
             text-align: center;
         }
+        .onboard-step .startup-row {
+            margin-bottom: 6px;
+        }
     </style>
 </head>
 
 <body>
-    <div class="container">
+    <!-- ONBOARDING CONTAINER (shown when needsSetup is true) -->
+    <div id="onboarding-container" class="container hidden">
+        <!-- Step 1: Welcome -->
+        <div id="onboard-step-welcome" class="onboard-step">
+            <div style="text-align:center; padding: 30px 16px 10px;">
+                <div style="font-size: 28px; margin-bottom: 12px;">⚡</div>
+                <div style="font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-green); text-shadow: var(--glow-green); margin-bottom: 8px;">Welcome to Switchboard</div>
+                <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-width: 280px; margin: 0 auto;">
+                    Cross-IDE agent orchestration — workflow routing, terminal targeting, and multi-agent coordination.
+                </div>
+            </div>
+            <div style="padding: 20px 16px;">
+                <button id="btn-onboard-init" class="secondary-btn w-full" style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: rgba(63,185,80,0.4);">INITIALIZE SWITCHBOARD</button>
+                <div id="onboard-init-status" style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);"></div>
+            </div>
+        </div>
+
+        <!-- Step 2: CLI Config -->
+        <div id="onboard-step-cli" class="onboard-step hidden">
+            <div style="padding: 16px;">
+                <div class="section-label" style="margin-bottom: 12px;">CONFIGURE CLI AGENTS</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
+                    Set commands for each agent role. Leave empty to skip.
+                </div>
+                <div class="startup-row"><label>Lead Coder</label><input type="text" id="onboard-cli-lead" placeholder="e.g. copilot --allow-all-tools"></div>
+                <div class="startup-row"><label>Coder</label><input type="text" id="onboard-cli-coder" placeholder="e.g. codex --full-auto"></div>
+                <div class="startup-row"><label>Reviewer</label><input type="text" id="onboard-cli-reviewer" placeholder="e.g. gemini --approval-mode auto_edit"></div>
+                <div class="startup-row"><label>Analyst</label><input type="text" id="onboard-cli-analyst" placeholder="e.g. qwen"></div>
+                <div style="margin-top: 12px; display: flex; gap: 8px;">
+                    <button id="btn-onboard-save" class="secondary-btn w-full" style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: rgba(63,185,80,0.4);">SAVE &amp; FINISH</button>
+                    <button id="btn-onboard-skip" class="secondary-btn w-full" style="padding: 10px; font-size: 11px;">SKIP</button>
+                </div>
+                <div id="onboard-cli-status" style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);"></div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN CONTAINER (normal sidebar) -->
+    <div id="main-container" class="container">
         <!-- HEADER: PLAN SELECTION -->
         <div class="header-section">
             <div class="section-header">
-                <div class="section-label">PLAN SELECT <span class="tooltip-icon" title="If the dropdown is incorrect, ask an agent to run the 'fix plans dropdown' skill.">ⓘ</span></div>
+                <div class="section-label">PLAN SELECT <span class="tooltip-icon" title="If the plan select dropdown does not appear correct, use the Recover menu or ask an agent to run the Fix Plans Dropdown skill.">ⓘ</span></div>
                 <div class="flex gap-2" style="align-items: center;">
+                    <button id="btn-recover-plans" class="icon-btn" style="color: var(--accent-green);"
+                        title="Recover archived or orphaned plans" aria-label="Recover plans">RECOVER</button>
                     <button id="btn-delete-plan" class="icon-btn" style="color: var(--accent-red);"
                         title="Delete active plan" aria-label="Delete plan">DELETE</button>
                     <button id="btn-copy-plan-link" class="icon-btn" title="Copy Markdown link for active plan"
@@ -1033,6 +1129,9 @@
             </div>
             <div style="margin-top: 6px;">
                 <button id="btn-create-plan" class="secondary-btn w-full">CREATE PLAN</button>
+            </div>
+            <div style="margin-top: 6px;">
+                <button id="btn-open-kanban" class="secondary-btn w-full" style="color: var(--accent-cyan); border-color: rgba(47, 129, 247, 0.3);">OPEN KANBAN</button>
             </div>
         </div>
 
@@ -1097,9 +1196,9 @@
                 <div class="startup-row"><label>Coder</label><input type="text" data-role="coder"
                         placeholder="e.g. codex --full-auto"></div>
                 <div class="startup-row"><label>Reviewer</label><input type="text" data-role="reviewer"
-                        placeholder="e.g. gemini"></div>
+                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div class="startup-row"><label>Planner</label><input type="text" data-role="planner"
-                        placeholder="e.g. gemini"></div>
+                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div class="startup-row"><label>Analyst</label><input type="text" data-role="analyst"
                         placeholder="e.g. qwen"></div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
@@ -1143,6 +1242,16 @@
         </div>
     </div>
 
+    <div id="recover-plans-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 480px;">
+            <div class="modal-title">RECOVER PLANS</div>
+            <input id="recover-search" class="modal-input" type="text" placeholder="Filter plans..." style="margin-bottom: 8px;">
+            <div id="recover-plan-list" style="max-height: 260px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <div id="recover-empty-msg" class="hidden" style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 11px;">No recoverable plans found.</div>
+            <button id="btn-close-recover" class="secondary-btn w-full">CLOSE</button>
+        </div>
+    </div>
+
 
 
     <script>
@@ -1171,6 +1280,11 @@
         const initiatePlanModal = document.getElementById('initiate-plan-modal');
         const initiatePlanTitleInput = document.getElementById('init-plan-title');
         const initiatePlanIdeaInput = document.getElementById('init-plan-idea');
+        const recoverPlansModal = document.getElementById('recover-plans-modal');
+        const recoverPlanList = document.getElementById('recover-plan-list');
+        const recoverEmptyMsg = document.getElementById('recover-empty-msg');
+        const recoverSearchInput = document.getElementById('recover-search');
+        let recoverablePlansCache = [];
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
@@ -1263,11 +1377,75 @@
             }
         });
 
+        // Recovery Modal
+        function openRecoverPlansModal() {
+            recoverPlansModal.classList.remove('hidden');
+            recoverSearchInput.value = '';
+            recoverPlanList.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:11px;">Loading...</div>';
+            recoverEmptyMsg.classList.add('hidden');
+            vscode.postMessage({ type: 'getRecoverablePlans' });
+        }
+        function closeRecoverPlansModal() {
+            recoverPlansModal.classList.add('hidden');
+        }
+        function inferTopicFromPath(filePath) {
+            if (!filePath) return '(untitled)';
+            var name = filePath.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+            name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
+            name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
+            if (!name) return '(untitled)';
+            return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); }).trim() || '(untitled)';
+        }
+        function renderRecoverablePlans(plans, filter) {
+            recoverablePlansCache = plans || [];
+            const q = (filter || '').toLowerCase();
+            const filtered = q ? recoverablePlansCache.filter(p => (p.topic || '').toLowerCase().includes(q)) : recoverablePlansCache;
+            recoverPlanList.innerHTML = '';
+            if (filtered.length === 0) {
+                recoverEmptyMsg.classList.remove('hidden');
+                return;
+            }
+            recoverEmptyMsg.classList.add('hidden');
+            for (const plan of filtered) {
+                const item = document.createElement('div');
+                item.className = 'recover-item';
+                const dateStr = plan.updatedAt ? new Date(plan.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() : '';
+                const btnLabel = plan.status === 'orphan' ? 'CLAIM' : 'RESTORE';
+                var displayTopic = plan.topic;
+                if (!displayTopic || displayTopic === '(untitled)') {
+                    displayTopic = inferTopicFromPath(plan.brainSourcePath || plan.localPlanPath);
+                }
+                item.innerHTML = '<div class="recover-item-info">'
+                    + '<div class="recover-item-topic">' + displayTopic.replace(/</g, '&lt;') + '</div>'
+                    + '<div class="recover-item-meta"><span class="recover-status-chip ' + plan.status + '">' + plan.status + '</span> · ' + plan.sourceType + ' · ' + dateStr + '</div>'
+                    + '</div>'
+                    + '<button class="recover-restore-btn" data-plan-id="' + plan.planId + '">' + btnLabel + '</button>';
+                recoverPlanList.appendChild(item);
+            }
+            recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const planId = btn.getAttribute('data-plan-id');
+                    btn.disabled = true;
+                    btn.textContent = '...';
+                    vscode.postMessage({ type: 'restorePlan', planId });
+                });
+            });
+        }
+        document.getElementById('btn-recover-plans').addEventListener('click', openRecoverPlansModal);
+        document.getElementById('btn-close-recover').addEventListener('click', closeRecoverPlansModal);
+        recoverPlansModal.addEventListener('click', (event) => {
+            if (event.target === recoverPlansModal) closeRecoverPlansModal();
+        });
+        recoverSearchInput.addEventListener('input', () => {
+            renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
+        });
+
         // Setup Buttons
         document.getElementById('btn-initialize').addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         document.getElementById('btn-connect-mcp').addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
         document.getElementById('createAgentGrid').addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
         document.getElementById('btn-deregister-all').addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
+        document.getElementById('btn-open-kanban').addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
         document.getElementById('terminal-operations-toggle').addEventListener('click', () => {
             const fields = document.getElementById('terminal-operations-fields');
             const chevron = document.getElementById('terminal-operations-chevron');
@@ -1513,6 +1691,15 @@
                 case 'mcpStatus':
                     updateMcpStatus(message);
                     setActiveTab(message.activeTab || 'agents', false);
+                    if (message.type === 'initialState') {
+                        toggleOnboarding(message.needsSetup === true);
+                    }
+                    break;
+                case 'setupStatus':
+                    toggleOnboarding(message.needsSetup === true);
+                    break;
+                case 'onboardingProgress':
+                    handleOnboardingProgress(message);
                     break;
                 case 'terminalStatuses':
                     lastTerminals = message.terminals || {};
@@ -1539,6 +1726,9 @@
                     break;
                 case 'copyPlanLinkResult':
                     showCopyPlanLinkFeedback(message.success === true);
+                    break;
+                case 'recoverablePlans':
+                    renderRecoverablePlans(message.plans || [], recoverSearchInput.value);
                     break;
                 case 'startupCommands':
                     if (message.commands) {
@@ -2521,7 +2711,7 @@
             btn.id = 'analyst-send-btn';
             const pendingDispatch = isDispatchPending('analyst');
             btn.innerText = pendingDispatch ? 'DISPATCHING...' : 'SEND QUESTION';
-            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
+            btn.disabled = !isReady || pendingDispatch;
             btn.dataset.role = 'analyst';
             if (pendingDispatch) {
                 btn.classList.add('dispatching');
@@ -2556,7 +2746,7 @@
             mapBtn.id = 'analyst-generate-map-btn';
             const pendingMapDispatch = isDispatchPending('analystMap');
             mapBtn.innerText = pendingMapDispatch ? 'GENERATING...' : 'GENERATE CONTEXT MAP';
-            mapBtn.disabled = !isReady || pendingMapDispatch || !isPlanSelected();
+            mapBtn.disabled = !isReady || pendingMapDispatch;
             mapBtn.dataset.role = 'analystMap';
             if (pendingMapDispatch) {
                 mapBtn.classList.add('dispatching');
@@ -2597,6 +2787,68 @@
                 mcpText.innerText = 'MCP: OFFLINE';
             }
         }
+
+        // --- Onboarding Logic ---
+        const onboardingContainer = document.getElementById('onboarding-container');
+        const mainContainer = document.getElementById('main-container');
+        const onboardStepWelcome = document.getElementById('onboard-step-welcome');
+        const onboardStepCli = document.getElementById('onboard-step-cli');
+
+        function toggleOnboarding(needsSetup) {
+            if (needsSetup) {
+                onboardingContainer.classList.remove('hidden');
+                mainContainer.classList.add('hidden');
+            } else {
+                onboardingContainer.classList.add('hidden');
+                mainContainer.classList.remove('hidden');
+            }
+        }
+
+        function handleOnboardingProgress(msg) {
+            const initStatus = document.getElementById('onboard-init-status');
+            const cliStatus = document.getElementById('onboard-cli-status');
+            switch (msg.step) {
+                case 'initializing':
+                    if (initStatus) initStatus.textContent = 'Initializing protocols...';
+                    break;
+                case 'initialized':
+                    if (initStatus) initStatus.textContent = '✅ Protocols initialized';
+                    // Advance to CLI config step
+                    setTimeout(() => {
+                        onboardStepWelcome.classList.add('hidden');
+                        onboardStepCli.classList.remove('hidden');
+                    }, 600);
+                    break;
+                case 'cli_saved':
+                    if (cliStatus) cliStatus.textContent = '✅ CLI agents saved';
+                    setTimeout(() => {
+                        vscode.postMessage({ type: 'finishOnboarding' });
+                    }, 400);
+                    break;
+                case 'error':
+                    const errTarget = onboardStepCli.classList.contains('hidden') ? initStatus : cliStatus;
+                    if (errTarget) errTarget.textContent = '❌ ' + (msg.message || 'Unknown error');
+                    break;
+            }
+        }
+
+        document.getElementById('btn-onboard-init').addEventListener('click', () => {
+            vscode.postMessage({ type: 'initializeProtocols' });
+        });
+
+        document.getElementById('btn-onboard-save').addEventListener('click', () => {
+            const agents = {
+                lead: document.getElementById('onboard-cli-lead').value,
+                coder: document.getElementById('onboard-cli-coder').value,
+                reviewer: document.getElementById('onboard-cli-reviewer').value,
+                analyst: document.getElementById('onboard-cli-analyst').value
+            };
+            vscode.postMessage({ type: 'saveCliAgents', agents });
+        });
+
+        document.getElementById('btn-onboard-skip').addEventListener('click', () => {
+            vscode.postMessage({ type: 'finishOnboarding' });
+        });
 
         // Notify extension we are ready to receive data
         updatePlanActionStates();

@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { ChildProcess, fork, execFileSync } from 'child_process';
 import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
+import { KanbanProvider } from './services/KanbanProvider';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
 // Status bar item for setup notification
@@ -641,6 +642,25 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(createAgentGridDisposable);
     context.subscriptions.push(createAgentGridEditorDisposable);
 
+    // Kanban Board
+    const kanbanProvider = new KanbanProvider(context.extensionUri, context);
+    context.subscriptions.push(kanbanProvider);
+    const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async () => {
+        await kanbanProvider.open();
+    });
+    context.subscriptions.push(openKanbanDisposable);
+
+    // Helper commands for Kanban ↔ sidebar delegation
+    const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string) => {
+        taskViewerProvider.handleKanbanTrigger(role, sessionId);
+    });
+    context.subscriptions.push(triggerFromKanbanDisposable);
+
+    const completePlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.completePlanFromKanban', async (sessionId: string) => {
+        taskViewerProvider.handleKanbanCompletePlan(sessionId);
+    });
+    context.subscriptions.push(completePlanFromKanbanDisposable);
+
     let degradedMcpStreak = 0;
     let autoHealInFlight = false;
     let lastAutoHealAt = 0;
@@ -906,7 +926,7 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.setSetupStatus(needsSetup);
 
     if (needsSetup && workspaceRoot) {
-        // 1. Status Bar Item
+        // Status Bar Item (toast suppressed — onboarding is now handled in the sidebar)
         setupStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
         setupStatusBarItem.text = "$(rocket) Switchboard: Setup Required";
         setupStatusBarItem.tooltip = "Click to configure Switchboard for your AI coding assistants";
@@ -914,16 +934,6 @@ export async function activate(context: vscode.ExtensionContext) {
         setupStatusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
         setupStatusBarItem.show();
         context.subscriptions.push(setupStatusBarItem);
-
-        // 2. Startup Notification (Non-blocking)
-        vscode.window.showInformationMessage(
-            "Switchboard protocols not detected in this workspace.",
-            "Run Setup"
-        ).then(selection => {
-            if (selection === "Run Setup") {
-                vscode.commands.executeCommand('switchboard.setup');
-            }
-        });
     }
 
     // Listen for configuration changes
