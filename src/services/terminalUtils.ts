@@ -1,4 +1,26 @@
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as crypto from 'crypto';
+
+/**
+ * Normalize a filesystem path for consistent cross-platform hashing.
+ * On Windows, lowercases the path for case-insensitive comparison.
+ */
+export function normalizePathForOS(p: string): string {
+    const normalized = path.normalize(p);
+    const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+    const root = path.parse(stable).root;
+    return stable.length > root.length ? stable.replace(/[\\\/]+$/, '') : stable;
+}
+
+/**
+ * Compute the SHA256 hash used for antigravity plan IDs.
+ * Accepts a raw path — normalizes it before hashing.
+ */
+export function getAntigravityHash(rawPath: string): string {
+    const stablePath = normalizePathForOS(rawPath);
+    return crypto.createHash('sha256').update(stablePath).digest('hex');
+}
 
 /**
  * Sends text to a terminal with chunking and pacing to prevent input corruption.

@@ -34,6 +34,9 @@ export class SessionActionLog {
     private isFlushing = false;
     private flushScheduled = false;
     private readonly _writeLocks = new Map<string, Promise<void>>();
+    private _titleCache: Map<string, string> | null = null;
+    private _titleCacheTimestamp = 0;
+    private static readonly TITLE_CACHE_TTL_MS = 5_000;
     private static readonly MAX_RETRIES = 4;
     private static readonly BASE_BACKOFF_MS = 200;
     private static readonly MAX_STRING_LEN = 800;
@@ -339,6 +342,11 @@ export class SessionActionLog {
     }
 
     private async _readSessionTitleMap(): Promise<Map<string, string>> {
+        // Return cached map if still fresh
+        if (this._titleCache && (Date.now() - this._titleCacheTimestamp) < SessionActionLog.TITLE_CACHE_TTL_MS) {
+            return this._titleCache;
+        }
+
         const map = new Map<string, string>();
         try {
             if (!fs.existsSync(this.sessionsDir)) return map;
@@ -359,6 +367,9 @@ export class SessionActionLog {
         } catch {
             // Ignore title map loading failures; fallback will use session IDs.
         }
+
+        this._titleCache = map;
+        this._titleCacheTimestamp = Date.now();
         return map;
     }
 
@@ -369,6 +380,12 @@ export class SessionActionLog {
         if (planName) return planName;
         const topic = typeof runSheet.topic === 'string' ? runSheet.topic.trim() : '';
         if (topic) return topic;
+        // For brain-sourced plans, extract a readable name from the source path
+        const brainSourcePath = typeof runSheet.brainSourcePath === 'string' ? runSheet.brainSourcePath.trim() : '';
+        if (brainSourcePath) {
+            const baseName = path.basename(brainSourcePath).replace(/\.md$/i, '').replace(/\.brain$/i, '');
+            if (baseName) return baseName;
+        }
         const planFile = typeof runSheet.planFile === 'string' ? runSheet.planFile.trim() : '';
         if (!planFile) return '';
         return path.basename(planFile).replace(/\.md$/i, '');

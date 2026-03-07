@@ -15,12 +15,11 @@
             --text-primary: #e0e0e0;
             --text-secondary: #888888;
 
-            --accent-cyan: #2f81f7;
-            --accent-green: #3fb950;
-            --accent-green-dim: #238636;
+            --accent-teal: #3ddbd9;
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
             --accent-red: #da3633;
             --accent-orange: #d29922;
-            --glow-green: 0 0 6px color-mix(in srgb, var(--accent-green) 30%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 10%, transparent);
             --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
@@ -49,8 +48,8 @@
             font-size: 11px;
             letter-spacing: 2px;
             text-transform: uppercase;
-            color: var(--accent-green);
-            text-shadow: var(--glow-green);
+            color: var(--accent-teal);
+            text-shadow: var(--glow-teal);
         }
 
         .btn-refresh {
@@ -67,9 +66,9 @@
             transition: all 0.15s;
         }
         .btn-refresh:hover {
-            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
-            border-color: var(--border-bright);
-            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
         }
 
         .kanban-board {
@@ -146,8 +145,8 @@
         }
 
         .column-body.drag-over {
-            background: color-mix(in srgb, var(--accent-green) 6%, transparent);
-            outline: 1px dashed var(--accent-green-dim);
+            background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
+            outline: 1px dashed var(--accent-teal-dim);
             outline-offset: -4px;
         }
 
@@ -166,12 +165,13 @@
 
         .kanban-card:hover {
             border-color: var(--border-bright);
+            border-left-color: var(--accent-teal);
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.3);
         }
 
         .kanban-card.dragging {
             opacity: 0.4;
-            border-color: var(--accent-green-dim);
+            border-color: var(--accent-teal-dim);
         }
 
         /* During drag, prevent child elements from interfering with drop targets */
@@ -222,8 +222,8 @@
             color: var(--text-primary);
         }
         .card-btn.complete:hover {
-            border-color: var(--accent-green-dim);
-            color: var(--accent-green);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
         }
 
         .empty-state {

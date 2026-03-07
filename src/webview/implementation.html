@@ -1189,8 +1189,6 @@
                         placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div class="startup-row"><label>Analyst</label><input type="text" id="onboard-cli-analyst"
                         placeholder="e.g. qwen"></div>
-                <div class="startup-row"><label>Librarian</label><input type="text" id="onboard-cli-librarian"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div style="margin-top: 12px; display: flex; gap: 8px;">
                     <button id="btn-onboard-save" class="secondary-btn w-full"
                         style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">SAVE
@@ -1304,8 +1302,6 @@
                         placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div class="startup-row"><label>Analyst</label><input type="text" data-role="analyst"
                         placeholder="e.g. qwen"></div>
-                <div class="startup-row"><label>Librarian</label><input type="text" data-role="librarian"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
                     <span>Accurate coding mode for Coder prompts</span>
@@ -1334,7 +1330,7 @@
 
     <div id="initiate-plan-modal" class="modal-overlay hidden">
         <div class="modal-card">
-            <div class="modal-title">INITIATE PLAN</div>
+            <div class="modal-title">Create Plan</div>
             <label class="modal-label" for="init-plan-title">Plan title</label>
             <input id="init-plan-title" class="modal-input" type="text"
                 placeholder="e.g. Improve onboarding conversion">
@@ -1343,6 +1339,7 @@
                 placeholder="Describe what should be fixed or built..."></textarea>
             <div class="flex gap-2">
                 <button id="btn-send-planner" class="action-btn w-full">SEND TO PLANNER</button>
+                <button id="btn-save-plan" class="secondary-btn w-full">SAVE PLAN</button>
                 <button id="btn-copy-prompt" class="secondary-btn w-full">COPY TO CLIPBOARD</button>
             </div>
         </div>
@@ -1449,13 +1446,31 @@
             }, 1500);
         }
 
-        function openInitiatePlanModal() {
+        function openInitiatePlanModal(initialIdea) {
+            _planModalFromAirlock = !!initialIdea;
+            if (initialIdea) {
+                initiatePlanIdeaInput.value = initialIdea;
+            }
+            const sendBtn = document.getElementById('btn-send-planner');
+            const copyBtn = document.getElementById('btn-copy-prompt');
+            if (_planModalFromAirlock) {
+                sendBtn.innerText = 'REVIEW PLAN';
+                copyBtn.innerText = 'SAVE AS PLAN';
+            } else {
+                sendBtn.innerText = 'SEND TO PLANNER';
+                copyBtn.innerText = 'COPY TO CLIPBOARD';
+            }
             initiatePlanModal.classList.remove('hidden');
             setTimeout(() => initiatePlanTitleInput.focus(), 0);
         }
 
         function closeInitiatePlanModal() {
             initiatePlanModal.classList.add('hidden');
+            _planModalFromAirlock = false;
+            const sendBtn = document.getElementById('btn-send-planner');
+            const copyBtn = document.getElementById('btn-copy-prompt');
+            sendBtn.innerText = 'SEND TO PLANNER';
+            copyBtn.innerText = 'COPY TO CLIPBOARD';
         }
 
         function submitInitiatePlan(action) {
@@ -1465,11 +1480,16 @@
                 return;
             }
 
+            let mode = action;
+            if (_planModalFromAirlock) {
+                mode = action === 'send' ? 'review' : 'local';
+            }
+
             vscode.postMessage({
                 type: 'initiatePlan',
                 title,
                 idea,
-                mode: action
+                mode
             });
             closeInitiatePlanModal();
             initiatePlanTitleInput.value = '';
@@ -1477,6 +1497,7 @@
         }
 
         document.getElementById('btn-send-planner').addEventListener('click', () => submitInitiatePlan('send'));
+        document.getElementById('btn-save-plan').addEventListener('click', () => submitInitiatePlan('local'));
         document.getElementById('btn-copy-prompt').addEventListener('click', () => submitInitiatePlan('copy'));
         document.getElementById('btn-create-plan').addEventListener('click', () => openInitiatePlanModal());
 
@@ -1728,7 +1749,6 @@
                 planner: 'Planner',
                 team: 'Team',
                 analyst: 'Analyst',
-                librarian: 'Librarian',
                 jules: 'Jules'
             };
             return roleMap[role] || 'Agent';
@@ -2001,14 +2021,14 @@
                         renderAgentList();
                     }
                     break;
-                case 'webai_exportComplete': {
+                case 'airlock_exportComplete': {
                     const expBtn = document.getElementById('webai-export-btn');
                     const wStatus = document.getElementById('webai-status');
                     if (expBtn) { expBtn.disabled = false; expBtn.innerText = 'BUNDLE CODE'; expBtn.classList.remove('dispatching'); }
                     if (wStatus) wStatus.innerText = '✓ Bundled — ' + new Date().toLocaleTimeString();
                     break;
                 }
-                case 'webai_exportError': {
+                case 'airlock_exportError': {
                     const expBtn2 = document.getElementById('webai-export-btn');
                     const wStatus2 = document.getElementById('webai-status');
                     if (expBtn2) { expBtn2.disabled = false; expBtn2.innerText = 'BUNDLE CODE'; expBtn2.classList.remove('dispatching'); }
@@ -2016,24 +2036,27 @@
                     break;
                 }
                 case 'airlock_syncComplete': {
-                    const sBtn = document.getElementById('airlock-sync-btn');
-                    const wStatus = document.getElementById('webai-status');
+                    const sBtn = document.getElementById('jules-sync-btn');
+                    const wStatus = document.getElementById('jules-sync-status');
                     if (sBtn) { sBtn.disabled = false; sBtn.innerText = 'SYNC REPO'; sBtn.classList.remove('dispatching'); }
                     if (wStatus) wStatus.innerText = '✓ Synced to cloud — ' + new Date().toLocaleTimeString();
                     break;
                 }
                 case 'airlock_syncError': {
-                    const sBtn2 = document.getElementById('airlock-sync-btn');
-                    const wStatus2 = document.getElementById('webai-status');
+                    const sBtn2 = document.getElementById('jules-sync-btn');
+                    const wStatus2 = document.getElementById('jules-sync-status');
                     if (sBtn2) { sBtn2.disabled = false; sBtn2.innerText = 'SYNC REPO'; sBtn2.classList.remove('dispatching'); }
                     if (wStatus2) wStatus2.innerText = '⚠ ' + (message.message || 'Sync failed');
                     break;
                 }
                 case 'airlock_planSaved': {
-                    const pBtn = document.getElementById('airlock-plan-btn');
                     const pStatus = document.getElementById('webai-status');
-                    if (pBtn) { pBtn.disabled = false; pBtn.innerText = 'PLAN'; }
+                    const pTa = document.getElementById('airlock-textarea');
+                    const pTitle = document.getElementById('airlock-title-input');
                     if (pStatus) pStatus.innerText = '✓ Plan saved — ' + new Date().toLocaleTimeString();
+                    if (pTa) { pTa.value = ''; }
+                    if (pTitle) { pTitle.value = ''; }
+                    _airlockTextareaValue = '';
                     break;
                 }
                 case 'airlock_planError': {
@@ -2216,15 +2239,9 @@
                 }
             }
 
-            // 5.5. Librarian
-            agentListStandard.appendChild(createAgentRow('LIBRARIAN', 'librarian',
-                'UPDATE MAP',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'librarian')
-            ));
-
             // 6. Jules
             agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
-                'START JULES CODING',
+                'START CLOUD CODING',
                 terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
                 true
             ));
@@ -2254,6 +2271,7 @@
         // Preserve airlock textarea content across re-renders
         let _airlockTextareaValue = '';
         let _airlockLastText = ''; // Backup for restore-on-error after optimistic clear
+        let _planModalFromAirlock = false;
 
         function createWebAiAirlockPanel() {
             const container = document.createElement('div');
@@ -2278,7 +2296,7 @@
             // Description
             const desc = document.createElement('div');
             desc.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
-            desc.innerText = 'Bundle your codebase + plans for any external AI. Paste the response below to convert to a plan or send as a patch to your coder.';
+            desc.innerText = 'Bundle your codebase for any external AI. Paste the response below and save it as a plan.';
             container.appendChild(desc);
 
             // Status line
@@ -2287,7 +2305,7 @@
             statusLine.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
             container.appendChild(statusLine);
 
-            // Action buttons row (Bundle + Sync)
+            // Action buttons row
             const topActions = document.createElement('div');
             topActions.style.cssText = 'display:flex; gap:8px;';
 
@@ -2302,31 +2320,42 @@
                 exportBtn.disabled = true;
                 exportBtn.innerText = 'BUNDLING...';
                 exportBtn.classList.add('dispatching');
-                vscode.postMessage({ type: 'webai_export' });
-            };
-
-            // SYNC REPO button
-            const syncBtn = document.createElement('button');
-            syncBtn.className = 'secondary-btn';
-            syncBtn.id = 'airlock-sync-btn';
-            syncBtn.style.flex = '1';
-            syncBtn.style.minWidth = '0';
-            syncBtn.innerText = 'SYNC REPO';
-            syncBtn.onclick = () => {
-                syncBtn.disabled = true;
-                syncBtn.innerText = 'SYNCING...';
-                syncBtn.classList.add('dispatching');
-                vscode.postMessage({ type: 'airlock_syncRepo' });
+                vscode.postMessage({ type: 'airlock_export' });
             };
 
             topActions.appendChild(exportBtn);
-            topActions.appendChild(syncBtn);
+
+            // OPEN FOLDER button
+            const openFolderBtn = document.createElement('button');
+            openFolderBtn.className = 'secondary-btn';
+            openFolderBtn.style.flex = '1';
+            openFolderBtn.style.minWidth = '0';
+            openFolderBtn.innerText = 'OPEN FOLDER';
+            openFolderBtn.onclick = () => {
+                vscode.postMessage({ type: 'airlock_openFolder' });
+            };
+            topActions.appendChild(openFolderBtn);
+
             container.appendChild(topActions);
 
             // Spacer
             const spacer1 = document.createElement('div');
             spacer1.style.height = '8px';
             container.appendChild(spacer1);
+
+            // Plan title input
+            const titleLabel = document.createElement('div');
+            titleLabel.style.cssText = 'padding:2px 8px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono); letter-spacing:1px; text-transform:uppercase;';
+            titleLabel.innerText = 'Plan title';
+            container.appendChild(titleLabel);
+
+            const titleInput = document.createElement('input');
+            titleInput.type = 'text';
+            titleInput.id = 'airlock-title-input';
+            titleInput.className = 'agent-input';
+            titleInput.style.cssText = 'width:calc(100% - 16px); margin:4px 8px;';
+            titleInput.placeholder = 'e.g. Add user authentication';
+            container.appendChild(titleInput);
 
             // Textarea label
             const taLabel = document.createElement('div');
@@ -2349,50 +2378,26 @@
             spacer2.style.height = '6px';
             container.appendChild(spacer2);
 
-            // CONVERT TO PLAN + SEND TO CODER buttons (flex row)
+            // SAVE PLAN button
             const btnRow = document.createElement('div');
             btnRow.style.cssText = 'display:flex; gap:8px; padding:0 8px 6px;';
 
-            // CONVERT TO PLAN button
             const planBtn = document.createElement('button');
             planBtn.className = 'secondary-btn';
             planBtn.id = 'airlock-plan-btn';
             planBtn.style.flex = '1';
             planBtn.style.minWidth = '0';
-            planBtn.innerText = 'CONVERT TO PLAN';
+            planBtn.innerText = 'SAVE PLAN';
             planBtn.onclick = () => {
+                const title = titleInput.value.trim();
                 const text = textarea.value.trim();
-                if (!text) { const s = document.getElementById('webai-status'); if (s) s.innerText = '⚠ Paste AI response first'; return; }
-                // Optimistic clear — restore on error
-                _airlockLastText = text;
-                _airlockTextareaValue = '';
-                textarea.value = '';
-                planBtn.disabled = true;
-                planBtn.innerText = 'SAVING...';
-                vscode.postMessage({ type: 'airlock_convertToPlan', text });
-            };
-
-            // SEND TO CODER button
-            const coderBtn = document.createElement('button');
-            coderBtn.className = 'action-btn';
-            coderBtn.id = 'airlock-coder-btn';
-            coderBtn.style.flex = '1';
-            coderBtn.style.minWidth = '0';
-            coderBtn.innerText = 'SEND TO CODER';
-            coderBtn.onclick = () => {
-                const text = textarea.value.trim();
-                if (!text) { const s = document.getElementById('webai-status'); if (s) s.innerText = '⚠ Paste AI response first'; return; }
-                // Optimistic clear — restore on error
-                _airlockLastText = text;
-                _airlockTextareaValue = '';
-                textarea.value = '';
-                coderBtn.disabled = true;
-                coderBtn.innerText = 'SENDING...';
-                vscode.postMessage({ type: 'airlock_sendToCoder', text });
+                const status = document.getElementById('webai-status');
+                if (!title) { if (status) status.innerText = '⚠ Enter a plan title'; return; }
+                if (!text) { if (status) status.innerText = '⚠ Paste AI response first'; return; }
+                vscode.postMessage({ type: 'initiatePlan', title, idea: text, mode: 'local' });
             };
 
             btnRow.appendChild(planBtn);
-            btnRow.appendChild(coderBtn);
             container.appendChild(btnRow);
 
             return container;
@@ -2877,14 +2882,32 @@
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'coder', sessionFile: sessionId });
                 } else if (roleId === 'lead') {
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'lead', sessionFile: sessionId });
-                } else if (roleId === 'librarian') {
-                    vscode.postMessage({ type: 'triggerAgentAction', role: 'librarian', sessionFile: sessionId, instruction: 'map' });
                 } else if (roleId === 'jules') {
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'jules', sessionFile: sessionId, instruction: 'execute' });
                 }
             };
 
             container.appendChild(header);
+
+            if (roleId === 'jules') {
+                const julesSync = document.createElement('button');
+                julesSync.className = 'secondary-btn is-cyan w-full';
+                julesSync.id = 'jules-sync-btn';
+                julesSync.innerText = 'SYNC REPO';
+                julesSync.onclick = () => {
+                    julesSync.disabled = true;
+                    julesSync.innerText = 'SYNCING...';
+                    julesSync.classList.add('dispatching');
+                    vscode.postMessage({ type: 'airlock_syncRepo' });
+                };
+                container.appendChild(julesSync);
+
+                const syncStatus = document.createElement('div');
+                syncStatus.id = 'jules-sync-status';
+                syncStatus.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+                container.appendChild(syncStatus);
+            }
+
             container.appendChild(btn);
 
             if (roleId === 'jules') {
@@ -3238,8 +3261,7 @@
                 lead: document.getElementById('onboard-cli-lead').value,
                 coder: document.getElementById('onboard-cli-coder').value,
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
-                analyst: document.getElementById('onboard-cli-analyst').value,
-                librarian: document.getElementById('onboard-cli-librarian').value
+                analyst: document.getElementById('onboard-cli-analyst').value
             };
             vscode.postMessage({ type: 'saveCliAgents', agents });
         });

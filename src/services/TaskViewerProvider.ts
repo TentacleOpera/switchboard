@@ -5,10 +5,9 @@ import * as os from 'os';
 import * as crypto from 'crypto';
 import * as lockfile from 'proper-lockfile';
 import * as cp from 'child_process';
-import AdmZip = require('adm-zip');
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
-import { sendRobustText } from './terminalUtils';
+import { sendRobustText, getAntigravityHash } from './terminalUtils';
 import { InteractiveOrchestrator } from './InteractiveOrchestrator';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
@@ -319,8 +318,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return ['planner'];
             case 'analyst':
                 return ['analyst'];
-            case 'librarian':
-                return ['librarian'];
             default:
                 return [role];
         }
@@ -350,7 +347,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         terminalsMap: Record<string, any>,
         activeTerminals: readonly vscode.Terminal[]
     ): Record<string, DispatchReadinessEntry> {
-        const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', 'librarian'];
+        const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst'];
         const readiness: Record<string, DispatchReadinessEntry> = {};
 
         for (const role of roles) {
@@ -987,13 +984,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._stopCoderReviewerWorkflow(data.sessionId);
                         }
                         break;
-                    case 'webai_export':
-                        this._handleWebAiExport();
-                        break;
-                    case 'airlock_convertToPlan':
-                        if (data.text) {
-                            this._handleAirlockConvertToPlan(data.text);
-                        }
+                    case 'airlock_export':
+                        this._handleAirlockExport();
                         break;
                     case 'airlock_sendToCoder':
                         if (data.text) {
@@ -1002,6 +994,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         break;
                     case 'airlock_syncRepo':
                         this._handleAirlockSyncRepo();
+                        break;
+                    case 'airlock_openFolder':
+                        this._handleAirlockOpenFolder();
                         break;
                     case 'kanban_workflowEvent':
                         if (data.workflow) {
@@ -1084,7 +1079,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (currentHead && currentHead !== lastHead) {
                             lastHead = currentHead;
                             // Silently re-export on commit
-                            this._handleWebAiExport().catch(() => { /* silent */ });
+                            this._handleAirlockExport().catch(() => { /* silent */ });
                         }
                     });
                 }
@@ -1747,7 +1742,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _getPlanIdFromStableBrainPath(stableBrainPath: string): string {
-        return crypto.createHash('sha256').update(stableBrainPath).digest('hex');
+        return getAntigravityHash(stableBrainPath);
     }
 
     private async _migrateLegacyToRegistry(workspaceRoot: string): Promise<void> {
@@ -3709,7 +3704,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 else if (lowerName.includes('planner')) autoRole = 'planner';
                 else if (lowerName.includes('lead')) autoRole = 'lead';
                 else if (lowerName.includes('analyst')) autoRole = 'analyst';
-                else if (lowerName.includes('librarian')) autoRole = 'librarian';
 
                 // Register new
                 state.terminals[uniqueName] = {
@@ -4498,11 +4492,6 @@ ${planAnchor}
 
 ${focusDirective}`);
             }
-        } else if (role === 'librarian') {
-            messagePayload = `Please write or update the 'context map' markdown document for the codebase.
-This context map should outline the structure of the repo bundle document, serving as a table of contents to help web agents traverse the repo and locate relevant code sections quickly.
-
-${focusDirective}`;
         } else {
             clearDispatchLock();
             vscode.window.showErrorMessage(`Unknown role: ${role}`);
@@ -4520,7 +4509,6 @@ ${focusDirective}`;
                 'reviewer': 'reviewer-pass',
                 'lead': 'handoff-lead',
                 'coder': 'handoff',
-                'librarian': 'librarian-map',
                 'jules': 'jules'
             };
             workflowName = workflowMap[role];
@@ -4689,7 +4677,7 @@ ${focusDirective}`;
             `1. Analyze the feature area described above.`,
             `2. Identify core files, logic flow, key dependencies, and open questions.`,
             `3. Write the context map as a markdown file to: ${outputPath}`,
-            `4. After writing the file, call handoff_clipboard(file: "${outputPath}") to copy it to clipboard.`,
+            `4. After writing the file, call handoff_clipboard(file: "${outputPath}", copyPathOnly: true) to copy the path to clipboard.`,
             `5. Report completion status.`,
         ].join('\n');
 
@@ -4783,7 +4771,7 @@ ${focusDirective}`;
         }
     }
 
-    private async _handleInitiatePlan(title: string, idea: string, mode: 'send' | 'copy') {
+    private async _handleInitiatePlan(title: string, idea: string, mode: 'send' | 'copy' | 'local' | 'review') {
         const trimmedTitle = title.trim();
         const trimmedIdea = idea.trim();
 
@@ -4792,16 +4780,36 @@ ${focusDirective}`;
             return;
         }
 
-        const { sessionId, planFileAbsolute } = await this._createInitiatedPlan(trimmedTitle, trimmedIdea);
-        const prompt = this._buildInitiatedPlanPrompt(planFileAbsolute);
+        try {
+            const { sessionId, planFileAbsolute } = await this._createInitiatedPlan(trimmedTitle, trimmedIdea);
 
-        if (mode === 'send') {
-            await this._handleTriggerAgentAction('planner', sessionId, 'enhance');
-            return;
+            if (mode === 'local') {
+                this._view?.webview.postMessage({ type: 'airlock_planSaved' });
+                vscode.window.showInformationMessage('Airlock: Plan saved.');
+                return;
+            }
+
+            if (mode === 'review') {
+                this._view?.webview.postMessage({ type: 'airlock_planSaved' });
+                await this._handleTriggerAgentAction('planner', sessionId, 'enhance');
+                return;
+            }
+
+            if (mode === 'send') {
+                await this._handleTriggerAgentAction('planner', sessionId, 'enhance');
+                return;
+            }
+
+            const prompt = this._buildInitiatedPlanPrompt(planFileAbsolute);
+            await vscode.env.clipboard.writeText(prompt);
+            vscode.window.showInformationMessage('Plan created and prompt copied to clipboard.');
+        } catch (err: any) {
+            const msg = err?.message || String(err);
+            if (mode === 'local' || mode === 'review') {
+                this._view?.webview.postMessage({ type: 'airlock_planError', message: msg });
+            }
+            vscode.window.showErrorMessage(`Plan creation failed: ${msg}`);
         }
-
-        await vscode.env.clipboard.writeText(prompt);
-        vscode.window.showInformationMessage('Plan created and prompt copied to clipboard.');
     }
 
     // --- Persona Injection System ---
@@ -6053,182 +6061,58 @@ ${focusDirective}`;
 
     // ── Web AI Airlock ──────────────────────────────────────────────────
 
-    private async _handleWebAiExport(): Promise<void> {
+    private async _handleAirlockExport(): Promise<void> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) {
-            this._view?.webview.postMessage({ type: 'webai_exportError', message: 'No workspace open' });
+            this._view?.webview.postMessage({ type: 'airlock_exportError', message: 'No workspace open' });
             return;
         }
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
         try {
-            // 1. Ensure .web-ai/ is in .gitignore
-            const gitignorePath = path.join(workspaceRoot, '.gitignore');
-            try {
-                const existing = fs.existsSync(gitignorePath) ? await fs.promises.readFile(gitignorePath, 'utf8') : '';
-                if (!existing.split('\n').some(l => l.trim() === '.web-ai/' || l.trim() === '.web-ai')) {
-                    await fs.promises.appendFile(gitignorePath, '\n.web-ai/\n');
-                }
-            } catch { /* non-fatal */ }
+            // 1. Scaffold airlock directory
+            const airlockDir = path.join(workspaceRoot, '.switchboard', 'airlock');
+            await fs.promises.mkdir(airlockDir, { recursive: true });
 
-            // 2. Scaffold directory structure
-            const outboxDir = path.join(workspaceRoot, '.web-ai', 'outbox');
-            const promptsDir = path.join(outboxDir, 'prompts');
-            await fs.promises.mkdir(promptsDir, { recursive: true });
-
-            // 3. Run the bundler (writes to .web-ai/outbox/codebase-bundle.md)
+            // 2. Run the bundler (writes timestamped bundle to .switchboard/airlock/)
             await bundleWorkspaceContext(workspaceRoot);
 
-            // 4. Serialize Kanban / plan state → active-plan.md
-            const activePlanPath = path.join(outboxDir, 'active-plan.md');
-            await this._serializeActivePlan(workspaceRoot, activePlanPath);
-
-            // 5. Write prompt templates
-            await this._writePromptTemplates(promptsDir);
-
-            // 6. Write inbox.md if it doesn't exist
-            const inboxPath = path.join(workspaceRoot, '.web-ai', 'inbox.md');
-            if (!fs.existsSync(inboxPath)) {
-                await fs.promises.writeFile(inboxPath,
-                    '<!-- WEB AI AIRLOCK — INBOX -->\n' +
-                    '<!-- Paste the Web AI\'s response below this line. -->\n' +
-                    '<!-- Then click EXECUTE INBOX in the Switchboard sidebar. -->\n\n',
-                    'utf8');
+            // 3. Write how_to_plan.md (skip if already present)
+            const howToPlanPath = path.join(airlockDir, 'how_to_plan.md');
+            if (!fs.existsSync(howToPlanPath)) {
+                await fs.promises.writeFile(howToPlanPath, [
+                    '# How to Plan',
+                    '',
+                    'Follow these four steps strictly and in order.',
+                    '',
+                    '## 1. Review',
+                    'Find the most recent `codebase-bundle-*.md` file in this folder (sort by timestamp in the filename, use the latest).',
+                    'Use it as the sole source of truth for the current codebase state. Do not use older bundles.',
+                    '',
+                    '## 2. Plan',
+                    'Draft a comprehensive technical plan that covers:',
+                    '- Exact files to create or modify',
+                    '- Function signatures and data flow',
+                    '- Edge cases and error handling',
+                    '- A step-by-step implementation order',
+                    '',
+                    '## 3. Adversarial Review',
+                    'Self-critique the plan for:',
+                    '- Missed edge cases and race conditions',
+                    '- Architectural alignment with existing patterns',
+                    '- Unnecessary complexity or scope creep',
+                    '',
+                    '## 4. Implementation',
+                    'Output the exact code changes in high detail (search/replace blocks or unified diffs).',
+                ].join('\n'), 'utf8');
             }
 
-            // 7. Create zip of outbox contents
-            const zipPath = path.join(outboxDir, 'switchboard-export.zip');
-            const zip = new AdmZip();
-            const bundlePath = path.join(outboxDir, 'codebase-bundle.md');
-            if (fs.existsSync(bundlePath)) zip.addLocalFile(bundlePath);
-            if (fs.existsSync(activePlanPath)) zip.addLocalFile(activePlanPath);
-            if (fs.existsSync(promptsDir)) {
-                const promptFiles = await fs.promises.readdir(promptsDir);
-                for (const pf of promptFiles) {
-                    zip.addLocalFile(path.join(promptsDir, pf), 'prompts');
-                }
-            }
-            zip.writeZip(zipPath);
-
-            this._view?.webview.postMessage({ type: 'webai_exportComplete' });
-            vscode.window.showInformationMessage('Web AI Airlock: Export complete → .web-ai/outbox/');
+            this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
+            vscode.window.showInformationMessage('Airlock: Bundle exported → .switchboard/airlock/');
         } catch (err: any) {
             const msg = err?.message || String(err);
-            this._view?.webview.postMessage({ type: 'webai_exportError', message: msg });
-            vscode.window.showErrorMessage(`Web AI export failed: ${msg}`);
-        }
-    }
-
-    private async _serializeActivePlan(workspaceRoot: string, outputPath: string): Promise<void> {
-        const lines: string[] = ['# Switchboard Active Plan State', '', `*Exported: ${new Date().toISOString()}*`, ''];
-
-        try {
-            const log = this._getSessionLog(workspaceRoot);
-            const sheets = await log.getRunSheets();
-
-            if (sheets.length === 0) {
-                lines.push('*No active runsheets found.*');
-            } else {
-                lines.push('## Runsheets', '');
-                lines.push('| Session | Topic | Column | Last Activity |');
-                lines.push('|---------|-------|--------|---------------|');
-
-                for (const sheet of sheets) {
-                    const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-                    const column = this._deriveKanbanColumn(events);
-                    let lastActivity = sheet.createdAt || '';
-                    for (const e of events) {
-                        if (e.timestamp && e.timestamp > lastActivity) lastActivity = e.timestamp;
-                    }
-                    const topic = (sheet.topic || sheet.planFile || 'Untitled').replace(/\|/g, '\\|');
-                    lines.push(`| ${sheet.sessionId || '?'} | ${topic} | ${column} | ${lastActivity} |`);
-                }
-            }
-
-            // Also include plan content if a plan is currently selected
-            const planEntries = Object.values(this._planRegistry.entries);
-            if (planEntries.length > 0) {
-                lines.push('', '## Plan Files', '');
-                for (const entry of planEntries as any[]) {
-                    const planPath = entry.path || entry.planFile;
-                    if (planPath && fs.existsSync(planPath)) {
-                        try {
-                            const content = await fs.promises.readFile(planPath, 'utf8');
-                            const name = path.basename(planPath);
-                            lines.push(`### ${name}`, '', '```markdown', content.substring(0, 8000), '```', '');
-                        } catch { /* skip unreadable plans */ }
-                    }
-                }
-            }
-        } catch (err) {
-            lines.push(`*Error serializing plan state: ${err}*`);
-        }
-
-        await fs.promises.writeFile(outputPath, lines.join('\n'), 'utf8');
-    }
-
-    private _deriveKanbanColumn(events: any[]): string {
-        for (let i = events.length - 1; i >= 0; i--) {
-            const wf = (events[i].workflow || '').toLowerCase();
-            if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
-            if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-            if (wf === 'planner' || wf === 'challenge' || wf === 'enhance' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
-        }
-        return 'CREATED';
-    }
-
-    private async _writePromptTemplates(promptsDir: string): Promise<void> {
-        const templates: Record<string, string> = {
-            '01-planning-spec.md': [
-                '# Planning Spec Prompt',
-                '',
-                'Read `active-plan.md` to understand the current project state and `codebase-bundle.md` for the full source code.',
-                '',
-                'Write a detailed implementation specification for the following feature/change:',
-                '',
-                '> [DESCRIBE YOUR FEATURE HERE]',
-                '',
-                'The spec should include:',
-                '- Exact files to create or modify',
-                '- Function signatures and data flow',
-                '- Edge cases and error handling',
-                '- A step-by-step implementation order',
-                '',
-                'Output the spec as a structured markdown document suitable for pasting into an IDE agent\'s inbox.',
-            ].join('\n'),
-            '02-bug-hunter.md': [
-                '# Bug Hunter Prompt',
-                '',
-                'Read `codebase-bundle.md` for the full source code.',
-                '',
-                'Identify the root cause of the following bug:',
-                '',
-                '> [DESCRIBE THE BUG / PASTE ERROR OUTPUT HERE]',
-                '',
-                'Provide:',
-                '- The exact file(s) and line(s) where the bug originates',
-                '- A clear explanation of why it fails',
-                '- A minimal fix (patch-style diff preferred)',
-            ].join('\n'),
-            '03-patch-generator.md': [
-                '# Patch Generator Prompt',
-                '',
-                'Read `codebase-bundle.md` for the full source code and `active-plan.md` for context.',
-                '',
-                'Write a strict code patch for the following change:',
-                '',
-                '> [DESCRIBE THE CHANGE HERE]',
-                '',
-                'Requirements:',
-                '- Output as a series of file edits (search/replace blocks or unified diff)',
-                '- Make the smallest possible changes',
-                '- Include only the affected files',
-                '- The output will be pasted into an IDE agent for execution, so be precise',
-            ].join('\n'),
-        };
-
-        for (const [name, content] of Object.entries(templates)) {
-            await fs.promises.writeFile(path.join(promptsDir, name), content, 'utf8');
+            this._view?.webview.postMessage({ type: 'airlock_exportError', message: msg });
+            vscode.window.showErrorMessage(`Airlock export failed: ${msg}`);
         }
     }
 
@@ -6260,37 +6144,6 @@ ${focusDirective}`;
             await this._kanbanProvider?.refresh();
         } catch (err: any) {
             console.error('[TaskViewerProvider] kanban_workflowEvent failed:', err?.message || err);
-        }
-    }
-
-    private async _handleAirlockConvertToPlan(text: string): Promise<void> {
-        if (Buffer.byteLength(text, 'utf8') > TaskViewerProvider.MAX_AIRLOCK_TEXT_BYTES) {
-            this._view?.webview.postMessage({ type: 'airlock_planError', message: 'Text exceeds 2MB limit. Please reduce the size.' });
-            return;
-        }
-        const workspaceFolders = vscode.workspace.workspaceFolders;
-        if (!workspaceFolders) {
-            this._view?.webview.postMessage({ type: 'airlock_planError', message: 'No workspace open' });
-            return;
-        }
-        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-
-        try {
-            const plansDir = path.join(workspaceRoot, '.switchboard', 'plans', 'features');
-            fs.mkdirSync(plansDir, { recursive: true });
-
-            const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').substring(0, 19);
-            const fileName = `airlock_plan_${stamp}.md`;
-            const planPath = path.join(plansDir, fileName);
-
-            await fs.promises.writeFile(planPath, text, 'utf8');
-
-            this._view?.webview.postMessage({ type: 'airlock_planSaved' });
-            vscode.window.showInformationMessage(`Airlock: Plan saved → .switchboard/plans/features/${fileName}`);
-        } catch (err: any) {
-            const msg = err?.message || String(err);
-            this._view?.webview.postMessage({ type: 'airlock_planError', message: msg });
-            vscode.window.showErrorMessage(`Airlock plan save failed: ${msg}`);
         }
     }
 
@@ -6388,6 +6241,20 @@ ${focusDirective}`;
             this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
             vscode.window.showErrorMessage(`Airlock sync failed: ${msg}`);
         }
+    }
+
+    private async _handleAirlockOpenFolder(): Promise<void> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) {
+            vscode.window.showWarningMessage('Airlock: No workspace open.');
+            return;
+        }
+        const airlockDir = path.join(workspaceFolders[0].uri.fsPath, '.switchboard', 'airlock');
+        if (!fs.existsSync(airlockDir)) {
+            vscode.window.showWarningMessage('Airlock: Folder does not exist yet. Click BUNDLE CODE first.');
+            return;
+        }
+        await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(airlockDir));
     }
 
     public dispose() {

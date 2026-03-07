@@ -1828,8 +1828,8 @@ function registerTools(server) {
     // Tool: handoff_clipboard
     server.tool(
         "handoff_clipboard",
-        { file: z.string() },
-        async ({ file }) => {
+        { file: z.string(), copyPathOnly: z.boolean().optional() },
+        async ({ file, copyPathOnly }) => {
             const workspaceRoot = getWorkspaceRoot();
             const resolved = resolveWorkspacePathToken(file, workspaceRoot);
             if (!resolved) {
@@ -1847,13 +1847,16 @@ function registerTools(server) {
                 return { isError: true, content: [{ type: "text", text: "Ã¢ Å’ File not found." }] };
             }
 
-            const content = fs.readFileSync(resolved, 'utf8');
+            const payload = copyPathOnly ? resolved : fs.readFileSync(resolved, 'utf8');
 
             try {
                 const cmd = process.platform === 'win32' ? 'clip' : 'pbcopy';
                 const child = require('child_process').spawn(cmd, { stdio: ['pipe', 'ignore', 'ignore'] });
-                child.stdin.write(content);
+                child.stdin.write(payload);
                 child.stdin.end();
+                if (copyPathOnly) {
+                    return { content: [{ type: "text", text: "✅ File path copied to clipboard." }] };
+                }
                 return { content: [{ type: "text", text: "Ã¢Å“â€¦ Content copied to clipboard (Secure Read)." }] };
             } catch (e) {
                 return { isError: true, content: [{ type: "text", text: `Ã¢ Å’ Clipboard failed: ${e.message}` }] };

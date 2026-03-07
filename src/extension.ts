@@ -1221,7 +1221,6 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Planner', role: 'planner' },
             { name: 'Analyst', role: 'analyst' },
-            { name: 'Librarian', role: 'librarian' },
             { name: 'Jules Monitor', role: 'jules_monitor' }
         ];
 
@@ -1618,7 +1617,10 @@ async function detectIDEs(workspaceRoot: string): Promise<{ key: string; name: s
         { key: 'antigravity', name: 'Antigravity', path: '.agent' },
         { key: 'github', name: 'GitHub Copilot', path: '.github' },
         { key: 'cursor', name: 'Cursor (Composer)', path: '.cursorrules' },
-        { key: 'windsurf', name: 'Windsurf (Cascade)', path: '.codeium' }
+        { key: 'windsurf', name: 'Windsurf (Cascade)', path: '.codeium' },
+        { key: 'claude', name: 'Claude Code', path: '.mcp.json' },
+        { key: 'gemini', name: 'Gemini CLI', path: '.gemini' },
+        { key: 'kiro', name: 'Kiro', path: '.kiro' }
     ];
 
     const results = await Promise.all(ideConfigs.map(async ide => {
@@ -1924,7 +1926,10 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         { key: 'github', name: 'GitHub Copilot', description: 'Copilot instructions + agent config' },
         { key: 'antigravity', name: 'Antigravity', description: 'Core .agent workflows (auto-scaffolded)' },
         { key: 'windsurf', name: 'Windsurf (Cascade)', description: 'Windsurf/Codeium AI IDE configuration' },
-        { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' }
+        { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' },
+        { key: 'claude', name: 'Claude Code', description: 'Claude Code MCP server configuration' },
+        { key: 'gemini', name: 'Gemini CLI', description: 'Gemini CLI MCP server configuration' },
+        { key: 'kiro', name: 'Kiro', description: 'Kiro IDE MCP server configuration' }
     ];
 
     // Build flattened quick pick — all options always visible
@@ -2038,6 +2043,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
 
         const templatesBaseUri = vscode.Uri.joinPath(context.extensionUri, 'templates');
         const results = { success: [] as string[], skipped: [] as string[], errors: [] as string[] };
+        const absWorkspaceRoot = workspaceRoot.replace(/\\/g, '/');
 
         for (const target of targets) {
             try {
@@ -2062,7 +2068,9 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
                         // Doesn't exist, copy it or create default
                         try {
                             await vscode.workspace.fs.stat(templatePath); // Check if template exists
-                            await vscode.workspace.fs.copy(templatePath, destPath, { overwrite: false });
+                            const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
+                            const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
+                            await vscode.workspace.fs.writeFile(destPath, Buffer.from(content, 'utf8'));
                             results.success.push(configFile.destination);
                         } catch {
                             // Template doesn't exist, use default content
@@ -2126,7 +2134,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
  * Configure CLI agent role-to-command mappings
  */
 async function configureCliAgents(switchboardConfig: vscode.WorkspaceConfiguration): Promise<boolean> {
-    const roles = ['lead', 'coder', 'analyst', 'reviewer', 'librarian'];
+    const roles = ['lead', 'coder', 'analyst', 'reviewer'];
     const currentAgents = switchboardConfig.get<Record<string, string>>('cliAgents', {});
     const staged: Record<string, string> = { ...currentAgents };
 
@@ -2186,10 +2194,21 @@ function getConfigFilesForIDE(ide: string): { template: string; destination: str
         ],
         antigravity: [], // Handled by performSetup
         windsurf: [
-            { template: 'windsurf-instructions.md.template', destination: '.codeium/windsurf-instructions.md' }
+            { template: 'windsurf-instructions.md.template', destination: '.codeium/windsurf-instructions.md' },
+            { template: 'mcp_config.json.template', destination: 'mcp_config.json' }
         ],
         cursor: [
-            { template: 'cursor-instructions.md.template', destination: '.cursorrules' }
+            { template: 'cursor-instructions.md.template', destination: '.cursorrules' },
+            { template: 'mcp.json.template', destination: '.cursor/mcp.json' }
+        ],
+        claude: [
+            { template: '.mcp.json.template', destination: '.mcp.json' }
+        ],
+        gemini: [
+            { template: 'settings.json.template', destination: '.gemini/settings.json' }
+        ],
+        kiro: [
+            { template: 'mcp.json.template', destination: '.kiro/settings/mcp.json' }
         ]
     };
 

@@ -2,13 +2,14 @@ import * as cp from 'child_process';
 import * as fs from 'fs';
 import * as path from 'path';
 
-const MAX_BUNDLE_BYTES = 5 * 1024 * 1024; // 5MB cap
+// 20MB — heuristic upper bound for web LLM context windows (GPT-4, Claude, Gemini)
+const MAX_BUNDLE_BYTES = 20 * 1024 * 1024;
 const BINARY_EXTENSIONS = new Set([
     '.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.woff', '.woff2', '.ttf', '.eot',
     '.zip', '.tar', '.gz', '.7z', '.exe', '.dll', '.so', '.dylib', '.bin',
     '.pdf', '.mp3', '.mp4', '.wav', '.avi', '.mov', '.vsix',
 ]);
-const EXCLUDED_DIRS = ['node_modules', 'dist', 'out', '.git', '.switchboard', '.web-ai'];
+const EXCLUDED_DIRS = ['node_modules', 'dist', 'out', '.git', '.switchboard'];
 
 function isBinary(filePath: string): boolean {
     return BINARY_EXTENSIONS.has(path.extname(filePath).toLowerCase());
@@ -29,10 +30,16 @@ function getLanguageId(filePath: string): string {
     return map[ext] || '';
 }
 
+function formatTimestamp(): string {
+    const now = new Date();
+    const pad = (n: number) => String(n).padStart(2, '0');
+    return `${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}_${pad(now.getHours())}${pad(now.getMinutes())}${pad(now.getSeconds())}`;
+}
+
 export async function bundleWorkspaceContext(workspaceRoot: string): Promise<string> {
-    const outputDir = path.join(workspaceRoot, '.web-ai', 'outbox');
+    const outputDir = path.join(workspaceRoot, '.switchboard', 'airlock');
     await fs.promises.mkdir(outputDir, { recursive: true });
-    const outputPath = path.join(outputDir, 'codebase-bundle.md');
+    const outputPath = path.join(outputDir, `codebase-bundle-${formatTimestamp()}.md`);
 
     // Use git ls-files for .gitignore-compliant listing
     let files: string[];
@@ -58,9 +65,9 @@ export async function bundleWorkspaceContext(workspaceRoot: string): Promise<str
             return a.localeCompare(b);
         });
 
-    let bundle = `# Workspace Context Bundle\n\nGenerated: ${new Date().toISOString()}\nFiles: ${files.length}\n\n## Project Structure\n\`\`\`text\n${files.join('\n')}\n\`\`\`\n\n---\n\n`;
+    // Structure map goes first so LLMs can orient before reading file contents
+    let bundle = `# Workspace Context Bundle\n\nGenerated: ${new Date().toISOString()}\nFiles: ${files.length}\n\n## Directory Structure\n\`\`\`text\n${files.join('\n')}\n\`\`\`\n\n---\n\n`;
     let totalBytes = Buffer.byteLength(bundle, 'utf8');
-    let truncated = false;
 
     for (const file of files) {
         const absPath = path.join(workspaceRoot, file);
@@ -73,7 +80,6 @@ export async function bundleWorkspaceContext(workspaceRoot: string): Promise<str
             const sectionBytes = Buffer.byteLength(section, 'utf8');
             if (totalBytes + sectionBytes > MAX_BUNDLE_BYTES) {
                 bundle += `\n\n> ⚠️ Bundle truncated at ${(totalBytes / 1024 / 1024).toFixed(1)}MB limit. ${files.length - files.indexOf(file)} files omitted.\n`;
-                truncated = true;
                 break;
             }
             bundle += section;
