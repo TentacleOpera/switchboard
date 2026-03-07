@@ -8,23 +8,25 @@
     <title>Switchboard</title>
     <style>
         :root {
-            --bg-color: #1a1a1a;
+            --bg-color: #0d0d0d;
             --panel-bg: #000000;
-            --panel-bg2: #0a0a0a;
-            --border-color: #333333;
-            --border-bright: #555555;
+            --panel-bg2: #050505;
+            --border-color: #222222;
+            --border-bright: #444444;
             --text-primary: #e0e0e0;
-            --text-secondary: #888888;
+            --text-secondary: #777777;
 
-            --accent-cyan: #2f81f7;
-            --accent-green: #3fb950;
-            --accent-green-dim: #238636;
-            --accent-red: #da3633;
-            --accent-orange: #d29922;
+            --accent-cyan: #3ddbd9;
+            --accent-green: #4ec9b0;
+            --accent-green-dim: #2d7a6a;
+            --accent-red: #f85149;
+            --accent-orange: #d18616;
+            --accent-purple: #ab7df8;
 
-            --glow-green: 0 0 6px color-mix(in srgb, var(--accent-green) 30%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 10%, transparent);
-            --glow-green-btn: 0 0 4px color-mix(in srgb, var(--accent-green) 25%, transparent), inset 0 1px 0 color-mix(in srgb, var(--accent-green) 10%, transparent);
-            --glow-cyan: 0 0 8px color-mix(in srgb, var(--accent-cyan) 40%, transparent);
+            --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
+            --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
+            --glow-green-btn: 0 0 6px rgba(78, 201, 176, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            --glow-cyan: 0 0 8px rgba(55, 148, 255, 0.3);
 
             --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
@@ -33,17 +35,18 @@
         * {
             box-sizing: border-box;
         }
-body {
-    font-family: var(--font-family);
-    padding: 0;
-    margin: 0;
-    color: var(--text-primary);
-    background: var(--bg-color);
-    font-size: 13px;
-    overflow-x: hidden;
-}
 
-/* Utility Classes */
+        body {
+            font-family: var(--font-family);
+            padding: 0;
+            margin: 0;
+            color: var(--text-primary);
+            background: var(--bg-color);
+            font-size: 13px;
+            overflow-x: hidden;
+        }
+
+        /* Utility Classes */
         .hidden {
             display: none !important;
         }
@@ -141,9 +144,27 @@ body {
         }
 
         .icon-btn:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            background: color-mix(in srgb, var(--border-bright) 15%, transparent);
             border-color: var(--border-bright);
             color: var(--text-primary);
+        }
+
+        .icon-btn.recover:hover:not(:disabled) {
+            color: var(--accent-green);
+            border-color: color-mix(in srgb, var(--accent-green) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-green) 20%, transparent);
+        }
+
+        .icon-btn.delete:hover:not(:disabled) {
+            color: var(--accent-red);
+            border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-red) 20%, transparent);
+        }
+
+        .icon-btn.merge:hover:not(:disabled) {
+            color: var(--accent-cyan);
+            border-color: color-mix(in srgb, var(--accent-cyan) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-cyan) 20%, transparent);
         }
 
         .icon-btn:disabled {
@@ -158,9 +179,9 @@ body {
         }
 
         .icon-btn.error {
-            color: var(--accent-red);
-            border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);
-            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 30%, transparent);
+            color: var(--accent-red) !important;
+            border-color: color-mix(in srgb, var(--accent-red) 60%, transparent) !important;
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 30%, transparent) !important;
         }
 
         .dropdown-container {
@@ -181,7 +202,8 @@ body {
             letter-spacing: 0.5px;
         }
 
-        .plan-select:hover, .plan-select:focus {
+        .plan-select:hover,
+        .plan-select:focus {
             border-color: var(--border-bright);
             outline: none;
         }
@@ -218,6 +240,7 @@ body {
             cursor: pointer;
             border-radius: 2px 2px 0 0;
         }
+
         .tab-btn:hover {
             background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
             border-color: var(--border-bright);
@@ -378,11 +401,19 @@ body {
         .agent-row:has(.status-dot.green) {
             border-left-color: var(--accent-green);
             box-shadow: -2px 0 6px color-mix(in srgb, var(--accent-green) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 2%, var(--panel-bg));
         }
 
         .agent-row:has(.status-dot.green-pulse) {
             border-left-color: var(--accent-green);
             box-shadow: -2px 0 8px color-mix(in srgb, var(--accent-green) 16%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 3%, var(--panel-bg));
+        }
+
+        .agent-row:has(.status-dot.red) {
+            border-left-color: var(--accent-red);
+            box-shadow: -2px 0 6px color-mix(in srgb, var(--accent-red) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-red) 2%, var(--panel-bg));
         }
 
         .row-header {
@@ -419,7 +450,13 @@ body {
             background: var(--accent-green);
             border-color: var(--accent-green);
             box-shadow: var(--glow-green);
-            animation: pulse-green 1.5s infinite;
+            animation: pulse-green 2s infinite ease-in-out;
+        }
+
+        .status-dot.red {
+            background: var(--accent-red);
+            border-color: var(--accent-red);
+            box-shadow: var(--glow-red);
         }
 
         .status-dot.orange {
@@ -430,17 +467,20 @@ body {
         @keyframes pulse-green {
             0% {
                 opacity: 1;
-                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 35%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 15%, transparent);
+                transform: scale(1);
+                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 40%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 20%, transparent);
             }
 
             50% {
-                opacity: 0.7;
-                box-shadow: 0 0 3px color-mix(in srgb, var(--accent-green) 20%, transparent);
+                opacity: 0.6;
+                transform: scale(0.95);
+                box-shadow: 0 0 2px color-mix(in srgb, var(--accent-green) 15%, transparent);
             }
 
             100% {
                 opacity: 1;
-                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 35%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 15%, transparent);
+                transform: scale(1);
+                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 40%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 20%, transparent);
             }
         }
 
@@ -486,9 +526,10 @@ body {
         /* Action Buttons */
         .action-btn {
             width: 100%;
-            background: color-mix(in srgb, var(--accent-green) 12%, transparent);
-            border: 1px solid color-mix(in srgb, var(--accent-green) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 18%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-green) 50%, transparent);
             color: var(--accent-green);
+            text-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 30%, transparent);
             padding: 9px;
             font-size: 11px;
             font-weight: 600;
@@ -583,20 +624,22 @@ body {
         /* Standby Input Area */
         .agent-input {
             width: 100%;
-            background: #0a0a0a;
+            background: var(--panel-bg2);
             border: 1px solid var(--border-color);
             color: var(--text-primary);
             font-family: var(--font-mono);
             font-size: 11px;
-            padding: 6px 8px;
+            padding: 8px 10px;
             resize: none;
-            height: 40px;
+            height: 48px;
             margin-bottom: 4px;
             border-radius: 2px;
+            line-height: 1.4;
         }
 
-        .agent-input:focus, .agent-input:hover {
-            border-color: var(--border-bright);
+        .agent-input:focus,
+        .agent-input:hover {
+            border-color: var(--accent-green-dim);
             outline: none;
         }
 
@@ -695,36 +738,44 @@ body {
         }
 
         .secondary-btn {
-            background: transparent;
+            background: var(--panel-bg2);
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
-            padding: 6px;
+            padding: 8px;
             font-size: 10px;
             font-family: var(--font-mono);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.2px;
             cursor: pointer;
-            transition: all 0.15s;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
             box-shadow: none;
             border-radius: 2px;
         }
 
         .secondary-btn:hover {
-            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
             border-color: var(--border-bright);
             color: var(--text-primary);
+        }
+
+        .secondary-btn.is-cyan {
+            color: var(--accent-cyan);
+            border-color: color-mix(in srgb, var(--accent-cyan) 40%, transparent);
+        }
+
+        .secondary-btn.is-cyan:hover {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-cyan) 20%, transparent);
         }
 
         .secondary-btn.success {
             color: var(--accent-green);
             border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
-            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 20%, transparent);
         }
 
         .secondary-btn.error {
             color: var(--accent-red);
             border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);
-            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 30%, transparent);
         }
 
         .modal-overlay {
@@ -776,8 +827,11 @@ body {
             font-size: 11px;
             margin-bottom: 10px;
         }
-        .modal-input:hover, .modal-input:focus,
-        .modal-textarea:hover, .modal-textarea:focus {
+
+        .modal-input:hover,
+        .modal-input:focus,
+        .modal-textarea:hover,
+        .modal-textarea:focus {
             border-color: var(--border-bright);
             outline: none;
         }
@@ -797,22 +851,26 @@ body {
             margin-bottom: 4px;
             font-size: 11px;
         }
+
         .recover-item-info {
             flex: 1;
             min-width: 0;
             overflow: hidden;
         }
+
         .recover-item-topic {
             color: var(--text-primary);
             white-space: nowrap;
             overflow: hidden;
             text-overflow: ellipsis;
         }
+
         .recover-item-meta {
             font-size: 9px;
             color: var(--text-secondary);
             margin-top: 2px;
         }
+
         .recover-status-chip {
             display: inline-block;
             font-size: 9px;
@@ -822,8 +880,17 @@ body {
             letter-spacing: 0.5px;
             font-family: var(--font-mono);
         }
-        .recover-status-chip.archived { background: color-mix(in srgb, var(--accent-purple) 20%, transparent); color: #b590f0; }
-        .recover-status-chip.orphan { background: color-mix(in srgb, var(--accent-orange) 20%, transparent); color: #e8b84a; }
+
+        .recover-status-chip.archived {
+            background: color-mix(in srgb, var(--accent-purple) 20%, transparent);
+            color: #cccccc;
+        }
+
+        .recover-status-chip.orphan {
+            background: color-mix(in srgb, var(--accent-orange) 20%, transparent);
+            color: #aaaaaa;
+        }
+
         .recover-restore-btn {
             flex-shrink: 0;
             margin-left: 8px;
@@ -838,7 +905,10 @@ body {
             text-transform: uppercase;
             letter-spacing: 0.5px;
         }
-        .recover-restore-btn:hover { background: color-mix(in srgb, var(--accent-green) 12%, transparent); }
+
+        .recover-restore-btn:hover {
+            background: color-mix(in srgb, var(--accent-green) 12%, transparent);
+        }
 
         /* Agent Startup Config */
         .startup-section {
@@ -896,23 +966,24 @@ body {
             font-size: 11px;
         }
 
-        .startup-row input:focus, .startup-row input:hover {
+        .startup-row input:focus,
+        .startup-row input:hover {
             border-color: var(--border-bright);
             outline: none;
         }
 
         /* Action Button Feedback Animations */
         @keyframes pulse-green {
-                    0% {
-                        box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 30%, transparent);
-                    }
-                    70% {
-                        box-shadow: 0 0 8px 3px color-mix(in srgb, var(--accent-green) 20%, transparent);
-                    }
-                    100% {
-                        box-shadow: 0 0 0 0 transparent;
-                    }
-                }
+            0% {
+                box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 30%, transparent);
+            }
+
+            70% {
+                box-shadow: 0 0 8px 3px color-mix(in srgb, var(--accent-green) 20%, transparent);
+            }
+
+            100% {
+                box-shadow: 0 0 0 0 transparent;
             }
         }
 
@@ -1065,10 +1136,13 @@ body {
             padding: 3px 6px;
             text-align: center;
         }
-        .orchestrator-interval input:hover, .orchestrator-interval input:focus {
+
+        .orchestrator-interval input:hover,
+        .orchestrator-interval input:focus {
             border-color: var(--border-bright);
             outline: none;
         }
+
         .onboard-step .startup-row {
             margin-bottom: 6px;
         }
@@ -1082,14 +1156,21 @@ body {
         <div id="onboard-step-welcome" class="onboard-step">
             <div style="text-align:center; padding: 30px 16px 10px;">
                 <div style="font-size: 28px; margin-bottom: 12px;">⚡</div>
-                <div style="font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-green); text-shadow: var(--glow-green); margin-bottom: 8px;">Welcome to Switchboard</div>
-                <div style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-width: 280px; margin: 0 auto;">
+                <div
+                    style="font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-green); text-shadow: var(--glow-green); margin-bottom: 8px;">
+                    Welcome to Switchboard</div>
+                <div
+                    style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-width: 280px; margin: 0 auto;">
                     Cross-IDE agent orchestration — workflow routing, terminal targeting, and multi-agent coordination.
                 </div>
             </div>
             <div style="padding: 20px 16px;">
-                <button id="btn-onboard-init" class="secondary-btn w-full" style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">INITIALIZE SWITCHBOARD</button>
-                <div id="onboard-init-status" style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);"></div>
+                <button id="btn-onboard-init" class="secondary-btn w-full"
+                    style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">INITIALIZE
+                    SWITCHBOARD</button>
+                <div id="onboard-init-status"
+                    style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">
+                </div>
             </div>
         </div>
 
@@ -1100,16 +1181,26 @@ body {
                 <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
                     Set commands for each agent role. Leave empty to skip.
                 </div>
-                <div class="startup-row"><label>Lead Coder</label><input type="text" id="onboard-cli-lead" placeholder="e.g. copilot --allow-all-tools"></div>
-                <div class="startup-row"><label>Coder</label><input type="text" id="onboard-cli-coder" placeholder="e.g. codex --full-auto"></div>
-                <div class="startup-row"><label>Reviewer</label><input type="text" id="onboard-cli-reviewer" placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Analyst</label><input type="text" id="onboard-cli-analyst" placeholder="e.g. qwen"></div>
-                <div class="startup-row"><label>Librarian</label><input type="text" id="onboard-cli-librarian" placeholder="e.g. gemini --approval-mode auto_edit"></div>
+                <div class="startup-row"><label>Lead Coder</label><input type="text" id="onboard-cli-lead"
+                        placeholder="e.g. copilot --allow-all-tools"></div>
+                <div class="startup-row"><label>Coder</label><input type="text" id="onboard-cli-coder"
+                        placeholder="e.g. codex --full-auto"></div>
+                <div class="startup-row"><label>Reviewer</label><input type="text" id="onboard-cli-reviewer"
+                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
+                <div class="startup-row"><label>Analyst</label><input type="text" id="onboard-cli-analyst"
+                        placeholder="e.g. qwen"></div>
+                <div class="startup-row"><label>Librarian</label><input type="text" id="onboard-cli-librarian"
+                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
                 <div style="margin-top: 12px; display: flex; gap: 8px;">
-                    <button id="btn-onboard-save" class="secondary-btn w-full" style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">SAVE &amp; FINISH</button>
-                    <button id="btn-onboard-skip" class="secondary-btn w-full" style="padding: 10px; font-size: 11px;">SKIP</button>
+                    <button id="btn-onboard-save" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">SAVE
+                        &amp; FINISH</button>
+                    <button id="btn-onboard-skip" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px;">SKIP</button>
                 </div>
-                <div id="onboard-cli-status" style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);"></div>
+                <div id="onboard-cli-status"
+                    style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">
+                </div>
             </div>
         </div>
     </div>
@@ -1119,15 +1210,16 @@ body {
         <!-- HEADER: PLAN SELECTION -->
         <div class="header-section">
             <div class="section-header">
-                <div class="section-label">PLAN SELECT <span class="tooltip-icon" title="If the plan select dropdown does not appear correct, use the Recover menu or ask an agent to run the Fix Plans Dropdown skill.">ⓘ</span></div>
+                <div class="section-label">PLAN SELECT <span class="tooltip-icon"
+                        title="If the plan select dropdown does not appear correct, use the Recover menu or ask an agent to run the Fix Plans Dropdown skill.">ⓘ</span>
+                </div>
                 <div class="flex gap-2" style="align-items: center;">
-                    <button id="btn-recover-plans" class="icon-btn" style="color: var(--accent-green);"
-                        title="Recover archived or orphaned plans" aria-label="Recover plans">RECOVER</button>
-                    <button id="btn-delete-plan" class="icon-btn" style="color: var(--accent-red);"
-                        title="Delete active plan" aria-label="Delete plan">DELETE</button>
-                    <button id="btn-merge-all-plans" class="icon-btn" title="Merge all plans into a single file"
-                        aria-label="Merge all plans"
-                        style="color: var(--accent-cyan); border-color: color-mix(in srgb, var(--accent-cyan) 50%, transparent); font-weight: 600; opacity: 1;">MERGE ALL</button>
+                    <button id="btn-recover-plans" class="icon-btn recover" title="Recover archived or orphaned plans"
+                        aria-label="Recover plans">RECOVER</button>
+                    <button id="btn-delete-plan" class="icon-btn delete" title="Delete active plan"
+                        aria-label="Delete plan">DELETE</button>
+                    <button id="btn-merge-all-plans" class="icon-btn merge" title="Merge all plans into a single file"
+                        aria-label="Merge all plans">MERGE ALL</button>
                 </div>
             </div>
             <div class="dropdown-container">
@@ -1138,14 +1230,12 @@ body {
             </div>
             <div class="flex gap-2" style="margin-top: 6px;">
                 <button id="btn-complete-plan" class="secondary-btn w-full">COMPLETE</button>
-                <button id="btn-copy-plan-link" class="secondary-btn w-full"
-                    title="Copy Markdown link for active plan"
-                    aria-label="Copy plan link"
-                    style="color: var(--accent-cyan); border-color: color-mix(in srgb, var(--accent-cyan) 30%, transparent);">COPY</button>
+                <button id="btn-copy-plan-link" class="secondary-btn w-full" title="Copy Markdown link for active plan"
+                    aria-label="Copy plan link">COPY</button>
                 <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
             </div>
             <div style="margin-top: 6px;">
-                <button id="btn-open-kanban" class="secondary-btn w-full" style="color: var(--accent-cyan); border-color: color-mix(in srgb, var(--accent-cyan) 30%, transparent);">OPEN KANBAN</button>
+                <button id="btn-open-kanban" class="secondary-btn w-full">OPEN KANBAN</button>
             </div>
         </div>
 
@@ -1189,8 +1279,7 @@ body {
             </div>
             <div class="panel-fields open" id="terminal-operations-fields">
                 <button id="createAgentGrid" class="secondary-btn w-full">OPEN AGENT TERMINALS</button>
-                <button id="btn-deregister-all" class="secondary-btn w-full"
-                    style="color: var(--accent-red); border-color: color-mix(in srgb, var(--accent-red) 30%, transparent);">RESET ALL AGENTS</button>
+                <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
             </div>
         </div>
 
@@ -1222,7 +1311,8 @@ body {
                     <span>Accurate coding mode for Coder prompts</span>
                 </label>
                 <button id="btn-save-startup" class="secondary-btn w-full"
-                    style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE STARTUP
+                    style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE
+                    STARTUP
                     COMMANDS</button>
                 <button id="btn-archive-all-completed" class="secondary-btn w-full" style="margin-top:4px;">🗄 Archive
                     All Completed</button>
@@ -1252,7 +1342,7 @@ body {
             <textarea id="init-plan-idea" class="modal-textarea"
                 placeholder="Describe what should be fixed or built..."></textarea>
             <div class="flex gap-2">
-                <button id="btn-send-planner" class="secondary-btn w-full">SEND TO PLANNER</button>
+                <button id="btn-send-planner" class="action-btn w-full">SEND TO PLANNER</button>
                 <button id="btn-copy-prompt" class="secondary-btn w-full">COPY TO CLIPBOARD</button>
             </div>
         </div>
@@ -1261,9 +1351,12 @@ body {
     <div id="recover-plans-modal" class="modal-overlay hidden">
         <div class="modal-card" style="max-width: 480px;">
             <div class="modal-title">RECOVER PLANS</div>
-            <input id="recover-search" class="modal-input" type="text" placeholder="Filter plans..." style="margin-bottom: 8px;">
+            <input id="recover-search" class="modal-input" type="text" placeholder="Filter plans..."
+                style="margin-bottom: 8px;">
             <div id="recover-plan-list" style="max-height: 260px; overflow-y: auto; margin-bottom: 10px;"></div>
-            <div id="recover-empty-msg" class="hidden" style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 11px;">No recoverable plans found.</div>
+            <div id="recover-empty-msg" class="hidden"
+                style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 11px;">No recoverable
+                plans found.</div>
             <button id="btn-close-recover" class="secondary-btn w-full">CLOSE</button>
         </div>
     </div>
@@ -1410,7 +1503,7 @@ body {
             name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
             name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
             if (!name) return '(untitled)';
-            return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, function(c) { return c.toUpperCase(); }).trim() || '(untitled)';
+            return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }).trim() || '(untitled)';
         }
         function renderRecoverablePlans(plans, filter) {
             recoverablePlansCache = plans || [];
@@ -1470,7 +1563,7 @@ body {
         if (btnDeregister) btnDeregister.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
         const btnKanban = document.getElementById('btn-open-kanban');
         if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
-        
+
         const termOpsToggle = document.getElementById('terminal-operations-toggle');
         if (termOpsToggle) {
             termOpsToggle.addEventListener('click', () => {
@@ -1482,7 +1575,7 @@ body {
                 }
             });
         }
-        
+
         if (liveFeedToggle && liveFeedFields && liveFeedChevron) {
             liveFeedToggle.addEventListener('click', () => {
                 const isOpen = liveFeedFields.classList.toggle('open');
@@ -1505,7 +1598,7 @@ body {
                 }
             });
         }
-        
+
         const btnSaveStartup = document.getElementById('btn-save-startup');
         if (btnSaveStartup) {
             btnSaveStartup.addEventListener('click', () => {
@@ -1523,7 +1616,7 @@ body {
                 setTimeout(() => { btnSaveStartup.textContent = 'SAVE STARTUP COMMANDS'; }, 1500);
             });
         }
-        
+
         const btnComplete = document.getElementById('btn-complete-plan');
         if (btnComplete) {
             btnComplete.addEventListener('click', () => {
@@ -1532,7 +1625,7 @@ body {
                 vscode.postMessage({ type: 'completePlan', sessionId });
             });
         }
-        
+
         const btnDelete = document.getElementById('btn-delete-plan');
         if (btnDelete) {
             btnDelete.addEventListener('click', () => {
@@ -1541,19 +1634,19 @@ body {
                 vscode.postMessage({ type: 'deletePlan', sessionId });
             });
         }
-        
+
         if (mergeAllPlansBtn) {
             mergeAllPlansBtn.addEventListener('click', () => {
                 vscode.postMessage({ type: 'mergeAllPlans' });
             });
         }
-        
+
         if (archiveAllCompletedBtn) {
             archiveAllCompletedBtn.addEventListener('click', () => {
                 vscode.postMessage({ type: 'archiveAllCompleted' });
             });
         }
-        
+
         if (copyPlanLinkBtn) {
             copyPlanLinkBtn.addEventListener('click', () => {
                 const sessionId = runSheetSelect ? runSheetSelect.value : null;
@@ -2200,7 +2293,7 @@ body {
 
             // BUNDLE CODE button
             const exportBtn = document.createElement('button');
-            exportBtn.className = 'action-btn';
+            exportBtn.className = 'secondary-btn';
             exportBtn.id = 'webai-export-btn';
             exportBtn.style.flex = '1';
             exportBtn.style.minWidth = '0';
@@ -2214,13 +2307,10 @@ body {
 
             // SYNC REPO button
             const syncBtn = document.createElement('button');
-            syncBtn.className = 'action-btn';
+            syncBtn.className = 'secondary-btn';
             syncBtn.id = 'airlock-sync-btn';
             syncBtn.style.flex = '1';
             syncBtn.style.minWidth = '0';
-            syncBtn.style.background = 'var(--vscode-button-secondaryBackground, transparent)';
-            syncBtn.style.color = 'var(--vscode-button-secondaryForeground, var(--vscode-button-background))';
-            syncBtn.style.border = '1px solid var(--vscode-button-background)';
             syncBtn.innerText = 'SYNC REPO';
             syncBtn.onclick = () => {
                 syncBtn.disabled = true;
@@ -2247,7 +2337,8 @@ body {
             // Textarea for pasting AI output
             const textarea = document.createElement('textarea');
             textarea.id = 'airlock-textarea';
-            textarea.style.cssText = 'width:calc(100% - 16px); margin:4px 8px; min-height:120px; max-height:300px; resize:vertical; background:var(--vscode-input-background, #1e1e1e); color:var(--vscode-input-foreground, #ccc); border:1px solid var(--vscode-input-border, #444); border-radius:3px; padding:6px; font-size:11px; font-family:var(--font-mono); line-height:1.4;';
+            textarea.className = 'agent-input';
+            textarea.style.cssText = 'width:calc(100% - 16px); margin:4px 8px; min-height:180px; max-height:400px; resize:vertical;';
             textarea.placeholder = 'Paste the text output from ChatGPT, Claude, Gemini, etc.';
             textarea.value = _airlockTextareaValue;
             textarea.addEventListener('input', () => { _airlockTextareaValue = textarea.value; });
@@ -2264,10 +2355,11 @@ body {
 
             // CONVERT TO PLAN button
             const planBtn = document.createElement('button');
-            planBtn.className = 'action-btn';
+            planBtn.className = 'secondary-btn';
             planBtn.id = 'airlock-plan-btn';
-            planBtn.style.cssText = 'flex:1; min-width:0; background:var(--vscode-button-secondaryBackground, transparent); color:var(--vscode-button-secondaryForeground, var(--vscode-button-background)); border:1px solid var(--vscode-button-background);';
-            planBtn.innerText = 'PLAN';
+            planBtn.style.flex = '1';
+            planBtn.style.minWidth = '0';
+            planBtn.innerText = 'CONVERT TO PLAN';
             planBtn.onclick = () => {
                 const text = textarea.value.trim();
                 if (!text) { const s = document.getElementById('webai-status'); if (s) s.innerText = '⚠ Paste AI response first'; return; }
@@ -2284,7 +2376,8 @@ body {
             const coderBtn = document.createElement('button');
             coderBtn.className = 'action-btn';
             coderBtn.id = 'airlock-coder-btn';
-            coderBtn.style.cssText = 'flex:1; min-width:0; background:var(--vscode-button-secondaryBackground, transparent); color:var(--vscode-button-secondaryForeground, var(--vscode-button-background)); border:1px solid var(--vscode-button-background);';
+            coderBtn.style.flex = '1';
+            coderBtn.style.minWidth = '0';
             coderBtn.innerText = 'SEND TO CODER';
             coderBtn.onclick = () => {
                 const text = textarea.value.trim();
@@ -2364,7 +2457,9 @@ body {
             identity.className = 'agent-identity';
 
             const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isRunning ? (isPaused ? ' orange' : ' green-pulse') : (pipelineReady ? ' green' : ''));
+            dot.className = 'status-dot';
+            if (isRunning) dot.classList.add(isPaused ? 'orange' : 'green-pulse');
+            else dot.classList.add(pipelineReady ? 'green' : 'red');
             identity.appendChild(dot);
 
             const name = document.createElement('span');
@@ -2492,7 +2587,9 @@ body {
             identity.className = 'agent-identity';
 
             const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isRunning ? (isPaused ? '' : ' green-pulse') : (allReady ? ' green' : ''));
+            dot.className = 'status-dot';
+            if (isRunning) dot.classList.add(isPaused ? 'orange' : 'green-pulse');
+            else dot.classList.add(allReady ? 'green' : 'red');
             identity.appendChild(dot);
 
             const name = document.createElement('span');
@@ -2706,6 +2803,7 @@ body {
             dot.className = 'status-dot';
             if (isWorking) dot.classList.add('green-pulse');
             else if (isReady) dot.classList.add(isRecoverable ? 'orange' : 'green');
+            else dot.classList.add('red');
 
             const name = document.createElement('div');
             name.className = 'agent-name';
@@ -2812,6 +2910,7 @@ body {
             const dot = document.createElement('div');
             dot.className = 'status-dot';
             if (isReady) dot.classList.add('green');
+            else dot.classList.add('red');
 
             const name = document.createElement('div');
             name.className = 'agent-name';
@@ -2878,7 +2977,9 @@ body {
             identity.className = 'agent-identity';
 
             const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isActive ? ' green-pulse' : (bothReady ? ' green' : ''));
+            dot.className = 'status-dot';
+            if (isActive) dot.classList.add('green-pulse');
+            else dot.classList.add(bothReady ? 'green' : 'red');
             identity.appendChild(dot);
 
             const name = document.createElement('span');
@@ -2973,6 +3074,7 @@ body {
             const dot = document.createElement('div');
             dot.className = 'status-dot';
             if (isReady) dot.classList.add('green');
+            else dot.classList.add('red');
 
             const name = document.createElement('div');
             name.className = 'agent-name';

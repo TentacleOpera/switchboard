@@ -5,6 +5,7 @@ import * as crypto from 'crypto';
 import { ChildProcess, fork, execFileSync } from 'child_process';
 import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
+import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
@@ -361,6 +362,19 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string) {
                         }, 100);
                     } else {
                         mcpOutputChannel?.appendLine(`[MCP] Warning: Could not find terminal (PID: ${pid}) to rename.`);
+                    }
+                    break;
+                }
+
+                case 'appendRunSheetEvent': {
+                    const { sessionId, event } = message;
+                    if (sessionId && workspaceRoot) {
+                        const log = new SessionActionLog(workspaceRoot);
+                        await log.updateRunSheet(sessionId, (current: any) => {
+                            if (!Array.isArray(current.events)) current.events = [];
+                            current.events.push({ timestamp: new Date().toISOString(), ...event });
+                            return current;
+                        });
                     }
                     break;
                 }

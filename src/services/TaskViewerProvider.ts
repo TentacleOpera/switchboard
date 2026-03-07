@@ -2769,16 +2769,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             // Archive brain source BEFORE marking complete — if archival throws, we do NOT proceed.
             // Local plans (no brainSourcePath) skip archival and proceed directly to completion.
+            let archivedBrainSourcePath = sheet.brainSourcePath;
             if (sheet.brainSourcePath && fs.existsSync(sheet.brainSourcePath)) {
                 const archivedPath = await this._archiveBrainPlan(sheet.brainSourcePath);
                 if (archivedPath) {
-                    sheet.brainSourcePath = archivedPath;
+                    archivedBrainSourcePath = archivedPath;
                 }
             }
 
-            sheet.completed = true;
-            sheet.completedAt = new Date().toISOString();
-            await log.updateRunSheet(sessionId, () => sheet);
+            await log.updateRunSheet(sessionId, (current: any) => ({
+                ...current,
+                completed: true,
+                completedAt: new Date().toISOString(),
+                brainSourcePath: archivedBrainSourcePath
+            }));
 
             // Register in archivedBrainPaths so startup scan skips this plan
             if (originalBrainPath) {
@@ -3378,8 +3382,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const sheet = JSON.parse(sheetContent);
                     const sheetRelPath = (sheet.planFile || '').replace(/\\/g, '/');
                     if (sheetRelPath === relPath && sheet.topic !== newTopic) {
-                        sheet.topic = newTopic;
-                        await fs.promises.writeFile(sheetPath, JSON.stringify(sheet, null, 2));
+                        const sessionId = path.basename(file, '.json');
+                        const log = this._getSessionLog(workspaceRoot);
+                        await log.updateRunSheet(sessionId, (s: any) => {
+                            s.topic = newTopic;
+                            return s;
+                        });
                         const planId = this._getPlanIdForRunSheet(sheet);
                         if (planId) {
                             const entry = this._planRegistry.entries[planId];

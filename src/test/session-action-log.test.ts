@@ -232,6 +232,33 @@ async function run() {
     assert.strictEqual(submitEvents.length, 1, `'submit_result' event should appear in live feed, got ${submitEvents.length}`);
     assert.ok(String(submitEvents[0]?.payload?.message || '').includes('COMPLETED'), `submit_result message should include 'COMPLETED', got: ${submitEvents[0]?.payload?.message}`);
 
+    // Test 9a: concurrent updateRunSheet — must not corrupt JSON
+    const raceSessionId = 'sess_race_1';
+    await log.createRunSheet(raceSessionId, { topic: 'race_base', events: [] });
+    await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+            log.updateRunSheet(raceSessionId, (s: any) => {
+                if (!s.events) s.events = [];
+                s.events.push({ seq: i });
+                return s;
+            })
+        )
+    );
+    const raceSheet = await log.getRunSheet(raceSessionId);
+    assert.ok(raceSheet !== null, 'Race sheet must not be corrupted to null');
+    assert.strictEqual(raceSheet.events.length, 20, `Expected 20 events, got ${raceSheet.events.length}`);
+
+    // Test 9b: stale-snapshot regression — merge updater must not lose events
+    const ssId = 'sess_snapshot_1';
+    await log.createRunSheet(ssId, { topic: 'ss', events: [] });
+    await Promise.all([
+        log.updateRunSheet(ssId, (s: any) => { s.events.push({ ev: 'first' }); return s; }),
+        log.updateRunSheet(ssId, (current: any) => ({ ...current, completed: true }))
+    ]);
+    const ssSheet = await log.getRunSheet(ssId);
+    assert.ok(ssSheet.completed === true, 'completed flag must survive merge');
+    assert.ok(ssSheet.events.length >= 1, 'events must not be wiped by merge updater');
+
     // Cleanup
     if (fs.existsSync(root)) {
         fs.rmSync(root, { recursive: true, force: true });

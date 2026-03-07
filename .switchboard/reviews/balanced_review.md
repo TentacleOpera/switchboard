@@ -1,57 +1,91 @@
-# Balanced Review: Airlock Tab Bug Fix Plan
+# Balanced Review — Runsheet Race Condition Fix
 
-**Reviewer**: Lead Developer (synthesis & mediation)
-**Grumpy critique**: `.switchboard/reviews/grumpy_critique.md`
+**Reviewer**: Lead Developer
+**Input**: Grumpy Critique + Implementation Plan
 
 ---
 
 ## Summary of Review
 
-The plan is directionally correct. It identifies the right 4 bugs and the right two files. However, it is underspecified on the two most complex fixes (bugs #2 and #3), and the Grumpy reviewer has surfaced a real race condition and a half-baked payload fix. The layout fix (bug #4) is simple but needs a one-line addition to handle narrow panel widths.
-
-**Status**: Approved to proceed with revisions outlined below.
+The plan correctly identifies the root cause (unguarded read-modify-write in `updateRunSheet`) and proposes the right class of solution (in-process promise-chain serialization). The mutex approach is sound. However, three significant defects in the plan will cause the fix to be incomplete or subtly wrong: one critical gap in the `_handlePlanTitleSync` fix, one closure bug in the cleanup code, and an unacknowledged stale-snapshot bypass in `_handleCompletePlan`. All three are fixable without changing the overall approach. The MAJORs are real but lower priority.
 
 ---
 
 ## Valid Concerns
 
-### ✅ Critical #1 — Payload Must Be File-Path-Only (Verified)
-The bug report is confirmed: `payload` at `TaskViewerProvider.ts:6269` contains `${text}` which is piped directly to terminal stdin via `sendRobustText`. This is a verified overflow path. The fix must ensure the payload dispatched to `_dispatchExecuteMessage` is *only* the instruction + file path — no raw text content whatsoever.
+**C1 — `_handlePlanTitleSync` fix is underspecified (CONFIRMED)**
+The plan's diff for this function is correct in intent but its implementation sketch glosses over an important detail: `_handlePlanTitleSync` doesn't currently have a `log` reference, derives the session ID as `path.basename(file, '.json')`, not from `sheet.sessionId`. The implementer must:
+1. Acquire `log = _getSessionLog(workspaceRoot)` at the top of the function (it's available via the `workspaceRoot` already derived there).
+2. Key the mutex on `path.basename(file, '.json')` (i.e., the filename stem, which IS the sessionId for all runsheet files) — not on `sheet.sessionId`, which could be stale.
 
-### ✅ Critical #2 — Textarea Stabilization Needs a Concrete Strategy
-The plan's description ("check if the panel exists") is not sufficient. The only bulletproof approaches are:
-- **(Preferred)** Skip rebuilding `agentListWebai` content if `document.getElementById('airlock-textarea')` exists **and** `document.activeElement` is within `agentListWebai` (i.e., the user is actively interacting).
-- **(Alternative)** Move the Airlock panel out of `renderAgentList()` entirely and render it once at init, updating only the `webai-status` element via ID targeting.
-The implementation spec must choose one explicitly.
+**C2 — Cleanup code closure footgun (CONFIRMED)**
+The multi-step snippet in the plan with `chainedNext` referenced before assignment is unsafe to copy-paste literally. The correct pattern is:
 
-### ✅ Critical #3 — Race Condition on Clear Is Real but Manageable
-The race condition between the plan-watcher-triggered re-render and the `airlock_planSaved` message is real. The fix: clear `_airlockTextareaValue = ''` **before** posting the message to the backend (optimistic clear on button click), not in response to the success message. If the backend fails, restore the value via the error path. This is simpler and avoids the race entirely.
+```typescript
+async updateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
+    const tail = this._writeLocks.get(sessionId) ?? Promise.resolve();
+    const self = this;
+    const next: Promise<void> = tail.then(() => self._doUpdateRunSheet(sessionId, updater));
+    this._writeLocks.set(sessionId, next.catch(() => {}).finally(() => {
+        if ((this._writeLocks.get(sessionId) as unknown) === next) {
+            this._writeLocks.delete(sessionId);
+        }
+    }));
+    return next;
+}
+```
+Store `next` first, then chain `.catch().finally()` as the map value. No forward-reference issue.
 
-### ✅ Major #4 — Add a Size Guard Before `writeFile`
-A max size check (e.g., 2MB) before writing to disk is a 2-line addition that prevents pathological behavior. Worth including.
+**C3 — `_handleCompletePlan` stale-snapshot (CONFIRMED)**
+The `updater: () => sheet` pattern ignores `current`, so a write queued between the outer `getRunSheet` read and the `updateRunSheet` call will be silently discarded. The fix: change the updater to merge:
+
+```typescript
+await log.updateRunSheet(sessionId, (current: any) => ({
+    ...current,
+    completed: true,
+    completedAt: new Date().toISOString(),
+    brainSourcePath: sheet.brainSourcePath // already patched above
+}));
+```
+
+This is a **separate bug** from the race condition and should be fixed in the same PR since the mutex makes the gap worse (it serializes but doesn't merge).
+
+**M2 — Debounce is a valid alternative for consideration (ACKNOWLEDGED, DEFERRED)**
+Serialization is correct but doesn't eliminate unnecessary writes from rapid file-system events. Debouncing the watcher trigger at 150ms would reduce N sequential disk writes to 1. This is a valid follow-up optimization but out of scope for this fix. Acknowledge it in a TODO comment.
+
+**M3 — Test needs a stale-snapshot case (CONFIRMED)**
+Add a second sub-test: concurrent calls where one updater ignores `current` (simulating the `_handleCompletePlan` pattern) — verify that after the fix (C3 resolution), the merge-updater version preserves all prior events.
 
 ---
 
 ## Action Plan
 
-| # | Priority | Action | Location |
-|---|----------|--------|----------|
-| A | Required | In `_handleAirlockSendToCoder`: change payload to only contain instruction + `patchPath`. Never include `text`. Same change for `_handleAirlockConvertToPlan` if it ever sends anything. | `TaskViewerProvider.ts:6269` |
-| B | Required | Add `MAX_AIRLOCK_TEXT_BYTES = 2 * 1024 * 1024` guard before `writeFile` in both handlers. Return an error message to the webview if exceeded. | `TaskViewerProvider.ts:6257` |
-| C | Required | Textarea clear: call `_airlockTextareaValue = ''` and `textarea.value = ''` **on button click** (optimistic), before posting the message. Restore on error. Do not wait for `airlock_planSaved`. | `implementation.html:2203-2208`, `2223-2228` |
-| D | Required | Choose a specific textarea stabilization strategy. Recommended: skip `agentListWebai.innerHTML = ''` + full reconstruction when `document.getElementById('airlock-textarea')` exists and airlock tab is active. Only rebuild if the airlock tab is not shown. | `implementation.html:2047` |
-| E | Recommended | Change dispatch priority to `leadAgent || coderAgent` (Lead first). | `TaskViewerProvider.ts:6262` |
-| F | Recommended | Buttons side-by-side: use `flex: 1; min-width: 0;` on each button and consider shortening labels to `PLAN` / `SEND`. | `implementation.html:2198-2230` |
+> These items are ordered by priority. Items 1–3 are required before merge.
+
+1. **[Must] Fix `_handlePlanTitleSync` to acquire `log` reference and key mutex on filename stem**
+   - Add `const log = this._getSessionLog(workspaceRoot);` near top of function
+   - Replace raw `writeFile` with `await log.updateRunSheet(path.basename(file, '.json'), (s) => { s.topic = newTopic; return s; })`
+
+2. **[Must] Fix `updateRunSheet` mutex cleanup — store `next` before chaining `.finally()`**
+   - Use the corrected pattern from C2 above; do not literally copy the plan's inconsistent snippets
+
+3. **[Must] Fix `_handleCompletePlan` stale-snapshot — change `() => sheet` to a merge updater**
+   - Use spread-merge: `(current) => ({ ...current, completed: true, completedAt: ..., brainSourcePath: ... })`
+
+4. **[Should] Add Test 9b — stale-snapshot regression test**
+   - Fire a concurrent pair: one updater appends an event, one uses `() => snapshot` (the bad pattern) — verify the merge-updater variant doesn't lose the first event
+
+5. **[Nice-to-have] Add a TODO comment in `_updateSessionRunSheet` for debounce exploration**
+   - Do not implement now; mark it for a follow-up
 
 ---
 
 ## Dismissed Points
 
-### ❌ NIT #7 — `_airlockTextareaValue` closure variable being "fragile"
-The closure pattern is appropriate for a single-file webview with no module system. Attaching state to `dataset` would be less readable. Dismissed.
+**M1 — createRunSheet mutex scope creep**: Grumpy is right that there's no proven race path for `createRunSheet`. However, wrapping it is still the correct defensive posture since it's nearly free (one extra `.then()`) and prevents a future caller from introducing the bug. Not dismissed — just accept it as defensive hygiene.
 
-### ❌ NIT #8 — Duplicate ID risk on `webai-status`
-Valid defensively, but once fix D is implemented, `createWebAiAirlockPanel()` will only be called once. Tracking a potential future problem is not worth spec complexity now. Dismissed.
+**M4 — `_handlePlanTitleSync` re-entrancy loop**: Grumpy's concern requires `_refreshRunSheets` to emit a file event on `.switchboard/sessions/*.json` that re-triggers `_handlePlanTitleSync`. The `_handlePlanTitleSync` watcher listens on plan files (`.md`), not session JSON. `_refreshRunSheets` only posts to the webview — no filesystem write. Re-entrancy loop dismissed as a theoretical concern that won't materialise with current code.
 
-### ❌ MAJOR #5 — Agent priority ordering
-The current priority (`coder || lead`) is arguably a user preference concern, not a critical bug. The Lead Coder in some setups is intentionally hands-off. Flagged as Recommended, not Required.
+**N1 — Inconsistent plan snippets**: Valid NIT but editorial, not a defect. Dismissed from action plan; implementer should use the corrected C2 pattern and ignore the plan's draft snippets.
+
+**N2, N3**: Purely documentation issues. Dismissed.

@@ -1,74 +1,107 @@
-# Grumpy Critique: Airlock Tab Bug Fix Plan
+# Grumpy Critique — Runsheet Race Condition Fix
 
-**Reviewer**: Principal Engineer (adversarial)
-**Subject**: 4-bug Airlock fix — `TaskViewerProvider.ts` + `implementation.html`
+**Target**: `implementation_plan.md` (Promise-chain mutex for `SessionActionLog.updateRunSheet` + `_handlePlanTitleSync` inline write fix)
 
 ---
 
 ## CRITICAL
 
-### 1. Payload Truncation is Half a Fix — You Still Cause a Buffer Overflow on Fallback
+### C1 — The Lock Doesn't Protect `_handlePlanTitleSync` (The Fix Is Incomplete)
 
-The plan says "remove `${text}` from the payload." Good. But the plan does NOT address the inbox fallback path. When `_attemptDirectTerminalPush` fails (e.g., terminal is not local), the function falls back to writing the message *as a JSON file* to `.switchboard/inbox/<agent>/<msgId>.json`. The JSON contains `payload` as a field. If the payload is still large (because the current fix only documents removing `${text}` from one string literal), the inbox JSON blob bloats unreasonably. The *real* fix is to ensure the payload string passed to `_dispatchExecuteMessage` is **always** compact — just the instruction + path, nothing else. The plan doesn't lock this down conceptually enough: a developer reading it could still accidentally stuff `text` into the payload under a different format.
+The plan claims to fix `_handlePlanTitleSync` by routing it through `log.updateRunSheet`. But look at the actual code (TVP line 3376–3378):
 
-**File**: `TaskViewerProvider.ts:6269` + `TaskViewerProvider.ts:3976`
+```typescript
+const sheetContent = await fs.promises.readFile(sheetPath, 'utf8');
+const sheet = JSON.parse(sheetContent);
+```
 
----
+`_handlePlanTitleSync` doesn't even have a reference to the `SessionActionLog` instance at that point in the code — it constructs the path itself (`sheetPath = path.join(sessionsDir, file)`) and works directly off the filesystem. The plan's diff sketch says to call `log.updateRunSheet(sessionIdForSheet, ...)`, which requires (a) knowing the `sessionIdForSheet` and (b) having a `log` reference. The function currently doesn't call `_getSessionLog`. If the refactor is done naively, it will work if and only if `sessionIdForSheet === path.basename(file, '.json')` — which is true for `antigravity_` sessions but not guaranteed. If JSON has a mismatched `sessionId` field (e.g., due to a prior corruption), the mutex keyed on the wrong ID gives **zero protection** against the concurrent write against `_doUpdateRunSheet` keyed on the correct ID. The plan doesn't acknowledge this.
 
-### 2. The Textarea "Stability" Fix is Vague to the Point of Being Unimplementable
-
-The plan says: *"check if the airlock panel already exists. If it does, do not recreate it."* This is dangerously hand-wavy.
-
-`renderAgentList()` is not just called on state changes. It is called: (a) on a timer every 1s if a CoderReviewer session is polling (`implementation.html:2026-2028`), (b) every time a `terminalStatuses`, `runSheets`, `sessionStatus` message arrives. The "check if it exists" approach based on `document.getElementById('airlock-textarea') !== null` will always return `true` on the second render pass — because the DOM mutation happens synchronously. The fix needs to be much more specific: either (a) **skip rebuilding `agentListWebai`** if the Airlock tab is currently active and focused, or (b) **extract the airlock panel out of `renderAgentList()` entirely** and render it once on init. The plan does not choose. This will be implemented poorly.
-
-**File**: `implementation.html:2035-2047`, `implementation.html:2023-2033`
+**Receipt**: `TaskViewerProvider.ts:3373` uses `file` from `fs.readdirSync(sessionsDir)` — the filename stem is the key, not `sheet.sessionId`.
 
 ---
 
-### 3. Clearing the Textarea on Success Has a Race Condition
+### C2 — `_writeLocks` Memory Leak Is Acknowledged But the Cleanup Code Is Wrong
 
-The plan clears `_airlockTextareaValue` (the closure variable) and sets `textarea.value = ''` in response to `airlock_planSaved` or `airlock_coderSent`. But by the time this message arrives, `renderAgentList()` may have already been triggered by the state write that saving the plan causes (writing to `.switchboard/plans/features/` triggers the plan watcher → triggers `refresh()` → triggers `renderAgentList()`). If the render runs *before* the `airlock_planSaved` message arrives, the textarea is recreated from `_airlockTextareaValue`, which is still non-empty — and then `airlock_planSaved` clears a textarea element that is already detached from the DOM. Net result: the user's text is preserved even after a success.
+The plan's own cleanup snippet is internally inconsistent:
 
-**File**: `TaskViewerProvider.ts:6229-6231` + `implementation.html:2188` + plan watcher at `TaskViewerProvider.ts:1005`
+```typescript
+const next = tail.then(() => this._doUpdateRunSheet(...)).finally(() => {
+    if (this._writeLocks.get(sessionId) === chainedNext) {
+        this._writeLocks.delete(sessionId);
+    }
+});
+const chainedNext = next.catch(() => {});
+this._writeLocks.set(sessionId, chainedNext);
+```
+
+`chainedNext` is defined AFTER `next`, but `next` references `chainedNext` in its `.finally()`. In JavaScript, `chainedNext` is `undefined` at the time `.finally(() => { ... === chainedNext })` is registered. The comparison always evaluates against the value of `chainedNext` **at the time `.finally()` callback fires** (i.e., after `const chainedNext = ...` is assigned), so it actually works by accident — but this is a textbook closure-over-mutable-variable footgun. Any reviewer will flag this as a bug on sight. The plan's own code is the kind that fails code review, gets reverted, and reintroduces the original bug.
+
+**Receipt**: JavaScript closures capture the binding, not the value — the snippet only "works" because `finally` fires asynchronously after synchronous assignment.
+
+---
+
+### C3 — `_handleCompletePlan` Does a Stale-Cache Double-Update That the Mutex Doesn't Protect
+
+Look at `_handleCompletePlan` (TVP:2764–2781):
+
+```typescript
+const sheet = await log.getRunSheet(sessionId);   // read outside mutex
+...
+sheet.completed = true;
+sheet.completedAt = new Date().toISOString();
+await log.updateRunSheet(sessionId, () => sheet);  // write ignores current
+```
+
+The `updater` passed to `updateRunSheet` is `() => sheet` — it **completely ignores the `current` argument**. Even with the mutex in place, a sequence like:
+
+1. `_handleCompletePlan` reads `sheet` (old state)
+2. File watcher calls `_updateSessionRunSheet` → gets queued, runs, writes new `events[]`
+3. `_handleCompletePlan`'s `updateRunSheet(() => sheet)` fires — OVERWRITES the new events with the stale snapshot
+
+The mutex serializes the writes but doesn't prevent stale reads from outside the critical section. The plan doesn't address this at all.
 
 ---
 
 ## MAJOR
 
-### 4. No Input Sanitization on `text` Before Writing to Disk
+### M1 — `createRunSheet` Is Not in a Concurrent-With-Update Race Path — The Mutex Wrapping Is Scope Creep
 
-The backend receives `text` directly from the webview and writes it to disk without any validation: `fs.promises.writeFile(patchPath, text, 'utf8')`. The webview is a sandboxed iframe, but VS Code's extension trust model allows any content to be passed as a serialized string. A sufficiently malformed patch (e.g., one that escapes the `.switchboard/airlock/` directory by embedding a crafted filename server-side — not possible here since the filename is generated — but the *content* itself is unbounded). The plan does not mention any size cap on the accepted text. A 500MB paste would write 500MB to disk without feedback. Add a `MAX_AIRLOCK_TEXT_BYTES` guard in the handler before the `writeFile`.
+The plan says "Also wrap `createRunSheet` in the same lock". Show the race: who calls `createRunSheet` concurrently with `updateRunSheet` on the **same** `sessionId`? Looking at the code:
+- `createRunSheet` is called at session **creation** (TVP:2653, TVP:2969)
+- `updateRunSheet` is called only on **existing** sessions
 
-**File**: `TaskViewerProvider.ts:6257`
+The only realistic window is `_handleMirrorPlanWriteback` / brain-merge flow (TVP:2969 calls `createRunSheet` on `mergedSessionId`). But that's a *new* ID being created for the first time. If there's already a `updateRunSheet` in-flight on the same `mergedSessionId` before `createRunSheet` completes, that implies two concurrent flows are both creating the same session — that's a deeper design bug outside the scope of this fix and the mutex doesn't help (because `if (!fs.existsSync(filePath)) return;` inside `updateRunSheet` would just bail). Wrapping `createRunSheet` adds complexity without a proven concurrent path.
 
----
+### M2 — No Debounce or Coalescing on the File Watcher — We're Serializing Noise, Not Eliminating It
 
-### 5. Sending to "coder" Preferred Over "lead" Is Architecturally Backwards
+The root trigger is: file watcher fires N times in milliseconds → N `updateRunSheet` calls. The plan serializes those N calls. But N sequential disk reads + writes is ** objectively worse performance** than just debouncing the watcher and doing 1 write. The mutex is solving the race but not the cause. For a plan that already requires O(N) sequential awaits on disk I/O, under rapid editing this will queue up 10–20 writes where 1 would suffice. The plan should at minimum acknowledge debouncing as an alternative (even if deferred) instead of treating serialization as the complete answer.
 
-The priority is: `coderAgent || leadAgent`. This means Airlock patches land on the Coder first, skipping the Lead Coder's context. The Lead Coder in this workflow is the one who *owns* the plan and is expected to drive code changes. If the Lead Coder exists and is ready, it should receive the Airlock patch, not the junior Coder. This ordering was probably copied without thinking from somewhere else. It's an anti-pattern for the Airlock's stated purpose.
+**Receipt**: `_updateSessionRunSheet` is called from the watcher handler. Each call queues a `readFile → JSON.parse → writeFile` cycle. With 10 rapid saves and no debounce, you get 10 sequential disk round-trips.
 
-**File**: `TaskViewerProvider.ts:6260-6262`
+### M3 — The Test Is Too Weak to Catch the Real Failure Mode
 
----
+The proposed Test 9 fires 20 concurrent `updateRunSheet` calls and checks `events.length === 20`. That proves serialization is working against an in-memory mutex. It does NOT prove:
+- The file isn't momentarily corrupt mid-write (only valid if Node's `fs.writeFile` is atomic, which it is on most POSIX but NOT on Windows with antivirus interference — relevant given this is a Windows-primary codebase)
+- The stale-snapshot problem from C3 (because the test uses `() => s.events.push(...); return s` — a read-modify-return of the `current` arg, which is fine — but the real world caller in `_handleCompletePlan` ignores `current`)
+- Recovery behavior if the write partially fails mid-queue
 
-### 6. Button Layout Fix Ignores Overflow — Small Panel, Long Labels
+### M4 — `_handlePlanTitleSync` Runs as a File-Watcher Handler That Can Re-Enter Itself
 
-The buttons currently have labels `CONVERT TO PLAN` and `SEND TO CODER`. Side-by-side in a narrow VS Code sidebar panel (~240px), these labels will overflow or wrap, making them unreadable. The plan calls for a simple `flex-direction: row` with `gap: 8px`. There is no mention of `min-width: 0`, `overflow: hidden`, `font-size` reduction, or shortening the labels. This will look broken on most default VS Code sidebar widths.
-
-**File**: `implementation.html:2198-2230`
+`_handlePlanTitleSync` reads the plan file, updates `sheet.topic`, and then calls `_refreshRunSheets()`. If `_refreshRunSheets` triggers any UI update that causes another file-system event (possible given VS Code extension model), this could loop. The plan does nothing to make this handler idempotent or guarded by a `_isHandlingTitleSync` flag. After the refactor, if `log.updateRunSheet` triggers the watcher (because it writes to the sessions directory, not the plan directory) this is unlikely — but needs to be verified, not assumed.
 
 ---
 
 ## NIT
 
-### 7. `_airlockTextareaValue` Is a Closure Variable, Not State
+### N1 — The Plan's Diff Sketches Are Incomplete and Inconsistent
 
-Storing panel state in a function-scoped closure variable (`let _airlockTextareaValue = ''`) is fragile. If `createWebAiAirlockPanel` is ever called from a different scope or the function is refactored, this state will be lost silently. Should use a module-level `const` or be attached to the container element via a `dataset` attribute.
+The plan shows three different, partially overlapping snippets for the `updateRunSheet` replacement. In the first snippet it uses `.catch(() => {})`, in the third it introduces `chainedNext` and `.finally()`. These contradictory sketches will confuse the implementer. A single, authoritative final implementation should be given, not three evolutionary attempts.
 
-### 8. Plan Does Not Address the `webai-status` ID Collision Risk
+### N2 — Test 9 Uses `Array.from({length: 20})` — No Actual Concurrency Guarantee
 
-The `statusLine` element is given `id="webai-status"`. If `createWebAiAirlockPanel()` is called more than once (defensive scenario, or if the guard added in bug #3 fails), there will be duplicate IDs in the DOM. `document.getElementById('webai-status')` in button callbacks will then return the *first* match, not the current one. The plan does not address ID uniqueness.
+`Promise.all` in Node.js is concurrent from the event-loop's perspective, but the actual execution of `async function` bodies up to the first `await` is **synchronous**. The test relies on `_writeLocks` being set asynchronously, but the first iteration of the loop will register its lock and begin the `readFile` before the others fire. This is fine for testing the mutex, but the test comment should say "20 back-to-back queued" not imply true parallel I/O.
 
----
+### N3 — "proper-lockfile is already a dependency" Is Misleading Context
 
-**Summary**: The plan correctly identifies *what* to fix. It fails to specify *how* with enough precision to avoid introducing new bugs in fixes #2 and #3. Fix #1 is partly correct but incomplete. These are not hypothetical: the race condition in #3 is a near-certainty given the watcher topology.
+The plan notes `proper-lockfile` is in `package.json` as justification for not using it. The reason to not use it is that a per-process promise-chain mutex is sufficient and simpler — not that file locking exists. The note inverts the logic and could mislead future readers into thinking file locking was considered and rejected for dependency reasons.

@@ -33,6 +33,7 @@ export class SessionActionLog {
     private readonly queue: QueueItem[] = [];
     private isFlushing = false;
     private flushScheduled = false;
+    private readonly _writeLocks = new Map<string, Promise<void>>();
     private static readonly MAX_RETRIES = 4;
     private static readonly BASE_BACKOFF_MS = 200;
     private static readonly MAX_STRING_LEN = 800;
@@ -382,6 +383,17 @@ export class SessionActionLog {
     // --- Session Run Sheet Management (Decoupled from TaskViewerProvider) ---
 
     async createRunSheet(sessionId: string, data: any): Promise<void> {
+        const tail = this._writeLocks.get(sessionId) ?? Promise.resolve();
+        const next: Promise<void> = tail.then(() => this._doCreateRunSheet(sessionId, data));
+        this._writeLocks.set(sessionId, next.catch(() => {}).finally(() => {
+            if ((this._writeLocks.get(sessionId) as unknown) === next) {
+                this._writeLocks.delete(sessionId);
+            }
+        }));
+        return next;
+    }
+
+    private async _doCreateRunSheet(sessionId: string, data: any): Promise<void> {
         try {
             await fs.promises.mkdir(this.sessionsDir, { recursive: true });
             const filePath = path.join(this.sessionsDir, `${sessionId}.json`);
@@ -402,6 +414,17 @@ export class SessionActionLog {
     }
 
     async updateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
+        const tail = this._writeLocks.get(sessionId) ?? Promise.resolve();
+        const next: Promise<void> = tail.then(() => this._doUpdateRunSheet(sessionId, updater));
+        this._writeLocks.set(sessionId, next.catch(() => {}).finally(() => {
+            if ((this._writeLocks.get(sessionId) as unknown) === next) {
+                this._writeLocks.delete(sessionId);
+            }
+        }));
+        return next;
+    }
+
+    private async _doUpdateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
         try {
             const filePath = path.join(this.sessionsDir, `${sessionId}.json`);
             if (!fs.existsSync(filePath)) return;

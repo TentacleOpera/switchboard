@@ -2693,7 +2693,13 @@ function registerTools(server) {
                     try {
                         const activeSheet = await findMostRecentActiveRunSheet(workspaceRoot);
                         if (activeSheet?.sessionId) {
-                            await appendRunSheetEvent(activeSheet.sessionId, { workflow: 'challenge' }, workspaceRoot);
+                            // Route through IPC so the extension's mutex serialises the write.
+                            // Direct file write here races with the extension's file-watcher write.
+                            if (process.send) {
+                                process.send({ type: 'appendRunSheetEvent', sessionId: activeSheet.sessionId, event: { workflow: 'challenge' } });
+                            } else {
+                                await appendRunSheetEvent(activeSheet.sessionId, { workflow: 'challenge' }, workspaceRoot);
+                            }
                         }
                     } catch (e) {
                         console.error(`[complete_workflow_phase] Failed to write kanban event: ${e?.message || e}`);
