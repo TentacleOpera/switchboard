@@ -57,7 +57,7 @@ async function run() {
             if (attempts < 3) {
                 throw new Error('simulated append failure');
             }
-            return originalAppendFile(...args);
+            return (originalAppendFile as any)(...args);
         };
         await log.logEvent('workflow_event', { action: 'retry_check' });
         await waitFor(async () => {
@@ -113,6 +113,10 @@ async function run() {
     // Test 6: Aggregation into summary event with plan title mapping
     const summarySessionId = 'sess_summary_1';
     await log.createRunSheet(summarySessionId, { planName: 'Alpha Plan', events: [] });
+    
+    // Invalidate title cache TTL
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
     const baseTs = Date.now() + 10_000;
     const syntheticEvents = [
         {
@@ -258,6 +262,60 @@ async function run() {
     const ssSheet = await log.getRunSheet(ssId);
     assert.ok(ssSheet.completed === true, 'completed flag must survive merge');
     assert.ok(ssSheet.events.length >= 1, 'events must not be wiped by merge updater');
+
+    // Test 10: Archived session titles lazy-loading and caching
+    const testArchiveId = 'sess_archived_1';
+    const archiveDir = path.join(root, '.switchboard', 'archive', 'sessions');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId}.json`), JSON.stringify({
+        sessionId: testArchiveId,
+        topic: 'Archived Topic'
+    }));
+
+    await log.logEvent('workflow_event', { action: 'test_archive_read' });
+    await waitFor(async () => {
+        const rows = (await fs.promises.readFile(activityPath, 'utf8')).trim().split('\n');
+        return rows.some(line => line.includes('test_archive_read'));
+    });
+
+    // Expire the cache from previous tests so the 1st read actually reads from disk
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
+    // 1st read should populate the archive cache
+    await log.getRecentActivity(10);
+
+    // Modify the file on disk. If it re-reads, the title would change.
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId}.json`), JSON.stringify({
+        sessionId: testArchiveId,
+        topic: 'MODIFIED TOPIC'
+    }));
+
+    // Expire the 5-second TTL for active sessions so it re-runs _readSessionTitleMap
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
+    // Simulate a newly archived session being added
+    const testArchiveId2 = 'sess_archived_2';
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId2}.json`), JSON.stringify({
+        sessionId: testArchiveId2,
+        topic: 'Newly Archived Topic'
+    }));
+
+    // Inject synthetic events to force title resolution for these archived sessions
+    await fs.promises.appendFile(activityPath, [
+        JSON.stringify({ timestamp: new Date(Date.now() + 1000).toISOString(), type: 'workflow_event', payload: { action: 'test_read_1', sessionId: testArchiveId } }),
+        JSON.stringify({ timestamp: new Date(Date.now() + 2000).toISOString(), type: 'workflow_event', payload: { action: 'test_read_2', sessionId: testArchiveId2 } })
+    ].join('\n') + '\n', 'utf8');
+
+    // 2nd read
+    const recent = await log.getRecentActivity(50);
+    const ev1 = recent.events.find(e => e.payload?.sessionId === testArchiveId);
+    const ev2 = recent.events.find(e => e.payload?.sessionId === testArchiveId2);
+
+    assert.ok(ev1, 'Expected to find event 1');
+    assert.strictEqual(ev1?.payload?.planTitle, 'Archived Topic', 'Cache must retain the original topic and not re-read the modified file from disk');
+    
+    assert.ok(ev2, 'Expected to find event 2');
+    assert.strictEqual(ev2?.payload?.planTitle, 'Newly Archived Topic', 'Must discover new archive files without re-reading old ones');
 
     // Cleanup
     if (fs.existsSync(root)) {

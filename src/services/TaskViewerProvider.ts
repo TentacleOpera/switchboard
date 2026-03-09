@@ -993,6 +993,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'airlock_syncRepo':
                         this._handleAirlockSyncRepo();
                         break;
+                    case 'airlock_openNotebookLM':
+                        this._handleAirlockOpenNotebookLM();
+                        break;
                     case 'airlock_openFolder':
                         this._handleAirlockOpenFolder();
                         break;
@@ -6321,6 +6324,10 @@ ${focusDirective}`);
             this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
             vscode.window.showErrorMessage(`Airlock sync failed: ${msg}`);
         }
+    }
+
+    private async _handleAirlockOpenNotebookLM(): Promise<void> {
+        await vscode.env.openExternal(vscode.Uri.parse('https://notebooklm.google.com/'));
     }
 
     private async _handleAirlockOpenFolder(): Promise<void> {

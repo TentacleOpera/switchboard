@@ -17,6 +17,9 @@
             --text-secondary: #777777;
 
             --accent-cyan: #3ddbd9;
+            --accent-teal: #3ddbd9;
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
             --accent-green: #4ec9b0;
             --accent-green-dim: #2d7a6a;
             --accent-red: #f85149;
@@ -762,6 +765,18 @@
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-cyan) 20%, transparent);
         }
 
+        .secondary-btn.is-teal {
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 5%, var(--panel-bg2));
+        }
+
+        .secondary-btn.is-teal:hover {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, var(--panel-bg2));
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
         .secondary-btn.success {
             color: var(--accent-green);
             border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
@@ -1227,7 +1242,7 @@
                 <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
             </div>
             <div style="margin-top: 6px;">
-                <button id="btn-open-kanban" class="secondary-btn w-full">OPEN CLI-BAN</button>
+                <button id="btn-open-kanban" class="secondary-btn is-teal w-full">OPEN CLI-BAN</button>
             </div>
         </div>
 
@@ -2272,7 +2287,6 @@
         function createWebAiAirlockPanel() {
             const container = document.createElement('div');
             container.className = 'agent-row';
-            container.style.borderLeft = '2px solid var(--vscode-button-background)';
 
             // Header
             const header = document.createElement('div');
@@ -2289,28 +2303,33 @@
             header.appendChild(identity);
             container.appendChild(header);
 
-            // Description
-            const desc = document.createElement('div');
-            desc.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
-            desc.innerText = 'Bundle your codebase for any external AI. Paste the response below and save it as a plan.';
-            container.appendChild(desc);
+            // Step 0: Intro
+            const intro = document.createElement('div');
+            intro.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
+            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.';
+            container.appendChild(intro);
 
-            // Status line
+            // Status line (hidden initially, used for feedback)
             const statusLine = document.createElement('div');
             statusLine.id = 'webai-status';
             statusLine.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
             container.appendChild(statusLine);
 
-            // Action buttons row
-            const topActions = document.createElement('div');
-            topActions.style.cssText = 'display:flex; gap:8px;';
+            // Step 1: Bundle Code
+            const s1Header = document.createElement('div');
+            s1Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s1Header.innerText = '1. BUNDLE CODE';
+            container.appendChild(s1Header);
 
-            // BUNDLE CODE button
+            const s1Desc = document.createElement('div');
+            s1Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s1Desc.innerText = 'Package your workspace into a single file.';
+            container.appendChild(s1Desc);
+
             const exportBtn = document.createElement('button');
             exportBtn.className = 'secondary-btn';
             exportBtn.id = 'webai-export-btn';
-            exportBtn.style.flex = '1';
-            exportBtn.style.minWidth = '0';
+            exportBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
             exportBtn.innerText = 'BUNDLE CODE';
             exportBtn.onclick = () => {
                 exportBtn.disabled = true;
@@ -2318,10 +2337,32 @@
                 exportBtn.classList.add('dispatching');
                 vscode.postMessage({ type: 'airlock_export' });
             };
+            container.appendChild(exportBtn);
 
-            topActions.appendChild(exportBtn);
+            // Step 2: Upload to NotebookLM
+            const s2Header = document.createElement('div');
+            s2Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s2Header.innerText = '2. UPLOAD TO NOTEBOOKLM';
+            container.appendChild(s2Header);
 
-            // OPEN FOLDER button
+            const s2Desc = document.createElement('div');
+            s2Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s2Desc.innerText = 'Open folder and upload all files in airlock folder to notebook.';
+            container.appendChild(s2Desc);
+
+            const s2BtnRow = document.createElement('div');
+            s2BtnRow.style.cssText = 'display:flex; gap:8px; padding:0 8px 8px;';
+
+            const openNotebookBtn = document.createElement('button');
+            openNotebookBtn.className = 'secondary-btn is-teal';
+            openNotebookBtn.style.flex = '1';
+            openNotebookBtn.style.minWidth = '0';
+            openNotebookBtn.innerText = 'OPEN NOTEBOOKLM';
+            openNotebookBtn.onclick = () => {
+                vscode.postMessage({ type: 'airlock_openNotebookLM' });
+            };
+            s2BtnRow.appendChild(openNotebookBtn);
+
             const openFolderBtn = document.createElement('button');
             openFolderBtn.className = 'secondary-btn';
             openFolderBtn.style.flex = '1';
@@ -2330,53 +2371,40 @@
             openFolderBtn.onclick = () => {
                 vscode.postMessage({ type: 'airlock_openFolder' });
             };
-            topActions.appendChild(openFolderBtn);
+            s2BtnRow.appendChild(openFolderBtn);
 
-            container.appendChild(topActions);
+            container.appendChild(s2BtnRow);
 
-            // Spacer
-            const spacer1 = document.createElement('div');
-            spacer1.style.height = '8px';
-            container.appendChild(spacer1);
+            // Step 3: Paste Response & Create Plan
+            const s3Header = document.createElement('div');
+            s3Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s3Header.innerText = '3. CREATE PLAN';
+            container.appendChild(s3Header);
 
-            // Plan title input
-            const titleLabel = document.createElement('div');
-            titleLabel.style.cssText = 'padding:2px 8px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono); letter-spacing:1px; text-transform:uppercase;';
-            titleLabel.innerText = 'Plan title';
-            container.appendChild(titleLabel);
+            const s3Desc = document.createElement('div');
+            s3Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s3Desc.innerText = 'Paste response.';
+            container.appendChild(s3Desc);
 
             const titleInput = document.createElement('input');
             titleInput.type = 'text';
             titleInput.id = 'airlock-title-input';
             titleInput.className = 'agent-input';
             titleInput.style.cssText = 'width:calc(100% - 16px); margin:4px 8px;';
-            titleInput.placeholder = 'e.g. Add user authentication';
+            titleInput.placeholder = 'Plan title (e.g. Add auth)';
             container.appendChild(titleInput);
 
-            // Textarea label
-            const taLabel = document.createElement('div');
-            taLabel.style.cssText = 'padding:2px 8px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono); letter-spacing:1px; text-transform:uppercase;';
-            taLabel.innerText = 'Paste AI response';
-            container.appendChild(taLabel);
-
-            // Textarea for pasting AI output
             const textarea = document.createElement('textarea');
             textarea.id = 'airlock-textarea';
             textarea.className = 'agent-input';
-            textarea.style.cssText = 'width:calc(100% - 16px); margin:4px 8px; min-height:180px; max-height:400px; resize:vertical;';
-            textarea.placeholder = 'Paste the text output from ChatGPT, Claude, Gemini, etc.';
+            textarea.style.cssText = 'width:calc(100% - 16px); margin:4px 8px; min-height:120px; max-height:400px; resize:vertical;';
+            textarea.placeholder = 'Paste response here...';
             textarea.value = _airlockTextareaValue;
             textarea.addEventListener('input', () => { _airlockTextareaValue = textarea.value; });
             container.appendChild(textarea);
 
-            // Spacer
-            const spacer2 = document.createElement('div');
-            spacer2.style.height = '6px';
-            container.appendChild(spacer2);
-
-            // SAVE PLAN button
             const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex; gap:8px; padding:0 8px 6px;';
+            btnRow.style.cssText = 'display:flex; gap:8px; padding:4px 8px 8px;';
 
             const planBtn = document.createElement('button');
             planBtn.className = 'secondary-btn';
@@ -2389,7 +2417,7 @@
                 const text = textarea.value.trim();
                 const status = document.getElementById('webai-status');
                 if (!title) { if (status) status.innerText = '⚠ Enter a plan title'; return; }
-                if (!text) { if (status) status.innerText = '⚠ Paste AI response first'; return; }
+                if (!text) { if (status) status.innerText = '⚠ Paste response first'; return; }
                 planBtn.disabled = true;
                 planBtn.innerText = 'SAVING...';
                 if (status) status.innerText = 'Saving plan...';
