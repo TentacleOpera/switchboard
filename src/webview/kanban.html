@@ -332,12 +332,24 @@
         .auto-move-bar {
             display: flex;
             align-items: center;
-            gap: 4px;
-            padding: 4px 12px 6px;
+            justify-content: space-between;
+            padding: 6px 8px 8px; /* Reduced from 12px to prevent overflow */
             background: var(--panel-bg2);
             border-bottom: 1px solid var(--border-color);
             font-family: var(--font-mono);
             font-size: 9px;
+            overflow: hidden; /* Added to keep content strictly within bounds */
+        }
+
+        .auto-move-left, .auto-move-right {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .invisible-placeholder {
+            visibility: hidden;
+            pointer-events: none;
         }
 
         .auto-move-bar input[type="number"] {
@@ -409,27 +421,30 @@
 
 <body>
     <div class="kanban-header">
-        <div class="kanban-title">⚡ CLI-BAN</div>
+        <div class="kanban-title">⚡ CLI-BAN - Drag plan cards to trigger CLI Agent actions</div>
         <button class="btn-refresh" id="btn-refresh">Refresh</button>
     </div>
     <div class="kanban-board" id="kanban-board">
         <div class="kanban-column" data-column="CREATED">
             <div class="column-header">
                 <div style="display:flex; flex-direction:column;">
-                    <div style="display:flex; align-items:center; gap:8px;">
-                        <span class="column-name">Created</span>
-                        <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
-                    </div>
-                    <div class="column-agent" id="agent-CREATED"></div>
+                    <span class="column-name">Created</span>
                 </div>
-                <span class="column-count" id="count-CREATED">0</span>
+                <div style="display: flex; align-items: center; gap: 8px;">
+                    <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
+                    <span class="column-count" id="count-CREATED">0</span>
+                </div>
             </div>
             <div class="auto-move-bar" id="automove-bar-CREATED">
-                <span class="auto-move-label">Every</span>
-                <input type="number" id="automove-interval-CREATED" min="1" max="60" value="1" title="Interval in minutes">
-                <span class="auto-move-label">min</span>
-                <button class="auto-move-btn" id="automove-btn-CREATED">START</button>
-                <span class="auto-move-timer" id="automove-timer-CREATED"></span>
+                <div class="auto-move-left">
+                    <span class="auto-move-label">Auto-move every</span>
+                    <input type="number" id="automove-interval-CREATED" min="1" max="60" value="5" title="Interval in minutes">
+                    <span class="auto-move-label">min</span>
+                </div>
+                <div class="auto-move-right">
+                    <span class="auto-move-timer" id="automove-timer-CREATED"></span>
+                    <button class="auto-move-btn" id="automove-btn-CREATED">START</button>
+                </div>
             </div>
             <div class="column-body" id="col-CREATED"></div>
         </div>
@@ -442,11 +457,15 @@
                 <span class="column-count" id="count-PLAN REVIEWED">0</span>
             </div>
             <div class="auto-move-bar" id="automove-bar-PLAN REVIEWED">
-                <span class="auto-move-label">Every</span>
-                <input type="number" id="automove-interval-PLAN REVIEWED" min="1" max="60" value="1" title="Interval in minutes">
-                <span class="auto-move-label">min</span>
-                <button class="auto-move-btn" id="automove-btn-PLAN REVIEWED">START</button>
-                <span class="auto-move-timer" id="automove-timer-PLAN REVIEWED"></span>
+                <div class="auto-move-left">
+                    <span class="auto-move-label">Auto-move every</span>
+                    <input type="number" id="automove-interval-PLAN REVIEWED" min="1" max="60" value="10" title="Interval in minutes">
+                    <span class="auto-move-label">min</span>
+                </div>
+                <div class="auto-move-right">
+                    <span class="auto-move-timer" id="automove-timer-PLAN REVIEWED"></span>
+                    <button class="auto-move-btn" id="automove-btn-PLAN REVIEWED">START</button>
+                </div>
             </div>
             <div class="column-body" id="col-PLAN REVIEWED"></div>
         </div>
@@ -456,18 +475,24 @@
                     <span class="column-name">Coded</span>
                     <div class="column-agent" id="agent-CODED"></div>
                 </div>
-                <select id="coded-target-select" class="column-select">
-                    <option value="lead">Lead Coder</option>
-                    <option value="coder">Coder</option>
-                </select>
-                <span class="column-count" id="count-CODED">0</span>
+                <div style="display: flex; align-items: center; gap: 12px;">
+                    <select id="coded-target-select" class="column-select">
+                        <option value="lead">Lead Coder</option>
+                        <option value="coder">Coder</option>
+                    </select>
+                    <span class="column-count" id="count-CODED">0</span>
+                </div>
             </div>
             <div class="auto-move-bar" id="automove-bar-CODED">
-                <span class="auto-move-label">Every</span>
-                <input type="number" id="automove-interval-CODED" min="1" max="60" value="1" title="Interval in minutes">
-                <span class="auto-move-label">min</span>
-                <button class="auto-move-btn" id="automove-btn-CODED">START</button>
-                <span class="auto-move-timer" id="automove-timer-CODED"></span>
+                <div class="auto-move-left">
+                    <span class="auto-move-label">Auto-move every</span>
+                    <input type="number" id="automove-interval-CODED" min="1" max="60" value="10" title="Interval in minutes">
+                    <span class="auto-move-label">min</span>
+                </div>
+                <div class="auto-move-right">
+                    <span class="auto-move-timer" id="automove-timer-CODED"></span>
+                    <button class="auto-move-btn" id="automove-btn-CODED">START</button>
+                </div>
             </div>
             <div class="column-body" id="col-CODED"></div>
         </div>
@@ -478,6 +503,17 @@
                     <div class="column-agent" id="agent-CODE REVIEWED"></div>
                 </div>
                 <span class="column-count" id="count-CODE REVIEWED">0</span>
+            </div>
+            <div class="auto-move-bar invisible-placeholder">
+                <div class="auto-move-left">
+                    <span class="auto-move-label">Auto-move every</span>
+                    <input type="number" min="1" max="60" value="10" title="Interval in minutes">
+                    <span class="auto-move-label">min</span>
+                </div>
+                <div class="auto-move-right">
+                    <span class="auto-move-timer"></span>
+                    <button class="auto-move-btn">START</button>
+                </div>
             </div>
             <div class="column-body" id="col-CODE REVIEWED"></div>
         </div>
@@ -496,8 +532,7 @@
         /** Map a kanban column to its assigned agent role. */
         function columnToRole(col) {
             const mapping = {
-                'CREATED': 'planner',
-                'PLAN REVIEWED': 'reviewer',
+                'PLAN REVIEWED': 'planner',
                 'CODED': currentCodedTarget,
                 'CODE REVIEWED': 'reviewer'
             };
@@ -832,7 +867,7 @@
                         vscode.postMessage({ type: 'autoMoveStop', column: col });
                     } else {
                         const inp = document.getElementById('automove-interval-' + col);
-                        const mins = parseInt(inp?.value, 10) || 1;
+                        const mins = parseInt(inp?.value, 10) || (col === 'CREATED' ? 5 : 10);
                         const intervalSeconds = Math.max(mins * 60, 30);
                         vscode.postMessage({ type: 'autoMoveStart', column: col, intervalSeconds });
                     }

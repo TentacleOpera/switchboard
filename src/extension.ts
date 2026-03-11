@@ -647,6 +647,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setupDisposable);
 
+    const initiatePlanDisposable = vscode.commands.registerCommand('switchboard.initiatePlan', () => {
+        taskViewerProvider?.revealInitiatePlanModal();
+    });
+    context.subscriptions.push(initiatePlanDisposable);
+
     const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async () => {
         await createAgentGrid();
     });

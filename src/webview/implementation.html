@@ -523,10 +523,10 @@
         /* Action Buttons */
         .action-btn {
             width: 100%;
-            background: color-mix(in srgb, var(--accent-green) 18%, transparent);
-            border: 1px solid color-mix(in srgb, var(--accent-green) 50%, transparent);
-            color: var(--accent-green);
-            text-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 30%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            text-shadow: none;
             padding: 9px;
             font-size: 11px;
             font-weight: 600;
@@ -540,10 +540,10 @@
         }
 
         .action-btn:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-green) 20%, transparent);
-            color: var(--accent-green);
-            border-color: color-mix(in srgb, var(--accent-green) 65%, transparent);
-            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-green) 35%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }
 
         .action-btn:active:not(:disabled) {
@@ -1935,6 +1935,9 @@
                         updatePlanActionStates();
                         vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
                     }
+                    break;
+                case 'openInitiatePlanModal':
+                    openInitiatePlanModal();
                     break;
                 case 'copyPlanLinkResult':
                     showCopyPlanLinkFeedback(message.success === true);

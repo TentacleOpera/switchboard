@@ -645,6 +645,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._orchestrator.restore(sessionId, secondsRemaining, stageIndex);
     }
 
+    public revealInitiatePlanModal() {
+        if (this._view) {
+            this._view.show?.(true);
+            this._view.webview.postMessage({ type: 'openInitiatePlanModal' });
+        }
+    }
+
     public async resolveWebviewView(
         webviewView: vscode.WebviewView,
         context: vscode.WebviewViewResolveContext,
