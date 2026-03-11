@@ -6,6 +6,29 @@ import { SessionActionLog } from './SessionActionLog';
 
 export type KanbanColumn = 'CREATED' | 'PLAN REVIEWED' | 'CODED' | 'CODE REVIEWED';
 
+/** Column ordering for auto-move: each column maps to its next column. */
+const NEXT_COLUMN: Record<string, KanbanColumn | null> = {
+    'CREATED': 'PLAN REVIEWED',
+    'PLAN REVIEWED': 'CODED',
+    'CODED': 'CODE REVIEWED',
+    'CODE REVIEWED': null
+};
+
+const AUTO_MOVE_MIN_INTERVAL = 30; // seconds
+
+interface AutoMoveTimer {
+    timer: NodeJS.Timeout;
+    intervalSeconds: number;
+    secondsRemaining: number;
+    isAdvancing: boolean;
+}
+
+export interface AutoMoveColumnState {
+    running: boolean;
+    intervalSeconds: number;
+    secondsRemaining: number;
+}
+
 export interface KanbanCard {
     sessionId: string;
     topic: string;
@@ -28,6 +51,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _codedColumnTarget: string;
+    private _autoMoveTimers = new Map<string, AutoMoveTimer>();
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -43,6 +67,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._stateWatcher?.dispose();
         try { this._fsSessionWatcher?.close(); } catch { }
         try { this._fsStateWatcher?.close(); } catch { }
+        this._stopAllAutoMove();
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
     }
@@ -176,6 +201,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateTarget', column: 'CODED', target: this._codedColumnTarget });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+            this._emitAutoMoveState();
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
         }
@@ -199,18 +225,18 @@ export class KanbanProvider implements vscode.Disposable {
                         const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
                         result[role] = `${name} CLI`;
                     } else {
-                        result[role] = role.toUpperCase();
+                        result[role] = 'No agent assigned';
                     }
                 }
             } else {
                 for (const role of roles) {
-                    result[role] = role.toUpperCase();
+                    result[role] = 'No agent assigned';
                 }
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to read agent names from state:', e);
             for (const role of roles) {
-                result[role] = role.toUpperCase();
+                result[role] = 'No agent assigned';
             }
         }
         return result;
@@ -327,6 +353,22 @@ export class KanbanProvider implements vscode.Disposable {
                     this._panel?.webview.postMessage({ type: 'copyPlanLinkResult', sessionId: msg.sessionId, success });
                 }
                 break;
+            case 'createPlan':
+                await vscode.commands.executeCommand('switchboard.initiatePlan');
+                break;
+            case 'autoMoveStart': {
+                const { column, intervalSeconds } = msg;
+                if (column && typeof intervalSeconds === 'number') {
+                    this._startAutoMove(column, intervalSeconds);
+                }
+                break;
+            }
+            case 'autoMoveStop': {
+                if (msg.column) {
+                    this._stopAutoMove(msg.column);
+                }
+                break;
+            }
         }
     }
 
@@ -340,6 +382,117 @@ export class KanbanProvider implements vscode.Disposable {
             case 'CODE REVIEWED': return 'reviewer';
             default: return null;
         }
+    }
+
+    // ── Auto-Move Timer Management ──────────────────────────────────────
+
+    private _startAutoMove(column: string, intervalSeconds: number) {
+        // Validate column has a next column
+        const nextCol = NEXT_COLUMN[column];
+        if (!nextCol) return;
+
+        // Enforce minimum interval
+        const interval = Math.max(intervalSeconds, AUTO_MOVE_MIN_INTERVAL);
+
+        // Stop existing timer for this column if any
+        this._stopAutoMove(column);
+
+        const state: AutoMoveTimer = {
+            timer: setInterval(() => this._autoMoveTick(column), 1000),
+            intervalSeconds: interval,
+            secondsRemaining: interval,
+            isAdvancing: false
+        };
+        this._autoMoveTimers.set(column, state);
+        this._emitAutoMoveState();
+    }
+
+    private _stopAutoMove(column: string) {
+        const existing = this._autoMoveTimers.get(column);
+        if (existing) {
+            clearInterval(existing.timer);
+            this._autoMoveTimers.delete(column);
+        }
+        this._emitAutoMoveState();
+    }
+
+    private _stopAllAutoMove() {
+        for (const [column] of this._autoMoveTimers) {
+            this._stopAutoMove(column);
+        }
+    }
+
+    private async _autoMoveTick(column: string) {
+        const state = this._autoMoveTimers.get(column);
+        if (!state || state.isAdvancing) return;
+
+        state.secondsRemaining--;
+
+        if (state.secondsRemaining <= 0) {
+            state.isAdvancing = true;
+            try {
+                const moved = await this._autoMoveOneCard(column);
+                if (!moved) {
+                    // No cards left — stop the timer
+                    this._stopAutoMove(column);
+                    return;
+                }
+            } catch (e) {
+                console.error(`[KanbanProvider] Auto-move failed for column ${column}:`, e);
+            } finally {
+                state.isAdvancing = false;
+            }
+            // Reset countdown for next card
+            state.secondsRemaining = state.intervalSeconds;
+        }
+
+        this._emitAutoMoveState();
+    }
+
+    /**
+     * Move the top (oldest) card from `sourceColumn` to its next column.
+     * Returns true if a card was moved, false if column was empty.
+     */
+    private async _autoMoveOneCard(sourceColumn: string): Promise<boolean> {
+        const nextCol = NEXT_COLUMN[sourceColumn];
+        if (!nextCol) return false;
+
+        const role = this._columnToRole(nextCol);
+        if (!role) return false;
+
+        // Get current cards
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return false;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+
+        const log = this._getSessionLog(workspaceRoot);
+        const sheets = await log.getRunSheets();
+        const cards: KanbanCard[] = sheets.map((sheet: any) => this._sheetToCard(sheet));
+
+        // Find cards in the source column, sorted by lastActivity (oldest first)
+        const columnCards = cards
+            .filter(c => c.column === sourceColumn)
+            .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
+
+        if (columnCards.length === 0) return false;
+
+        const topCard = columnCards[0];
+        await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, topCard.sessionId);
+        return true;
+    }
+
+    /** Emit the auto-move state for all columns to the webview. */
+    private _emitAutoMoveState() {
+        if (!this._panel) return;
+        const state: Record<string, AutoMoveColumnState> = {};
+        for (const [column, timer] of this._autoMoveTimers) {
+            state[column] = {
+                running: true,
+                intervalSeconds: timer.intervalSeconds,
+                secondsRemaining: timer.secondsRemaining
+            };
+        }
+        this._panel.webview.postMessage({ type: 'autoMoveState', state });
     }
 
     private async _getHtml(webview: vscode.Webview): Promise<string> {

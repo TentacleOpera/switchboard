@@ -77,6 +77,31 @@
             color: var(--accent-teal);
         }
 
+        .btn-add-plan {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: var(--accent-teal);
+            font-family: var(--font-mono);
+            font-size: 14px;
+            font-weight: bold;
+            line-height: 1;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            box-shadow: var(--glow-teal);
+        }
+
+        .btn-add-plan:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            box-shadow: 0 0 15px var(--accent-teal);
+        }
+
         .kanban-board {
             display: flex;
             gap: 12px;
@@ -302,6 +327,83 @@
             pointer-events: none;
             overflow: hidden;
         }
+
+        /* Auto-Move Controls */
+        .auto-move-bar {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+            padding: 4px 12px 6px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            font-family: var(--font-mono);
+            font-size: 9px;
+        }
+
+        .auto-move-bar input[type="number"] {
+            width: 36px;
+            padding: 2px 4px;
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 9px;
+            text-align: center;
+            outline: none;
+        }
+
+        .auto-move-bar input[type="number"]:focus {
+            border-color: var(--border-bright);
+        }
+
+        .auto-move-bar .auto-move-label {
+            color: var(--text-secondary);
+            white-space: nowrap;
+        }
+
+        .auto-move-bar .auto-move-btn {
+            padding: 1px 8px;
+            background: transparent;
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            color: var(--accent-teal);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 8px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            cursor: pointer;
+            white-space: nowrap;
+        }
+
+        .auto-move-bar .auto-move-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .auto-move-bar .auto-move-btn.is-stop {
+            border-color: color-mix(in srgb, var(--vscode-errorForeground, #f44747) 40%, transparent);
+            color: var(--vscode-errorForeground, #f44747);
+        }
+
+        .auto-move-bar .auto-move-btn.is-stop:hover {
+            background: color-mix(in srgb, var(--vscode-errorForeground, #f44747) 10%, transparent);
+        }
+
+        .auto-move-bar .auto-move-timer {
+            color: var(--accent-teal);
+            font-variant-numeric: tabular-nums;
+            min-width: 32px;
+            text-align: right;
+        }
+
+        @keyframes timerPulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .auto-move-bar .auto-move-timer.is-active {
+            animation: timerPulse 2s ease-in-out infinite;
+        }
     </style>
 </head>
 
@@ -314,10 +416,20 @@
         <div class="kanban-column" data-column="CREATED">
             <div class="column-header">
                 <div style="display:flex; flex-direction:column;">
-                    <span class="column-name">Created</span>
+                    <div style="display:flex; align-items:center; gap:8px;">
+                        <span class="column-name">Created</span>
+                        <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
+                    </div>
                     <div class="column-agent" id="agent-CREATED"></div>
                 </div>
                 <span class="column-count" id="count-CREATED">0</span>
+            </div>
+            <div class="auto-move-bar" id="automove-bar-CREATED">
+                <span class="auto-move-label">Every</span>
+                <input type="number" id="automove-interval-CREATED" min="1" max="60" value="1" title="Interval in minutes">
+                <span class="auto-move-label">min</span>
+                <button class="auto-move-btn" id="automove-btn-CREATED">START</button>
+                <span class="auto-move-timer" id="automove-timer-CREATED"></span>
             </div>
             <div class="column-body" id="col-CREATED"></div>
         </div>
@@ -328,6 +440,13 @@
                     <div class="column-agent" id="agent-PLAN REVIEWED"></div>
                 </div>
                 <span class="column-count" id="count-PLAN REVIEWED">0</span>
+            </div>
+            <div class="auto-move-bar" id="automove-bar-PLAN REVIEWED">
+                <span class="auto-move-label">Every</span>
+                <input type="number" id="automove-interval-PLAN REVIEWED" min="1" max="60" value="1" title="Interval in minutes">
+                <span class="auto-move-label">min</span>
+                <button class="auto-move-btn" id="automove-btn-PLAN REVIEWED">START</button>
+                <span class="auto-move-timer" id="automove-timer-PLAN REVIEWED"></span>
             </div>
             <div class="column-body" id="col-PLAN REVIEWED"></div>
         </div>
@@ -342,6 +461,13 @@
                     <option value="coder">Coder</option>
                 </select>
                 <span class="column-count" id="count-CODED">0</span>
+            </div>
+            <div class="auto-move-bar" id="automove-bar-CODED">
+                <span class="auto-move-label">Every</span>
+                <input type="number" id="automove-interval-CODED" min="1" max="60" value="1" title="Interval in minutes">
+                <span class="auto-move-label">min</span>
+                <button class="auto-move-btn" id="automove-btn-CODED">START</button>
+                <span class="auto-move-timer" id="automove-timer-CODED"></span>
             </div>
             <div class="column-body" id="col-CODED"></div>
         </div>
@@ -364,6 +490,8 @@
         let lastAgentNames = {};
         let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
         let currentCodedTarget = 'lead';
+        let autoMoveState = {}; // { 'CREATED': { running, intervalSeconds, secondsRemaining }, ... }
+        const autoMoveColumns = ['CREATED', 'PLAN REVIEWED', 'CODED'];
 
         /** Map a kanban column to its assigned agent role. */
         function columnToRole(col) {
@@ -390,12 +518,12 @@
                 const el = document.getElementById('agent-' + col);
                 if (el) {
                     const role = columnToRole(col);
-                    if (role && lastVisibleAgents[role] === false) {
+                    const name = lastAgentNames[role];
+                    if (role && (lastVisibleAgents[role] === false || name === 'No agent assigned')) {
                         el.textContent = 'No agent assigned';
                         el.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
                         el.style.fontStyle = 'italic';
                     } else {
-                        const name = lastAgentNames[role];
                         el.textContent = name || '';
                         el.style.color = '';
                         el.style.fontStyle = '';
@@ -651,11 +779,73 @@
                         }
                     }
                     break;
+                case 'autoMoveState':
+                    autoMoveState = msg.state || {};
+                    updateAutoMoveUI();
+                    break;
+            }
+        });
+
+        /** Format seconds as MM:SS */
+        function formatCountdown(secs) {
+            const m = Math.floor(secs / 60);
+            const s = secs % 60;
+            return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
+        }
+
+        /** Update all auto-move bar UIs based on current state. */
+        function updateAutoMoveUI() {
+            autoMoveColumns.forEach(col => {
+                const btn = document.getElementById('automove-btn-' + col);
+                const inp = document.getElementById('automove-interval-' + col);
+                const timerEl = document.getElementById('automove-timer-' + col);
+                if (!btn || !inp || !timerEl) return;
+
+                const colState = autoMoveState[col];
+                if (colState && colState.running) {
+                    btn.textContent = 'STOP';
+                    btn.classList.add('is-stop');
+                    btn.classList.remove('auto-move-btn');
+                    btn.className = 'auto-move-btn is-stop';
+                    inp.disabled = true;
+                    inp.style.opacity = '0.4';
+                    timerEl.textContent = formatCountdown(colState.secondsRemaining);
+                    timerEl.classList.add('is-active');
+                } else {
+                    btn.textContent = 'START';
+                    btn.className = 'auto-move-btn';
+                    inp.disabled = false;
+                    inp.style.opacity = '1';
+                    timerEl.textContent = '';
+                    timerEl.classList.remove('is-active');
+                }
+            });
+        }
+
+        /** Wire up auto-move button click handlers for each column. */
+        autoMoveColumns.forEach(col => {
+            const btn = document.getElementById('automove-btn-' + col);
+            if (btn) {
+                btn.addEventListener('click', () => {
+                    const colState = autoMoveState[col];
+                    if (colState && colState.running) {
+                        vscode.postMessage({ type: 'autoMoveStop', column: col });
+                    } else {
+                        const inp = document.getElementById('automove-interval-' + col);
+                        const mins = parseInt(inp?.value, 10) || 1;
+                        const intervalSeconds = Math.max(mins * 60, 30);
+                        vscode.postMessage({ type: 'autoMoveStart', column: col, intervalSeconds });
+                    }
+                });
             }
         });
 
         document.getElementById('btn-refresh').addEventListener('click', () => {
             vscode.postMessage({ type: 'refresh' });
+        });
+
+        document.getElementById('btn-add-plan').addEventListener('click', () => {
+            vscode.postMessage({ type: 'createPlan' });
         });
 
         const codedTargetSelect = document.getElementById('coded-target-select');
