@@ -23,7 +23,9 @@ export class KanbanProvider implements vscode.Disposable {
     private _disposables: vscode.Disposable[] = [];
     private _sessionLog?: SessionActionLog;
     private _sessionWatcher?: vscode.FileSystemWatcher;
+    private _stateWatcher?: vscode.FileSystemWatcher;
     private _fsSessionWatcher?: fs.FSWatcher;
+    private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _codedColumnTarget: string;
 
@@ -38,7 +40,9 @@ export class KanbanProvider implements vscode.Disposable {
         this._panel?.dispose();
         if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
         this._sessionWatcher?.dispose();
+        this._stateWatcher?.dispose();
         try { this._fsSessionWatcher?.close(); } catch { }
+        try { this._fsStateWatcher?.close(); } catch { }
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
     }
@@ -91,30 +95,45 @@ export class KanbanProvider implements vscode.Disposable {
      */
     private _setupSessionWatcher() {
         this._sessionWatcher?.dispose();
+        this._stateWatcher?.dispose();
         try { this._fsSessionWatcher?.close(); } catch { }
+        try { this._fsStateWatcher?.close(); } catch { }
 
         const debouncedRefresh = () => {
             if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
             this._refreshDebounceTimer = setTimeout(() => this._refreshBoard(), 300);
         };
 
-        // VS Code file system watcher
+        // VS Code file system watchers
         this._sessionWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/sessions/*.json');
         this._sessionWatcher.onDidCreate(debouncedRefresh);
         this._sessionWatcher.onDidChange(debouncedRefresh);
         this._sessionWatcher.onDidDelete(debouncedRefresh);
+
+        this._stateWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/state.json');
+        this._stateWatcher.onDidCreate(debouncedRefresh);
+        this._stateWatcher.onDidChange(debouncedRefresh);
+        this._stateWatcher.onDidDelete(debouncedRefresh);
 
         // Native fs.watch fallback — VS Code's createFileSystemWatcher can miss
         // gitignored directories (.switchboard is gitignored).
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (workspaceRoot) {
             const sessionsDir = path.join(workspaceRoot, '.switchboard', 'sessions');
+            const stateFile = path.join(workspaceRoot, '.switchboard', 'state.json');
             try {
                 if (!fs.existsSync(sessionsDir)) {
                     fs.mkdirSync(sessionsDir, { recursive: true });
                 }
                 this._fsSessionWatcher = fs.watch(sessionsDir, (_eventType, filename) => {
                     if (filename && filename.toString().endsWith('.json')) {
+                        debouncedRefresh();
+                    }
+                });
+
+                const sbDir = path.join(workspaceRoot, '.switchboard');
+                this._fsStateWatcher = fs.watch(sbDir, (_eventType, filename) => {
+                    if (filename && filename.toString() === 'state.json') {
                         debouncedRefresh();
                     }
                 });
@@ -150,11 +169,75 @@ export class KanbanProvider implements vscode.Disposable {
             const sheets = await log.getRunSheets();
             const cards: KanbanCard[] = sheets.map((sheet: any) => this._sheetToCard(sheet));
 
+            const agentNames = await this._getAgentNames(workspaceRoot);
+            const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+
             this._panel.webview.postMessage({ type: 'updateBoard', cards });
             this._panel.webview.postMessage({ type: 'updateTarget', column: 'CODED', target: this._codedColumnTarget });
+            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
+            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
         }
+    }
+
+    private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst'];
+        const result: Record<string, string> = {};
+
+        try {
+            if (fs.existsSync(statePath)) {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+                const commands = state.startupCommands || {};
+
+                for (const role of roles) {
+                    const cmd = (commands[role] || '').trim();
+                    if (cmd) {
+                        const binary = cmd.split(/\s+/)[0];
+                        const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
+                        result[role] = `${name} CLI`;
+                    } else {
+                        result[role] = role.toUpperCase();
+                    }
+                }
+            } else {
+                for (const role of roles) {
+                    result[role] = role.toUpperCase();
+                }
+            }
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to read agent names from state:', e);
+            for (const role of roles) {
+                result[role] = role.toUpperCase();
+            }
+        }
+        return result;
+    }
+
+    private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
+        const defaults: Record<string, boolean> = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            if (fs.existsSync(statePath)) {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+                return { ...defaults, ...state.visibleAgents };
+            }
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to read visible agents from state:', e);
+        }
+        return defaults;
+    }
+
+    /** Send current visible agents to the kanban webview panel. */
+    public async sendVisibleAgents() {
+        if (!this._panel) return;
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        const visibleAgents = await this._getVisibleAgents(workspaceFolders[0].uri.fsPath);
+        this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
     }
 
     /**
@@ -208,6 +291,14 @@ export class KanbanProvider implements vscode.Disposable {
                 const { sessionId, targetColumn } = msg;
                 const role = this._columnToRole(targetColumn);
                 if (role) {
+                    // Reject if the target agent is hidden
+                    const workspaceFolders = vscode.workspace.workspaceFolders;
+                    if (workspaceFolders) {
+                        const visibleAgents = await this._getVisibleAgents(workspaceFolders[0].uri.fsPath);
+                        if (visibleAgents[role] === false) {
+                            break;
+                        }
+                    }
                     await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId);
                 }
                 break;

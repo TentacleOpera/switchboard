@@ -114,6 +114,16 @@
             color: var(--text-secondary);
         }
 
+        .column-agent {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+            text-transform: uppercase;
+            opacity: 0.8;
+            letter-spacing: 0.5px;
+        }
+
         .column-count {
             font-family: var(--font-mono);
             font-size: 10px;
@@ -303,21 +313,30 @@
     <div class="kanban-board" id="kanban-board">
         <div class="kanban-column" data-column="CREATED">
             <div class="column-header">
-                <span class="column-name">Created</span>
+                <div style="display:flex; flex-direction:column;">
+                    <span class="column-name">Created</span>
+                    <div class="column-agent" id="agent-CREATED"></div>
+                </div>
                 <span class="column-count" id="count-CREATED">0</span>
             </div>
             <div class="column-body" id="col-CREATED"></div>
         </div>
         <div class="kanban-column" data-column="PLAN REVIEWED">
             <div class="column-header">
-                <span class="column-name">Plan Reviewed</span>
+                <div style="display:flex; flex-direction:column;">
+                    <span class="column-name">Plan Reviewed</span>
+                    <div class="column-agent" id="agent-PLAN REVIEWED"></div>
+                </div>
                 <span class="column-count" id="count-PLAN REVIEWED">0</span>
             </div>
             <div class="column-body" id="col-PLAN REVIEWED"></div>
         </div>
         <div class="kanban-column" data-column="CODED">
             <div class="column-header">
-                <span class="column-name">Coded</span>
+                <div style="display:flex; flex-direction:column;">
+                    <span class="column-name">Coded</span>
+                    <div class="column-agent" id="agent-CODED"></div>
+                </div>
                 <select id="coded-target-select" class="column-select">
                     <option value="lead">Lead Coder</option>
                     <option value="coder">Coder</option>
@@ -328,7 +347,10 @@
         </div>
         <div class="kanban-column" data-column="CODE REVIEWED">
             <div class="column-header">
-                <span class="column-name">Code Reviewed</span>
+                <div style="display:flex; flex-direction:column;">
+                    <span class="column-name">Code Reviewed</span>
+                    <div class="column-agent" id="agent-CODE REVIEWED"></div>
+                </div>
                 <span class="column-count" id="count-CODE REVIEWED">0</span>
             </div>
             <div class="column-body" id="col-CODE REVIEWED"></div>
@@ -339,6 +361,48 @@
         const vscode = acquireVsCodeApi();
         const columns = ['CREATED', 'PLAN REVIEWED', 'CODED', 'CODE REVIEWED'];
         let currentCards = [];
+        let lastAgentNames = {};
+        let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        let currentCodedTarget = 'lead';
+
+        /** Map a kanban column to its assigned agent role. */
+        function columnToRole(col) {
+            const mapping = {
+                'CREATED': 'planner',
+                'PLAN REVIEWED': 'reviewer',
+                'CODED': currentCodedTarget,
+                'CODE REVIEWED': 'reviewer'
+            };
+            return mapping[col] || null;
+        }
+
+        /** Check if a column's agent is visible (enabled). */
+        function isColumnAgentVisible(col) {
+            const role = columnToRole(col);
+            if (!role) return true;
+            return lastVisibleAgents[role] !== false;
+        }
+
+        function updateAllColumnAgents() {
+            if (!lastAgentNames) return;
+
+            columns.forEach(col => {
+                const el = document.getElementById('agent-' + col);
+                if (el) {
+                    const role = columnToRole(col);
+                    if (role && lastVisibleAgents[role] === false) {
+                        el.textContent = 'No agent assigned';
+                        el.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                        el.style.fontStyle = 'italic';
+                    } else {
+                        const name = lastAgentNames[role];
+                        el.textContent = name || '';
+                        el.style.color = '';
+                        el.style.fontStyle = '';
+                    }
+                }
+            });
+        }
 
         function renderBoard(cards) {
             currentCards = cards;
@@ -455,7 +519,8 @@
 
         function handleDragOver(e) {
             e.preventDefault();
-            e.dataTransfer.dropEffect = 'move';
+            const col = e.currentTarget.closest('.kanban-column')?.dataset?.column;
+            e.dataTransfer.dropEffect = (col && !isColumnAgentVisible(col)) ? 'none' : 'move';
         }
 
         function handleDragEnter(e) {
@@ -479,6 +544,19 @@
             e.currentTarget.classList.remove('drag-over');
             const sessionId = e.dataTransfer.getData('text/plain');
             if (!sessionId) return;
+
+            // Reject drop if the target column's agent is hidden
+            if (!isColumnAgentVisible(targetColumn)) {
+                const agentEl = document.getElementById('agent-' + targetColumn);
+                if (agentEl) {
+                    agentEl.style.transition = 'color 0.15s';
+                    agentEl.style.color = 'var(--vscode-errorForeground, #f44747)';
+                    setTimeout(() => {
+                        agentEl.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                    }, 800);
+                }
+                return;
+            }
 
             // Find current column of the card
             const card = currentCards.find(c => c.sessionId === sessionId);
@@ -538,6 +616,18 @@
                     if (msg.column === 'CODED' && msg.target) {
                         const selectEl = document.getElementById('coded-target-select');
                         if (selectEl) selectEl.value = msg.target;
+                        currentCodedTarget = msg.target;
+                        updateAllColumnAgents();
+                    }
+                    break;
+                case 'updateAgentNames':
+                    lastAgentNames = msg.agentNames || {};
+                    updateAllColumnAgents();
+                    break;
+                case 'visibleAgents':
+                    if (msg.agents) {
+                        lastVisibleAgents = { ...lastVisibleAgents, ...msg.agents };
+                        updateAllColumnAgents();
                     }
                     break;
                 case 'copyPlanLinkResult':
@@ -571,6 +661,8 @@
         const codedTargetSelect = document.getElementById('coded-target-select');
         if (codedTargetSelect) {
             codedTargetSelect.addEventListener('change', (e) => {
+                currentCodedTarget = e.target.value;
+                updateAllColumnAgents();
                 vscode.postMessage({ type: 'setColumnTarget', column: 'CODED', target: e.target.value });
             });
         }

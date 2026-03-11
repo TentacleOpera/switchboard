@@ -1188,16 +1188,28 @@
             <div style="padding: 16px;">
                 <div class="section-label" style="margin-bottom: 12px;">CONFIGURE CLI AGENTS</div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
-                    Set commands for each agent role. Leave empty to skip.
+                    Set commands for each agent role. Uncheck to hide an agent from the sidebar. Leave command empty to skip.
                 </div>
-                <div class="startup-row"><label>Lead Coder</label><input type="text" id="onboard-cli-lead"
-                        placeholder="e.g. copilot --allow-all-tools"></div>
-                <div class="startup-row"><label>Coder</label><input type="text" id="onboard-cli-coder"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Reviewer</label><input type="text" id="onboard-cli-reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Analyst</label><input type="text" id="onboard-cli-analyst"
-                        placeholder="e.g. qwen"></div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="lead" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Lead Coder</label><input type="text" id="onboard-cli-lead"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="coder" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Coder</label><input type="text" id="onboard-cli-coder"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="reviewer" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Reviewer</label><input type="text" id="onboard-cli-reviewer"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Analyst</label><input type="text" id="onboard-cli-analyst"
+                        placeholder="e.g. qwen" style="flex:1;">
+                </div>
                 <div style="margin-top: 12px; display: flex; gap: 8px;">
                     <button id="btn-onboard-save" class="secondary-btn w-full"
                         style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">SAVE
@@ -1300,24 +1312,40 @@
                 <div class="flex gap-2">
                     <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>       
                     <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>      
-                </div>                <div class="startup-row"><label>Lead Coder</label><input type="text" data-role="lead"
-                        placeholder="e.g. copilot --allow-all-tools"></div>
-                <div class="startup-row"><label>Coder</label><input type="text" data-role="coder"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Reviewer</label><input type="text" data-role="reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Planner</label><input type="text" data-role="planner"
-                        placeholder="e.g. gemini --approval-mode auto_edit"></div>
-                <div class="startup-row"><label>Analyst</label><input type="text" data-role="analyst"
-                        placeholder="e.g. qwen"></div>
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">AGENT VISIBILITY &amp; CLI COMMANDS</div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="coder" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Coder</label><input type="text" data-role="coder"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
+                        placeholder="e.g. qwen" style="flex:1;">
+                </div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
                     <span>Accurate coding mode for Coder prompts</span>
                 </label>
                 <button id="btn-save-startup" class="secondary-btn w-full"
                     style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE
-                    STARTUP
-                    COMMANDS</button>
+                    CONFIGURATION</button>
 
             </div>
         </div>
@@ -1621,8 +1649,11 @@
                 if (fields && chevron) {
                     const isOpen = fields.classList.toggle('open');
                     chevron.classList.toggle('open', isOpen);
-                    if (isOpen) vscode.postMessage({ type: 'getStartupCommands' });
-                    if (isOpen) vscode.postMessage({ type: 'getAccurateCodingSetting' });
+                    if (isOpen) {
+                        vscode.postMessage({ type: 'getStartupCommands' });
+                        vscode.postMessage({ type: 'getAccurateCodingSetting' });
+                        vscode.postMessage({ type: 'getVisibleAgents' });
+                    }
                 }
             });
         }
@@ -1631,17 +1662,24 @@
         if (btnSaveStartup) {
             btnSaveStartup.addEventListener('click', () => {
                 const commands = { ...lastStartupCommands };
-                document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
+                document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
                     const role = input.dataset.role;
                     const value = input.value.trim();
                     if (!role) return;
                     if (value) commands[role] = value;
                     else delete commands[role];
                 });
+                const visibleAgents = {};
+                document.querySelectorAll('#startup-fields .agent-visible-toggle').forEach(cb => {
+                    const role = cb.dataset.role;
+                    if (role) visibleAgents[role] = cb.checked;
+                });
                 const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-                vscode.postMessage({ type: 'saveStartupCommands', commands, accurateCodingEnabled });
+                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled });
+                lastVisibleAgents = visibleAgents;
+                renderAgentList();
                 btnSaveStartup.textContent = 'SAVED';
-                setTimeout(() => { btnSaveStartup.textContent = 'SAVE STARTUP COMMANDS'; }, 1500);
+                setTimeout(() => { btnSaveStartup.textContent = 'SAVE CONFIGURATION'; }, 1500);
             });
         }
 
@@ -1686,6 +1724,7 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
+        let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
         let lastOrchestratorState = null;
         let lastPipelineState = null;
         let orchIntervalSeconds = 300;
@@ -1918,9 +1957,19 @@
                 case 'startupCommands':
                     if (message.commands) {
                         lastStartupCommands = message.commands;
-                        document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
+                        document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
                             input.value = message.commands[input.dataset.role] || '';
                         });
+                    }
+                    break;
+                case 'visibleAgents':
+                    if (message.agents) {
+                        lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
+                        document.querySelectorAll('#startup-fields .agent-visible-toggle').forEach(cb => {
+                            const role = cb.dataset.role;
+                            if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
+                        });
+                        renderAgentList();
                     }
                     break;
                 case 'accurateCodingSetting': {
@@ -2198,52 +2247,74 @@
             }
 
             // === AGENTS TAB: Lead Coder, Coder, Planner, Reviewer, Analyst ===
+            // Filter agents based on visibility preferences
+            const va = lastVisibleAgents;
 
             // 1. Lead Coder
-            agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
-                'START CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
-            ));
+            if (va.lead !== false) {
+                agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+                ));
+            }
 
             // 2. Coder
-            agentListStandard.appendChild(createAgentRow('CODER', 'coder',
-                'START CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
-            ));
+            if (va.coder !== false) {
+                agentListStandard.appendChild(createAgentRow('CODER', 'coder',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+                ));
+            }
 
             // 3. Planner
-            agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
-                'IMPROVE PLAN',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
-            ));
+            if (va.planner !== false) {
+                agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
+                    'IMPROVE PLAN',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
+                ));
+            }
 
             // 4. Reviewer
-            agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
-                'REVIEW CODE',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
-            ));
+            if (va.reviewer !== false) {
+                agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
+                    'REVIEW CODE',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
+                ));
+            }
 
             // 5. Analyst
-            agentListStandard.appendChild(createAnalystRow());
-            // Restore analyst input state after re-render
-            if (analystSnapshot.value || analystSnapshot.focused) {
-                const inp = document.getElementById('analyst-input');
-                if (inp) {
-                    inp.value = analystSnapshot.value;
-                    if (analystSnapshot.focused) {
-                        inp.focus();
-                        inp.selectionStart = analystSnapshot.selStart;
-                        inp.selectionEnd = analystSnapshot.selEnd;
+            if (va.analyst !== false) {
+                agentListStandard.appendChild(createAnalystRow());
+                // Restore analyst input state after re-render
+                if (analystSnapshot.value || analystSnapshot.focused) {
+                    const inp = document.getElementById('analyst-input');
+                    if (inp) {
+                        inp.value = analystSnapshot.value;
+                        if (analystSnapshot.focused) {
+                            inp.focus();
+                            inp.selectionStart = analystSnapshot.selStart;
+                            inp.selectionEnd = analystSnapshot.selEnd;
+                        }
                     }
                 }
             }
 
             // 6. Jules
-            agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
-                'START CLOUD CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
-                true
-            ));
+            if (va.jules !== false) {
+                agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
+                    'START CLOUD CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
+                    true
+                ));
+            }
+
+            // Show empty state if all agents are hidden
+            if (agentListStandard.children.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.style.cssText = 'text-align:center; padding:20px; color:var(--text-secondary); font-family:var(--font-mono); font-size:11px;';
+                emptyMsg.textContent = 'All agents hidden. Open Setup to configure.';
+                agentListStandard.appendChild(emptyMsg);
+            }
 
             // === AUTO TAB: Auto-Agent, Lead Coder + Coder (Team) ===
 
@@ -3280,7 +3351,13 @@
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
                 analyst: document.getElementById('onboard-cli-analyst').value
             };
-            vscode.postMessage({ type: 'saveStartupCommands', commands: agents, accurateCodingEnabled: false });
+            const visibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+            document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
+                const role = cb.dataset.role;
+                if (role) visibleAgents[role] = cb.checked;
+            });
+            lastVisibleAgents = visibleAgents;
+            vscode.postMessage({ type: 'saveStartupCommands', commands: agents, visibleAgents, accurateCodingEnabled: false });
             setTimeout(() => {
                 vscode.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
             }, 100);

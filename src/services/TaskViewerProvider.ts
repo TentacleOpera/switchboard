@@ -547,6 +547,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    public async getVisibleAgents(): Promise<Record<string, boolean>> {
+        const defaults: Record<string, boolean> = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return defaults;
+        const statePath = path.join(workspaceFolders[0].uri.fsPath, '.switchboard', 'state.json');
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return { ...defaults, ...state.visibleAgents };
+        } catch {
+            return defaults;
+        }
+    }
+
 
     private _sendInitialState() {
         const activeTab = this._context.workspaceState.get<string>(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, 'agents');
@@ -695,6 +709,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         {
                             const cmds = await this.getStartupCommands();
                             this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds });
+                            const vis = await this.getVisibleAgents();
+                            this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
                         }
                         this._view?.webview.postMessage({ type: 'loading', value: false });
                         break;
@@ -882,6 +898,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 state.startupCommands = data.commands;
                             });
                         }
+                        if (data.visibleAgents && typeof data.visibleAgents === 'object') {
+                            await this.updateState(async (state: any) => {
+                                state.visibleAgents = data.visibleAgents;
+                            });
+                            // Notify kanban board of visibility change
+                            this._kanbanProvider?.sendVisibleAgents();
+                        }
                         if (typeof data.accurateCodingEnabled === 'boolean') {
                             await vscode.workspace.getConfiguration('switchboard').update(
                                 'accurateCoding.enabled',
@@ -893,6 +916,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'getStartupCommands': {
                         const cmds = await this.getStartupCommands();
                         this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds });
+                        break;
+                    }
+                    case 'getVisibleAgents': {
+                        const vis = await this.getVisibleAgents();
+                        this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
                         break;
                     }
                     case 'getAccurateCodingSetting': {
@@ -1659,21 +1687,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             delete sheet.completedAt;
             if (brainSourcePath) {
                 sheet.brainSourcePath = brainSourcePath;
-                // Also restore the mirror file from archive so planFile remains valid
-                if (typeof sheet.planFile === 'string') {
-                    const mirrorAbsPath = path.isAbsolute(sheet.planFile)
-                        ? sheet.planFile
-                        : path.join(workspaceRoot, sheet.planFile);
-                    if (!fs.existsSync(mirrorAbsPath)) {
-                        const archivedMirrorPath = path.join(workspaceRoot, '.switchboard', 'archive', 'plans', path.basename(mirrorAbsPath));
-                        if (fs.existsSync(archivedMirrorPath)) {
-                            await fs.promises.mkdir(path.dirname(mirrorAbsPath), { recursive: true });
-                            await fs.promises.copyFile(archivedMirrorPath, mirrorAbsPath);
-                            console.log(`[TaskViewerProvider] Restored mirror file from archive: ${path.basename(mirrorAbsPath)}`);
-                        }
+            }
+
+            // Also restore the plan file from archive so planFile remains valid
+            if (typeof sheet.planFile === 'string') {
+                const mirrorAbsPath = path.isAbsolute(sheet.planFile)
+                    ? sheet.planFile
+                    : path.join(workspaceRoot, sheet.planFile);
+                if (!fs.existsSync(mirrorAbsPath)) {
+                    const archivedMirrorPath = path.join(workspaceRoot, '.switchboard', 'archive', 'plans', path.basename(mirrorAbsPath));
+                    if (fs.existsSync(archivedMirrorPath)) {
+                        await fs.promises.mkdir(path.dirname(mirrorAbsPath), { recursive: true });
+                        await fs.promises.copyFile(archivedMirrorPath, mirrorAbsPath);
+                        console.log(`[TaskViewerProvider] Restored plan file from archive: ${path.basename(mirrorAbsPath)}`);
                     }
                 }
             }
+
             await fs.promises.mkdir(sessionsDir, { recursive: true });
             await fs.promises.writeFile(activeRunSheetPath, JSON.stringify(sheet, null, 2));
             console.log(`[TaskViewerProvider] Restored run sheet: ${sessionId}`);
