@@ -81,6 +81,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _recentActionDispatches = new Map<string, NodeJS.Timeout>(); // short TTL dedupe for sidebar actions
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
+    private _sessionWatcher?: vscode.FileSystemWatcher;
+    private _fsSessionWatcher?: fs.FSWatcher;
     private _refreshTimeout?: NodeJS.Timeout;
     private _julesStatusPollTimer?: NodeJS.Timeout;
     private _isRefreshingJules: boolean = false;
@@ -158,6 +160,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         );
         this._setupStateWatcher();
         this._setupPlanWatcher();
+        this._setupSessionWatcher();
         this._setupGitCommitWatcher();
         // Initialize ownership registry before brain watcher (async, fire-and-forget)
         this._ensureOwnershipRegistryInitialized().then(() => {
@@ -520,8 +523,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /** Called by the Kanban board to trigger an agent action on a plan session. */
-    public async handleKanbanTrigger(role: string, sessionId: string) {
-        await this._handleTriggerAgentAction(role, sessionId);
+    public async handleKanbanTrigger(role: string, sessionId: string, instruction?: string) {
+        await this._handleTriggerAgentAction(role, sessionId, instruction);
     }
 
     /** Called by the Kanban board to mark a plan as complete. */
@@ -919,6 +922,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 vscode.ConfigurationTarget.Workspace
                             );
                         }
+                        if (data.onboardingComplete === true) {
+                            this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
+                        }
                         break;
                     case 'getStartupCommands': {
                         const cmds = await this.getStartupCommands();
@@ -1188,6 +1194,46 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
 
         this._fsPlansWatcher = watchPlanDirectory(plansRootDir);
+    }
+
+    private _setupSessionWatcher() {
+        if (this._sessionWatcher) {
+            this._sessionWatcher.dispose();
+        }
+        try { this._fsSessionWatcher?.close(); } catch { }
+
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const sessionsDir = path.join(workspaceRoot, '.switchboard', 'sessions');
+
+        if (!fs.existsSync(sessionsDir)) {
+            try { fs.mkdirSync(sessionsDir, { recursive: true }); } catch { }
+        }
+
+        let sessionSyncTimer: NodeJS.Timeout | undefined;
+        const debouncedSessionSync = () => {
+            if (sessionSyncTimer) clearTimeout(sessionSyncTimer);
+            sessionSyncTimer = setTimeout(() => this._refreshRunSheets(), 300);
+        };
+
+        this._sessionWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/sessions/*.json');
+        this._sessionWatcher.onDidCreate(() => debouncedSessionSync());
+        this._sessionWatcher.onDidChange(() => debouncedSessionSync());
+        this._sessionWatcher.onDidDelete(() => debouncedSessionSync());
+
+        const watchSessionDirectory = (dir: string): fs.FSWatcher | undefined => {
+            try {
+                return fs.watch(dir, (_eventType, filename) => {
+                    if (!filename || !filename.toString().endsWith('.json')) return;
+                    debouncedSessionSync();
+                });
+            } catch (e) {
+                console.error(`[TaskViewerProvider] fs.watch fallback failed for '${dir}':`, e);
+                return undefined;
+            }
+        };
+        this._fsSessionWatcher = watchSessionDirectory(sessionsDir);
     }
 
     private _setupBrainWatcher() {
@@ -2714,11 +2760,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /** Called by the Kanban board to copy a plan link to clipboard. Returns true on success. */
-    public async handleKanbanCopyPlan(sessionId: string): Promise<boolean> {
-        return await this._handleCopyPlanLink(sessionId);
+    public async handleKanbanCopyPlan(sessionId: string, column?: string): Promise<boolean> {
+        return await this._handleCopyPlanLink(sessionId, column);
     }
 
-    private async _handleCopyPlanLink(sessionId: string): Promise<boolean> {
+    private async _handleCopyPlanLink(sessionId: string, column?: string): Promise<boolean> {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return false;
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
@@ -2747,7 +2793,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             const planUri = vscode.Uri.file(planPathAbsolute).toString();
             const markdownLink = `[${topic}](${planUri})`;
-            await vscode.env.clipboard.writeText(markdownLink);
+            let textToCopy = markdownLink;
+            if (column === 'CREATED') {
+                textToCopy = `Please review and enhance the following plan. Execute the .agent/workflows/enhance.md workflow to break it down into distinct steps grouped by high complexity and low complexity:\n\n${markdownLink}`;
+            } else if (column === 'PLAN REVIEWED') {
+                textToCopy = `Please execute the following plan. Use the linked file as the single source of truth:\n\n${markdownLink}`;
+            } else if (column === 'CODED') {
+                textToCopy = `The implementation for the following plan is complete. Please review the code against the plan requirements and identify any defects:\n\n${markdownLink}`;
+            }
+
+            await vscode.env.clipboard.writeText(textToCopy);
             this._view?.webview.postMessage({ type: 'copyPlanLinkResult', success: true });
             return true;
         } catch (e: any) {
@@ -3473,7 +3528,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (!found && termInfo) {
                     for (const t of activeTerminals) {
                         try {
-                            const tPid = await this._waitWithTimeout(t.processId, 1000, undefined);
+                            const tPid = await this._waitWithTimeout(t.processId, 5000, undefined);
                             if (tPid === termInfo.pid || tPid === termInfo.childPid) {
                                 found = t;
                                 break;
@@ -3615,7 +3670,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // 1. Gather PIDs
         const terminalData: { terminal: vscode.Terminal; pid: number | undefined }[] = [];
         for (const terminal of openTerminals) {
-            const pid = await this._waitWithTimeout(terminal.processId, 1000, undefined);
+            const pid = await this._waitWithTimeout(terminal.processId, 5000, undefined);
             terminalData.push({ terminal, pid });
         }
 
@@ -3642,6 +3697,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // Update existing entry
                     state.terminals[existingName].lastSeen = new Date().toISOString();
                     state.terminals[existingName].friendlyName = rawName;
+                    
+                    if (state.terminals[existingName].role === 'none') {
+                        const lowerName = rawName.toLowerCase();
+                        let autoRole = 'none';
+
+                        const startupCommands = await this.getStartupCommands();
+                        for (const [role, cmd] of Object.entries(startupCommands)) {
+                            if (cmd) {
+                                const cmdBase = cmd.toLowerCase().trim().split(' ')[0];
+                                if (cmdBase && lowerName.includes(cmdBase)) {
+                                    autoRole = role;
+                                    break;
+                                }
+                            }
+                        }
+
+                        if (autoRole === 'none') {
+                            if (lowerName.includes('lead')) autoRole = 'lead';
+                            else if (lowerName.includes('reviewer')) autoRole = 'reviewer';
+                            else if (lowerName.includes('planner')) autoRole = 'planner';
+                            else if (lowerName.includes('coder')) autoRole = 'coder';
+                            else if (lowerName.includes('analyst')) autoRole = 'analyst';
+                        }
+                        state.terminals[existingName].role = autoRole;
+                    }
 
                     if (this._registeredTerminals) {
                         this._registeredTerminals.set(existingName, terminal);
@@ -3660,11 +3740,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Auto-detect role from name
                 const lowerName = rawName.toLowerCase();
                 let autoRole = 'none';
-                if (lowerName.includes('coder')) autoRole = 'coder';
-                else if (lowerName.includes('reviewer')) autoRole = 'reviewer';
-                else if (lowerName.includes('planner')) autoRole = 'planner';
-                else if (lowerName.includes('lead')) autoRole = 'lead';
-                else if (lowerName.includes('analyst')) autoRole = 'analyst';
+
+                const startupCommands = await this.getStartupCommands();
+                for (const [role, cmd] of Object.entries(startupCommands)) {
+                    if (cmd && lowerName.includes(cmd.toLowerCase().trim())) {
+                        autoRole = role;
+                        break;
+                    }
+                }
+
+                if (autoRole === 'none') {
+                    if (lowerName.includes('coder')) autoRole = 'coder';
+                    else if (lowerName.includes('reviewer')) autoRole = 'reviewer';
+                    else if (lowerName.includes('planner')) autoRole = 'planner';
+                    else if (lowerName.includes('lead')) autoRole = 'lead';
+                    else if (lowerName.includes('analyst')) autoRole = 'analyst';
+                }
 
                 // Register new
                 state.terminals[uniqueName] = {
@@ -4273,17 +4364,19 @@ You may add clarifying implementation detail only if strictly implied by existin
 
 ${planAnchor}
 
-Use the explicit two-stage review process:
-  Stage 1 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
-  Stage 2 — Write a balanced synthesis to ${balancedReviewPath}
+Use the explicit three-stage review process:
+  Stage 1 — Enhancement: If you see any 'TODO' sections or underspecified parts, fill those out first with proposed implementation details without asking for permission. If already specified, skip this.
+  Stage 2 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
+  Stage 3 — Write a balanced synthesis to ${balancedReviewPath}
 
 Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Grumpy) findings directly in chat.
-2. Immediately after, post Stage 2 (Balanced) synthesis directly in chat.
-3. Update the original plan and provide the final enhancement assessment in chat.
-4. Keep file outputs as archival artifacts, not the primary user-facing output.
+1. Post Stage 1 (Enhancement) findings directly in chat, if applicable.
+2. Post Stage 2 (Grumpy) findings directly in chat.
+3. Immediately after, post Stage 3 (Balanced) synthesis directly in chat.
+4. Update the original plan and provide the final enhancement assessment in chat.
+5. Keep file outputs as archival artifacts, not the primary user-facing output.
 
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
+CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
 
 At the very end of your response, explicitly recommend which agent should execute this plan:
 - If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
@@ -4301,11 +4394,12 @@ ${planAnchor}
 
 Light mode rules (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
 1. Do NOT write plan/review artifact files for this pass.
-2. Stage 1 (Grumpy): post adversarial critique directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-3. Stage 2 (Balanced): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
-4. Stage 3 (Action): Update the original plan with the enhancement findings and provide the final assessment in chat.
+2. Stage 1 (Enhancement): If you see any 'TODO' sections or underspecified parts in the plan, fill those out first with proposed implementation details without asking for permission. If the plan is already fully specified, you may skip this stage and go straight into the critique.
+3. Stage 2 (Grumpy Critique): post adversarial critique of the technical approach directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
+4. Stage 3 (Balanced Synthesis): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
+5. Stage 4 (Action): Update the original plan with the enhancement findings and provide the final assessment in chat.
 
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
+CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
 
 At the very end of your response, explicitly recommend which agent should execute this plan:
 - If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
@@ -4321,17 +4415,19 @@ Context: ${instruction}` : '';
 
 ${planAnchor}
 
-Use the explicit two-stage review process:
-  Stage 1 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
-  Stage 2 — Write a balanced synthesis to ${balancedReviewPath}
+Use the explicit three-stage review process:
+  Stage 1 — Enhancement: If you see any 'TODO' sections or underspecified parts, fill those out first with proposed implementation details without asking for permission. If already specified, skip this.
+  Stage 2 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
+  Stage 3 — Write a balanced synthesis to ${balancedReviewPath}
 
 Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Grumpy) findings directly in chat.
-2. Immediately after, post Stage 2 (Balanced) synthesis directly in chat.
-3. Update the original plan and provide the final plan assessment in chat.
-4. Keep file outputs as archival artifacts, not the primary user-facing output.
+1. Post Stage 1 (Enhancement) findings directly in chat, if applicable.
+2. Post Stage 2 (Grumpy) findings directly in chat.
+3. Immediately after, post Stage 3 (Balanced) synthesis directly in chat.
+4. Update the original plan and provide the final plan assessment in chat.
+5. Keep file outputs as archival artifacts, not the primary user-facing output.
 
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
+CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
 
 At the very end of your response, explicitly recommend which agent should execute this plan:
 - If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
@@ -4347,11 +4443,12 @@ ${planAnchor}
 
 Light mode rules (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
 1. Do NOT write plan/review artifact files for this pass.
-2. Stage 1 (Grumpy): post adversarial critique directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-3. Stage 2 (Balanced): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
-4. Stage 3 (Action): Update the original plan with review feedback and completed items, and provide the final assessment in chat.
+2. Stage 1 (Enhancement): If you see any 'TODO' sections or underspecified parts in the plan, fill those out first with proposed implementation details without asking for permission. If the plan is already fully specified, you may skip this stage and go straight into the critique.
+3. Stage 2 (Grumpy Critique): post adversarial critique of the technical approach directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
+4. Stage 3 (Balanced Synthesis): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
+5. Stage 4 (Action): Update the original plan with review feedback and completed items, and provide the final assessment in chat.
 
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
+CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
 
 At the very end of your response, explicitly recommend which agent should execute this plan:
 - If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
@@ -5873,7 +5970,7 @@ ${focusDirective}`);
 
                 const allOpenTerminals = await Promise.all(activeTerminals.map(async t => {
                     try {
-                        const pid = await this._waitWithTimeout(t.processId, 1000, undefined);
+                        const pid = await this._waitWithTimeout(t.processId, 5000, undefined);
                         const displayName = (pid && pidAliasMap.get(pid)) || nameAliasMap.get(t.name) || t.name;
                         return { name: t.name, pid: pid || null, displayName };
                     } catch {
@@ -6141,6 +6238,9 @@ ${focusDirective}`);
                 '### Manual Testing',
                 '1. [Step 1 of manual verification]',
                 '2. [Step 2...]',
+                '',
+                '## Appendix: Implementation Patch',
+                '[Provide the complete generated code, unified diff, or exact file replacements needed to implement the proposed changes above in a single code block. Use `N/A` only when no code change is required.]',
             ].join('\n'), 'utf8');
 
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
@@ -6308,8 +6408,10 @@ ${focusDirective}`);
         this._pipeline.dispose();
         this._stateWatcher?.dispose();
         this._planWatcher?.dispose();
+        this._sessionWatcher?.dispose();
         try { this._fsStateWatcher?.close(); } catch { }
         try { this._fsPlansWatcher?.close(); } catch { }
+        try { this._fsSessionWatcher?.close(); } catch { }
         try { this._brainWatcher?.dispose(); } catch { }
         try { this._stagingWatcher?.close(); } catch { }
         this._gitCommitDisposable?.dispose();

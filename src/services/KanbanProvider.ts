@@ -35,6 +35,7 @@ export interface KanbanCard {
     planFile: string;
     column: KanbanColumn;
     lastActivity: string;
+    complexity: 'Unknown' | 'Low' | 'High';
 }
 
 /**
@@ -192,7 +193,71 @@ export class KanbanProvider implements vscode.Disposable {
         try {
             const log = this._getSessionLog(workspaceRoot);
             const sheets = await log.getRunSheets();
-            const cards: KanbanCard[] = sheets.map((sheet: any) => this._sheetToCard(sheet));
+
+            // Load ownership and exclusion state for workspace scoping
+            let workspaceId: string | null = null;
+            let registry: any = { entries: {} };
+            let tombstones = new Set<string>();
+            let blacklist = new Set<string>();
+
+            try {
+                const switchboardDir = path.join(workspaceRoot, '.switchboard');
+                const identityPath = path.join(switchboardDir, 'workspace_identity.json');
+                const registryPath = path.join(switchboardDir, 'plan_registry.json');
+                const tombstonePath = path.join(switchboardDir, 'plan_tombstones.json');
+                const blacklistPath = path.join(switchboardDir, 'brain_plan_blacklist.json');
+
+                if (fs.existsSync(identityPath)) {
+                    workspaceId = JSON.parse(await fs.promises.readFile(identityPath, 'utf8')).workspaceId;
+                }
+                if (fs.existsSync(registryPath)) {
+                    registry = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
+                }
+                if (fs.existsSync(tombstonePath)) {
+                    tombstones = new Set(JSON.parse(await fs.promises.readFile(tombstonePath, 'utf8')));
+                }
+                if (fs.existsSync(blacklistPath)) {
+                    const parsed = JSON.parse(await fs.promises.readFile(blacklistPath, 'utf8'));
+                    const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
+                    blacklist = new Set(rawEntries);
+                }
+            } catch (e) {
+                console.error('[KanbanProvider] Failed to read registry/identity for scoping:', e);
+            }
+
+            const getStablePath = (p: string) => {
+                const normalized = path.normalize(p);
+                const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+                const rootPath = path.parse(stable).root;
+                return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
+            };
+
+            const getBaseBrainPath = (p: string) => p.replace(/\.resolved(\.\d+)?$/i, '');
+
+            const activeSheets = sheets.filter((sheet: any) => {
+                if (sheet.completed) return false;
+
+                let planId = sheet.sessionId;
+                if (sheet.brainSourcePath) {
+                    const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
+                    if (blacklist.has(stablePath)) return false;
+                    planId = crypto.createHash('sha256').update(stablePath).digest('hex');
+                    if (tombstones.has(planId)) return false;
+                }
+
+                if (!planId) return false;
+                const entry = registry.entries[planId];
+                if (!entry) return false;
+
+                return entry.ownerWorkspaceId === workspaceId && entry.status === 'active';
+            });
+
+            const cards: KanbanCard[] = await Promise.all(
+                activeSheets.map(async (sheet: any) => {
+                    const complexity = await this._getComplexityFromPlan(workspaceRoot, sheet.planFile || '');
+                    return this._sheetToCard(sheet, complexity);
+                })
+            );
 
             const agentNames = await this._getAgentNames(workspaceRoot);
             const visibleAgents = await this._getVisibleAgents(workspaceRoot);
@@ -257,6 +322,30 @@ export class KanbanProvider implements vscode.Disposable {
         return defaults;
     }
 
+    private async _hasAssignedAgent(workspaceRoot: string, role: string): Promise<boolean> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            if (!fs.existsSync(statePath)) {
+                return false;
+            }
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            const commands = state.startupCommands || {};
+            return typeof commands[role] === 'string' && commands[role].trim().length > 0;
+        } catch (e) {
+            console.error(`[KanbanProvider] Failed to read assignment state for role '${role}':`, e);
+            return false;
+        }
+    }
+
+    private async _canAssignRole(workspaceRoot: string, role: string): Promise<boolean> {
+        const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+        if (visibleAgents[role] === false) {
+            return false;
+        }
+        return this._hasAssignedAgent(workspaceRoot, role);
+    }
+
     /** Send current visible agents to the kanban webview panel. */
     public async sendVisibleAgents() {
         if (!this._panel) return;
@@ -269,7 +358,7 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Map a runsheet to a Kanban card by inspecting its events array.
      */
-    private _sheetToCard(sheet: any): KanbanCard {
+    private _sheetToCard(sheet: any, complexity: 'Unknown' | 'Low' | 'High' = 'Unknown'): KanbanCard {
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
         const column = this._deriveColumn(events);
         let lastActivity = sheet.createdAt || '';
@@ -284,8 +373,49 @@ export class KanbanProvider implements vscode.Disposable {
             topic: sheet.topic || sheet.planFile || 'Untitled',
             planFile: sheet.planFile || '',
             column,
-            lastActivity
+            lastActivity,
+            complexity
         };
+    }
+
+    /**
+     * Read a plan file and determine complexity from its Complexity Audit / Band B section.
+     * Returns 'Unknown' if no audit section, 'Low' if Band B is empty/None, 'High' otherwise.
+     */
+    private async _getComplexityFromPlan(workspaceRoot: string, planPath: string): Promise<'Unknown' | 'Low' | 'High'> {
+        try {
+            if (!planPath) return 'Unknown';
+            const resolvedPlanPath = path.isAbsolute(planPath) ? planPath : path.join(workspaceRoot, planPath);
+            if (!fs.existsSync(resolvedPlanPath)) return 'Unknown';
+            const content = await fs.promises.readFile(resolvedPlanPath, 'utf8');
+
+            // Find the Complexity Audit section
+            const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
+            if (!auditMatch) return 'Unknown';
+
+            const auditStart = auditMatch.index! + auditMatch[0].length;
+
+            // Find "Band B" within the audit section (stop at next top-level heading)
+            const afterAudit = content.slice(auditStart);
+            const bandBMatch = afterAudit.match(/\bBand\s+B\b/i);
+            if (!bandBMatch) return 'Low';
+
+            // Extract text after "Band B" until next heading or "Band C/D" marker
+            const bandBStart = bandBMatch.index! + bandBMatch[0].length;
+            const afterBandB = afterAudit.slice(bandBStart);
+            const nextSection = afterBandB.match(/^#{1,4}\s|\bBand\s+[C-Z]\b/im);
+            const bandBContent = nextSection
+                ? afterBandB.slice(0, nextSection.index).trim()
+                : afterBandB.trim();
+
+            // Check if Band B content is effectively empty
+            const isEmpty = /^[-:*\s]*(none\.?|n\/a|—|-)\s*$/im.test(bandBContent)
+                || bandBContent.length === 0;
+
+            return isEmpty ? 'Low' : 'High';
+        } catch {
+            return 'Unknown';
+        }
     }
 
     /**
@@ -317,15 +447,16 @@ export class KanbanProvider implements vscode.Disposable {
                 const { sessionId, targetColumn } = msg;
                 const role = this._columnToRole(targetColumn);
                 if (role) {
-                    // Reject if the target agent is hidden
+                    // Reject if the target agent is hidden or unassigned
                     const workspaceFolders = vscode.workspace.workspaceFolders;
                     if (workspaceFolders) {
-                        const visibleAgents = await this._getVisibleAgents(workspaceFolders[0].uri.fsPath);
-                        if (visibleAgents[role] === false) {
+                        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                        if (!(await this._canAssignRole(workspaceRoot, role))) {
                             break;
                         }
                     }
-                    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId);
+                    const instruction = role === 'planner' ? 'enhance' : undefined;
+                    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction);
                 }
                 break;
             }
@@ -349,7 +480,7 @@ export class KanbanProvider implements vscode.Disposable {
                 break;
             case 'copyPlanLink':
                 if (msg.sessionId) {
-                    const success = await vscode.commands.executeCommand<boolean>('switchboard.copyPlanFromKanban', msg.sessionId);
+                    const success = await vscode.commands.executeCommand<boolean>('switchboard.copyPlanFromKanban', msg.sessionId, msg.column);
                     this._panel?.webview.postMessage({ type: 'copyPlanLinkResult', sessionId: msg.sessionId, success });
                 }
                 break;
@@ -405,6 +536,18 @@ export class KanbanProvider implements vscode.Disposable {
         };
         this._autoMoveTimers.set(column, state);
         this._emitAutoMoveState();
+
+        // Move the first card immediately, then wait the interval for subsequent cards
+        state.isAdvancing = true;
+        this._autoMoveOneCard(column).then(moved => {
+            if (!moved) {
+                this._stopAutoMove(column);
+            }
+        }).catch(e => {
+            console.error(`[KanbanProvider] Auto-move (immediate) failed for column ${column}:`, e);
+        }).finally(() => {
+            state.isAdvancing = false;
+        });
     }
 
     private _stopAutoMove(column: string) {
@@ -464,6 +607,9 @@ export class KanbanProvider implements vscode.Disposable {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return false;
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        if (!(await this._canAssignRole(workspaceRoot, role))) {
+            return false;
+        }
 
         const log = this._getSessionLog(workspaceRoot);
         const sheets = await log.getRunSheets();
@@ -477,7 +623,8 @@ export class KanbanProvider implements vscode.Disposable {
         if (columnCards.length === 0) return false;
 
         const topCard = columnCards[0];
-        await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, topCard.sessionId);
+        const instruction = role === 'planner' ? 'enhance' : undefined;
+        await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, topCard.sessionId, instruction);
         return true;
     }
 

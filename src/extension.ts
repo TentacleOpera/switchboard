@@ -671,8 +671,8 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(openKanbanDisposable);
 
     // Helper commands for Kanban ↔ sidebar delegation
-    const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string) => {
-        taskViewerProvider.handleKanbanTrigger(role, sessionId);
+    const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string) => {
+        taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -681,8 +681,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(completePlanFromKanbanDisposable);
 
-    const copyPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.copyPlanFromKanban', async (sessionId: string) => {
-        return await taskViewerProvider.handleKanbanCopyPlan(sessionId);
+    const copyPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.copyPlanFromKanban', async (sessionId: string, column?: string) => {
+        return await taskViewerProvider.handleKanbanCopyPlan(sessionId, column);
     });
     context.subscriptions.push(copyPlanFromKanbanDisposable);
 
@@ -856,7 +856,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const heartbeatInterval = setInterval(async () => {
             for (const [name, terminal] of registeredTerminals.entries()) {
                 try {
-                    const pid = await waitWithTimeout(terminal.processId, 1000, undefined);
+                    const pid = await waitWithTimeout(terminal.processId, 5000, undefined);
                     if (pid && mcpServerProcess) {
                         mcpServerProcess.send({
                             type: 'registerTerminal',
@@ -927,7 +927,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (terminalInfo.pid) {
                     for (const t of openTerminals) {
                         try {
-                            const pid = await waitWithTimeout(t.processId, 1000, undefined);
+                            const pid = await waitWithTimeout(t.processId, 5000, undefined);
                             if (pid && pid === terminalInfo.pid) {
                                 newRegistry.set(name, t);
                                 mcpOutputChannel?.appendLine(`[Extension] Re-claimed terminal '${name}' by PID match: ${pid}`);
@@ -1265,7 +1265,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
                 const healthy: vscode.Terminal[] = [];
                 for (const term of matches) {
-                    const pid = await waitWithTimeout(term.processId, 1500, undefined);
+                    const pid = await waitWithTimeout(term.processId, 5000, undefined);
                     if (!pid) {
                         mcpOutputChannel?.appendLine(`[Extension] Disposing stale grid terminal '${term.name}' for agent '${agent.name}' (PID unresolved)`);
                         term.dispose();
@@ -2017,7 +2017,7 @@ async function autoRegisterTerminals(workspaceRoot: string) {
         if (registeredTerminals.has(name)) continue;
 
         try {
-            const pid = await waitWithTimeout(terminal.processId, 2000, undefined);
+            const pid = await waitWithTimeout(terminal.processId, 5000, undefined);
             if (!pid) continue;
 
             registeredTerminals.set(name, terminal);
