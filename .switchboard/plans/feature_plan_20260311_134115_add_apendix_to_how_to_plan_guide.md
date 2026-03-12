@@ -75,3 +75,36 @@ Apply the following patch to `src/services/TaskViewerProvider.ts`:
 ```
 
 *(Note: If you are editing the live extension without running a build step, you can apply this exact same string array insertion to `src/services/TaskViewerProvider.js` around line 1472).*
+
+## Reviewer-Executor Pass (2026-03-12)
+
+### Findings Summary
+- CRITICAL: None.
+- MAJOR: `src/services/TaskViewerProvider.ts` was correctly updated, but the checked-in `src/services/TaskViewerProvider.js` still contained the old template with no appendix at all. That left the source tree internally inconsistent and violated the plan’s explicit note about updating the live `.js` path when needed.
+- NIT: The TypeScript and legacy JavaScript templates are still not text-identical overall. That broader divergence predates this pass and is outside the narrow appendix requirement.
+
+### Plan Requirement Check
+- [x] The Airlock export template includes `## Appendix: Implementation Patch`.
+- [x] The appendix appears at the bottom of the generated guide template.
+- [x] The shipped bundle path (`dist/extension.js`) includes the appendix text.
+- [x] The checked-in legacy JavaScript source now also includes the appendix text for live/non-built debugging scenarios.
+
+### Fixes Applied
+- Patched `src/services/TaskViewerProvider.js` to append the missing `## Appendix: Implementation Patch` section at the end of the generated guide template.
+- Rebuilt the extension bundle to verify the active shipped implementation still includes the appendix.
+
+### Files Changed in This Reviewer Pass
+- `C:\Users\patvu\Documents\GitHub\switchboard\src/services/TaskViewerProvider.js`
+- `C:\Users\patvu\Documents\GitHub\switchboard\dist\extension.js`
+- `C:\Users\patvu\Documents\GitHub\switchboard\src\webview\kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\dist\webview\kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\.switchboard\plans\feature_plan_20260311_134115_add_apendix_to_how_to_plan_guide.md`
+
+### Validation Results
+- `npx tsc -p . --noEmit`: PASS (exit code `0`).
+- `npm run compile`: PASS (webpack completed successfully).
+- `rg -n "Appendix: Implementation Patch" src/services/TaskViewerProvider.ts src/services/TaskViewerProvider.js dist/extension.js`: PASS.
+
+### Remaining Risks
+- Manual Airlock export verification is still required to confirm the generated `*-how_to_plan.md` file places the appendix exactly at the bottom in the live extension flow.
+- This reviewer pass also rebuilt unrelated Kanban output because the worktree contained a separate user-requested layout correction in `src/webview/kanban.html`; that rebuild side effect is unrelated to the appendix feature itself.

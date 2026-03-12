@@ -1,6 +1,6 @@
-﻿# AGENTS.md - Switchboard Protocol
+# AGENTS.md - Switchboard Protocol
 
-## ðŸš¨ STRICT PROTOCOL ENFORCEMENT ðŸš¨
+## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
 
 This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 
@@ -24,14 +24,15 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
 
 
-### âš ï¸ MANDATORY PRE-FLIGHT CHECK
+### ⚠️ MANDATORY PRE-FLIGHT CHECK
 
 Before EVERY response, you MUST:
 
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
 3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **If no match is found**: Respond normally.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `Get Kanban State` skill (`node .agent/scripts/kanban-list.js`) to instantly identify the target plans.
+5. **If no match is found**: Respond normally.
 
 ### Execution Rules
 
@@ -50,8 +51,8 @@ The following actions are enforced at the tool level and WILL be rejected if mis
 | :--- | :--- |
 | `execute` | `handoff`, `challenge`, or `handoff-lead` |
 | `delegate_task` | `handoff` |
-| `submit_result` | *(no restriction â€” this is a response)* |
-| `status_update` | *(no restriction â€” informational)* |
+| `submit_result` | *(no restriction — this is a response)* |
+| `status_update` | *(no restriction — informational)* |
 
 Sending to non-existent recipients is always rejected (even when auto-routed).
 

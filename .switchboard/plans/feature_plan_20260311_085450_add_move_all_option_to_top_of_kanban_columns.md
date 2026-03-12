@@ -34,3 +34,39 @@ Do not worry about edge cases of 'is this agent available?' if it fails for that
 - **Grumpy Review:** "Don't worry about edge cases"?! Are you kidding me?! That's a developer's famous last words before bringing down the whole system! What happens when the user types '1 millisecond' and DDOSes the LLM API?! Where is this timer state living? In the webview? In the backend? What happens if the webview reloads? You want background jobs running without a proper job queue or state persistence?! This isn't a "plan," it's a recipe for a memory leak and a frozen extension!
 - **Balanced Synthesis:** The use case is completely valid: users need a way to batch-process a queue of plans without manually dragging them one by one. However, brushing off "edge cases" is dangerous for background timers. We must implement these timers in the backend (not the webview UI) so they survive panel closures, and we need to ensure the `setInterval` IDs are strictly managed to prevent memory leaks or duplicate processing. We also need basic validation on the interval input to prevent system abuse.
 - **User Clarification:** The instruction to "not worry about edge cases" specifically refers to checking whether the agent is actually active in the terminal before moving the card. The system should assume the user has correctly set up their terminals before pressing the button. Implementing status checks would add too much complexity. This feature should heavily borrow from the existing auto agent pipeline automation that was recently implemented and proven to work, adding only the guardrails strictly necessary for it to run from the Kanban view.
+
+## Reviewer-Executor Pass (2026-03-12)
+
+### Findings Summary
+- CRITICAL: None.
+- MAJOR: `src/services/KanbanProvider.ts` auto-move was sourcing cards from raw runsheets instead of the same workspace-scoped active-plan filter used by the rendered board. That could dispatch tombstoned, blacklisted, or foreign-workspace plans that were not actually visible in CLI-BAN.
+- NIT: `src/webview/kanban.html` was rebinding drop listeners inside every board re-render. The static column bodies should only bind those handlers once.
+
+### Plan Requirement Check
+- [x] Per-column auto-move controls exist in the Kanban UI for the movable columns.
+- [x] Backend timer state is maintained per column.
+- [x] Auto-move triggers the first eligible card immediately at Start, then continues one card per configured interval.
+- [x] Auto-move now operates only on the same active, workspace-owned plans visible on the board.
+- [x] The timer still stops when no eligible cards remain in the source column.
+
+### Fixes Applied
+- Extracted shared active-plan filtering into `KanbanProvider._getActiveSheets()` and reused it for both board rendering and auto-move dispatch selection.
+- Preserved immediate first dispatch on Start, while keeping the configured interval for subsequent cards.
+- Added an empty-column guard so Start does not create a dead timer when there is nothing to move.
+- Moved Kanban drop-target listener binding out of `renderBoard()` so refreshes do not stack duplicate listeners on static column containers.
+- Recompiled the extension bundle so `dist/extension.js` and `dist/webview/kanban.html` match the reviewed source.
+
+### Files Changed in This Reviewer Pass
+- `C:\Users\patvu\Documents\GitHub\switchboard\src/services/KanbanProvider.ts`
+- `C:\Users\patvu\Documents\GitHub\switchboard\src/webview/kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\dist/extension.js`
+- `C:\Users\patvu\Documents\GitHub\switchboard\dist/webview/kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\.switchboard\plans\feature_plan_20260311_085450_add_move_all_option_to_top_of_kanban_columns.md`
+
+### Validation Results
+- `npx tsc -p . --noEmit`: PASS (exit code `0`).
+- `npm run compile`: PASS (webpack completed successfully and recopied `webview/kanban.html`).
+
+### Remaining Risks
+- Manual webview verification is still required to confirm the countdown, Start/Stop state, and card motion timing feel correct in the VS Code panel.
+- Auto-move timers remain session-only; they are not persisted across full extension reloads or VS Code restarts. That is acceptable for this pass because the plan left persistence as an open question rather than a requirement.

@@ -39,12 +39,13 @@ Grumpy raises a valid point about token limits. However, the prompt specifically
 ## Verification Plan
 
 ### Manual Testing
-1. Apply the patch to `TaskViewerProvider.ts` (and `TaskViewerProvider.js` if running a live debug session).
-2. Restart the extension host if necessary.
-3. Open the Switchboard sidebar and navigate to the **Airlock** tab.
-4. Click **BUNDLE CODE**.
-5. Open the newly generated `.switchboard/handoff/how_to_plan.md` file.
-6. Verify that the strict **NO TRUNCATION** rules appear in Step 5, and the new granular bullet points appear under the Proposed Changes template.
+1. Apply the patch to `TaskViewerProvider.ts`.
+2. Compile the extension by running `npm run compile`.
+3. Restart the extension host if necessary.
+4. Open the Switchboard sidebar and navigate to the **Airlock** tab.
+5. Click **BUNDLE CODE**.
+6. Open the newly generated `.switchboard/handoff/how_to_plan.md` file.
+7. Verify that the strict **NO TRUNCATION** rules appear in Step 5, and the new granular bullet points appear under the Proposed Changes template.
 
 ***
 
@@ -88,4 +89,6 @@ Apply the following patch to `src/services/TaskViewerProvider.ts` (inside the `_
 + '- **Edge Cases Handled:** [Explain how the code above mitigates the risks identified in the Edge-Case Audit]',
 ```
 
-*(Note: Apply the exact same string changes to the compiled `src/services/TaskViewerProvider.js` file if you want to test it immediately without a build step).*
+## Review Feedback
+- **Grumpy Review:** "The prompt asks the AI to produce 'Exact search/replace blocks or unified diffs', AND THEN tells it 'Write out the exact, final state of the functions', AND THEN asks for 'the COMPLETE code block, unified diff, or full function rewrite'. This is wildly contradictory! If you force the LLM to write out the whole function *and* a diff, it's going to get confused, duplicate code, and waste tokens. Pick a lane! Plus, encouraging manual edits to compiled JS artifacts (`TaskViewerProvider.js`) in the Verification Plan is an atrocious anti-pattern! We have a build script for a reason."
+- **Balanced Synthesis:** "The goal of enforcing maximum context and preventing truncation is crucial for effective agent handoffs. However, the proposed changes are slightly muddy in how they ask for code output formats. The LLM shouldn't do both a unified diff *and* a full function rewrite for the same code block; it should choose the most appropriate fully-fleshed-out format. Additionally, we must remove the advice to manually edit the compiled `.js` artifact from the Verification Plan and strictly rely on `npm run compile`. The plan has been updated to reflect correct build practices."

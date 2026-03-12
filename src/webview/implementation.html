@@ -1206,9 +1206,19 @@
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" id="onboard-cli-planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Analyst</label><input type="text" id="onboard-cli-analyst"
                         placeholder="e.g. qwen" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="jules" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Jules</label>
+                    <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
                 </div>
                 <div style="margin-top: 12px; display: flex; gap: 8px;">
                     <button id="btn-onboard-save" class="secondary-btn w-full"
@@ -1297,8 +1307,9 @@
                 <span class="chevron open" id="terminal-operations-chevron">▶</span>
             </div>
             <div class="panel-fields open" id="terminal-operations-fields">
-                <button id="createAgentGrid" class="secondary-btn w-full">OPEN AGENT TERMINALS</button>
+                <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
                 <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
+                <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px; border-color: color-mix(in srgb, var(--accent-red) 30%, transparent); color: var(--accent-red);">Access main program</button>
             </div>
         </div>
 
@@ -1338,6 +1349,11 @@
                     <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
                         placeholder="e.g. qwen" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="jules" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Jules</label>
+                    <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
                 </div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
@@ -1620,6 +1636,36 @@
         const btnKanban = document.getElementById('btn-open-kanban');
         if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
 
+        // Easter egg button - Jurassic Park reference
+        const btnEasterEgg = document.getElementById('btn-easter-egg');
+        if (btnEasterEgg) {
+            const labels = ['Access main program', 'Access main security', 'Access main program grid'];
+            let currentIndex = 0;
+            let isDenied = false;
+
+            btnEasterEgg.addEventListener('click', () => {
+                if (isDenied) return;
+
+                isDenied = true;
+                const originalText = btnEasterEgg.textContent;
+                btnEasterEgg.textContent = 'DENIED';
+                btnEasterEgg.disabled = true;
+                btnEasterEgg.style.background = 'var(--accent-red)';
+                btnEasterEgg.style.color = '#ffffff';
+                btnEasterEgg.style.boxShadow = 'var(--glow-red)';
+
+                setTimeout(() => {
+                    btnEasterEgg.style.background = '';
+                    btnEasterEgg.style.color = '';
+                    btnEasterEgg.style.boxShadow = '';
+                    currentIndex = (currentIndex + 1) % labels.length;
+                    btnEasterEgg.textContent = labels[currentIndex];
+                    btnEasterEgg.disabled = false;
+                    isDenied = false;
+                }, 1000);
+            });
+        }
+
         const termOpsToggle = document.getElementById('terminal-operations-toggle');
         if (termOpsToggle) {
             termOpsToggle.addEventListener('click', () => {
@@ -1676,7 +1722,7 @@
                 });
                 const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
                 vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled });
-                lastVisibleAgents = visibleAgents;
+                lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
                 renderAgentList();
                 btnSaveStartup.textContent = 'SAVED';
                 setTimeout(() => { btnSaveStartup.textContent = 'SAVE CONFIGURATION'; }, 1500);
@@ -1963,12 +2009,26 @@
                         document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
                             input.value = message.commands[input.dataset.role] || '';
                         });
+                        const onboardingFields = {
+                            lead: document.getElementById('onboard-cli-lead'),
+                            coder: document.getElementById('onboard-cli-coder'),
+                            reviewer: document.getElementById('onboard-cli-reviewer'),
+                            planner: document.getElementById('onboard-cli-planner'),
+                            analyst: document.getElementById('onboard-cli-analyst')
+                        };
+                        Object.entries(onboardingFields).forEach(([role, input]) => {
+                            if (input) input.value = message.commands[role] || '';
+                        });
                     }
                     break;
                 case 'visibleAgents':
                     if (message.agents) {
                         lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
                         document.querySelectorAll('#startup-fields .agent-visible-toggle').forEach(cb => {
+                            const role = cb.dataset.role;
+                            if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
+                        });
+                        document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                             const role = cb.dataset.role;
                             if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
                         });
@@ -3352,6 +3412,7 @@
                 lead: document.getElementById('onboard-cli-lead').value,
                 coder: document.getElementById('onboard-cli-coder').value,
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
+                planner: document.getElementById('onboard-cli-planner').value,
                 analyst: document.getElementById('onboard-cli-analyst').value
             };
             const visibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
@@ -3359,11 +3420,8 @@
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;
             });
-            lastVisibleAgents = visibleAgents;
-            vscode.postMessage({ type: 'saveStartupCommands', commands: agents, visibleAgents, accurateCodingEnabled: false });
-            setTimeout(() => {
-                vscode.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
-            }, 100);
+            lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
+            vscode.postMessage({ type: 'saveStartupCommands', commands: agents, visibleAgents, accurateCodingEnabled: false, onboardingComplete: true });
         });
 
         document.getElementById('btn-onboard-skip').addEventListener('click', () => {

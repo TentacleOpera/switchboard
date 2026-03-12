@@ -149,6 +149,11 @@
             letter-spacing: 0.5px;
         }
 
+        .column-subline-spacer {
+            height: 13px;
+            margin-top: 2px;
+        }
+
         .column-count {
             font-family: var(--font-mono);
             font-size: 10px;
@@ -246,7 +251,18 @@
             font-size: 9px;
             color: color-mix(in srgb, var(--text-secondary) 50%, var(--accent-teal-dim));
             letter-spacing: 0.5px;
+            display: flex;
+            align-items: center;
+            gap: 4px;
         }
+
+        .complexity-indicator {
+            font-weight: 600;
+            letter-spacing: 0.3px;
+        }
+        .complexity-indicator.high { color: #e06c75; }
+        .complexity-indicator.low { color: #98c379; }
+        .complexity-indicator.unknown { color: #7f848e; }
 
         .card-actions {
             display: flex;
@@ -429,8 +445,9 @@
             <div class="column-header">
                 <div style="display:flex; flex-direction:column;">
                     <span class="column-name">Created</span>
+                    <div class="column-subline-spacer" aria-hidden="true"></div>
                 </div>
-                <div style="display: flex; align-items: center; gap: 8px;">
+                <div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
                     <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
                     <span class="column-count" id="count-CREATED">0</span>
                 </div>
@@ -438,7 +455,7 @@
             <div class="auto-move-bar" id="automove-bar-CREATED">
                 <div class="auto-move-left">
                     <span class="auto-move-label">Auto-move every</span>
-                    <input type="number" id="automove-interval-CREATED" min="1" max="60" value="5" title="Interval in minutes">
+                    <input type="number" id="automove-interval-CREATED" min="1" max="60" value="2" title="Interval in minutes">
                     <span class="auto-move-label">min</span>
                 </div>
                 <div class="auto-move-right">
@@ -546,6 +563,18 @@
             return lastVisibleAgents[role] !== false;
         }
 
+        /** Check if a column currently has an assigned agent command behind it. */
+        function isColumnAgentAssigned(col) {
+            const role = columnToRole(col);
+            if (!role) return true;
+            const name = lastAgentNames[role];
+            return !!name && name !== 'No agent assigned';
+        }
+
+        function isColumnAgentAvailable(col) {
+            return isColumnAgentVisible(col) && isColumnAgentAssigned(col);
+        }
+
         function updateAllColumnAgents() {
             if (!lastAgentNames) return;
 
@@ -588,12 +617,6 @@
                 } else {
                     container.innerHTML = items.map(card => createCardHtml(card)).join('');
                 }
-
-                // Drag & drop target
-                container.addEventListener('dragover', handleDragOver);
-                container.addEventListener('dragenter', handleDragEnter);
-                container.addEventListener('dragleave', handleDragLeave);
-                container.addEventListener('drop', (e) => handleDrop(e, col));
             });
 
             // Attach card-level event listeners
@@ -627,7 +650,8 @@
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
                     btn.disabled = true;
-                    vscode.postMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session });
+                    const column = btn.closest('.kanban-column')?.dataset?.column;
+                    vscode.postMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session, column });
                 });
             });
         }
@@ -635,12 +659,18 @@
         function createCardHtml(card) {
             const timeAgo = formatTimeAgo(card.lastActivity);
             const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
+            const complexity = card.complexity || 'Unknown';
+            const complexityClass = complexity.toLowerCase();
+            let copyLabel = 'Copy Plan';
+            if (card.column === 'CREATED') copyLabel = 'Copy Prompt';
+            else if (card.column === 'PLAN REVIEWED') copyLabel = 'Copy Prompt';
+            else if (card.column === 'CODED') copyLabel = 'Copy Prompt';
             return `
                 <div class="kanban-card" draggable="true" data-session="${card.sessionId}">
                     <div class="card-topic" title="${escapeHtml(card.topic)}">${escapeHtml(shortTopic)}</div>
-                    <div class="card-meta">${timeAgo}</div>
+                    <div class="card-meta"><span class="complexity-indicator ${complexityClass}">${complexity}</span> · ${timeAgo}</div>
                     <div class="card-actions">
-                        <button class="card-btn copy" data-session="${card.sessionId}">Copy</button>
+                        <button class="card-btn copy" data-session="${card.sessionId}">${copyLabel}</button>
                         <button class="card-btn view" data-session="${card.sessionId}">View</button>
                         <button class="card-btn complete" data-session="${card.sessionId}">Complete</button>
                     </div>
@@ -683,7 +713,7 @@
         function handleDragOver(e) {
             e.preventDefault();
             const col = e.currentTarget.closest('.kanban-column')?.dataset?.column;
-            e.dataTransfer.dropEffect = (col && !isColumnAgentVisible(col)) ? 'none' : 'move';
+            e.dataTransfer.dropEffect = (col && !isColumnAgentAvailable(col)) ? 'none' : 'move';
         }
 
         function handleDragEnter(e) {
@@ -708,8 +738,8 @@
             const sessionId = e.dataTransfer.getData('text/plain');
             if (!sessionId) return;
 
-            // Reject drop if the target column's agent is hidden
-            if (!isColumnAgentVisible(targetColumn)) {
+            // Reject drop if the target column has no active assignment
+            if (!isColumnAgentAvailable(targetColumn)) {
                 const agentEl = document.getElementById('agent-' + targetColumn);
                 if (agentEl) {
                     agentEl.style.transition = 'color 0.15s';
@@ -867,7 +897,7 @@
                         vscode.postMessage({ type: 'autoMoveStop', column: col });
                     } else {
                         const inp = document.getElementById('automove-interval-' + col);
-                        const mins = parseInt(inp?.value, 10) || (col === 'CREATED' ? 5 : 10);
+                        const mins = parseInt(inp?.value, 10) || (col === 'CREATED' ? 2 : 10);
                         const intervalSeconds = Math.max(mins * 60, 30);
                         vscode.postMessage({ type: 'autoMoveStart', column: col, intervalSeconds });
                     }
@@ -892,9 +922,17 @@
             });
         }
 
+        document.querySelectorAll('.column-body').forEach(container => {
+            const col = container.id.replace(/^col-/, '');
+            container.addEventListener('dragover', handleDragOver);
+            container.addEventListener('dragenter', handleDragEnter);
+            container.addEventListener('dragleave', handleDragLeave);
+            container.addEventListener('drop', (e) => handleDrop(e, col));
+        });
+
         // Initial empty state
         renderBoard([]);
     </script>
 </body>
 
-</html>
+</html>

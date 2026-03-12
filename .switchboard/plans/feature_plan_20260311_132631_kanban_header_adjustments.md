@@ -190,3 +190,38 @@ Grumpy is right that invisible DOM nodes aren't the purest semantic HTML, but in
     <div class="column-body" id="col-CODE REVIEWED"></div>
 </div>
 ```
+
+## Reviewer-Executor Pass (2026-03-12)
+
+### Findings Summary
+- CRITICAL: None.
+- MAJOR: The `CREATED` column header did not include the agent sub-label row (`agent-CREATED`) and kept the `+` button grouped with the count badge on the right. That meant the specific alignment fix called out in the plan for the Created header was not actually implemented.
+- NIT: The invisible placeholder in `CODE REVIEWED` uses a full hidden auto-move structure rather than the minimal placeholder shown in the appendix. That is noisier than necessary, but functionally acceptable because it still preserves layout alignment.
+
+### Plan Requirement Check
+- [x] Auto-move bars use split left/right layout with clearer "Auto-move every" labeling.
+- [x] `CODED` groups the target dropdown and count badge together on the right.
+- [x] `CODE REVIEWED` includes an invisible placeholder bar for alignment.
+- [x] `CREATED` now groups the title and `+` button together with `line-height: 1`.
+- [x] `CREATED` now includes an agent sub-label row so its header height/alignment matches the other active columns.
+
+### Fixes Applied
+- Restored the `CREATED` header structure to match the approved layout:
+  - grouped the title and add button together on the left,
+  - restored `line-height: 1` on that row,
+  - added `agent-CREATED`,
+  - moved the count badge back to the far right.
+- Recompiled the extension bundle so `dist/webview/kanban.html` matches the reviewed source.
+
+### Files Changed in This Reviewer Pass
+- `C:\Users\patvu\Documents\GitHub\switchboard\src\webview\kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\dist\webview\kanban.html`
+- `C:\Users\patvu\Documents\GitHub\switchboard\.switchboard\plans\feature_plan_20260311_132631_kanban_header_adjustments.md`
+
+### Validation Results
+- `npx tsc -p . --noEmit`: PASS (exit code `0`).
+- `npm run compile`: PASS (webpack completed successfully and recopied `webview/kanban.html`).
+
+### Remaining Risks
+- Manual webview verification is still required to confirm the revised Created header, agent label alignment, and auto-move bar spacing look correct across realistic VS Code panel widths.
+- This file also contains unrelated functional changes outside the original scope of this visual-adjustment plan; those were reviewed only for interference with the header/layout requirements.

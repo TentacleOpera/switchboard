@@ -83,6 +83,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
     private _sessionWatcher?: vscode.FileSystemWatcher;
     private _fsSessionWatcher?: fs.FSWatcher;
+    private _sessionSyncTimer?: NodeJS.Timeout;
     private _refreshTimeout?: NodeJS.Timeout;
     private _julesStatusPollTimer?: NodeJS.Timeout;
     private _isRefreshingJules: boolean = false;
@@ -1201,6 +1202,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._sessionWatcher.dispose();
         }
         try { this._fsSessionWatcher?.close(); } catch { }
+        if (this._sessionSyncTimer) {
+            clearTimeout(this._sessionSyncTimer);
+            this._sessionSyncTimer = undefined;
+        }
 
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders) return;
@@ -1211,10 +1216,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             try { fs.mkdirSync(sessionsDir, { recursive: true }); } catch { }
         }
 
-        let sessionSyncTimer: NodeJS.Timeout | undefined;
         const debouncedSessionSync = () => {
-            if (sessionSyncTimer) clearTimeout(sessionSyncTimer);
-            sessionSyncTimer = setTimeout(() => this._refreshRunSheets(), 300);
+            if (this._sessionSyncTimer) clearTimeout(this._sessionSyncTimer);
+            this._sessionSyncTimer = setTimeout(() => {
+                this._sessionSyncTimer = undefined;
+                this._refreshRunSheets();
+            }, 300);
         };
 
         this._sessionWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/sessions/*.json');
@@ -6412,6 +6419,10 @@ ${focusDirective}`);
         try { this._fsStateWatcher?.close(); } catch { }
         try { this._fsPlansWatcher?.close(); } catch { }
         try { this._fsSessionWatcher?.close(); } catch { }
+        if (this._sessionSyncTimer) {
+            clearTimeout(this._sessionSyncTimer);
+            this._sessionSyncTimer = undefined;
+        }
         try { this._brainWatcher?.dispose(); } catch { }
         try { this._stagingWatcher?.close(); } catch { }
         this._gitCommitDisposable?.dispose();

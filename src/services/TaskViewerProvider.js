@@ -5857,6 +5857,9 @@ ${focusDirective}`);
                 '',
                 '### Manual Verification',
                 '1. [Step-by-step instructions to confirm the feature works end-to-end in the running application.]',
+                '',
+                '## Appendix: Implementation Patch',
+                '[Provide the complete generated code, unified diff, or exact file replacements needed to implement the proposed changes above in a single code block. Use `N/A` only when no code change is required.]',
                 '```',
             ].join('\n'), 'utf8');
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });

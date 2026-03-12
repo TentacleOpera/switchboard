@@ -37,3 +37,28 @@ In the setup menu, (both onboarding setup as well as the normal setup menu in th
 - **Grumpy Review:** Ticks?! You mean checkboxes?! And 'save startup commands' button to save UI state? That's coupling unrelated things! Why are we saving UI display preferences when saving 'startup commands'? These are workspace settings! We need a proper configuration object for agent visibility. Where is this state stored? `settings.json`? VS Code workspace state? This 'plan' is just a wish list. How does the Kanban view know an agent is unassigned? What happens if I unassign the 'coder' but leave a plan in the 'coder' column? This needs a proper data model update, not just UI 'ticks'!
 - **Balanced Synthesis:** The core idea of allowing users to hide specific agents from the UI is a valid quality-of-life feature. However, the plan currently conflates saving UI preferences with saving startup commands. The proposed changes need to clearly define where this preference state is stored (e.g., in a workspace setting) and how changes to this state reactively update both the Agents sidebar view and the Kanban view.
 - **User Clarification:** The Kanban column should absolutely *not* vanish when an agent is hidden. The column must remain visible, show any existing/completed tasks, display a 'No agent assigned' message, and actively reject ("bounce back") any new tasks. There is also a dependency on another unreviewed plan that implements the 'No agent assigned' message field.
+
+## Reviewer Execution Update (2026-03-12)
+
+### Fixed Items
+- Fixed the onboarding save path so `SAVE & FINISH` now completes through the extension-backed `cli_saved` acknowledgment instead of posting an unhandled webview message.
+- Added missing visibility controls so onboarding now covers `planner` and `jules`, and the normal setup menu now covers `jules` alongside the existing agent roles.
+- Hardened kanban assignment checks so drag/drop refuses columns that are either hidden or currently unassigned (`No agent assigned`).
+- Hardened kanban auto-move so it also stops instead of dispatching into hidden or unassigned columns.
+
+### Files Changed
+- `src/webview/implementation.html`
+- `src/webview/kanban.html`
+- `src/services/KanbanProvider.ts`
+- `src/services/TaskViewerProvider.ts`
+
+### Validation Results
+- `npx tsc -p . --noEmit` ✅
+- `npm run compile` ✅
+
+### Remaining Risks
+- Agent visibility is still stored in `.switchboard/state.json` rather than a dedicated VS Code setting. This matches the current implementation path, but the storage question from the plan remains an architectural follow-up rather than a functional blocker.
+- This pass validated via static checks/build only. The manual UX path in VS Code still needs the original verification plan run end to end.
+
+### Reviewer Verdict
+- Ready

@@ -191,66 +191,7 @@ export class KanbanProvider implements vscode.Disposable {
         const workspaceRoot = workspaceFolders[0].uri.fsPath;
 
         try {
-            const log = this._getSessionLog(workspaceRoot);
-            const sheets = await log.getRunSheets();
-
-            // Load ownership and exclusion state for workspace scoping
-            let workspaceId: string | null = null;
-            let registry: any = { entries: {} };
-            let tombstones = new Set<string>();
-            let blacklist = new Set<string>();
-
-            try {
-                const switchboardDir = path.join(workspaceRoot, '.switchboard');
-                const identityPath = path.join(switchboardDir, 'workspace_identity.json');
-                const registryPath = path.join(switchboardDir, 'plan_registry.json');
-                const tombstonePath = path.join(switchboardDir, 'plan_tombstones.json');
-                const blacklistPath = path.join(switchboardDir, 'brain_plan_blacklist.json');
-
-                if (fs.existsSync(identityPath)) {
-                    workspaceId = JSON.parse(await fs.promises.readFile(identityPath, 'utf8')).workspaceId;
-                }
-                if (fs.existsSync(registryPath)) {
-                    registry = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
-                }
-                if (fs.existsSync(tombstonePath)) {
-                    tombstones = new Set(JSON.parse(await fs.promises.readFile(tombstonePath, 'utf8')));
-                }
-                if (fs.existsSync(blacklistPath)) {
-                    const parsed = JSON.parse(await fs.promises.readFile(blacklistPath, 'utf8'));
-                    const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
-                    blacklist = new Set(rawEntries);
-                }
-            } catch (e) {
-                console.error('[KanbanProvider] Failed to read registry/identity for scoping:', e);
-            }
-
-            const getStablePath = (p: string) => {
-                const normalized = path.normalize(p);
-                const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-                const rootPath = path.parse(stable).root;
-                return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
-            };
-
-            const getBaseBrainPath = (p: string) => p.replace(/\.resolved(\.\d+)?$/i, '');
-
-            const activeSheets = sheets.filter((sheet: any) => {
-                if (sheet.completed) return false;
-
-                let planId = sheet.sessionId;
-                if (sheet.brainSourcePath) {
-                    const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                    if (blacklist.has(stablePath)) return false;
-                    planId = crypto.createHash('sha256').update(stablePath).digest('hex');
-                    if (tombstones.has(planId)) return false;
-                }
-
-                if (!planId) return false;
-                const entry = registry.entries[planId];
-                if (!entry) return false;
-
-                return entry.ownerWorkspaceId === workspaceId && entry.status === 'active';
-            });
+            const activeSheets = await this._getActiveSheets(workspaceRoot);
 
             const cards: KanbanCard[] = await Promise.all(
                 activeSheets.map(async (sheet: any) => {
@@ -270,6 +211,68 @@ export class KanbanProvider implements vscode.Disposable {
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
         }
+    }
+
+    private async _getActiveSheets(workspaceRoot: string): Promise<any[]> {
+        const log = this._getSessionLog(workspaceRoot);
+        const sheets = await log.getRunSheets();
+
+        let workspaceId: string | null = null;
+        let registry: any = { entries: {} };
+        let tombstones = new Set<string>();
+        let blacklist = new Set<string>();
+
+        try {
+            const switchboardDir = path.join(workspaceRoot, '.switchboard');
+            const identityPath = path.join(switchboardDir, 'workspace_identity.json');
+            const registryPath = path.join(switchboardDir, 'plan_registry.json');
+            const tombstonePath = path.join(switchboardDir, 'plan_tombstones.json');
+            const blacklistPath = path.join(switchboardDir, 'brain_plan_blacklist.json');
+
+            if (fs.existsSync(identityPath)) {
+                workspaceId = JSON.parse(await fs.promises.readFile(identityPath, 'utf8')).workspaceId;
+            }
+            if (fs.existsSync(registryPath)) {
+                registry = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
+            }
+            if (fs.existsSync(tombstonePath)) {
+                tombstones = new Set(JSON.parse(await fs.promises.readFile(tombstonePath, 'utf8')));
+            }
+            if (fs.existsSync(blacklistPath)) {
+                const parsed = JSON.parse(await fs.promises.readFile(blacklistPath, 'utf8'));
+                const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
+                blacklist = new Set(rawEntries);
+            }
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to read registry/identity for scoping:', e);
+        }
+
+        const getStablePath = (planPath: string) => {
+            const normalized = path.normalize(planPath);
+            const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+            const rootPath = path.parse(stable).root;
+            return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
+        };
+
+        const getBaseBrainPath = (planPath: string) => planPath.replace(/\.resolved(\.\d+)?$/i, '');
+
+        return sheets.filter((sheet: any) => {
+            if (sheet.completed) return false;
+
+            let planId = sheet.sessionId;
+            if (sheet.brainSourcePath) {
+                const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
+                if (blacklist.has(stablePath)) return false;
+                planId = crypto.createHash('sha256').update(stablePath).digest('hex');
+                if (tombstones.has(planId)) return false;
+            }
+
+            if (!planId) return false;
+            const entry = registry.entries[planId];
+            if (!entry) return false;
+
+            return entry.ownerWorkspaceId === workspaceId && entry.status === 'active';
+        });
     }
 
     private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
@@ -517,7 +520,7 @@ export class KanbanProvider implements vscode.Disposable {
 
     // ── Auto-Move Timer Management ──────────────────────────────────────
 
-    private _startAutoMove(column: string, intervalSeconds: number) {
+    private async _startAutoMove(column: string, intervalSeconds: number) {
         // Validate column has a next column
         const nextCol = NEXT_COLUMN[column];
         if (!nextCol) return;
@@ -528,6 +531,19 @@ export class KanbanProvider implements vscode.Disposable {
         // Stop existing timer for this column if any
         this._stopAutoMove(column);
 
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return;
+
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const activeSheets = await this._getActiveSheets(workspaceRoot);
+        const hasCardsInColumn = activeSheets
+            .map((sheet: any) => this._sheetToCard(sheet))
+            .some(card => card.column === column);
+
+        if (!hasCardsInColumn) {
+            return;
+        }
+
         const state: AutoMoveTimer = {
             timer: setInterval(() => this._autoMoveTick(column), 1000),
             intervalSeconds: interval,
@@ -537,7 +553,7 @@ export class KanbanProvider implements vscode.Disposable {
         this._autoMoveTimers.set(column, state);
         this._emitAutoMoveState();
 
-        // Move the first card immediately, then wait the interval for subsequent cards
+        // Trigger the first move immediately, then wait the full interval for subsequent moves.
         state.isAdvancing = true;
         this._autoMoveOneCard(column).then(moved => {
             if (!moved) {
@@ -547,6 +563,8 @@ export class KanbanProvider implements vscode.Disposable {
             console.error(`[KanbanProvider] Auto-move (immediate) failed for column ${column}:`, e);
         }).finally(() => {
             state.isAdvancing = false;
+            state.secondsRemaining = state.intervalSeconds;
+            this._emitAutoMoveState();
         });
     }
 
@@ -611,8 +629,7 @@ export class KanbanProvider implements vscode.Disposable {
             return false;
         }
 
-        const log = this._getSessionLog(workspaceRoot);
-        const sheets = await log.getRunSheets();
+        const sheets = await this._getActiveSheets(workspaceRoot);
         const cards: KanbanCard[] = sheets.map((sheet: any) => this._sheetToCard(sheet));
 
         // Find cards in the source column, sorted by lastActivity (oldest first)
