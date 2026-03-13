@@ -1757,9 +1757,9 @@
             enabled: false,
             batchSize: 3,
             rules: {
-                'CREATED': { enabled: true, intervalMinutes: 5 },
-                'PLAN REVIEWED': { enabled: true, intervalMinutes: 10 },
-                'CODED': { enabled: true, intervalMinutes: 10 }
+                'CREATED': { enabled: true, intervalMinutes: 10 },
+                'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
+                'CODED': { enabled: true, intervalMinutes: 15 }
             }
         };
         let userInitiatedChange = false;
@@ -2598,12 +2598,29 @@
 
             // Column interval rules
             const columnTransitions = [
-                { column: 'CREATED', label: 'CREATED → PLAN REVIEWED', defaultMin: 5 },
-                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED → CODED', defaultMin: 10 },
-                { column: 'CODED', label: 'CODED → CODE REVIEWED', defaultMin: 10 }
+                { column: 'CREATED', label: 'CREATED → PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
+                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED → CODED', defaultMin: 20, floorPerPlan: 5 },
+                { column: 'CODED', label: 'CODED → CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
             ];
 
-            columnTransitions.forEach(({ column, label, defaultMin }) => {
+            function evaluateIntervalWarning(column, val, batchSz, floorPerPlan, inputEl, warnEl) {
+                const floor = batchSz * floorPerPlan;
+                const ratio = val / floor;
+                if (ratio < 0.5) {
+                    inputEl.style.borderColor = 'var(--accent-red, #e55)';
+                    warnEl.textContent = '\u26A0 ' + floor + 'm recommended for batch ' + batchSz + ' \u2014 plans may not finish in time';
+                    warnEl.style.color = 'var(--accent-red, #e55)';
+                } else if (ratio < 1.0) {
+                    inputEl.style.borderColor = 'var(--accent-orange, #e90)';
+                    warnEl.textContent = 'Low-complexity plans only \u2014 recommended ' + floor + 'm for batch ' + batchSz;
+                    warnEl.style.color = 'var(--accent-orange, #e90)';
+                } else {
+                    inputEl.style.borderColor = '';
+                    warnEl.textContent = '';
+                }
+            }
+
+            columnTransitions.forEach(({ column, label, defaultMin, floorPerPlan }) => {
                 const rule = autobanState.rules[column] || { enabled: true, intervalMinutes: defaultMin };
                 const ruleRow = document.createElement('div');
                 ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
@@ -2632,13 +2649,17 @@
                 minInput.type = 'number';
                 minInput.min = '1';
                 minInput.max = '60';
+                minInput.id = 'interval-input-' + column;
                 minInput.value = String(rule.intervalMinutes);
                 minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
                 minInput.addEventListener('change', () => {
                     if (!autobanState.rules[column]) {
                         autobanState.rules[column] = { enabled: true, intervalMinutes: defaultMin };
                     }
-                    autobanState.rules[column].intervalMinutes = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
+                    const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
+                    autobanState.rules[column].intervalMinutes = val;
+                    minInput.value = String(val);
+                    evaluateIntervalWarning(column, val, autobanState.batchSize, floorPerPlan, minInput, warnLabel);
                     emitAutobanState();
                 });
 
@@ -2646,12 +2667,20 @@
                 minLbl.style.cssText = 'color:var(--text-secondary);';
                 minLbl.textContent = 'min';
 
+                const warnLabel = document.createElement('div');
+                warnLabel.id = 'warn-label-' + column;
+                warnLabel.style.cssText = 'font-size:9px; padding:1px 8px 4px; font-family:var(--font-mono); min-height:12px;';
+
                 ruleRow.appendChild(checkbox);
                 ruleRow.appendChild(ruleLbl);
                 ruleRow.appendChild(everyLbl);
                 ruleRow.appendChild(minInput);
                 ruleRow.appendChild(minLbl);
                 container.appendChild(ruleRow);
+                container.appendChild(warnLabel);
+
+                // Initial warning evaluation
+                evaluateIntervalWarning(column, rule.intervalMinutes, autobanState.batchSize, floorPerPlan, minInput, warnLabel);
             });
 
             return container;

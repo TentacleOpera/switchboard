@@ -106,11 +106,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         enabled: false,
         batchSize: 3,
         rules: {
-            'CREATED': { enabled: true, intervalMinutes: 5 },
-            'PLAN REVIEWED': { enabled: true, intervalMinutes: 10 },
-            'CODED': { enabled: true, intervalMinutes: 10 }
+            'CREATED': { enabled: true, intervalMinutes: 10 },
+            'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
+            'CODED': { enabled: true, intervalMinutes: 15 }
         }
     };
+    // Tracks session IDs currently dispatched but not yet column-promoted.
+    // Prevents the same card being picked up twice if a tick fires before runsheet propagates.
+    private _activeDispatchSessions = new Set<string>();
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
@@ -617,7 +620,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Construct batched prompt
         const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
 
-        let prompt = `Please process the following ${validPlans.length} plans.\nIf your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\nCRITICAL INSTRUCTIONS:\n1. Treat each file path below as a completely isolated context. Do not mix requirements between plans.\n2. Execute each plan fully before moving to the next (if sequential).\n3. Upon completing ALL plans, save a read receipt to the inbox.\n\n${focusDirective}\n\nPLANS TO PROCESS:\n`;
+        let prompt = `Please process the following ${validPlans.length} plans.\nIf your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\nCRITICAL INSTRUCTIONS:\n1. Treat each file path below as a completely isolated context. Do not mix requirements between plans.\n2. Execute each plan fully before moving to the next (if sequential).\n\n${focusDirective}\n\nPLANS TO PROCESS:\n`;
 
         for (const plan of validPlans) {
             prompt += `- [${plan.topic}] Plan File: ${plan.absolutePath}\n`;
@@ -811,6 +814,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             clearInterval(timer);
         }
         this._autobanTimers.clear();
+        this._activeDispatchSessions.clear();
     }
 
     /** Process one tick for a given column: find cards, batch-dispatch up to batchSize. */
@@ -844,10 +848,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         if (cardsInColumn.length === 0) { return; }
 
-        // Sort oldest first, take up to batchSize
+        // Sort oldest first, take up to batchSize, filtering out already-in-flight sessions
         cardsInColumn.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
-        const batch = cardsInColumn.slice(0, batchSize);
+        const batch = cardsInColumn
+            .filter(c => !this._activeDispatchSessions.has(c.sessionId))
+            .slice(0, batchSize);
+        if (batch.length === 0) { return; }
         const sessionIds = batch.map(c => c.sessionId);
+
+        // Mark as in-flight (cleared naturally: next tick won't find them in the same column once promoted)
+        batch.forEach(c => this._activeDispatchSessions.add(c.sessionId));
 
         console.log(`[Autoban] ${sourceColumn}: dispatching ${sessionIds.length} card(s) to ${role}`);
         await this.handleKanbanBatchTrigger(role, sessionIds, instruction);
