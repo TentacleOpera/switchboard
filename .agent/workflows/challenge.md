@@ -31,7 +31,9 @@ Use this for:
 
 1. **Start + Scope**
    - Call `start_workflow(name: "challenge", force: true)` to auto-replace any stale workflows.
-   - Identify the exact plan/code scope to review.
+   - Identify the exact plan/code scope to review from the user's message (e.g. a file link, plan name, or path).
+   - **PIN THE TARGET SESSION NOW** — scan `.switchboard/sessions/*.json` to find the session whose `planFile` matches the target plan. Store this as `targetSessionId` and `targetPlanFile`. Do NOT defer this to step 5. If no matching session is found, ask the user to confirm the correct plan before proceeding.
+   - `targetSessionId` will be passed to `complete_workflow_phase(phase: 5)` to guarantee the correct Kanban card is promoted, even if the user creates new plans during the review.
    - Resolve output paths up front:
      - `grumpyPath` default: `.switchboard/reviews/grumpy_critique.md`
      - `balancedPath` default: `.switchboard/reviews/balanced_review.md`
@@ -67,10 +69,12 @@ Use this for:
 
 5. **Complete + Integrate**
    - MANDATORY before calling `complete_workflow_phase`: update the original Feature Plan document with the Action Plan items from the balanced review.
-     - Read `.switchboard/sessions/` to find the most recent session JSON and extract `planFile` (the absolute path to the Feature Plan).
+     - Use `targetPlanFile` pinned in Step 1 as the absolute path to the Feature Plan. **DO NOT re-read the sessions directory** to find the plan — this would pick up the most-recently-touched session which may be a different plan if the user created new plans during the review.
      - Edit the Feature Plan to integrate the approved Action Plan items. ⚠️ **CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing.** This is a permitted write under the CRITICAL CONSTRAINTS block — it is orchestration, not implementation.
-   - Call `complete_workflow_phase(phase: 5, workflow: "challenge", artifacts: [{ path: "<balancedPath>", description: "Final internal review output" }, { path: "<feature_plan_absolute_path>", description: "Feature Plan updated with review findings" }])`.
-   - **Kanban**: `complete_workflow_phase(phase: 5)` automatically promotes the most recently active Kanban card to **PLAN REVIEWED**. No additional tool call is required.
+   - Call `complete_workflow_phase(phase: 5, workflow: "challenge", sessionId: "<targetSessionId>", artifacts: [{ path: "<balancedPath>", description: "Final internal review output" }, { path: "<targetPlanFile>", description: "Feature Plan updated with review findings" }])`.
+   - **Kanban**: Passing `sessionId` ensures the correct card is promoted to **PLAN REVIEWED**, regardless of any other plan activity during the review.
+     > [!NOTE]
+     > `targetSessionId` must be the value pinned in Step 1. Omitting it falls back to the most-recently-active session (unsafe if plans were created during the review).
 
 ## Final-Phase Recovery Rule
 - Phase 5 is terminal for `challenge`. Do NOT call phase 6.

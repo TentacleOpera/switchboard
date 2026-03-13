@@ -178,7 +178,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             const cards: KanbanCard[] = await Promise.all(
                 activeSheets.map(async (sheet: any) => {
-                    const complexity = await this._getComplexityFromPlan(workspaceRoot, sheet.planFile || '');
+                    const complexity = await this.getComplexityFromPlan(workspaceRoot, sheet.planFile || '');
                     return this._sheetToCard(sheet, complexity);
                 })
             );
@@ -378,7 +378,7 @@ export class KanbanProvider implements vscode.Disposable {
      * Read a plan file and determine complexity from its Complexity Audit / Band B section.
      * Returns 'Unknown' if no audit section, 'Low' if Band B is empty/None, 'High' otherwise.
      */
-    private async _getComplexityFromPlan(workspaceRoot: string, planPath: string): Promise<'Unknown' | 'Low' | 'High'> {
+    public async getComplexityFromPlan(workspaceRoot: string, planPath: string): Promise<'Unknown' | 'Low' | 'High'> {
         try {
             if (!planPath) return 'Unknown';
             const resolvedPlanPath = path.isAbsolute(planPath) ? planPath : path.join(workspaceRoot, planPath);

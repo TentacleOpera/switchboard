@@ -2533,9 +2533,10 @@ function registerTools(server) {
             })).optional().describe("Required artifacts to validate before marking phase complete"),
             notes: z.string().optional().describe("Optional notes about this phase completion"),
             skipReason: z.string().optional().describe("If skipping phases, provide an explicit justification here"),
-            targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, targets session.")
+            targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, targets session."),
+            sessionId: z.string().optional().describe("Session ID of the specific Kanban card to promote on workflow completion. When provided, overrides the default most-recent-session heuristic. Required for 'challenge' workflow to prevent promoting the wrong card.")
         },
-        async ({ workflow, phase, artifacts, notes, skipReason, targetAgent }) => {
+        async ({ workflow, phase, artifacts, notes, skipReason, targetAgent, sessionId }) => {
             const workspaceRoot = getWorkspaceRoot();
             if (artifacts && artifacts.length > 0) {
                 const missing = [];
@@ -2798,18 +2799,24 @@ function registerTools(server) {
                 }
                 autoStopText = " (Workflow Auto-Stopped)";
 
-                // Auto-promote Kanban card: write a workflow event to the most recent run sheet.
+                // Auto-promote Kanban card: write a workflow event to the target run sheet.
+                // Prefer the explicit sessionId parameter over the most-recent-session heuristic
+                // to prevent promoting the wrong card when the user creates plans during a review.
                 // KanbanProvider's file watcher picks this up automatically.
                 if (workflow === 'challenge') {
                     try {
-                        const activeSheet = await findMostRecentActiveRunSheet(workspaceRoot);
-                        if (activeSheet?.sessionId) {
+                        let targetSessionId = sessionId || null;
+                        if (!targetSessionId) {
+                            const activeSheet = await findMostRecentActiveRunSheet(workspaceRoot);
+                            targetSessionId = activeSheet?.sessionId || null;
+                        }
+                        if (targetSessionId) {
                             // Route through IPC so the extension's mutex serialises the write.
                             // Direct file write here races with the extension's file-watcher write.
                             if (process.send) {
-                                process.send({ type: 'appendRunSheetEvent', sessionId: activeSheet.sessionId, event: { workflow: 'challenge' } });
+                                process.send({ type: 'appendRunSheetEvent', sessionId: targetSessionId, event: { workflow: 'challenge' } });
                             } else {
-                                await appendRunSheetEvent(activeSheet.sessionId, { workflow: 'challenge' }, workspaceRoot);
+                                await appendRunSheetEvent(targetSessionId, { workflow: 'challenge' }, workspaceRoot);
                             }
                         }
                     } catch (e) {

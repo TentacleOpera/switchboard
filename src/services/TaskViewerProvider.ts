@@ -829,8 +829,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const log = this._getSessionLog(workspaceRoot);
         const sheets = await log.getRunSheets();
 
-        // Determine which column each card is in (reuse KanbanProvider's logic inline)
-        const cardsInColumn: { sessionId: string; lastActivity: string }[] = [];
+        // Determine which column each card is in, pre-resolving planFile to avoid double-reads
+        const cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[] = [];
         for (const sheet of sheets) {
             if (!sheet.sessionId || sheet.completed) { continue; }
             const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
@@ -842,7 +842,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         lastActivity = e.timestamp;
                     }
                 }
-                cardsInColumn.push({ sessionId: sheet.sessionId, lastActivity });
+                cardsInColumn.push({ sessionId: sheet.sessionId, lastActivity, planFile: sheet.planFile });
             }
         }
 
@@ -854,9 +854,48 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .filter(c => !this._activeDispatchSessions.has(c.sessionId))
             .slice(0, batchSize);
         if (batch.length === 0) { return; }
-        const sessionIds = batch.map(c => c.sessionId);
 
-        // Mark as in-flight (cleared naturally: next tick won't find them in the same column once promoted)
+        // Dynamic Complexity Routing for PLAN REVIEWED → CODED
+        if (sourceColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
+            const lowSessions: string[] = [];
+            const highSessions: string[] = [];
+
+            for (const card of batch) {
+                try {
+                    const planFile = card.planFile;
+                    if (planFile) {
+                        const complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, planFile);
+                        if (complexity === 'Low') {
+                            lowSessions.push(card.sessionId);
+                        } else {
+                            highSessions.push(card.sessionId);
+                        }
+                    } else {
+                        highSessions.push(card.sessionId);
+                    }
+                } catch {
+                    highSessions.push(card.sessionId);
+                }
+            }
+
+            console.log(`[Autoban] Complexity routing: ${lowSessions.length} → coder, ${highSessions.length} → lead`);
+
+            // Dispatch sequentially to avoid file and terminal lock contention
+            if (lowSessions.length > 0) {
+                lowSessions.forEach(id => this._activeDispatchSessions.add(id));
+                const ok = await this.handleKanbanBatchTrigger('coder', lowSessions, instruction);
+                if (!ok) { lowSessions.forEach(id => this._activeDispatchSessions.delete(id)); }
+            }
+            if (highSessions.length > 0) {
+                highSessions.forEach(id => this._activeDispatchSessions.add(id));
+                const ok = await this.handleKanbanBatchTrigger('lead', highSessions, instruction);
+                if (!ok) { highSessions.forEach(id => this._activeDispatchSessions.delete(id)); }
+            }
+            return;
+        }
+
+        // Default static routing for other columns
+        const sessionIds = batch.map(c => c.sessionId);
         batch.forEach(c => this._activeDispatchSessions.add(c.sessionId));
 
         console.log(`[Autoban] ${sourceColumn}: dispatching ${sessionIds.length} card(s) to ${role}`);
