@@ -28,6 +28,6 @@ Cursor's Composer agent can participate via the Switchboard MCP server.
 | `/handoff-chat` | handoff-chat | Clipboard/chat delegation workflow |
 | `/handoff-relay` | handoff-relay | Execute-now, stage-rest relay workflow |
 | `/handoff-lead` | handoff-lead | One-shot lead execution workflow |
-| `/challenge` | challenge | Adversarial code review |
+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review |
 | `/accuracy` | accuracy | High-accuracy solo mode |
 | `/chat` | chat | Product Manager consultation (no code) |

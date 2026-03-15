@@ -10,6 +10,7 @@ import { KanbanProvider } from './KanbanProvider';
 import { sendRobustText, getAntigravityHash } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
+import { CustomAgentConfig, findCustomAgentByRole, parseCustomAgents } from './agentConfig';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
     syncMirrorToBrain: (options: {
         mirrorPath: string;
@@ -363,9 +364,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _computeDispatchReadiness(
         enrichedTerminals: Record<string, any>,
         terminalsMap: Record<string, any>,
-        activeTerminals: readonly vscode.Terminal[]
+        activeTerminals: readonly vscode.Terminal[],
+        roles: string[],
+        roleCandidates: Record<string, string[]>
     ): Record<string, DispatchReadinessEntry> {
-        const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst'];
         const readiness: Record<string, DispatchReadinessEntry> = {};
 
         for (const role of roles) {
@@ -404,7 +406,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 continue;
             }
 
-            const roleFallbackMatch = this._findOpenTerminalMatch(activeTerminals, this._roleNameCandidates(role));
+            const roleFallbackMatch = this._findOpenTerminalMatch(activeTerminals, roleCandidates[role] || this._roleNameCandidates(role));
             if (roleFallbackMatch) {
                 readiness[role] = {
                     state: 'recoverable',
@@ -606,8 +608,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (role === 'planner' && instruction === 'enhance') {
             // Special case for enhance
         }
-        const workflowName = (role === 'planner' && instruction === 'enhance')
-            ? 'Enhanced plan'
+        const workflowName = role === 'planner'
+            ? (instruction === 'improve-plan'
+                ? 'Improved plan'
+                : instruction === 'enhance'
+                    ? 'Enhanced plan'
+                    : workflowMap[role])
             : workflowMap[role];
 
         // Sequential runsheet updates to prevent file-lock contention
@@ -681,7 +687,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
-            return state.startupCommands || {};
+            const startupCommands = { ...(state.startupCommands || {}) };
+            for (const agent of parseCustomAgents(state.customAgents)) {
+                startupCommands[agent.role] = agent.startupCommand;
+            }
+            return startupCommands;
         } catch {
             return {};
         }
@@ -695,10 +705,37 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
+            for (const agent of parseCustomAgents(state.customAgents)) {
+                defaults[agent.role] = true;
+            }
             return { ...defaults, ...state.visibleAgents };
         } catch {
             return defaults;
         }
+    }
+
+    public async getCustomAgents(): Promise<CustomAgentConfig[]> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders) return [];
+        const statePath = path.join(workspaceFolders[0].uri.fsPath, '.switchboard', 'state.json');
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return parseCustomAgents(state.customAgents);
+        } catch {
+            return [];
+        }
+    }
+
+    private _sanitizeCustomAgents(raw: unknown): CustomAgentConfig[] {
+        return parseCustomAgents(raw);
+    }
+
+    private _buildCustomAgentPrompt(customAgent: CustomAgentConfig, planAnchor: string, focusDirective: string): string {
+        const instructions = customAgent.promptInstructions
+            ? `${customAgent.promptInstructions}\n\n`
+            : '';
+        return `${instructions}Please execute the plan.\n\n${planAnchor}\n\n${focusDirective}`;
     }
 
 
@@ -786,7 +823,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** Column-to-instruction mapping for Autoban dispatches. */
     private _autobanColumnToInstruction(column: string): string | undefined {
-        if (column === 'CREATED') { return 'enhance'; }
+        if (column === 'CREATED') { return 'improve-plan'; }
         return undefined;
     }
 
@@ -914,30 +951,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _deriveColumnFromEvents(events: any[]): string {
         if (!events || events.length === 0) { return 'CREATED'; }
 
-        const REVIEW_WORKFLOWS = ['sidebar-review', 'Enhanced plan', 'reviewer-pass'];
-        const CODE_WORKFLOWS = ['handoff', 'handoff-lead', 'jules'];
-
-        let lastReviewStart: string | null = null;
-        let lastCodeStart: string | null = null;
-        let lastReviewerStart: string | null = null;
-
-        for (const e of events) {
+        for (let i = events.length - 1; i >= 0; i--) {
+            const e = events[i];
             if (e.action !== 'start') { continue; }
-            if (REVIEW_WORKFLOWS.includes(e.workflow)) {
-                if (e.workflow === 'reviewer-pass') {
-                    lastReviewerStart = e.timestamp;
-                } else {
-                    lastReviewStart = e.timestamp;
-                }
-            }
-            if (CODE_WORKFLOWS.includes(e.workflow)) {
-                lastCodeStart = e.timestamp;
+            if (e.workflow === 'reviewer-pass') { return 'CODE REVIEWED'; }
+            if (e.workflow === 'handoff' || e.workflow === 'handoff-lead' || e.workflow === 'jules') { return 'CODED'; }
+            if (e.workflow === 'sidebar-review' || e.workflow === 'Enhanced plan' || e.workflow === 'improve-plan' || e.workflow === 'Improved plan') { return 'PLAN REVIEWED'; }
+            if (typeof e.workflow === 'string' && e.workflow.startsWith('custom-agent:')) {
+                return e.workflow.slice('custom-agent:'.length) || 'CREATED';
             }
         }
 
-        if (lastReviewerStart) { return 'CODE REVIEWED'; }
-        if (lastCodeStart) { return 'CODED'; }
-        if (lastReviewStart) { return 'PLAN REVIEWED'; }
         return 'CREATED';
     }
 
@@ -1237,6 +1261,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'getAccurateCodingSetting': {
                         const enabled = this._isAccurateCodingEnabled();
                         this._view?.webview.postMessage({ type: 'accurateCodingSetting', enabled });
+                        break;
+                    }
+                    case 'openDocs': {
+                        const readmePath = vscode.Uri.joinPath(this._context.extensionUri, 'README.md');
+                        vscode.commands.executeCommand('markdown.showPreview', readmePath);
                         break;
                     }
                     case 'setActiveTab': {
@@ -3158,19 +3187,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 throw new Error('Plan file path is outside the workspace boundary.');
             }
 
+            const effectiveColumn = column || this._deriveColumnFromEvents(Array.isArray(sheet.events) ? sheet.events : []);
             const planUri = vscode.Uri.file(planPathAbsolute).toString();
             const markdownLink = `[${topic}](${planUri})`;
             let textToCopy = markdownLink;
-            if (column === 'CREATED') {
-                textToCopy = `Please review and enhance the following plan. Execute the .agent/workflows/enhance.md workflow to break it down into distinct steps grouped by high complexity and low complexity:\n\n${markdownLink}`;
-            } else if (column === 'PLAN REVIEWED') {
+            const customAgents = await this.getCustomAgents();
+            const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
+            if (effectiveColumn === 'CREATED') {
+                textToCopy = `Please improve the following plan. Execute the .agent/workflows/improve-plan.md workflow to perform a dependency check and adversarial review:\n\n${markdownLink}`;
+            } else if (effectiveColumn === 'PLAN REVIEWED') {
                 textToCopy = `Please execute the following plan. Use the linked file as the single source of truth:\n\n${markdownLink}`;
-            } else if (column === 'CODED') {
+            } else if (effectiveColumn === 'CODED') {
                 textToCopy = `The implementation for the following plan is complete. Please review the code against the plan requirements and identify any defects:\n\n${markdownLink}`;
+            } else if (customAgent) {
+                textToCopy = `Please execute the following plan. Use the linked file as the single source of truth:\n\n${markdownLink}`;
+                if (customAgent.promptInstructions) {
+                    textToCopy += `\n\nAdditional Instructions: ${customAgent.promptInstructions}`;
+                }
             }
 
             await vscode.env.clipboard.writeText(textToCopy);
             this._view?.webview.postMessage({ type: 'copyPlanLinkResult', success: true });
+            const workflowName = effectiveColumn === 'CREATED'
+                ? 'improve-plan'
+                : effectiveColumn === 'PLAN REVIEWED'
+                    ? 'handoff'
+                    : effectiveColumn === 'CODED'
+                        ? 'reviewer-pass'
+                        : undefined;
+            if (workflowName) {
+                try {
+                    await this._updateSessionRunSheet(sessionId, workflowName);
+                } catch (updateError) {
+                    console.error(`[TaskViewerProvider] Failed to auto-advance runsheet after copy for ${sessionId}:`, updateError);
+                }
+            }
             return true;
         } catch (e: any) {
             const errorMessage = e?.message || String(e);
@@ -4715,15 +4766,22 @@ ${focusDirective}`),
         const strictReviewPrompts = teamStrictPrompts ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('review.strictPrompts', false);
         const focusDirective = `FOCUS DIRECTIVE: Use the Plan File path above as the single source of truth. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
         const planAnchor = `Plan File: ${planFileAbsolute}`;
+        const inlineChallengeDirective = `Challenge step (inline, no workflow transitions):
+- Before implementation, perform a concise adversarial review of this plan.
+- List at least 2 concrete flaws/edge cases and how you'll address them.
+- Then execute using those corrections.
+- Do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
+        const customAgents = await this.getCustomAgents();
+        const customAgent = findCustomAgentByRole(customAgents, role);
         const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
         const balancedReviewPath = `.switchboard/reviews/balanced_review_${sessionId}.md`;
         const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
         const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
 
         if (role === 'planner') {
-            if (instruction === 'enhance') {
+            if (instruction === 'improve-plan' || instruction === 'enhance') {
                 if (strictPlannerPrompts) {
-                    messagePayload = `Please enhance this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
+                    messagePayload = `Please improve this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
 Do not add net-new product requirements or scope.
 You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
 
@@ -4751,7 +4809,7 @@ IMPORTANT: Once the balanced review is complete, you MUST update the original fe
 
 ${focusDirective}`;
                 } else {
-                    messagePayload = `Please enhance this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
+                    messagePayload = `Please improve this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
 Do not add net-new product requirements or scope.
 You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
 
@@ -4836,6 +4894,7 @@ ${planAnchor}
 Mode:
 - You are the reviewer-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
+- Treat the challenge stage as inline analysis in this same prompt (no \`/challenge\` workflow).
 - Assess actual code changes against the plan requirements, then fix valid issues in code, then verify.
 
 Use explicit two-stage analysis:
@@ -4877,6 +4936,7 @@ ${planAnchor}
 Mode:
 - You are the reviewer-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
+- Treat the challenge stage as inline analysis in this same prompt (no \`/challenge\` workflow).
 - Assess actual code changes against the plan requirements, fix valid material issues, then verify.
 
 Use explicit two-stage analysis:
@@ -4914,6 +4974,8 @@ ${focusDirective}`;
 
 ${planAnchor}
 
+${inlineChallengeDirective}
+
 ${focusDirective}`;
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
@@ -4922,11 +4984,15 @@ ${focusDirective}`;
 
 ${planAnchor}
 
+${inlineChallengeDirective}
+
 ${focusDirective}`);
             } else if (instruction === 'low-complexity') {
                 messagePayload = this._withCoderAccuracyInstruction(`Please execute the low complexity steps of the plan.
 
 ${planAnchor}
+
+${inlineChallengeDirective}
 
 ${focusDirective}`);
             } else if (instruction === 'create-signal-file') {
@@ -4941,8 +5007,12 @@ Create this file exactly as specified, then continue your work.`);
 
 ${planAnchor}
 
+${inlineChallengeDirective}
+
 ${focusDirective}`);
             }
+        } else if (customAgent) {
+            messagePayload = this._buildCustomAgentPrompt(customAgent, planAnchor, focusDirective);
         } else {
             clearDispatchLock();
             vscode.window.showErrorMessage(`Unknown role: ${role}`);
@@ -4954,6 +5024,8 @@ ${focusDirective}`);
 
         if (role === 'planner' && instruction === 'enhance') {
             workflowName = 'Enhanced plan';
+        } else if (customAgent) {
+            workflowName = `custom-agent:${role}`;
         } else {
             const workflowMap: Record<string, string> = {
                 'planner': 'sidebar-review',
@@ -5150,7 +5222,7 @@ ${focusDirective}`);
 
     private _buildInitiatedPlanPrompt(planPath: string): string {
         const focusDirective = `FOCUS DIRECTIVE: You are working on the file at ${planPath}. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing. Treat the provided path as the single source of truth.`;
-        return `@[/enhance] Please review and expand the initial plan.\n\n${focusDirective}`;
+        return `@[/improve-plan] Please review and expand the initial plan.\n\n${focusDirective}`;
     }
 
     private async _createInitiatedPlan(title: string, idea: string): Promise<{ sessionId: string; planFileAbsolute: string; }> {
@@ -6232,6 +6304,7 @@ ${focusDirective}`);
                 const content = await fs.promises.readFile(statePath, 'utf8');
                 const state = JSON.parse(content);
                 const terminalsMap = state.terminals || {};
+                const customAgents = parseCustomAgents(state.customAgents);
 
                 // Build local PID + name sets for ownership detection
                 const activeTerminals = vscode.window.terminals;
@@ -6316,7 +6389,9 @@ ${focusDirective}`);
                 const leadAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
                 const coderAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
                 const teamReady = !!(leadAgent && (leadAgent as any).alive && coderAgent && (coderAgent as any).alive);
-                const dispatchReadiness = this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals);
+                const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
+                const roleCandidates = Object.fromEntries(customAgents.map(agent => [agent.role, [agent.name, agent.role]]));
+                const dispatchReadiness = this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
 
                 this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, teamReady, dispatchReadiness });
 
@@ -6451,10 +6526,12 @@ ${focusDirective}`);
                 '*   **Edge Cases:** Identify race conditions, security flaws, backward compatibility issues, and side effects.',
                 '*   **Dependencies & Conflicts:** Identify if this plan relies on other pending plans in the Kanban board, or if it will conflict with concurrent work.',
                 '',
-                '## Step 3: Internal Adversarial Review',
-                'You must internally simulate two distinct personas to stress-test your assumptions before writing the implementation steps:',
-                '1.  **Grumpy Principal Engineer:** Aggressively critique the assumptions, edge cases, and missing error handling in your initial thought process. Assume the plan will break production.',
-                '2.  **Balanced Lead Developer:** Synthesize that critique. Acknowledge valid concerns and adjust the architecture/approach to mitigate the risks raised by Grumpy.',
+                '## Step 3: Improve Plan (`/improve-plan`)',
+                'Audit the strategy and stress-test the assumptions:',
+                '- Identify missing pieces, implicit dependencies, or assumptions that need hardening',
+                '- Decompose large changes into Band A (routine) and Band B (complex/risky) tasks',
+                '- **Grumpy Persona**: Aggressively critique every assumption. Find edge cases, race conditions, missing error handling, and scope creep.',
+                '- **Balanced Persona**: Synthesize the critique and finalize the plan.',
                 '',
                 '## Step 4: The Implementation Spec (Plan Template)',
                 'Output your final plan using the exact Markdown structure below. **You must include every section.**',

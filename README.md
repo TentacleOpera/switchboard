@@ -107,8 +107,8 @@ Use these within the Antigravity chat to replicate the sidebar or CLI-BAN action
 | Command | What it does |
 | :--- | :--- |
 | `/chat` | Ideation mode — discuss requirements before any plan is written. |
-| `/enhance` | Deepen and stress-test an existing plan. |
-| `/challenge` | Adversarial review — a grumpy persona finds flaws, then synthesizes fixes. |
+| `/improve-plan` | Deep planning, dependency checks, and adversarial review in one pass. |
+| `/challenge` | Internal adversarial review pass (advisory-only, no Kanban auto-move). |
 | `/handoff` | Route sanity-checking for micro-specs to a CLI agent; ends at spec decomposition. |
 | `/handoff-lead` | Send everything to your Lead Coder agent in one shot. |
 | `/handoff-chat` | Copy the plan to the clipboard for pasting into Windsurf or another IDE. |

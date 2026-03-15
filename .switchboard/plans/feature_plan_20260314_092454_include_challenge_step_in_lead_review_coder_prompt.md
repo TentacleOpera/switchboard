@@ -1,17 +1,24 @@
-# include challenge step in lead review coder prompt
+# include optional challenge step in lead review coder prompt
 
 ## Notebook Plan
 
-workflow refinement: kjust say i want to make a plan in notebook, but then i want to challenge it and send to a lead coder, but i don't have a planner agent set, and just want to go notebook to lead coder, who is working on per prompt pricing. i don't want to spend two prompts first on challenge, then implementation. is it possible to have an ioption to include challenge i nwiththe lead coder implementation prompt - adversarially revierw, integrate, then code?
+I want challenge behavior to be available as an **option** when sending work to lead coder, not forced into every single lead/coder prompt by default.
 
 ## Goal
-- Clarify expected outcome and scope.
+- Add an explicit opt-in path to include a challenge step in the lead/coder implementation prompt.
+- Keep the default lead/coder prompt unchanged (no automatic challenge step).
 
 ## Proposed Changes
-- TODO
+1. Update prompt-building logic in `src/services/TaskViewerProvider.ts` so challenge instructions are injected only when an explicit flag is set.
+2. Add a clear UI option in `src/webview/implementation.html` (and any related view) to choose:
+   - Standard lead/coder prompt (default)
+   - Lead/coder prompt with inline challenge step (opt-in)
+3. Ensure existing dispatch paths keep current behavior unless the new option is selected.
 
 ## Verification Plan
-- TODO
+1. Trigger standard lead/coder dispatch and verify payload has no inline challenge instructions.
+2. Trigger the new "with challenge" option and verify payload includes the challenge step instructions.
+3. Run both flows end-to-end and confirm they target the same plan file and complete successfully.
 
 ## Open Questions
-- TODO
+- Naming preference for the UI action: `Lead Coder + Challenge` vs `Lead Coder (Challenge Enabled)`.

@@ -29,6 +29,11 @@ This update universally applies the consolidation, cleaning up all UI references
 - **Security:** None.
 - **Side Effects:** Agents executing `/improve-plan` will output their critique and synthesis directly into the chat and immediately update the plan file, saving significant token costs and execution time compared to the old multi-step FSMs. Legacy plans marked with `enhance` or `challenge` in their run sheets will continue to map correctly to `PLAN REVIEWED`.
 
+## Enhancement Findings & Cross-Plan Conflict Audit
+- **Cross-Plan Conflicts Detected:** 
+  - `feature_plan_20260314_092454_include_challenge_step_in_lead_review_coder_prompt.md` and `feature_plan_20260314_092325_prompt_for_plan_created_should_reference_challenge_workflow.md` explicitly rely on the `challenge` workflow which we are deleting. These plans must either be cancelled, or their implementation must pivot to reference `improve-plan` instead.
+- **Code Dependencies:** `send-message-guards.test.js` and `workflow-controls.test.js` strictly depend on specific FSM states. Removing `challenge` requires updating test assertions to expect `improve-plan` state routing.
+
 ## Adversarial Synthesis
 ### Grumpy Critique
 You're modifying tests, documentation, IDE templates, and the core Orchestrators all at once! If you miss a single string replacement in `send-message-guards.test.js`, the CI is going to fail because it tests strict FSM gating! Also, if you replace the workflow with a single step that says "do everything at once," the agent might just output the chat messages and forget to actually update the plan file using `replace_file_content`!

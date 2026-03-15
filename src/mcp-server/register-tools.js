@@ -59,7 +59,7 @@ const WORKFLOW_ACTION_ROUTING = {
     'handoff-relay': {
         // Relay flow pauses after staging, no dispatch required.
     },
-    challenge: {
+    'improve-plan': {
         execute: 'reviewer'
     },
     accuracy: {
@@ -832,7 +832,7 @@ function isBrainLeakage(payload) {
  * the tool call is REJECTED Ã¢â‚¬â€ not warned, rejected.
  */
 const ACTION_REQUIRED_WORKFLOWS = {
-    'execute': ['handoff', 'challenge', 'handoff-lead'],
+    'execute': ['handoff', 'improve-plan', 'handoff-lead'],
     'delegate_task': ['handoff'],
 };
 
@@ -1445,7 +1445,7 @@ function registerTools(server) {
     server.tool(
         "start_workflow",
         {
-            name: z.string().min(1),
+            name: WorkflowEnum,
             initialContext: z.string().optional(),
             targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, starts workflow on session."),
             force: z.boolean().optional().describe("If true, forcibly stop any active workflow on the target before starting the new one.")
@@ -1923,7 +1923,7 @@ function registerTools(server) {
                     const wf = (e.workflow || '').toLowerCase();
                     if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
                     if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-                    if (wf === 'planner' || wf === 'challenge' || wf === 'enhance' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
+                    if (wf === 'planner' || wf === 'enhance' || wf === 'improve-plan' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan' || wf === 'improved plan') return 'PLAN REVIEWED';
                 }
                 return 'CREATED';
             }
@@ -2534,7 +2534,7 @@ function registerTools(server) {
             notes: z.string().optional().describe("Optional notes about this phase completion"),
             skipReason: z.string().optional().describe("If skipping phases, provide an explicit justification here"),
             targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, targets session."),
-            sessionId: z.string().optional().describe("Session ID of the specific Kanban card to promote on workflow completion. When provided, overrides the default most-recent-session heuristic. Required for 'challenge' workflow to prevent promoting the wrong card.")
+            sessionId: z.string().optional().describe("Session ID of the specific Kanban card to promote on workflow completion. When provided, overrides the default most-recent-session heuristic. Required for 'improve-plan' workflow to prevent promoting the wrong card.")
         },
         async ({ workflow, phase, artifacts, notes, skipReason, targetAgent, sessionId }) => {
             const workspaceRoot = getWorkspaceRoot();
@@ -2803,7 +2803,7 @@ function registerTools(server) {
                 // Prefer the explicit sessionId parameter over the most-recent-session heuristic
                 // to prevent promoting the wrong card when the user creates plans during a review.
                 // KanbanProvider's file watcher picks this up automatically.
-                if (workflow === 'challenge') {
+                if (workflow === 'improve-plan') {
                     try {
                         let targetSessionId = sessionId || null;
                         if (!targetSessionId) {
@@ -2814,9 +2814,9 @@ function registerTools(server) {
                             // Route through IPC so the extension's mutex serialises the write.
                             // Direct file write here races with the extension's file-watcher write.
                             if (process.send) {
-                                process.send({ type: 'appendRunSheetEvent', sessionId: targetSessionId, event: { workflow: 'challenge' } });
+                                process.send({ type: 'appendRunSheetEvent', sessionId: targetSessionId, event: { workflow: 'improve-plan' } });
                             } else {
-                                await appendRunSheetEvent(targetSessionId, { workflow: 'challenge' }, workspaceRoot);
+                                await appendRunSheetEvent(targetSessionId, { workflow: 'improve-plan' }, workspaceRoot);
                             }
                         }
                     } catch (e) {
@@ -2892,7 +2892,9 @@ module.exports = {
     enforceWorkflowForAction,
     isBrainLeakage,
     validateRecipient,
-    handleInternalRegistration
+    handleInternalRegistration,
+    WORKFLOWS,
+    PhaseGateSchema
 };
 
 

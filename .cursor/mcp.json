@@ -2,7 +2,7 @@
   "mcpServers": {
     "switchboard": {
       "command": "node",
-      "args": ["c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"]
+      "args": ["${workspaceFolder}/.switchboard/MCP/mcp-server.js"]
     }
   }
 }

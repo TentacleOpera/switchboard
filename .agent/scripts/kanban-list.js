@@ -23,7 +23,7 @@ function deriveColumn(events) {
         const wf = (e.workflow || '').toLowerCase();
         if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
         if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-        if (wf === 'planner' || wf === 'challenge' || wf === 'enhance' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
+        if (wf === 'planner' || wf === 'enhance' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
     }
     return 'CREATED';
 }

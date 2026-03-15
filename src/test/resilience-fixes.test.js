@@ -75,10 +75,10 @@ async function run() {
 
     // Test 1: Routing rejection message includes valid actions
     await test('routing rejection message includes valid actions list', async () => {
-        await seedState({ sessionWorkflow: 'challenge', currentStep: 1 });
+        await seedState({ sessionWorkflow: 'improve-plan', currentStep: 1 });
 
         const result = await sendMessage({
-            action: 'delegate_task',  // Wrong action for challenge
+            action: 'delegate_task',  // Wrong action for improve-plan
             payload: 'review this'
         });
 
@@ -89,7 +89,7 @@ async function run() {
         assert.match(text, /Action 'delegate_task' is not valid/i, 'Should say action is not valid');
         
         // Should list valid actions
-        assert.match(text, /Valid actions for 'challenge'/i, 'Should mention valid actions');
+        assert.match(text, /Valid actions for 'improve-plan'/i, 'Should mention valid actions');
         assert.match(text, /'execute'/i, 'Should list execute as valid action');
         
         // Should suggest correction
@@ -136,9 +136,9 @@ async function run() {
         assert.match(readText(result), /is not valid for workflow 'standby'/i);
     });
 
-    // Test 4: challenge execute does not require phase-gate bypass
-    await test('challenge execute works at step 0 without --all', async () => {
-        await seedState({ sessionWorkflow: 'challenge', currentStep: 0 });
+    // Test 4: improve-plan execute does not require phase-gate bypass
+    await test('improve-plan execute works at step 0 without --all', async () => {
+        await seedState({ sessionWorkflow: 'improve-plan', currentStep: 0 });
 
         const result = await sendMessage({
             action: 'execute',
@@ -146,7 +146,7 @@ async function run() {
             metadata: {}
         });
 
-        assert.ok(!result.isError, `Challenge execute should not be phase-gated: ${readText(result)}`);
+        assert.ok(!result.isError, `Improve-plan execute should not be phase-gated: ${readText(result)}`);
     });
 
     // Test 5: Phase-gate error message is helpful

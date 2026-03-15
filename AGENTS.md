@@ -14,13 +14,13 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
-| `/challenge`, `/challenge --self`, `challenge --self` | **`challenge.md`** | Internal adversarial review (Grumpy Persona + Balanced Synthesis). No external agent needed. |
 | `/handoff`, `/handoff --all`, `handoff --all` | **`handoff.md`** | Default terminal delegation workflow. Optional `--all` only. |
 | `/handoff-chat`, `/handoff chat`, `handoff-chat`, `handoff chat` | **`handoff-chat.md`** | Clipboard/chat delegation workflow. Optional `--all` only. |
 | `/handoff-relay`, `/handoff relay`, `handoff-relay`, `handoff relay` | **`handoff-relay.md`** | Relay workflow: execute complex work now, stage remainder, then pause for model switch. |
 | `/handoff-lead`, `/handoff lead`, `handoff-lead`, `handoff lead` | **`handoff-lead.md`** | Lead Coder one-shot execution workflow for large feature requests. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/enhance` | **`enhance.md`** | Deep planning and structural audit before challenge/handoff. |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
+| `/challenge`, `/challenge --self` | **`challenge.md`** | Internal adversarial review workflow (no delegation). |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
 
 
@@ -49,7 +49,7 @@ The following actions are enforced at the tool level and WILL be rejected if mis
 
 | Action | Required Active Workflow |
 | :--- | :--- |
-| `execute` | `handoff`, `challenge`, or `handoff-lead` |
+| `execute` | `handoff`, `improve-plan`, or `handoff-lead` |
 | `delegate_task` | `handoff` |
 | `submit_result` | *(no restriction — this is a response)* |
 | `status_update` | *(no restriction — informational)* |
@@ -62,7 +62,7 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 User ──► Switchboard Operator (chat.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► /challenge      Internal adversarial review (grumpy + synthesis)
+              ├──► /improve-plan   Deep planning, dependency checks, and adversarial review
               ├──► /handoff-lead   One-shot Lead Coder execution (large features)
               ├──► /handoff --all  Bulk terminal delegation (small features)
 

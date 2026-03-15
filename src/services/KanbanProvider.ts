@@ -3,16 +3,12 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { SessionActionLog } from './SessionActionLog';
+import { buildKanbanColumns, CustomAgentConfig, findCustomAgentByRole, parseCustomAgents } from './agentConfig';
 
-export type KanbanColumn = 'CREATED' | 'PLAN REVIEWED' | 'CODED' | 'CODE REVIEWED';
+export type KanbanColumn = string;
 
 /** Column ordering: each column maps to its next column. */
-const NEXT_COLUMN: Record<string, KanbanColumn | null> = {
-    'CREATED': 'PLAN REVIEWED',
-    'PLAN REVIEWED': 'CODED',
-    'CODED': 'CODE REVIEWED',
-    'CODE REVIEWED': null
-};
+const NEXT_COLUMN: Record<string, KanbanColumn | null> = {};
 
 export interface KanbanCard {
     sessionId: string;
@@ -175,17 +171,20 @@ export class KanbanProvider implements vscode.Disposable {
 
         try {
             const activeSheets = await this._getActiveSheets(workspaceRoot);
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const columns = buildKanbanColumns(customAgents);
 
             const cards: KanbanCard[] = await Promise.all(
                 activeSheets.map(async (sheet: any) => {
                     const complexity = await this.getComplexityFromPlan(workspaceRoot, sheet.planFile || '');
-                    return this._sheetToCard(sheet, complexity);
+                    return this._sheetToCard(sheet, complexity, customAgents);
                 })
             );
 
             const agentNames = await this._getAgentNames(workspaceRoot);
             const visibleAgents = await this._getVisibleAgents(workspaceRoot);
 
+            this._panel.webview.postMessage({ type: 'updateColumns', columns });
             this._panel.webview.postMessage({ type: 'updateBoard', cards });
             this._panel.webview.postMessage({ type: 'updateTarget', column: 'CODED', target: this._codedColumnTarget });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
@@ -257,16 +256,35 @@ export class KanbanProvider implements vscode.Disposable {
         });
     }
 
+    private async _getCustomAgents(workspaceRoot: string): Promise<CustomAgentConfig[]> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            if (!fs.existsSync(statePath)) {
+                return [];
+            }
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return parseCustomAgents(state.customAgents);
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to read custom agents from state:', e);
+            return [];
+        }
+    }
+
     private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-        const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst'];
         const result: Record<string, string> = {};
 
         try {
             if (fs.existsSync(statePath)) {
                 const content = await fs.promises.readFile(statePath, 'utf8');
                 const state = JSON.parse(content);
-                const commands = state.startupCommands || {};
+                const commands = { ...(state.startupCommands || {}) };
+                const customAgents = parseCustomAgents(state.customAgents);
+                const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
+                for (const agent of customAgents) {
+                    commands[agent.role] = agent.startupCommand;
+                }
 
                 for (const role of roles) {
                     const cmd = (commands[role] || '').trim();
@@ -279,13 +297,13 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                 }
             } else {
-                for (const role of roles) {
+                for (const role of ['lead', 'coder', 'reviewer', 'planner', 'analyst']) {
                     result[role] = 'No agent assigned';
                 }
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to read agent names from state:', e);
-            for (const role of roles) {
+            for (const role of ['lead', 'coder', 'reviewer', 'planner', 'analyst']) {
                 result[role] = 'No agent assigned';
             }
         }
@@ -299,6 +317,10 @@ export class KanbanProvider implements vscode.Disposable {
             if (fs.existsSync(statePath)) {
                 const content = await fs.promises.readFile(statePath, 'utf8');
                 const state = JSON.parse(content);
+                const customAgents = parseCustomAgents(state.customAgents);
+                for (const agent of customAgents) {
+                    defaults[agent.role] = true;
+                }
                 return { ...defaults, ...state.visibleAgents };
             }
         } catch (e) {
@@ -315,7 +337,10 @@ export class KanbanProvider implements vscode.Disposable {
             }
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
-            const commands = state.startupCommands || {};
+            const commands = { ...(state.startupCommands || {}) };
+            for (const agent of parseCustomAgents(state.customAgents)) {
+                commands[agent.role] = agent.startupCommand;
+            }
             return typeof commands[role] === 'string' && commands[role].trim().length > 0;
         } catch (e) {
             console.error(`[KanbanProvider] Failed to read assignment state for role '${role}':`, e);
@@ -354,9 +379,9 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Map a runsheet to a Kanban card by inspecting its events array.
      */
-    private _sheetToCard(sheet: any, complexity: 'Unknown' | 'Low' | 'High' = 'Unknown'): KanbanCard {
+    private _sheetToCard(sheet: any, complexity: 'Unknown' | 'Low' | 'High' = 'Unknown', customAgents: CustomAgentConfig[] = []): KanbanCard {
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-        const column = this._deriveColumn(events);
+        const column = this._deriveColumn(events, customAgents);
         let lastActivity = sheet.createdAt || '';
         for (const e of events) {
             if (e.timestamp && e.timestamp > lastActivity) {
@@ -404,24 +429,11 @@ export class KanbanProvider implements vscode.Disposable {
                 ? afterBandB.slice(0, nextSection.index).trim()
                 : afterBandB.trim();
 
-            // Treat Band B as empty only when the entire section collapses to a known empty marker.
-            const normalizedBandB = bandBContent
-                .split(/\r?\n/)
-                .map(line => line.trim())
-                .filter(line => line.length > 0)
-                .map(line => line.replace(/^[-*+]\s*/, '').trim())
-                .join(' ')
-                .replace(/\s+/g, ' ')
-                .trim()
-                .toLowerCase();
+            // Treat Band B as empty if it is completely blank or explicitly starts with a "None" marker
+            // (ignoring markdown list chars), even if explanatory text follows it.
+            const isEmptyRegex = /^[\*\-\`\s]*(none|n\/?a|—|-)($|[\s\.,;:!?]+)/i;
 
-            const isEmpty = normalizedBandB.length === 0
-                || normalizedBandB === 'none'
-                || normalizedBandB === 'none.'
-                || normalizedBandB === 'n/a'
-                || normalizedBandB === 'na'
-                || normalizedBandB === '—'
-                || normalizedBandB === '-';
+            const isEmpty = bandBContent === '' || isEmptyRegex.test(bandBContent);
 
             return isEmpty ? 'Low' : 'High';
         } catch {
@@ -433,17 +445,23 @@ export class KanbanProvider implements vscode.Disposable {
      * Derive column from the most recent workflow event:
      *   reviewer -> CODE REVIEWED
      *   lead/coder/handoff/team -> CODED
-     *   planner/challenge/enhance/accuracy -> REVIEWED
+     *   planner/improve-plan/accuracy -> REVIEWED
      *   (none) -> CREATED
      */
-    private _deriveColumn(events: any[]): KanbanColumn {
+    private _deriveColumn(events: any[], customAgents: CustomAgentConfig[] = []): KanbanColumn {
         // Walk backwards to find the latest relevant workflow start event
         for (let i = events.length - 1; i >= 0; i--) {
             const e = events[i];
             const wf = (e.workflow || '').toLowerCase();
             if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
             if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-            if (wf === 'planner' || wf === 'challenge' || wf === 'enhance' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
+            if (wf === 'planner' || wf === 'enhance' || wf === 'improve-plan' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
+            if (wf.startsWith('custom-agent:')) {
+                const role = wf.slice('custom-agent:'.length);
+                if (findCustomAgentByRole(customAgents, role)) {
+                    return role;
+                }
+            }
         }
         return 'CREATED';
     }
@@ -514,7 +532,7 @@ export class KanbanProvider implements vscode.Disposable {
             case 'PLAN REVIEWED': return 'planner';
             case 'CODED': return this._codedColumnTarget;
             case 'CODE REVIEWED': return 'reviewer';
-            default: return null;
+            default: return column.startsWith('custom_agent_') ? column : null;
         }
     }
 

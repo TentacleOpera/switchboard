@@ -189,7 +189,7 @@ class KanbanProvider {
      * Derive column from the most recent workflow event:
      *   reviewer -> CODE REVIEWED
      *   lead/coder/handoff/team -> CODED
-     *   planner/challenge/enhance/accuracy -> REVIEWED
+     *   planner/improve-plan/accuracy -> REVIEWED
      *   (none) -> CREATED
      */
     _deriveColumn(events) {

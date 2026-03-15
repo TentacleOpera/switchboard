@@ -4,9 +4,12 @@
 		"switchboard": {
 			"command": "node",
 			"args": [
-				"c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
+				"c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js",
+				"c:/Users/patvu/Documents/GitHub/switchboard"
 			],
-			"env": {},
+			"env": {
+				"SWITCHBOARD_WORKSPACE_ROOT": "c:/Users/patvu/Documents/GitHub/switchboard"
+			},
 			"disabled": false,
 			"alwaysAllow": []
 		}

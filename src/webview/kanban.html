@@ -385,88 +385,102 @@
         <div class="kanban-title">⚡ CLI-BAN - Drag plan cards to trigger CLI Agent actions | Copy prompts to send to external IDE agents</div>
         <button class="btn-refresh" id="btn-refresh">Refresh</button>
     </div>
-    <div class="kanban-board" id="kanban-board">
-        <div class="kanban-column" data-column="CREATED">
-            <div class="column-header">
-                <div style="display:flex; flex-direction:column;">
-                    <span class="column-name">Plan Created</span>
-                    <div class="column-subline-spacer" aria-hidden="true"></div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
-                    <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
-                    <span class="column-count" id="count-CREATED">0</span>
-                </div>
-            </div>
-            <div class="autoban-status-bar" id="autoban-status-CREATED">
-                <span class="autoban-indicator" id="autoban-indicator-CREATED"></span>
-            </div>
-            <div class="column-body" id="col-CREATED"></div>
-        </div>
-        <div class="kanban-column" data-column="PLAN REVIEWED">
-            <div class="column-header">
-                <div style="display:flex; flex-direction:column;">
-                    <span class="column-name">Plan Reviewed</span>
-                    <div class="column-agent" id="agent-PLAN REVIEWED"></div>
-                </div>
-                <span class="column-count" id="count-PLAN REVIEWED">0</span>
-            </div>
-            <div class="autoban-status-bar" id="autoban-status-PLAN REVIEWED">
-                <span class="autoban-indicator" id="autoban-indicator-PLAN REVIEWED"></span>
-            </div>
-            <div class="column-body" id="col-PLAN REVIEWED"></div>
-        </div>
-        <div class="kanban-column" data-column="CODED">
-            <div class="column-header">
-                <div style="display:flex; flex-direction:column;">
-                    <span class="column-name">Coded</span>
-                    <div class="column-agent" id="agent-CODED"></div>
-                </div>
-                <div style="display: flex; align-items: center; gap: 12px;">
-                    <select id="coded-target-select" class="column-select">
-                        <option value="lead">Lead Coder</option>
-                        <option value="coder">Coder</option>
-                    </select>
-                    <span class="column-count" id="count-CODED">0</span>
-                </div>
-            </div>
-            <div class="autoban-status-bar" id="autoban-status-CODED">
-                <span class="autoban-indicator" id="autoban-indicator-CODED"></span>
-            </div>
-            <div class="column-body" id="col-CODED"></div>
-        </div>
-        <div class="kanban-column" data-column="CODE REVIEWED">
-            <div class="column-header">
-                <div style="display:flex; flex-direction:column;">
-                    <span class="column-name">Code Reviewed</span>
-                    <div class="column-agent" id="agent-CODE REVIEWED"></div>
-                </div>
-                <span class="column-count" id="count-CODE REVIEWED">0</span>
-            </div>
-            <div class="autoban-status-bar">
-                <!-- Final column — no automation -->
-            </div>
-            <div class="column-body" id="col-CODE REVIEWED"></div>
-        </div>
-    </div>
+    <div class="kanban-board" id="kanban-board"></div>
 
     <script>
         const vscode = acquireVsCodeApi();
-        const columns = ['CREATED', 'PLAN REVIEWED', 'CODED', 'CODE REVIEWED'];
+        const kanbanBoard = document.getElementById('kanban-board');
+        let columnDefinitions = [
+            { id: 'CREATED', label: 'Plan Created', role: null, autobanEnabled: true },
+            { id: 'PLAN REVIEWED', label: 'Plan Reviewed', role: 'planner', autobanEnabled: true },
+            { id: 'CODED', label: 'Coded', role: null, autobanEnabled: true },
+            { id: 'CODE REVIEWED', label: 'Code Reviewed', role: 'reviewer', autobanEnabled: false }
+        ];
+        let columns = columnDefinitions.map(col => col.id);
         let currentCards = [];
         let lastAgentNames = {};
         let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
         let currentCodedTarget = 'lead';
         let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
-        const autobanColumns = ['CREATED', 'PLAN REVIEWED', 'CODED'];
+        let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
+
+        function escapeAttr(value) {
+            return String(value || '').replace(/"/g, '&quot;');
+        }
+
+        function getColumnDefinition(col) {
+            return columnDefinitions.find(def => def.id === col) || null;
+        }
+
+        function renderColumns() {
+            kanbanBoard.innerHTML = columnDefinitions.map(def => {
+                const isCreated = def.id === 'CREATED';
+                const isCoded = def.id === 'CODED';
+                const hasAgent = !isCreated;
+                const rightSide = isCreated
+                    ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
+                            <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
+                            <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
+                       </div>`
+                    : isCoded
+                        ? `<div style="display: flex; align-items: center; gap: 12px;">
+                                <select id="coded-target-select" class="column-select">
+                                    <option value="lead">Lead Coder</option>
+                                    <option value="coder">Coder</option>
+                                </select>
+                                <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
+                           </div>`
+                        : `<span class="column-count" id="count-${escapeAttr(def.id)}">0</span>`;
+                const subline = hasAgent
+                    ? `<div class="column-agent" id="agent-${escapeAttr(def.id)}"></div>`
+                    : `<div class="column-subline-spacer" aria-hidden="true"></div>`;
+                const autoban = def.autobanEnabled
+                    ? `<div class="autoban-status-bar" id="autoban-status-${escapeAttr(def.id)}">
+                            <span class="autoban-indicator" id="autoban-indicator-${escapeAttr(def.id)}"></span>
+                       </div>`
+                    : `<div class="autoban-status-bar"></div>`;
+
+                return `<div class="kanban-column" data-column="${escapeAttr(def.id)}">
+                    <div class="column-header">
+                        <div style="display:flex; flex-direction:column;">
+                            <span class="column-name">${escapeHtml(def.label)}</span>
+                            ${subline}
+                        </div>
+                        ${rightSide}
+                    </div>
+                    ${autoban}
+                    <div class="column-body" id="col-${escapeAttr(def.id)}"></div>
+                </div>`;
+            }).join('');
+
+            document.getElementById('btn-add-plan')?.addEventListener('click', () => {
+                vscode.postMessage({ type: 'createPlan' });
+            });
+
+            const codedTargetSelect = document.getElementById('coded-target-select');
+            if (codedTargetSelect) {
+                codedTargetSelect.value = currentCodedTarget;
+                codedTargetSelect.addEventListener('change', (e) => {
+                    currentCodedTarget = e.target.value;
+                    updateAllColumnAgents();
+                    vscode.postMessage({ type: 'setColumnTarget', column: 'CODED', target: e.target.value });
+                });
+            }
+
+            document.querySelectorAll('.column-body').forEach(container => {
+                const col = container.id.replace(/^col-/, '');
+                container.addEventListener('dragover', handleDragOver);
+                container.addEventListener('dragenter', handleDragEnter);
+                container.addEventListener('dragleave', handleDragLeave);
+                container.addEventListener('drop', (e) => handleDrop(e, col));
+            });
+        }
 
         /** Map a kanban column to its assigned agent role. */
         function columnToRole(col) {
-            const mapping = {
-                'PLAN REVIEWED': 'planner',
-                'CODED': currentCodedTarget,
-                'CODE REVIEWED': 'reviewer'
-            };
-            return mapping[col] || null;
+            if (col === 'CODED') return currentCodedTarget;
+            const def = getColumnDefinition(col);
+            return def ? (def.role || null) : null;
         }
 
         /** Check if a column's agent is visible (enabled). */
@@ -722,6 +736,17 @@
                 case 'updateBoard':
                     renderBoard(msg.cards || []);
                     break;
+                case 'updateColumns':
+                    if (Array.isArray(msg.columns) && msg.columns.length > 0) {
+                        columnDefinitions = msg.columns;
+                        columns = columnDefinitions.map(col => col.id);
+                        autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
+                        renderColumns();
+                        renderBoard(currentCards);
+                        updateAllColumnAgents();
+                        updateAutobanIndicators();
+                    }
+                    break;
                 case 'updateTarget':
                     if (msg.column === 'CODED' && msg.target) {
                         const selectEl = document.getElementById('coded-target-select');
@@ -802,28 +827,7 @@
             vscode.postMessage({ type: 'refresh' });
         });
 
-        document.getElementById('btn-add-plan').addEventListener('click', () => {
-            vscode.postMessage({ type: 'createPlan' });
-        });
-
-        const codedTargetSelect = document.getElementById('coded-target-select');
-        if (codedTargetSelect) {
-            codedTargetSelect.addEventListener('change', (e) => {
-                currentCodedTarget = e.target.value;
-                updateAllColumnAgents();
-                vscode.postMessage({ type: 'setColumnTarget', column: 'CODED', target: e.target.value });
-            });
-        }
-
-        document.querySelectorAll('.column-body').forEach(container => {
-            const col = container.id.replace(/^col-/, '');
-            container.addEventListener('dragover', handleDragOver);
-            container.addEventListener('dragenter', handleDragEnter);
-            container.addEventListener('dragleave', handleDragLeave);
-            container.addEventListener('drop', (e) => handleDrop(e, col));
-        });
-
-        // Initial empty state
+        renderColumns();
         renderBoard([]);
     </script>
 </body>

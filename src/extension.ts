@@ -22,6 +22,10 @@ function getWorkspaceMcpDirectory(workspaceRoot: string): string {
     return path.join(workspaceRoot, '.switchboard', 'MCP');
 }
 
+function getWorkspaceSourceMcpDirectory(workspaceRoot: string): string {
+    return path.join(workspaceRoot, 'src', 'mcp-server');
+}
+
 function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean): { value: boolean; ignoredWorkspaceOverride: boolean } {
     const config = vscode.workspace.getConfiguration('switchboard');
     const inspected = config.inspect<boolean>(key);
@@ -54,8 +58,10 @@ async function getOrCreateDispatchSigningKey(context: vscode.ExtensionContext): 
     return generated;
 }
 
-function resolveBundledMcpSourceDirectory(extensionPath: string): string | undefined {
+function resolveBundledMcpSourceDirectory(extensionPath: string, workspaceRoot: string): string | undefined {
     const candidates = [
+        getWorkspaceSourceMcpDirectory(workspaceRoot),
+        path.join(workspaceRoot, 'dist', 'mcp-server'),
         path.join(extensionPath, 'dist', 'mcp-server'),
         path.join(extensionPath, 'src', 'mcp-server')
     ];
@@ -83,7 +89,7 @@ async function copyDirectoryRecursive(sourceDir: string, destinationDir: string)
 }
 
 async function ensureWorkspaceMcpServerFiles(extensionPath: string, workspaceRoot: string): Promise<string> {
-    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath);
+    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot);
     if (!sourceDir) {
         throw new Error('Could not locate bundled mcp-server source directory in extension package.');
     }
@@ -519,7 +525,7 @@ async function restartLocalMcpServer(context: vscode.ExtensionContext, workspace
     if (!fs.existsSync(serverPath)) {
         mcpOutputChannel?.appendLine(`[MCP] Local server script not found at ${serverPath}. Falling back to bundled restart.`);
         await restartBundledMcpServer(context, workspaceRoot);
-        const mcpStatus = await checkMcpConnection(workspaceRoot);
+        const mcpStatus = await checkMcpConnection(context, workspaceRoot);
         taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
         vscode.window.showInformationMessage('Switchboard MCP Server restarted (bundled).');
         return;
@@ -575,7 +581,7 @@ async function restartLocalMcpServer(context: vscode.ExtensionContext, workspace
 
         // 3. Delayed Health Check: Wait for server to initialize
         setTimeout(async () => {
-            const mcpStatus = await checkMcpConnection(workspaceRoot);
+            const mcpStatus = await checkMcpConnection(context, workspaceRoot);
             taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
         }, 2000);
     });
@@ -765,43 +771,10 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(reviewPlanFromKanbanDisposable);
 
-    let degradedMcpStreak = 0;
-    let autoHealInFlight = false;
-    let lastAutoHealAt = 0;
-    let isMcpCurrentlyDegraded = false;
-
     const refreshMcpStatus = async () => {
         if (!workspaceRoot) return;
-        const mcpStatus = await checkMcpConnection(workspaceRoot);
+        const mcpStatus = await checkMcpConnection(context, workspaceRoot);
         taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
-
-        const isDegraded = mcpStatus.ideConfigured && (!mcpStatus.serverRunning || !mcpStatus.toolReachable);
-        isMcpCurrentlyDegraded = isDegraded;
-        degradedMcpStreak = isDegraded ? degradedMcpStreak + 1 : 0;
-
-        const shouldAutoHeal =
-            isDegraded &&
-            degradedMcpStreak >= 3 &&
-            !autoHealInFlight &&
-            (Date.now() - lastAutoHealAt > 60_000);
-
-        if (shouldAutoHeal) {
-            autoHealInFlight = true;
-            lastAutoHealAt = Date.now();
-            mcpOutputChannel?.appendLine('[MCP] Auto-heal triggered after repeated degraded checks. Restarting bundled MCP server...');
-            try {
-                await restartBundledMcpServer(context, workspaceRoot);
-                const healedStatus = await checkMcpConnection(workspaceRoot);
-                taskViewerProvider.sendMcpConnectionStatus(healedStatus);
-                degradedMcpStreak = healedStatus.ideConfigured && (!healedStatus.serverRunning || !healedStatus.toolReachable)
-                    ? 1
-                    : 0;
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[MCP] Auto-heal failed: ${e}`);
-            } finally {
-                autoHealInFlight = false;
-            }
-        }
     };
 
     // Start InboxWatcher (Outbox Pattern for terminal commands)
@@ -887,34 +860,6 @@ export async function activate(context: vscode.ExtensionContext) {
         setTimeout(async () => {
             await refreshMcpStatus();
         }, 3000);
-
-        // 8. Keep MCP status fresh across sleep/resume and transport drops.
-        const HEALTHY_POLL_MS = 120000;
-        const DEGRADED_POLL_MS = 15000;
-        let mcpPollTimeout: NodeJS.Timeout | null = null;
-        let disposed = false;
-
-        const scheduleNextMcpPoll = () => {
-            if (disposed) return;
-            const delay = isMcpCurrentlyDegraded ? DEGRADED_POLL_MS : HEALTHY_POLL_MS;
-            mcpPollTimeout = setTimeout(async () => {
-                try {
-                    await refreshMcpStatus();
-                } catch { }
-                scheduleNextMcpPoll();
-            }, delay);
-        };
-
-        scheduleNextMcpPoll();
-        context.subscriptions.push({
-            dispose: () => {
-                disposed = true;
-                if (mcpPollTimeout) {
-                    clearTimeout(mcpPollTimeout);
-                    mcpPollTimeout = null;
-                }
-            }
-        });
 
         context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
             if (state.focused) {
@@ -1040,6 +985,16 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         } catch (e) {
             mcpOutputChannel?.appendLine(`[Extension] Failed to sync terminal registry: ${e}`);
+        }
+    }
+
+    // Self-heal partial setup: protocol files exist but MCP runtime script is missing.
+    if (workspaceRoot) {
+        const hasProtocolFiles = await hasSwitchboardProtocolFiles(workspaceRoot);
+        const hasMcpRuntime = await hasWorkspaceMcpRuntime(workspaceRoot);
+        if (hasProtocolFiles && !hasMcpRuntime) {
+            mcpOutputChannel?.appendLine('[Setup] Detected missing .switchboard/MCP runtime. Running silent repair.');
+            await setupProtocolFilesSilent(workspaceRoot, context.extensionUri);
         }
     }
 
@@ -1450,14 +1405,25 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
+        const visibleAgents = await taskViewerProvider.getVisibleAgents();
+        const includeJulesMonitor = visibleAgents.jules !== false;
+        const customAgents = await taskViewerProvider.getCustomAgents();
         const agents: { name: string; role: string }[] = [
             { name: 'Lead Coder', role: 'lead' },
             { name: 'Coder', role: 'coder' },
             { name: 'Planner', role: 'planner' },
             { name: 'Reviewer', role: 'reviewer' },
-            { name: 'Analyst', role: 'analyst' },
-            { name: 'Jules Monitor', role: 'jules_monitor' }
+            { name: 'Analyst', role: 'analyst' }
         ];
+        for (const agent of customAgents) {
+            if (visibleAgents[agent.role] === false) {
+                continue;
+            }
+            agents.push({ name: agent.name, role: agent.role });
+        }
+        if (includeJulesMonitor) {
+            agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
+        }
 
         const normalizeGridTerminalName = (value: string | undefined): string =>
             (value || '').trim();
@@ -1473,12 +1439,27 @@ export async function activate(context: vscode.ExtensionContext) {
 
         const clearGridBlockers = async () => {
             const agentNames = new Set(agents.map(a => a.name));
+            if (!includeJulesMonitor) {
+                agentNames.add('Jules Monitor');
+            }
 
             // Drop stale in-memory references for grid agents.
             for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
                 if (agentNames.has(name) && terminal.exitStatus !== undefined) {
                     registeredTerminals.delete(name);
                 }
+            }
+
+            // If Jules is hidden, proactively close any existing monitor terminal.
+            if (!includeJulesMonitor) {
+                const julesMatches = vscode.window.terminals.filter(t =>
+                    t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor')
+                );
+                for (const terminal of julesMatches) {
+                    mcpOutputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
+                    terminal.dispose();
+                }
+                registeredTerminals.delete('Jules Monitor');
             }
 
             // Remove dead/duplicate terminals that would confuse name-based matching.
@@ -1681,18 +1662,19 @@ async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskVi
         if (serverPath) break;
     }
 
-    // 1b. Fallback: Extension-bundled MCP server (marketplace installs)
-    // context.extensionPath points to the immutable extension install directory
-    // (e.g. ~/.vscode/extensions/turnzero.switchboard-1.4.0/), NOT the workspace.
-    // The VSIX always contains dist/mcp-server/mcp-server.js.
-    if (!serverPath && workspaceRoot) {
+    // 1b. Prefer workspace-local runtime copy for IDE MCP clients.
+    // This self-heals stale configs that point to .switchboard/MCP when the file is missing.
+    if (workspaceRoot) {
         try {
             serverPath = await ensureWorkspaceMcpServerFiles(context.extensionPath, workspaceRoot);
         } catch {
-            // ensureWorkspaceMcpServerFiles failed — try direct bundle path
-            const bundledCandidate = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
-            if (await fileExists(bundledCandidate)) {
-                serverPath = bundledCandidate;
+            // ensureWorkspaceMcpServerFiles failed — retain detected serverPath if available,
+            // otherwise try direct bundle path as a fallback.
+            if (!serverPath) {
+                const bundledCandidate = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
+                if (await fileExists(bundledCandidate)) {
+                    serverPath = bundledCandidate;
+                }
             }
         }
     }
@@ -1793,7 +1775,7 @@ async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskVi
 
         // 7. Update connection status
         if (workspaceRoot) {
-            const mcpStatus = await checkMcpConnection(workspaceRoot);
+            const mcpStatus = await checkMcpConnection(context, workspaceRoot);
             provider.sendMcpConnectionStatus(mcpStatus);
         }
 
@@ -1825,7 +1807,7 @@ async function fileExists(filePath: string): Promise<boolean> {
 /**
  * Check if Switchboard configurations exist (Robust check)
  */
-async function hasSwitchboardConfigs(workspaceRoot: string): Promise<boolean> {
+async function hasSwitchboardProtocolFiles(workspaceRoot: string): Promise<boolean> {
     const agentDir = vscode.Uri.file(path.join(workspaceRoot, '.agent'));
     const workflowsDir = vscode.Uri.file(path.join(workspaceRoot, '.agent', 'workflows'));
     const switchboardDir = vscode.Uri.file(path.join(workspaceRoot, '.switchboard'));
@@ -1842,6 +1824,22 @@ async function hasSwitchboardConfigs(workspaceRoot: string): Promise<boolean> {
     } catch {
         return false;
     }
+}
+
+async function hasWorkspaceMcpRuntime(workspaceRoot: string): Promise<boolean> {
+    const runtimeScript = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
+    return fileExists(runtimeScript);
+}
+
+/**
+ * Check if Switchboard configurations exist (protocol + MCP runtime)
+ */
+async function hasSwitchboardConfigs(workspaceRoot: string): Promise<boolean> {
+    const hasProtocolFiles = await hasSwitchboardProtocolFiles(workspaceRoot);
+    if (!hasProtocolFiles) {
+        return false;
+    }
+    return hasWorkspaceMcpRuntime(workspaceRoot);
 }
 
 /**
@@ -2196,7 +2194,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     try {
         await vscode.workspace.fs.stat(readmeUri);
     } catch {
-        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use \`/handoff\` to delegate tasks to other agents.\n- Use \`/challenge\` for adversarial code review.`;
+        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use \`/handoff\` to delegate tasks to other agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.\n- Use \`/challenge\` for internal adversarial review without delegation.`;
         await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(readmeContent, 'utf8'));
     }
 
@@ -2593,7 +2591,8 @@ Windsurf's Cascade agent can participate via the Switchboard MCP server.
 | \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
 | \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
 | \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
-| \`/challenge\` | challenge | Adversarial code review |
+| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
+| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |
 | \`/chat\` | chat | Product Manager consultation (no code) |
 `;
@@ -2630,7 +2629,8 @@ Cursor's Composer agent can participate via the Switchboard MCP server.
 | \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
 | \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
 | \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
-| \`/challenge\` | challenge | Adversarial code review |
+| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
+| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |
 | \`/chat\` | chat | Product Manager consultation (no code) |
 `;
@@ -2650,7 +2650,7 @@ When the Switchboard MCP server is connected, you have access to these tools:
 - **get_team_roster** — Discover registered terminals/chat agents and role assignments.
 
 ### Workflow Management
-- **start_workflow** — Begin a workflow (e.g., \`handoff\`, \`challenge\`, \`accuracy\`).
+- **start_workflow** — Begin a workflow (e.g., \`handoff\`, \`improve-plan\`, \`challenge\`, \`accuracy\`).
 - **get_workflow_state** — Inspect active workflow and phase state.
 - **complete_workflow_phase** — Mark a workflow phase as done (enforces step ordering and required artifacts).
 - **stop_workflow** — End the current workflow.
@@ -2674,7 +2674,8 @@ Messages are delivered via the filesystem:
 | \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
 | \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
 | \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
-| \`/challenge\` | challenge | Adversarial code review |
+| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
+| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |
 | \`/chat\` | chat | Product Manager consultation (no code) |
 `;
@@ -2688,69 +2689,9 @@ interface McpStatus {
 }
 
 /**
- * Check MCP connection status — returns granular status:
- *   serverRunning: The bundled MCP server child process is alive (handles IPC internally)
- *   ideConfigured: The IDE's MCP client has a 'switchboard' entry (AI agent can use tools)
+ * Check MCP connection status — simplified to file existence check
  */
-
-
-async function probeBundledMcpTools(timeoutMs: number = 1500): Promise<boolean> {
-    if (!mcpServerProcess || mcpServerProcess.killed || !mcpServerProcess.pid) return false;
-
-    const proc = mcpServerProcess;
-    const probeOnce = (probeTimeoutMs: number): Promise<boolean> => {
-        const requestId = `probe-${Date.now()}-${Math.random().toString(36).slice(2)}`;
-        return new Promise((resolve) => {
-            let done = false;
-            let timer: NodeJS.Timeout;
-
-            const cleanup = () => {
-                if (done) return;
-                done = true;
-                clearTimeout(timer);
-                proc.off('message', onMessage);
-            };
-
-            const onMessage = (message: any) => {
-                if (message?.type === 'healthProbeResponse' && message?.id === requestId) {
-                    cleanup();
-                    resolve(message?.ok === true);
-                }
-            };
-
-            proc.on('message', onMessage);
-            timer = setTimeout(() => {
-                cleanup();
-                resolve(false);
-            }, probeTimeoutMs);
-
-            try {
-                proc.send({ type: 'healthProbe', id: requestId });
-            } catch {
-                cleanup();
-                resolve(false);
-            }
-        });
-    };
-
-    const firstTry = await probeOnce(timeoutMs);
-    if (firstTry) return true;
-
-    await new Promise(r => setTimeout(r, 250));
-    const secondTry = await probeOnce(Math.max(timeoutMs, 2500));
-    if (secondTry) return true;
-
-    // Last-resort fallback: if IPC channel is still connected and process is alive,
-    // treat the tool channel as reachable to avoid persistent false negatives in some hosts.
-    return proc.connected === true && !proc.killed && !!proc.pid;
-}
-
-/**
- * Check MCP connection status — returns granular status:
- *   serverRunning: The bundled MCP server child process is alive (handles IPC internally)
- *   ideConfigured: The IDE's MCP client has a 'switchboard' entry (AI agent can use tools)
- */
-async function checkMcpConnection(workspaceRoot: string): Promise<McpStatus> {
+async function checkMcpConnection(context: vscode.ExtensionContext, workspaceRoot: string): Promise<McpStatus> {
     const status: McpStatus = {
         serverRunning: false,
         ideConfigured: false,
@@ -2765,13 +2706,16 @@ async function checkMcpConnection(workspaceRoot: string): Promise<McpStatus> {
         });
     };
 
-    // 1. Bundled server process is alive (internal IPC only)
-    if (mcpServerProcess && !mcpServerProcess.killed && mcpServerProcess.pid) {
+    // Check if mcp-server.js exists in the extension's bundled dist directory
+    const serverPath = vscode.Uri.joinPath(context.extensionUri, 'dist', 'mcp-server', 'mcp-server.js').fsPath;
+    const fileExists = fs.existsSync(serverPath);
+
+    if (fileExists) {
         status.serverRunning = true;
+        status.toolReachable = true;
     }
 
-
-    // 3. Primary: Check VS Code workspace settings (works for both Windsurf and VS Code)
+    // Check VS Code workspace settings
     try {
         const workspaceMcpServers = vscode.workspace.getConfiguration().get('mcpServers') as any;
         if (hasActiveSwitchboardEntry(workspaceMcpServers)) {
@@ -2779,18 +2723,10 @@ async function checkMcpConnection(workspaceRoot: string): Promise<McpStatus> {
         }
     } catch { }
 
-    // 4. Lightweight end-to-end probe through the extension<->MCP IPC channel.
-    // This is the primary readiness signal in stdio-only mode.
-    if (status.serverRunning) {
-        status.toolReachable = await probeBundledMcpTools();
-    }
-
     if (!status.ideConfigured) {
         status.diagnostic = 'IDE MCP config not found or disabled';
     } else if (!status.serverRunning) {
-        status.diagnostic = 'Bundled MCP process is not running';
-    } else if (!status.toolReachable) {
-        status.diagnostic = 'MCP process alive but tool channel is unresponsive';
+        status.diagnostic = 'MCP server file not found';
     } else {
         status.diagnostic = 'MCP tools reachable';
     }

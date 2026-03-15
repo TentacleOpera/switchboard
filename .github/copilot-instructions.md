@@ -22,7 +22,7 @@ This project uses the **Switchboard** cross-IDE agent orchestration protocol. Wo
 
 | Trigger | Workflow |
 |:---|:---|
-| `review`, `critique` | `/review` — Adversarial two-persona review |
+| `improve`, `plan review` | `/improve-plan` — Deep planning, dependency checks, and adversarial review |
 | `handoff`, `delegate` | `/handoff` — Terminal-based task delegation |
 | `team`, `peer review` | `/team` — Implementation with review checkpoints |
 | `accuracy`, `careful` | `/accuracy` — High-accuracy solo mode |

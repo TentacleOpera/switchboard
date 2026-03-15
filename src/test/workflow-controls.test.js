@@ -68,29 +68,31 @@ async function run() {
 
     await test('start_workflow blocks without force when another workflow is active', async () => {
         await updateState(state => {
-            state.session.activeWorkflow = 'challenge';
+            state.session.activeWorkflow = 'handoff';
             state.session.status = 'IN_PROGRESS';
             state.session.currentStep = 1;
             return state;
         });
 
-        const result = await startWorkflow({ name: 'challenge' });
+        const result = await startWorkflow({ name: 'improve-plan' });
+
         assert.strictEqual(result.isError, true);
         assert.match(readText(result), /WORKFLOW LOCK/i);
     });
 
     await test('start_workflow force=true replaces active workflow', async () => {
         await updateState(state => {
-            state.session.activeWorkflow = 'challenge';
+            state.session.activeWorkflow = 'handoff';
             state.session.status = 'IN_PROGRESS';
             state.session.currentStep = 2;
             return state;
         });
 
-        const result = await startWorkflow({ name: 'challenge', force: true });
+        const result = await startWorkflow({ name: 'improve-plan', force: true });
+
         assert.ok(!result.isError, readText(result));
-        assert.match(readText(result), /Force-stopped 'challenge'/i);
-        assert.match(readText(result), /Started workflow 'Challenge/i);
+        assert.match(readText(result), /Force-stopped 'handoff'/i);
+        assert.match(readText(result), /Started workflow 'Improve Plan/i);
     });
 
 
@@ -113,11 +115,11 @@ async function run() {
         fs.mkdirSync(path.dirname(artifactAbs), { recursive: true });
         fs.writeFileSync(artifactAbs, '# artifact');
 
-        const start = await startWorkflow({ name: 'challenge' });
+        const start = await startWorkflow({ name: 'improve-plan' });
         assert.ok(!start.isError, readText(start));
 
         const phase = await completeWorkflowPhase({
-            workflow: 'challenge',
+            workflow: 'improve-plan',
             phase: 1,
             artifacts: [{ path: relativeArtifact, description: 'staged request' }]
         });
@@ -132,11 +134,11 @@ async function run() {
         fs.mkdirSync(path.dirname(artifactAbs), { recursive: true });
         fs.writeFileSync(artifactAbs, '# artifact');
 
-        const start = await startWorkflow({ name: 'challenge' });
+        const start = await startWorkflow({ name: 'improve-plan' });
         assert.ok(!start.isError, readText(start));
 
         const phase = await completeWorkflowPhase({
-            workflow: 'challenge',
+            workflow: 'improve-plan',
             phase: 1,
             artifacts: [{ path: artifactAbs, description: 'absolute artifact path' }]
         });
@@ -145,41 +147,29 @@ async function run() {
         assert.match(readText(phase), /PHASE 1 COMPLETE/i);
     });
 
-    await test('challenge phase 2 accepts send_message evidence across calls', async () => {
+    await test('improve-plan phase 1 completes and auto-stops the workflow', async () => {
         const stageArtifact = path.join('.switchboard', 'handoff', 'implementation_plan.md');
         const stageArtifactAbs = path.join(TEST_ROOT, stageArtifact);
         fs.mkdirSync(path.dirname(stageArtifactAbs), { recursive: true });
         fs.writeFileSync(stageArtifactAbs, '# plan');
 
-        const start = await startWorkflow({ name: 'challenge' });
+        const start = await startWorkflow({ name: 'improve-plan' });
         assert.ok(!start.isError, readText(start));
 
         const phase1 = await completeWorkflowPhase({
-            workflow: 'challenge',
+            workflow: 'improve-plan',
             phase: 1,
             artifacts: [{ path: stageArtifact, description: 'staged request' }]
         });
         assert.ok(!phase1.isError, readText(phase1));
+        assert.match(readText(phase1), /PHASE 1 COMPLETE/i);
 
-        const dispatch = await sendMessage({
+        const postCompleteExecute = await sendMessage({
             action: 'execute',
-            payload: 'Review this plan',
-            metadata: {
-                review: {
-                    authorized_plan: stageArtifact,
-                    report_path: '.switchboard/handoff/challenge_report_test.md'
-                }
-            }
+            payload: 'Review this plan'
         });
-        assert.ok(!dispatch.isError, readText(dispatch));
-
-        const phase2 = await completeWorkflowPhase({
-            workflow: 'challenge',
-            phase: 2,
-            artifacts: [{ path: '.switchboard/handoff', description: 'dispatch metadata captured' }]
-        });
-        assert.ok(!phase2.isError, readText(phase2));
-        assert.match(readText(phase2), /PHASE 2 COMPLETE/i);
+        assert.strictEqual(postCompleteExecute.isError, true);
+        assert.match(readText(postCompleteExecute), /No active workflow/i);
     });
 
 

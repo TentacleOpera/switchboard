@@ -80,8 +80,10 @@ async function getOrCreateDispatchSigningKey(context) {
     await context.secrets.store(DISPATCH_SIGNING_KEY_SECRET, generated);
     return generated;
 }
-function resolveBundledMcpSourceDirectory(extensionPath) {
+function resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot) {
     const candidates = [
+        path.join(workspaceRoot, 'src', 'mcp-server'),
+        path.join(workspaceRoot, 'dist', 'mcp-server'),
         path.join(extensionPath, 'dist', 'mcp-server'),
         path.join(extensionPath, 'src', 'mcp-server')
     ];
@@ -103,7 +105,7 @@ async function copyDirectoryRecursive(sourceDir, destinationDir) {
     }
 }
 async function ensureWorkspaceMcpServerFiles(extensionPath, workspaceRoot) {
-    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath);
+    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot);
     if (!sourceDir) {
         throw new Error('Could not locate bundled mcp-server source directory in extension package.');
     }

@@ -800,7 +800,7 @@
 
         .modal-card {
             width: 100%;
-            max-width: 420px;
+            max-width: 800px;
             background: var(--panel-bg);
             border: 1px solid var(--border-bright);
             border-radius: 4px;
@@ -846,7 +846,7 @@
         }
 
         .modal-textarea {
-            min-height: 90px;
+            min-height: 200px;
             resize: vertical;
         }
 
@@ -1359,9 +1359,14 @@
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
                     <span>Accurate coding mode for Coder prompts</span>
                 </label>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">CUSTOM AGENTS</div>
+                <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
                 <button id="btn-save-startup" class="secondary-btn w-full"
                     style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE
                     CONFIGURATION</button>
+                <button id="btn-open-docs" class="secondary-btn w-full"
+                    style="margin-top:4px;">OPEN DOCS</button>
 
             </div>
         </div>
@@ -1409,6 +1414,29 @@
         </div>
     </div>
 
+    <div id="custom-agent-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 520px;">
+            <div class="modal-title">CUSTOM AGENT</div>
+            <label class="modal-label" for="custom-agent-name">Agent name</label>
+            <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+            <label class="modal-label" for="custom-agent-command">Startup command</label>
+            <input id="custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
+            <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
+            <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
+            <label class="modal-label" for="custom-agent-order">Kanban order</label>
+            <input id="custom-agent-order" class="modal-input" type="number" value="150">
+            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
+                <span>Show as Kanban column</span>
+            </label>
+            <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+                <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
+                <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
 
 
     <script>
@@ -1441,12 +1469,21 @@
         const recoverPlanList = document.getElementById('recover-plan-list');
         const recoverEmptyMsg = document.getElementById('recover-empty-msg');
         const recoverSearchInput = document.getElementById('recover-search');
+        const customAgentList = document.getElementById('custom-agent-list');
+        const customAgentModal = document.getElementById('custom-agent-modal');
+        const customAgentNameInput = document.getElementById('custom-agent-name');
+        const customAgentCommandInput = document.getElementById('custom-agent-command');
+        const customAgentPromptInput = document.getElementById('custom-agent-prompt');
+        const customAgentOrderInput = document.getElementById('custom-agent-order');
+        const customAgentKanbanInput = document.getElementById('custom-agent-kanban');
+        const customAgentError = document.getElementById('custom-agent-error');
         let recoverablePlansCache = [];
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
         let analystMapFeedback = null; // { text, className, expiresAt }
         let analystMapFeedbackTimer = null;
+        let editingCustomAgentId = null;
 
         function isPlanSelected() {
             return Boolean(runSheetSelect && runSheetSelect.value);
@@ -1503,6 +1540,141 @@
             const copyBtn = document.getElementById('btn-copy-prompt');
             sendBtn.innerText = 'SEND TO PLANNER';
             copyBtn.innerText = 'COPY TO CLIPBOARD';
+        }
+
+        function sanitizeCustomAgentId(value) {
+            const normalized = String(value || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 48);
+            return normalized || `agent_${Date.now().toString(36)}`;
+        }
+
+        function toCustomAgentRole(id) {
+            return `custom_agent_${sanitizeCustomAgentId(id)}`;
+        }
+
+        function openCustomAgentModal(agent) {
+            editingCustomAgentId = agent ? agent.id : null;
+            customAgentNameInput.value = agent?.name || '';
+            customAgentCommandInput.value = agent?.startupCommand || '';
+            customAgentPromptInput.value = agent?.promptInstructions || '';
+            customAgentOrderInput.value = String(agent?.kanbanOrder ?? 150);
+            customAgentKanbanInput.checked = agent?.includeInKanban === true;
+            customAgentError.textContent = '';
+            customAgentModal.classList.remove('hidden');
+            setTimeout(() => customAgentNameInput.focus(), 0);
+        }
+
+        function closeCustomAgentModal() {
+            editingCustomAgentId = null;
+            customAgentModal.classList.add('hidden');
+            customAgentError.textContent = '';
+        }
+
+        function saveCustomAgentDraft() {
+            const name = customAgentNameInput.value.trim();
+            const startupCommand = customAgentCommandInput.value.trim();
+            if (!name || !startupCommand) {
+                customAgentError.textContent = 'Name and startup command are required.';
+                return;
+            }
+
+            const existingId = editingCustomAgentId || sanitizeCustomAgentId(name);
+            const role = toCustomAgentRole(existingId);
+            const nextAgent = {
+                id: existingId,
+                role,
+                name,
+                startupCommand,
+                promptInstructions: customAgentPromptInput.value.trim(),
+                includeInKanban: !!customAgentKanbanInput.checked,
+                kanbanOrder: Number(customAgentOrderInput.value) || 150
+            };
+
+            const duplicate = lastCustomAgents.find(agent =>
+                agent.id !== nextAgent.id &&
+                agent.name.toLowerCase() === nextAgent.name.toLowerCase()
+            );
+            if (duplicate) {
+                customAgentError.textContent = 'Agent names must be unique.';
+                return;
+            }
+
+            lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
+            lastCustomAgents.push(nextAgent);
+            lastCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
+            if (!(nextAgent.role in lastVisibleAgents)) {
+                lastVisibleAgents[nextAgent.role] = true;
+            }
+            lastStartupCommands[nextAgent.role] = nextAgent.startupCommand;
+            renderCustomAgentConfigList();
+            renderAgentList();
+            closeCustomAgentModal();
+        }
+
+        function renderCustomAgentConfigList() {
+            if (!customAgentList) return;
+            customAgentList.innerHTML = '';
+            if (!lastCustomAgents.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-size:11px; text-align:center;';
+                empty.textContent = 'No custom agents configured.';
+                customAgentList.appendChild(empty);
+                return;
+            }
+
+            lastCustomAgents.forEach(agent => {
+                const row = document.createElement('div');
+                row.className = 'startup-row';
+                row.style.cssText = 'display:flex; flex-direction:column; gap:6px; align-items:stretch;';
+
+                const top = document.createElement('div');
+                top.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                const visibility = document.createElement('input');
+                visibility.type = 'checkbox';
+                visibility.className = 'agent-visible-toggle custom-agent-visible-toggle';
+                visibility.dataset.role = agent.role;
+                visibility.checked = lastVisibleAgents[agent.role] !== false;
+                visibility.style.cssText = 'width:auto; margin:0; flex-shrink:0;';
+
+                const label = document.createElement('div');
+                label.style.cssText = 'flex:1; font-size:11px; color:var(--text-primary);';
+                label.textContent = agent.name;
+
+                const editBtn = document.createElement('button');
+                editBtn.className = 'secondary-btn';
+                editBtn.style.cssText = 'width:auto; min-width:64px;';
+                editBtn.textContent = 'EDIT';
+                editBtn.onclick = () => openCustomAgentModal(agent);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'secondary-btn';
+                deleteBtn.style.cssText = 'width:auto; min-width:64px;';
+                deleteBtn.textContent = 'DELETE';
+                deleteBtn.onclick = () => {
+                    lastCustomAgents = lastCustomAgents.filter(item => item.id !== agent.id);
+                    delete lastVisibleAgents[agent.role];
+                    delete lastStartupCommands[agent.role];
+                    renderCustomAgentConfigList();
+                    renderAgentList();
+                };
+
+                top.appendChild(visibility);
+                top.appendChild(label);
+                top.appendChild(editBtn);
+                top.appendChild(deleteBtn);
+
+                const meta = document.createElement('div');
+                meta.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+                meta.textContent = `${agent.startupCommand}${agent.includeInKanban ? ` • Kanban ${agent.kanbanOrder}` : ''}`;
+
+                row.appendChild(top);
+                row.appendChild(meta);
+                customAgentList.appendChild(row);
+            });
         }
 
         function submitInitiatePlan(action) {
@@ -1595,11 +1767,17 @@
         }
         document.getElementById('btn-recover-plans').addEventListener('click', openRecoverPlansModal);
         document.getElementById('btn-close-recover').addEventListener('click', closeRecoverPlansModal);
+        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
+        document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
+        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
         recoverPlansModal.addEventListener('click', (event) => {
             if (event.target === recoverPlansModal) closeRecoverPlansModal();
         });
+        customAgentModal.addEventListener('click', (event) => {
+            if (event.target === customAgentModal) closeCustomAgentModal();
+        });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { closeInitiatePlanModal(); closeRecoverPlansModal(); }
+            if (e.key === 'Escape') { closeInitiatePlanModal(); closeRecoverPlansModal(); closeCustomAgentModal(); }
         });
         recoverSearchInput.addEventListener('input', () => {
             renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
@@ -1680,6 +1858,7 @@
                         vscode.postMessage({ type: 'getStartupCommands' });
                         vscode.postMessage({ type: 'getAccurateCodingSetting' });
                         vscode.postMessage({ type: 'getVisibleAgents' });
+                        vscode.postMessage({ type: 'getCustomAgents' });
                     }
                 }
             });
@@ -1691,22 +1870,27 @@
                 const commands = { ...lastStartupCommands };
                 document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
                     const role = input.dataset.role;
-                    const value = input.value.trim();
-                    if (!role) return;
-                    if (value) commands[role] = value;
-                    else delete commands[role];
+                    commands[role] = input.value.trim();
                 });
                 const visibleAgents = {};
-                document.querySelectorAll('#startup-fields .agent-visible-toggle').forEach(cb => {
+                document.querySelectorAll('#startup-fields input[type="checkbox"][data-role]').forEach(cb => {
                     const role = cb.dataset.role;
                     if (role) visibleAgents[role] = cb.checked;
                 });
                 const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled });
+                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, customAgents: lastCustomAgents });
                 lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
+                renderCustomAgentConfigList();
                 renderAgentList();
                 btnSaveStartup.textContent = 'SAVED';
                 setTimeout(() => { btnSaveStartup.textContent = 'SAVE CONFIGURATION'; }, 1500);
+            });
+        }
+
+        const btnOpenDocs = document.getElementById('btn-open-docs');
+        if (btnOpenDocs) {
+            btnOpenDocs.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openDocs' });
             });
         }
 
@@ -1752,6 +1936,7 @@
         let lastJulesSessions = [];
         let lastStartupCommands = {};
         let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        let lastCustomAgents = [];
         // Autoban engine state (received from backend)
         let autobanState = {
             enabled: false,
@@ -1821,7 +2006,9 @@
                 analyst: 'Analyst',
                 jules: 'Jules'
             };
-            return roleMap[role] || 'Agent';
+            if (roleMap[role]) return roleMap[role];
+            const customAgent = lastCustomAgents.find(agent => agent.role === role);
+            return customAgent ? customAgent.name : 'Agent';
         }
 
         function formatActivitySummary(event) {
@@ -2016,6 +2203,14 @@
                             const role = cb.dataset.role;
                             if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
                         });
+                        renderCustomAgentConfigList();
+                        renderAgentList();
+                    }
+                    break;
+                case 'customAgents':
+                    if (Array.isArray(message.customAgents)) {
+                        lastCustomAgents = message.customAgents;
+                        renderCustomAgentConfigList();
                         renderAgentList();
                     }
                     break;
@@ -2134,10 +2329,12 @@
                 }
                 case 'airlock_planSaved': {
                     const pBtn = document.getElementById('airlock-plan-btn');
+                    const pPlannerBtn = document.getElementById('airlock-planner-btn');
                     const pStatus = document.getElementById('webai-status');
                     const pTa = document.getElementById('airlock-textarea');
                     const pTitle = document.getElementById('airlock-title-input');
                     if (pBtn) { pBtn.disabled = false; pBtn.innerText = 'SAVE PLAN'; }
+                    if (pPlannerBtn) { pPlannerBtn.disabled = false; pPlannerBtn.innerText = 'SAVE AND SEND TO PLANNER'; }
                     if (pStatus) pStatus.innerText = '✓ Plan saved — ' + new Date().toLocaleTimeString();
                     if (pTa) { pTa.value = ''; }
                     if (pTitle) { pTitle.value = ''; }
@@ -2146,9 +2343,11 @@
                 }
                 case 'airlock_planError': {
                     const pBtn2 = document.getElementById('airlock-plan-btn');
+                    const pPlannerBtn2 = document.getElementById('airlock-planner-btn');
                     const pStatus2 = document.getElementById('webai-status');
                     const pTa = document.getElementById('airlock-textarea');
                     if (pBtn2) { pBtn2.disabled = false; pBtn2.innerText = 'SAVE PLAN'; }
+                    if (pPlannerBtn2) { pPlannerBtn2.disabled = false; pPlannerBtn2.innerText = 'SAVE AND SEND TO PLANNER'; }
                     if (pStatus2) pStatus2.innerText = '⚠ ' + (message.message || 'Plan save failed');
                     if (_airlockLastText) { _airlockTextareaValue = _airlockLastText; if (pTa) pTa.value = _airlockLastText; }
                     break;
@@ -2380,6 +2579,8 @@
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'lead', sessionFile: sessionId });
                 } else if (roleId === 'jules') {
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'jules', sessionFile: sessionId, instruction: 'execute' });
+                } else {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: roleId, sessionFile: sessionId });
                 }
             };
 
@@ -2486,6 +2687,16 @@
                 }
             }
 
+            for (const customAgent of lastCustomAgents) {
+                if (va[customAgent.role] === false) continue;
+                agentListStandard.appendChild(createAgentRow(
+                    customAgent.name.toUpperCase(),
+                    customAgent.role,
+                    'EXECUTE TASK',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === customAgent.role)
+                ));
+            }
+
             // 6. Jules
             if (va.jules !== false) {
                 agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
@@ -2559,7 +2770,7 @@
 
             const s1Desc = document.createElement('div');
             s1Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s1Desc.innerText = 'Package your workspace into a single file.';
+            s1Desc.innerText = 'Package code into docx files for NotebookLM compatibility.';
             container.appendChild(s1Desc);
 
             const exportBtn = document.createElement('button');
@@ -2583,7 +2794,7 @@
 
             const s2Desc = document.createElement('div');
             s2Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s2Desc.innerText = 'Open folder and upload all files in airlock folder to notebook.';
+            s2Desc.innerText = 'Create new Notebook and upload all files in the airlock folder as sources';
             container.appendChild(s2Desc);
 
             const s2BtnRow = document.createElement('div');
@@ -2619,7 +2830,7 @@
 
             const s3Desc = document.createElement('div');
             s3Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s3Desc.innerText = 'Paste response.';
+            s3Desc.innerText = 'Ask Notebook to make a plan following the How to Plan guide and paste response to save to .switchboard/plans and the Antigravity brain (if using Antigravity).';
             container.appendChild(s3Desc);
 
             const titleInput = document.createElement('input');
@@ -2640,13 +2851,11 @@
             container.appendChild(textarea);
 
             const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex; gap:8px; padding:4px 8px 8px;';
+            btnRow.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:4px 8px 8px;';
 
             const planBtn = document.createElement('button');
             planBtn.className = 'secondary-btn';
             planBtn.id = 'airlock-plan-btn';
-            planBtn.style.flex = '1';
-            planBtn.style.minWidth = '0';
             planBtn.innerText = 'SAVE PLAN';
             planBtn.onclick = () => {
                 const title = titleInput.value.trim();
@@ -2660,7 +2869,24 @@
                 vscode.postMessage({ type: 'initiatePlan', title, idea: text, mode: 'local' });
             };
 
+            const plannerBtn = document.createElement('button');
+            plannerBtn.className = 'secondary-btn is-teal';
+            plannerBtn.id = 'airlock-planner-btn';
+            plannerBtn.innerText = 'SAVE AND SEND TO PLANNER';
+            plannerBtn.onclick = () => {
+                const title = titleInput.value.trim();
+                const text = textarea.value.trim();
+                const status = document.getElementById('webai-status');
+                if (!title) { if (status) status.innerText = '⚠ Enter a plan title'; return; }
+                if (!text) { if (status) status.innerText = '⚠ Paste response first'; return; }
+                plannerBtn.disabled = true;
+                plannerBtn.innerText = 'SENDING...';
+                if (status) status.innerText = 'Sending to planner...';
+                vscode.postMessage({ type: 'initiatePlan', title, idea: text, mode: 'send' });
+            };
+
             btnRow.appendChild(planBtn);
+            btnRow.appendChild(plannerBtn);
             container.appendChild(btnRow);
 
             return container;
