@@ -836,6 +836,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!rule.enabled) { continue; }
             const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
 
+            // Fire an immediate tick so plans move as soon as the engine starts
+            this._autobanTickColumn(column, batchSize).catch(e => {
+                console.error(`[Autoban] Initial tick failed for column ${column}:`, e);
+            });
+
             const timer = setInterval(async () => {
                 if (!this._autobanState.enabled) { return; }
                 try {
