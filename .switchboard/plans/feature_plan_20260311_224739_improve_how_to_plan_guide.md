@@ -5,7 +5,7 @@ Update the Airlock "How to Plan" template to enforce maximum context usage, stri
 
 ## User Review Required
 > [!NOTE]
-> This modifies the template generator in the backend extension code. You will need to rebuild the extension or manually update the compiled `.js` file to see the changes take effect in the live UI.
+> This modifies the template generator in the backend extension code. Rebuild the extension (`npm run compile`) to see the changes take effect in the live UI. Do not manually edit compiled `.js` artifacts.
 
 ## Complexity Audit
 
@@ -92,3 +92,24 @@ Apply the following patch to `src/services/TaskViewerProvider.ts` (inside the `_
 ## Review Feedback
 - **Grumpy Review:** "The prompt asks the AI to produce 'Exact search/replace blocks or unified diffs', AND THEN tells it 'Write out the exact, final state of the functions', AND THEN asks for 'the COMPLETE code block, unified diff, or full function rewrite'. This is wildly contradictory! If you force the LLM to write out the whole function *and* a diff, it's going to get confused, duplicate code, and waste tokens. Pick a lane! Plus, encouraging manual edits to compiled JS artifacts (`TaskViewerProvider.js`) in the Verification Plan is an atrocious anti-pattern! We have a build script for a reason."
 - **Balanced Synthesis:** "The goal of enforcing maximum context and preventing truncation is crucial for effective agent handoffs. However, the proposed changes are slightly muddy in how they ask for code output formats. The LLM shouldn't do both a unified diff *and* a full function rewrite for the same code block; it should choose the most appropriate fully-fleshed-out format. Additionally, we must remove the advice to manually edit the compiled `.js` artifact from the Verification Plan and strictly rely on `npm run compile`. The plan has been updated to reflect correct build practices."
+
+## Reviewer-Executor Pass (2026-03-15)
+
+### Fixed Items
+- Implemented strict anti-truncation constraints in the Airlock `how_to_plan.md` generator (`_handleAirlockExport`) including explicit prohibition of placeholders like `// ... existing code ...`, `TODO`, and omitted sections for modified code.
+- Added maximum-detail directives requiring deep logic breakdown before code output.
+- Reworked `## Proposed Changes` template bullets to enforce structured output: `Context`, `Logic`, `Implementation`, and `Edge Cases Handled`.
+- Clarified output-format ambiguity by requiring one primary implementation format per change (`complete code block` OR `unified diff` OR `full function rewrite`), while still forbidding truncation.
+- Strengthened Appendix guidance to explicitly ban truncated placeholders.
+
+### Files Changed
+- `src/services/TaskViewerProvider.ts`
+- `.switchboard/plans/feature_plan_20260311_224739_improve_how_to_plan_guide.md` (this reviewer update section)
+
+### Validation Results
+- `npm run compile` ✅ Passed (webpack build succeeded for extension and MCP server bundles)
+- `npm run compile-tests` ✅ Passed (`tsc -p . --outDir out`)
+- `npm run lint -- src/services/TaskViewerProvider.ts` ❌ Blocked by repository lint baseline (`ESLint couldn't find an eslint.config.* file` under ESLint v9; unrelated to this change)
+
+### Remaining Risks
+- Prompt verbosity is intentionally higher; this can increase token usage, but the template now emphasizes detailed, non-truncated, implementation-safe output.

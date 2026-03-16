@@ -4,7 +4,7 @@ import * as fs from 'fs';
 import * as lockfile from 'proper-lockfile';
 
 /** Transient directories that are safe to wipe on activation. */
-const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns'];
+const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP'];
 
 /** Transient files that are safe to delete on activation. */
 const TRANSIENT_FILES = ['bridge_debug.log'];

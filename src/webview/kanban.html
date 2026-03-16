@@ -403,6 +403,7 @@
         let currentCodedTarget = 'lead';
         let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
+        let lastBoardSignature = '';
 
         function escapeAttr(value) {
             return String(value || '').replace(/"/g, '&quot;');
@@ -410,6 +411,37 @@
 
         function getColumnDefinition(col) {
             return columnDefinitions.find(def => def.id === col) || null;
+        }
+
+        function buildBoardSignature(cards) {
+            if (!Array.isArray(cards) || cards.length === 0) return '';
+            return cards
+                .map(card => `${card.sessionId}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}`)
+                .sort()
+                .join('||');
+        }
+
+        function captureBoardViewState() {
+            const columnScrollTop = {};
+            columns.forEach(col => {
+                const container = document.getElementById('col-' + col);
+                if (container) columnScrollTop[col] = container.scrollTop;
+            });
+            return {
+                boardScrollLeft: kanbanBoard.scrollLeft,
+                pageScrollY: window.scrollY,
+                columnScrollTop
+            };
+        }
+
+        function restoreBoardViewState(viewState) {
+            if (!viewState) return;
+            kanbanBoard.scrollLeft = viewState.boardScrollLeft || 0;
+            columns.forEach(col => {
+                const container = document.getElementById('col-' + col);
+                if (container) container.scrollTop = viewState.columnScrollTop[col] || 0;
+            });
+            window.scrollTo(0, viewState.pageScrollY || 0);
         }
 
         function renderColumns() {
@@ -524,6 +556,7 @@
         }
 
         function renderBoard(cards) {
+            const viewState = captureBoardViewState();
             currentCards = cards;
             const buckets = {};
             columns.forEach(c => buckets[c] = []);
@@ -537,6 +570,7 @@
                 const container = document.getElementById('col-' + col);
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
+                if (!container || !countEl) return;
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -587,6 +621,8 @@
                     vscode.postMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session, column });
                 });
             });
+
+            requestAnimationFrame(() => restoreBoardViewState(viewState));
         }
 
         function createCardHtml(card) {
@@ -734,13 +770,21 @@
             const msg = event.data;
             switch (msg.type) {
                 case 'updateBoard':
-                    renderBoard(msg.cards || []);
+                    const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    const nextBoardSignature = buildBoardSignature(nextCards);
+                    if (nextBoardSignature !== lastBoardSignature) {
+                        lastBoardSignature = nextBoardSignature;
+                        renderBoard(nextCards);
+                    } else {
+                        currentCards = nextCards;
+                    }
                     break;
                 case 'updateColumns':
                     if (Array.isArray(msg.columns) && msg.columns.length > 0) {
                         columnDefinitions = msg.columns;
                         columns = columnDefinitions.map(col => col.id);
                         autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
+                        lastBoardSignature = '';
                         renderColumns();
                         renderBoard(currentCards);
                         updateAllColumnAgents();

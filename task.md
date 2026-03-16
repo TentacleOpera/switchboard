@@ -1,5 +1,33 @@
 # Task Tracking
 
+## MCP polling removal execution (feature_plan_20260312_053351_remove_mcp_server_polling)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces (`src/extension.ts`) and related tests/interfaces.
+- [x] Run baseline verification (`npm run compile`, `npm run lint`) and capture status.
+- [x] Apply plan changes plus inline challenge corrections in `src/extension.ts`.
+- [x] Verify implementation gate (`npm run compile`) and read back modified code.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Verification Record (MCP polling removal)
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- Post-change `npm run compile`: PASS.
+- Final `npm run compile`: PASS.
+- Final `npm run lint`: FAIL (same pre-existing ESLint config issue, unchanged by this task).
+- Scoped diff review: only `src/extension.ts` logic and this `task.md` tracking section.
+
+### Red Team Findings (MCP polling removal)
+
+- `src/extension.ts:2712-2715` — Failure mode: non-standard packaging path could miss `mcp-server.js` and show false negative; mitigation: check both `dist` and `src` extension layouts.
+- `src/extension.ts:2728-2732` — Failure mode: MCP config read exceptions were previously silent; mitigation: explicit output-channel logging plus `Unable to read IDE MCP config` diagnostic.
+- `src/extension.ts:2740-2742` — Failure mode: prior diagnostic implied runtime tool health; mitigation: wording changed to static signal (`MCP server file detected`) to avoid false observability claims.
+- `task.md:3-11` — Failure mode: checklist drift if execution order changes; mitigation: checklist now reflects completed gates in-order for this plan run.
+- `task.md:13-19` — Failure mode: verification evidence can become stale after additional edits; mitigation: this run records baseline/post/final command outcomes explicitly.
+- `task.md:21-27` — Failure mode: line references can age as file evolves; mitigation: references are snapshot-scoped to this execution block and not reused across tasks.
+
 - [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
 - [x] Read all impacted sources and dependencies (`src/extension.ts`, `src/webview/implementation.html`, `src/services/TaskViewerProvider.ts`, related Jules tests).
 - [x] Run baseline verification (`npm run compile`, `npm run lint`) and capture current status.

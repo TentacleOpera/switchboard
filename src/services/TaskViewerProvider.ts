@@ -11,6 +11,8 @@ import { sendRobustText, getAntigravityHash } from './terminalUtils';
 import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
 import { CustomAgentConfig, findCustomAgentByRole, parseCustomAgents } from './agentConfig';
+import { deriveKanbanColumn } from './kanbanColumnDerivation';
+import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
     syncMirrorToBrain: (options: {
         mirrorPath: string;
@@ -99,6 +101,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _tombstonesReady: Promise<void> | null = null;
     // Autoban continuous background polling engine
     private _autobanTimers = new Map<string, NodeJS.Timeout>();
+    // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
+    private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: {
         enabled: boolean;
         batchSize: number;
@@ -112,9 +116,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             'CODED': { enabled: true, intervalMinutes: 15 }
         }
     };
-    // Tracks session IDs currently dispatched but not yet column-promoted.
-    // Prevents the same card being picked up twice if a tick fires before runsheet propagates.
-    private _activeDispatchSessions = new Set<string>();
+    // Tracks session IDs currently dispatched, keyed by the source column that dispatched them.
+    // Prevents duplicate dispatch within the same column while still allowing downstream column ticks.
+    private _activeDispatchSessions = new Map<string, string>();
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
     private _recentMirrorProcessed = new Map<string, NodeJS.Timeout>();
     // Persisted workspace blacklist: stable-path keys of brain plans present during setup.
@@ -133,6 +137,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _lastActiveWorkflow: string | null = null;
     private _sessionLog?: SessionActionLog;
     private _kanbanProvider?: KanbanProvider;
+    private _kanbanDb?: KanbanDatabase;
+    private _kanbanDbDisabled: boolean = false;
     private _notifiedSessions = new Set<string>(); // Track sessions that have been notified of completion
 
     // Batched State Updates
@@ -516,6 +522,153 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setKanbanProvider(provider: KanbanProvider) {
         this._kanbanProvider = provider;
+        this._kanbanProvider.updateAutobanConfig(this._autobanState);
+    }
+
+    private _deriveLastActionFromEvents(events: any[]): string {
+        for (let i = events.length - 1; i >= 0; i--) {
+            const workflow = String(events[i]?.workflow || '').trim();
+            if (workflow) return workflow;
+        }
+        return '';
+    }
+
+    private async _getKanbanDb(workspaceRoot: string): Promise<KanbanDatabase | undefined> {
+        if (this._kanbanDbDisabled) {
+            return undefined;
+        }
+        if (!this._kanbanDb) {
+            this._kanbanDb = KanbanDatabase.forWorkspace(workspaceRoot);
+        }
+        const ready = await this._kanbanDb.ensureReady();
+        if (!ready) {
+            this._kanbanDbDisabled = true;
+            console.warn(`[TaskViewerProvider] Kanban DB unavailable, falling back to file-based state: ${this._kanbanDb.lastInitError || 'unknown error'}`);
+            return undefined;
+        }
+        return this._kanbanDb;
+    }
+
+    private async _buildKanbanRecordFromSheet(
+        workspaceRoot: string,
+        workspaceId: string,
+        sheet: any,
+        customAgents: CustomAgentConfig[]
+    ): Promise<KanbanPlanRecord | undefined> {
+        const planId = this._getPlanIdForRunSheet(sheet);
+        if (!planId || typeof sheet?.sessionId !== 'string' || !sheet.sessionId.trim()) {
+            return undefined;
+        }
+
+        const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
+        const createdAt = typeof sheet.createdAt === 'string' && sheet.createdAt ? sheet.createdAt : new Date().toISOString();
+        const activityTs = this._getSheetActivityTimestamp(sheet);
+        const updatedAt = activityTs > 0 ? new Date(activityTs).toISOString() : createdAt;
+        const rawPlanFile = typeof sheet.planFile === 'string' ? sheet.planFile : '';
+
+        let complexity: 'Unknown' | 'Low' | 'High' = 'Unknown';
+        if (this._kanbanProvider && rawPlanFile) {
+            try {
+                complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, rawPlanFile);
+            } catch {
+                complexity = 'Unknown';
+            }
+        }
+
+        return {
+            planId,
+            sessionId: sheet.sessionId,
+            topic: String(sheet.topic || sheet.planFile || 'Untitled'),
+            planFile: rawPlanFile,
+            kanbanColumn: deriveKanbanColumn(events, customAgents),
+            status: sheet.completed ? 'completed' : 'active',
+            complexity,
+            workspaceId,
+            createdAt,
+            updatedAt,
+            lastAction: this._deriveLastActionFromEvents(events),
+            sourceType: sheet.brainSourcePath ? 'brain' : 'local'
+        };
+    }
+
+    private async _syncKanbanDbFromSheetsSnapshot(
+        workspaceRoot: string,
+        sheets: any[],
+        customAgents: CustomAgentConfig[],
+        archiveMissing: boolean = true
+    ): Promise<string | null> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) return null;
+
+        await this._ensureOwnershipRegistryInitialized();
+        const workspaceId = this._workspaceId || await this._getOrCreateWorkspaceId(workspaceRoot);
+        const records: KanbanPlanRecord[] = [];
+        const activePlanIds = new Set<string>();
+
+        for (const sheet of sheets) {
+            const record = await this._buildKanbanRecordFromSheet(workspaceRoot, workspaceId, sheet, customAgents);
+            if (!record) continue;
+            if (record.status === 'active') {
+                if (!this._isOwnedActiveRunSheet(sheet)) continue;
+                activePlanIds.add(record.planId);
+            } else {
+                const entry = this._planRegistry.entries[record.planId];
+                if (!entry || entry.ownerWorkspaceId !== workspaceId) continue;
+            }
+            records.push(record);
+        }
+
+        if (records.length === 0) {
+            if (archiveMissing) {
+                await db.markMissingAsArchived(workspaceId, activePlanIds);
+            }
+            return workspaceId;
+        }
+
+        const upserted = await db.upsertPlans(records);
+        if (!upserted) return null;
+        if (archiveMissing) {
+            await db.markMissingAsArchived(workspaceId, activePlanIds);
+        }
+        return workspaceId;
+    }
+
+    private async _getAutobanStateFromDb(
+        workspaceRoot: string,
+        workspaceId: string,
+        sourceColumn: string
+    ): Promise<{ cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[]; currentColumnBySession: Map<string, string> } | null> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) return null;
+
+        const rows = await db.getBoard(workspaceId);
+        if (rows.length === 0) {
+            return null;
+        }
+
+        const currentColumnBySession = new Map<string, string>();
+        const cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[] = [];
+        for (const row of rows) {
+            currentColumnBySession.set(row.sessionId, row.kanbanColumn);
+            if (row.kanbanColumn !== sourceColumn) continue;
+
+            const rawPlanFile = String(row.planFile || '').trim();
+            const resolvedPlanPath = rawPlanFile
+                ? (path.isAbsolute(rawPlanFile) ? rawPlanFile : path.resolve(workspaceRoot, rawPlanFile))
+                : '';
+            if (!resolvedPlanPath || !fs.existsSync(resolvedPlanPath)) {
+                console.warn(`[Autoban] Skipping session ${row.sessionId}: missing plan file (${rawPlanFile || 'none'})`);
+                continue;
+            }
+
+            cardsInColumn.push({
+                sessionId: row.sessionId,
+                lastActivity: row.updatedAt || row.createdAt || '',
+                planFile: resolvedPlanPath
+            });
+        }
+
+        return { cardsInColumn, currentColumnBySession };
     }
 
     public refresh() {
@@ -616,13 +769,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     : workflowMap[role])
             : workflowMap[role];
 
-        // Sequential runsheet updates to prevent file-lock contention
-        for (const plan of validPlans) {
-            if (workflowName) {
-                await this._updateSessionRunSheet(plan.sessionId, workflowName);
-            }
-        }
-
         // Construct batched prompt
         const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
 
@@ -636,13 +782,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             prompt = this._withCoderAccuracyInstruction(prompt);
         }
 
-        // Dispatch the batched prompt
+        // Dispatch the batched prompt FIRST, then update runsheets only on success.
+        // This prevents cards from being moved forward if the dispatch fails.
         try {
             vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
             await this._dispatchExecuteMessage(workspaceRoot, targetAgent, prompt, {
                 batch: true,
                 sessionIds: validPlans.map(p => p.sessionId)
             });
+
+            // Dispatch succeeded — now update runsheets sequentially
+            for (const plan of validPlans) {
+                if (workflowName) {
+                    await this._updateSessionRunSheet(plan.sessionId, workflowName);
+                }
+            }
+
             await this._logEvent('dispatch', {
                 event: 'batch_dispatch_sent',
                 role,
@@ -802,6 +957,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     /** Restore Autoban engine if it was running before reload. */
     private _tryRestoreAutoban(): void {
+        this._kanbanProvider?.updateAutobanConfig(this._autobanState);
         if (this._autobanState.enabled) {
             this._startAutobanEngine();
         }
@@ -827,6 +983,21 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return undefined;
     }
 
+    /**
+     * Enqueue an autoban tick so that column dispatches are always serialized.
+     * This prevents concurrent terminal sends from causing IDE lag and double-tap failures.
+     */
+    private _enqueueAutobanTick(column: string, batchSize: number): void {
+        this._autobanTickQueue = this._autobanTickQueue.then(async () => {
+            if (!this._autobanState.enabled) { return; }
+            try {
+                await this._autobanTickColumn(column, batchSize);
+            } catch (e) {
+                console.error(`[Autoban] Tick failed for column ${column}:`, e);
+            }
+        });
+    }
+
     /** Start the continuous Autoban background polling engine. */
     private _startAutobanEngine(): void {
         this._stopAutobanEngine();
@@ -836,18 +1007,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!rule.enabled) { continue; }
             const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
 
-            // Fire an immediate tick so plans move as soon as the engine starts
-            this._autobanTickColumn(column, batchSize).catch(e => {
-                console.error(`[Autoban] Initial tick failed for column ${column}:`, e);
-            });
+            // Fire an immediate tick (serialized via queue) so plans move as soon as the engine starts
+            this._enqueueAutobanTick(column, batchSize);
 
-            const timer = setInterval(async () => {
-                if (!this._autobanState.enabled) { return; }
-                try {
-                    await this._autobanTickColumn(column, batchSize);
-                } catch (e) {
-                    console.error(`[Autoban] Tick failed for column ${column}:`, e);
-                }
+            const timer = setInterval(() => {
+                this._enqueueAutobanTick(column, batchSize);
             }, intervalMs);
 
             this._autobanTimers.set(column, timer);
@@ -862,6 +1026,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         this._autobanTimers.clear();
         this._activeDispatchSessions.clear();
+        this._autobanTickQueue = Promise.resolve();
     }
 
     /** Process one tick for a given column: find cards, batch-dispatch up to batchSize. */
@@ -875,21 +1040,53 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const log = this._getSessionLog(workspaceRoot);
         const sheets = await log.getRunSheets();
+        const customAgents = await this.getCustomAgents();
+        let currentColumnBySession = new Map<string, string>();
 
-        // Determine which column each card is in, pre-resolving planFile to avoid double-reads
-        const cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[] = [];
+        // File-based fallback snapshot
+        let cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[] = [];
         for (const sheet of sheets) {
             if (!sheet.sessionId || sheet.completed) { continue; }
             const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-            const column = this._deriveColumnFromEvents(events);
-            if (column === sourceColumn) {
-                let lastActivity = sheet.createdAt || '';
-                for (const e of events) {
-                    if (e.timestamp && e.timestamp > lastActivity) {
-                        lastActivity = e.timestamp;
-                    }
+            const column = deriveKanbanColumn(events, customAgents);
+            currentColumnBySession.set(sheet.sessionId, column);
+            if (column !== sourceColumn) { continue; }
+
+            const rawPlanFile = typeof sheet.planFile === 'string' ? sheet.planFile.trim() : '';
+            const resolvedPlanPath = rawPlanFile
+                ? (path.isAbsolute(rawPlanFile) ? rawPlanFile : path.resolve(workspaceRoot, rawPlanFile))
+                : '';
+            if (!resolvedPlanPath || !fs.existsSync(resolvedPlanPath)) {
+                console.warn(`[Autoban] Skipping session ${sheet.sessionId}: missing plan file (${rawPlanFile || 'none'})`);
+                continue;
+            }
+            let lastActivity = sheet.createdAt || '';
+            for (const e of events) {
+                if (e.timestamp && e.timestamp > lastActivity) {
+                    lastActivity = e.timestamp;
                 }
-                cardsInColumn.push({ sessionId: sheet.sessionId, lastActivity, planFile: sheet.planFile });
+            }
+            cardsInColumn.push({ sessionId: sheet.sessionId, lastActivity, planFile: resolvedPlanPath });
+        }
+
+        // DB-first snapshot (with fallback to file-based if DB is unavailable)
+        try {
+            const workspaceId = await this._syncKanbanDbFromSheetsSnapshot(workspaceRoot, sheets, customAgents);
+            if (workspaceId) {
+                const dbState = await this._getAutobanStateFromDb(workspaceRoot, workspaceId, sourceColumn);
+                if (dbState) {
+                    currentColumnBySession = dbState.currentColumnBySession;
+                    cardsInColumn = dbState.cardsInColumn;
+                }
+            }
+        } catch (e) {
+            console.warn('[Autoban] DB sync/read failed; continuing with file-based snapshot:', e);
+        }
+
+        // Release in-flight locks once a card leaves the column that originally dispatched it.
+        for (const [sessionId, dispatchedFromColumn] of this._activeDispatchSessions) {
+            if (currentColumnBySession.get(sessionId) !== dispatchedFromColumn) {
+                this._activeDispatchSessions.delete(sessionId);
             }
         }
 
@@ -898,7 +1095,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Sort oldest first, take up to batchSize, filtering out already-in-flight sessions
         cardsInColumn.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
         const batch = cardsInColumn
-            .filter(c => !this._activeDispatchSessions.has(c.sessionId))
+            .filter(c => this._activeDispatchSessions.get(c.sessionId) !== sourceColumn)
             .slice(0, batchSize);
         if (batch.length === 0) { return; }
 
@@ -929,12 +1126,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             // Dispatch sequentially to avoid file and terminal lock contention
             if (lowSessions.length > 0) {
-                lowSessions.forEach(id => this._activeDispatchSessions.add(id));
+                lowSessions.forEach(id => this._activeDispatchSessions.set(id, sourceColumn));
                 const ok = await this.handleKanbanBatchTrigger('coder', lowSessions, instruction);
                 if (!ok) { lowSessions.forEach(id => this._activeDispatchSessions.delete(id)); }
             }
             if (highSessions.length > 0) {
-                highSessions.forEach(id => this._activeDispatchSessions.add(id));
+                highSessions.forEach(id => this._activeDispatchSessions.set(id, sourceColumn));
                 const ok = await this.handleKanbanBatchTrigger('lead', highSessions, instruction);
                 if (!ok) { highSessions.forEach(id => this._activeDispatchSessions.delete(id)); }
             }
@@ -943,31 +1140,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Default static routing for other columns
         const sessionIds = batch.map(c => c.sessionId);
-        batch.forEach(c => this._activeDispatchSessions.add(c.sessionId));
+        batch.forEach(c => this._activeDispatchSessions.set(c.sessionId, sourceColumn));
 
         console.log(`[Autoban] ${sourceColumn}: dispatching ${sessionIds.length} card(s) to ${role}`);
-        await this.handleKanbanBatchTrigger(role, sessionIds, instruction);
-    }
-
-    /**
-     * Derive column from runsheet events. Mirrors KanbanProvider._deriveColumn.
-     * Kept as a standalone method to avoid circular dependency on KanbanProvider.
-     */
-    private _deriveColumnFromEvents(events: any[]): string {
-        if (!events || events.length === 0) { return 'CREATED'; }
-
-        for (let i = events.length - 1; i >= 0; i--) {
-            const e = events[i];
-            if (e.action !== 'start') { continue; }
-            if (e.workflow === 'reviewer-pass') { return 'CODE REVIEWED'; }
-            if (e.workflow === 'handoff' || e.workflow === 'handoff-lead' || e.workflow === 'jules') { return 'CODED'; }
-            if (e.workflow === 'sidebar-review' || e.workflow === 'Enhanced plan' || e.workflow === 'improve-plan' || e.workflow === 'Improved plan') { return 'PLAN REVIEWED'; }
-            if (typeof e.workflow === 'string' && e.workflow.startsWith('custom-agent:')) {
-                return e.workflow.slice('custom-agent:'.length) || 'CREATED';
-            }
+        const ok = await this.handleKanbanBatchTrigger(role, sessionIds, instruction);
+        if (!ok) {
+            sessionIds.forEach(id => this._activeDispatchSessions.delete(id));
         }
-
-        return 'CREATED';
     }
 
     public revealInitiatePlanModal() {
@@ -3192,11 +3371,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 throw new Error('Plan file path is outside the workspace boundary.');
             }
 
-            const effectiveColumn = column || this._deriveColumnFromEvents(Array.isArray(sheet.events) ? sheet.events : []);
+            const customAgents = await this.getCustomAgents();
+            const effectiveColumn = column || deriveKanbanColumn(Array.isArray(sheet.events) ? sheet.events : [], customAgents);
             const planUri = vscode.Uri.file(planPathAbsolute).toString();
             const markdownLink = `[${topic}](${planUri})`;
             let textToCopy = markdownLink;
-            const customAgents = await this.getCustomAgents();
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
             if (effectiveColumn === 'CREATED') {
                 textToCopy = `Please improve the following plan. Execute the .agent/workflows/improve-plan.md workflow to perform a dependency check and adversarial review:\n\n${markdownLink}`;
@@ -3865,6 +4044,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 runSheet.events.push(event);
                 return runSheet;
             });
+            const updatedSheet = await this._getSessionLog(workspaceRoot).getRunSheet(sessionId);
+            if (updatedSheet) {
+                const customAgents = await this.getCustomAgents();
+                await this._syncKanbanDbFromSheetsSnapshot(workspaceRoot, [updatedSheet], customAgents, false);
+            }
             console.log(`[TaskViewerProvider] Updated Run Sheet for session ${sessionId} -> ${workflow} (${isStop ? 'stop' : 'start'})`);
             this._refreshRunSheets();
         } catch (e) {
@@ -3884,6 +4068,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._ensureTombstonesLoaded(workspaceRoot);
             await this._reconcileLocalPlansFromRunSheets(workspaceRoot);
             const allSheets = await this._getSessionLog(workspaceRoot).getRunSheets();
+            const customAgents = await this.getCustomAgents();
+            await this._syncKanbanDbFromSheetsSnapshot(workspaceRoot, allSheets, customAgents, true);
             const ownedActiveEntries = Object.values(this._planRegistry.entries).filter((entry) =>
                 entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active'
             );
@@ -4705,8 +4891,6 @@ ${focusDirective}`),
                     return false;
                 }
 
-                await this._updateSessionRunSheet(sessionId, 'handoff');
-
                 for (let i = 0; i < dispatches.length; i++) {
                     const dispatch = dispatches[i];
                     await this._dispatchExecuteMessage(workspaceRoot, dispatch.agent, dispatch.payload, dispatch.metadata);
@@ -4714,6 +4898,9 @@ ${focusDirective}`),
                         vscode.commands.executeCommand('switchboard.focusTerminalByName', dispatch.agent);
                     }
                 }
+
+                // Dispatch succeeded — now update runsheet
+                await this._updateSessionRunSheet(sessionId, 'handoff');
 
                 const summary = dispatches.map(d => `${d.role} (${d.agent})`).join(', ');
                 vscode.window.showInformationMessage(`Team coding started: ${summary}`);
@@ -4794,6 +4981,12 @@ ${planAnchor}
 
 Use the explicit three-stage review process:
   Stage 1 — Enhancement: Fill out 'TODO' sections or underspecified parts. Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
+    MANDATORY: Ensure the plan has a "## Complexity Audit" section with "### Band A — Routine" and "### Band B — Complex / Risky" subsections.
+    - If missing, create it.
+    - If present, update it based on your analysis.
+    - Band A: List straightforward, low-risk changes.
+    - Band B: List complex/risky changes (architectural shifts, new frameworks, state management, cross-module impacts).
+    - If Band B is empty, write "- None" explicitly.
   Stage 2 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
   Stage 3 — Write a balanced synthesis to ${balancedReviewPath}
 
@@ -4823,6 +5016,12 @@ ${planAnchor}
 Light mode rules (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
 1. Do NOT write plan/review artifact files for this pass.
 2. Stage 1 (Enhancement): Fill out any 'TODO' sections. MANDATORY: Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
+   MANDATORY: Ensure the plan has a "## Complexity Audit" section with "### Band A — Routine" and "### Band B — Complex / Risky" subsections.
+   - If missing, create it.
+   - If present, update it based on your analysis.
+   - Band A: List straightforward, low-risk changes.
+   - Band B: List complex/risky changes (architectural shifts, new frameworks, state management, cross-module impacts).
+   - If Band B is empty, write "- None" explicitly.
 3. Stage 2 (Grumpy Critique): post adversarial critique of the technical approach directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
 4. Stage 3 (Balanced Synthesis): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
 5. Stage 4 (Action): Update the original plan with the enhancement findings and provide the final assessment in chat. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
@@ -5042,13 +5241,16 @@ ${focusDirective}`);
             workflowName = workflowMap[role];
         }
 
-        if (workflowName) {
-            await this._updateSessionRunSheet(sessionId, workflowName);
-        }
-
-        // 4. Send Message (Write to Inbox)
+        // 4. Send Message (Write to Inbox) — dispatch FIRST, then update runsheet on success.
+        // This prevents cards from advancing in the kanban when the terminal dispatch fails.
         try {
             await this._dispatchExecuteMessage(workspaceRoot, targetAgent, messagePayload, messageMetadata);
+
+            // Dispatch succeeded — now update runsheet
+            if (workflowName) {
+                await this._updateSessionRunSheet(sessionId, workflowName);
+            }
+
             this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true });
             await this._logEvent('dispatch', {
                 event: 'dispatch_sent',
@@ -6541,6 +6743,13 @@ ${focusDirective}`);
                 '## Step 4: The Implementation Spec (Plan Template)',
                 'Output your final plan using the exact Markdown structure below. **You must include every section.**',
                 '',
+                '## 5. Exhaustive Implementation Spec',
+                'Produce a complete, copy-paste-ready implementation spec. You must maximize your context window to provide the highest level of detail possible. Include:',
+                '- Exact search/replace blocks or unified diffs for EVERY file change.',
+                '- **NO TRUNCATION:** You are strictly forbidden from using placeholders like `// ... existing code ...`, `// ... implement later`, `TODO`, or omitted middle sections for modified code. Write the exact, final state of the functions or blocks being changed.',
+                '- Deep logical breakdowns explaining the *Why* behind each architectural choice before code.',
+                '- Inline comments explaining non-obvious logic.',
+                '',
                 '---',
                 '',
                 '# [Plan Title]',
@@ -6572,10 +6781,15 @@ ${focusDirective}`);
                 '[Simulate the Lead Developer: Address Grumpy\'s concerns and explain how the implementation steps below have been adjusted to prevent them.]',
                 '',
                 '## Proposed Changes',
+                '> [!IMPORTANT]',
+                '> **MAXIMUM DETAIL REQUIRED:** Provide complete, fully functioning code blocks. Break down the logic step-by-step before showing code.',
+                '',
                 '### [Target File or Component 1]',
                 '#### [MODIFY / CREATE / DELETE] `path/to/file.ext`',
-                '- [Explicit, step-by-step instructions on what to change]',
-                '- [Include how to handle the edge cases discovered above]',
+                '- **Context:** [Explain exactly why this file needs to be changed]',
+                '- **Logic:** [Provide a granular, step-by-step breakdown of the logical changes required]',
+                '- **Implementation:** [Provide the complete code block, unified diff, or full function rewrite without truncation. Choose ONE primary format per change.]',
+                '- **Edge Cases Handled:** [Explain how the code above mitigates the risks identified in the Edge-Case Audit]',
                 '',
                 '### [Target File or Component 2]',
                 '...',
@@ -6588,7 +6802,7 @@ ${focusDirective}`);
                 '2. [Step 2...]',
                 '',
                 '## Appendix: Implementation Patch',
-                '[Provide the complete generated code, unified diff, or exact file replacements needed to implement the proposed changes above in a single code block. Use `N/A` only when no code change is required.]',
+                '[Provide the complete generated code, unified diff, or exact file replacements needed to implement the proposed changes above in a single code block. Do not use truncated placeholders. Use `N/A` only when no code change is required.]',
             ].join('\n'), 'utf8');
 
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });

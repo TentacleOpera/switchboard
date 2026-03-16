@@ -3,9 +3,13 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import { SessionActionLog } from './SessionActionLog';
-import { buildKanbanColumns, CustomAgentConfig, findCustomAgentByRole, parseCustomAgents } from './agentConfig';
+import { buildKanbanColumns, CustomAgentConfig, parseCustomAgents } from './agentConfig';
+import { deriveKanbanColumn } from './kanbanColumnDerivation';
+import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanMigration } from './KanbanMigration';
 
 export type KanbanColumn = string;
+type AutobanConfigState = { enabled: boolean; batchSize: number; rules: Record<string, { enabled: boolean; intervalMinutes: number }> };
 
 /** Column ordering: each column maps to its next column. */
 const NEXT_COLUMN: Record<string, KanbanColumn | null> = {};
@@ -33,6 +37,9 @@ export class KanbanProvider implements vscode.Disposable {
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _codedColumnTarget: string;
+    private _lastColumnsSignature: string | null = null;
+    private _autobanState?: AutobanConfigState;
+    private _kanbanDb?: KanbanDatabase;
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
@@ -86,6 +93,7 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._panel.onDidDispose(() => {
             this._panel = undefined;
+            this._lastColumnsSignature = null;
         }, null, this._disposables);
 
         // Initial data push after a short delay for webview mount
@@ -164,6 +172,36 @@ export class KanbanProvider implements vscode.Disposable {
         return this._sessionLog;
     }
 
+    private _getKanbanDb(workspaceRoot: string): KanbanDatabase {
+        if (!this._kanbanDb) {
+            this._kanbanDb = KanbanDatabase.forWorkspace(workspaceRoot);
+        }
+        return this._kanbanDb;
+    }
+
+    private _deriveLastAction(events: any[]): string {
+        for (let i = events.length - 1; i >= 0; i--) {
+            const workflow = String(events[i]?.workflow || '').trim();
+            if (workflow) {
+                return workflow;
+            }
+        }
+        return '';
+    }
+
+    private async _readWorkspaceId(workspaceRoot: string): Promise<string | null> {
+        const identityPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
+        try {
+            if (!fs.existsSync(identityPath)) return null;
+            const parsed = JSON.parse(await fs.promises.readFile(identityPath, 'utf8'));
+            const workspaceId = typeof parsed?.workspaceId === 'string' ? parsed.workspaceId.trim() : '';
+            return workspaceId || null;
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to read workspace identity:', e);
+            return null;
+        }
+    }
+
     private async _refreshBoard() {
         const workspaceFolders = vscode.workspace.workspaceFolders;
         if (!workspaceFolders || !this._panel) return;
@@ -173,25 +211,83 @@ export class KanbanProvider implements vscode.Disposable {
             const activeSheets = await this._getActiveSheets(workspaceRoot);
             const customAgents = await this._getCustomAgents(workspaceRoot);
             const columns = buildKanbanColumns(customAgents);
+            const workspaceId = await this._readWorkspaceId(workspaceRoot);
 
-            const cards: KanbanCard[] = await Promise.all(
+            const legacySnapshot = await Promise.all(
                 activeSheets.map(async (sheet: any) => {
-                    const complexity = await this.getComplexityFromPlan(workspaceRoot, sheet.planFile || '');
-                    return this._sheetToCard(sheet, complexity, customAgents);
+                    const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
+                    const planFile = typeof sheet.planFile === 'string' ? sheet.planFile : '';
+                    const complexity = await this.getComplexityFromPlan(workspaceRoot, planFile);
+                    return {
+                        planId: String(sheet._kanbanPlanId || sheet.sessionId || ''),
+                        sessionId: String(sheet.sessionId || ''),
+                        topic: String(sheet.topic || sheet.planFile || 'Untitled'),
+                        planFile,
+                        kanbanColumn: deriveKanbanColumn(events, customAgents),
+                        complexity,
+                        workspaceId: workspaceId || '',
+                        createdAt: String(sheet.createdAt || ''),
+                        updatedAt: String(events[events.length - 1]?.timestamp || sheet.createdAt || ''),
+                        lastAction: this._deriveLastAction(events),
+                        sourceType: (sheet._kanbanSourceType === 'brain' ? 'brain' : 'local') as 'local' | 'brain'
+                    };
                 })
             );
+
+            let cards: KanbanCard[] = legacySnapshot.map(row => ({
+                sessionId: row.sessionId,
+                topic: row.topic,
+                planFile: row.planFile,
+                column: row.kanbanColumn,
+                lastActivity: row.updatedAt || row.createdAt,
+                complexity: row.complexity
+            }));
+
+            if (workspaceId) {
+                const db = this._getKanbanDb(workspaceRoot);
+                if (await db.ensureReady()) {
+                    const synced = await KanbanMigration.bootstrapAndSync(db, workspaceId, legacySnapshot.filter(row => row.planId && row.sessionId && row.workspaceId));
+                    if (synced) {
+                        const dbRows = await db.getBoard(workspaceId);
+                        cards = dbRows.map(row => ({
+                            sessionId: row.sessionId,
+                            topic: row.topic || row.planFile || 'Untitled',
+                            planFile: row.planFile || '',
+                            column: row.kanbanColumn || 'CREATED',
+                            lastActivity: row.updatedAt || row.createdAt || '',
+                            complexity: row.complexity
+                        }));
+                    }
+                }
+            }
 
             const agentNames = await this._getAgentNames(workspaceRoot);
             const visibleAgents = await this._getVisibleAgents(workspaceRoot);
 
-            this._panel.webview.postMessage({ type: 'updateColumns', columns });
+            const nextColumnsSignature = this._columnsSignature(columns);
+            if (this._lastColumnsSignature !== nextColumnsSignature) {
+                this._panel.webview.postMessage({ type: 'updateColumns', columns });
+                this._lastColumnsSignature = nextColumnsSignature;
+            }
             this._panel.webview.postMessage({ type: 'updateBoard', cards });
             this._panel.webview.postMessage({ type: 'updateTarget', column: 'CODED', target: this._codedColumnTarget });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+            if (this._autobanState) {
+                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+            }
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
         }
+    }
+
+    private _columnsSignature(columns: Array<{ id: string; label: string; role?: string | null; autobanEnabled?: boolean }>): string {
+        return JSON.stringify(columns.map(col => ({
+            id: col.id,
+            label: col.label,
+            role: col.role ?? null,
+            autobanEnabled: !!col.autobanEnabled
+        })));
     }
 
     private async _getActiveSheets(workspaceRoot: string): Promise<any[]> {
@@ -237,23 +333,30 @@ export class KanbanProvider implements vscode.Disposable {
 
         const getBaseBrainPath = (planPath: string) => planPath.replace(/\.resolved(\.\d+)?$/i, '');
 
-        return sheets.filter((sheet: any) => {
-            if (sheet.completed) return false;
+        const activeSheets: any[] = [];
+        for (const sheet of sheets) {
+            if (sheet.completed) continue;
 
             let planId = sheet.sessionId;
             if (sheet.brainSourcePath) {
                 const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                if (blacklist.has(stablePath)) return false;
+                if (blacklist.has(stablePath)) continue;
                 planId = crypto.createHash('sha256').update(stablePath).digest('hex');
-                if (tombstones.has(planId)) return false;
+                if (tombstones.has(planId)) continue;
             }
 
-            if (!planId) return false;
+            if (!planId) continue;
             const entry = registry.entries[planId];
-            if (!entry) return false;
+            if (!entry) continue;
+            if (entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
 
-            return entry.ownerWorkspaceId === workspaceId && entry.status === 'active';
-        });
+            activeSheets.push({
+                ...sheet,
+                _kanbanPlanId: planId,
+                _kanbanSourceType: sheet.brainSourcePath ? 'brain' : 'local'
+            });
+        }
+        return activeSheets;
     }
 
     private async _getCustomAgents(workspaceRoot: string): Promise<CustomAgentConfig[]> {
@@ -366,7 +469,8 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** Receive updated Autoban configuration from the sidebar and relay to the Kanban webview. */
-    public updateAutobanConfig(state: { enabled: boolean; batchSize: number; rules: Record<string, { enabled: boolean; intervalMinutes: number }> }): void {
+    public updateAutobanConfig(state: AutobanConfigState): void {
+        this._autobanState = state;
         if (!this._panel) { return; }
         this._panel.webview.postMessage({ type: 'updateAutobanConfig', state });
     }
@@ -381,7 +485,7 @@ export class KanbanProvider implements vscode.Disposable {
      */
     private _sheetToCard(sheet: any, complexity: 'Unknown' | 'Low' | 'High' = 'Unknown', customAgents: CustomAgentConfig[] = []): KanbanCard {
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-        const column = this._deriveColumn(events, customAgents);
+        const column = deriveKanbanColumn(events, customAgents);
         let lastActivity = sheet.createdAt || '';
         for (const e of events) {
             if (e.timestamp && e.timestamp > lastActivity) {
@@ -412,7 +516,18 @@ export class KanbanProvider implements vscode.Disposable {
 
             // Find the Complexity Audit section
             const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
-            if (!auditMatch) return 'Unknown';
+            if (!auditMatch) {
+                // Fallback: the improve-plan workflow often appends a recommendation
+                // like "Send it to the Lead Coder" or "Send it to the Coder agent"
+                // without creating a formal Complexity Audit section.
+                // Match the recommendation line directly — it's more reliable than
+                // matching complexity adjectives (high/moderate/advanced all mean Lead Coder).
+                const leadCoderRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
+                const coderAgentRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
+                if (leadCoderRec.test(content)) return 'High';
+                if (coderAgentRec.test(content)) return 'Low';
+                return 'Unknown';
+            }
 
             const auditStart = auditMatch.index! + auditMatch[0].length;
 
@@ -429,41 +544,27 @@ export class KanbanProvider implements vscode.Disposable {
                 ? afterBandB.slice(0, nextSection.index).trim()
                 : afterBandB.trim();
 
-            // Treat Band B as empty if it is completely blank or explicitly starts with a "None" marker
-            // (ignoring markdown list chars), even if explanatory text follows it.
-            const isEmptyRegex = /^[\*\-\`\s]*(none|n\/?a|—|-)($|[\s\.,;:!?]+)/i;
+            // Band B content typically starts with a label line like "— Complex / Risky".
+            // Strip that label, then check whether the remaining lines contain real tasks.
+            const lines = bandBContent
+                .split(/\r?\n/)
+                .map(line => line.trim())
+                .filter(line => line.length > 0);
 
-            const isEmpty = bandBContent === '' || isEmptyRegex.test(bandBContent);
+            // Remove leading label line (e.g. "— Complex / Risky", "— High Complexity")
+            if (lines.length > 0 && /^—\s/.test(lines[0])) {
+                lines.shift();
+            }
+
+            // Normalize remaining lines: strip markdown list markers and check for empty/None markers
+            const noneMarker = /^[\*\-\+\s]*(none\.?|n\/?a\.?|—|-)\b/i;
+            const meaningful = lines.filter(line => !noneMarker.test(line));
+            const isEmpty = meaningful.length === 0;
 
             return isEmpty ? 'Low' : 'High';
         } catch {
             return 'Unknown';
         }
-    }
-
-    /**
-     * Derive column from the most recent workflow event:
-     *   reviewer -> CODE REVIEWED
-     *   lead/coder/handoff/team -> CODED
-     *   planner/improve-plan/accuracy -> REVIEWED
-     *   (none) -> CREATED
-     */
-    private _deriveColumn(events: any[], customAgents: CustomAgentConfig[] = []): KanbanColumn {
-        // Walk backwards to find the latest relevant workflow start event
-        for (let i = events.length - 1; i >= 0; i--) {
-            const e = events[i];
-            const wf = (e.workflow || '').toLowerCase();
-            if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
-            if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-            if (wf === 'planner' || wf === 'enhance' || wf === 'improve-plan' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan') return 'PLAN REVIEWED';
-            if (wf.startsWith('custom-agent:')) {
-                const role = wf.slice('custom-agent:'.length);
-                if (findCustomAgentByRole(customAgents, role)) {
-                    return role;
-                }
-            }
-        }
-        return 'CREATED';
     }
 
     private async _handleMessage(msg: any) {

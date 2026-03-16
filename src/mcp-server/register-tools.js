@@ -16,6 +16,7 @@ const execFileAsync = promisify(execFile);
 
 const { loadState, updateState } = require("./state-manager");
 const { getWorkflow, WORKFLOWS } = require("./workflows");
+const { deriveKanbanColumn } = require('../services/kanbanColumnDerivation');
 
 // DYNAMICALLY derived from WORKFLOWS object keys
 const WorkflowEnum = z.enum(Object.keys(WORKFLOWS));
@@ -282,6 +283,81 @@ function isPathWithinRoot(resolvedPath, rootDir) {
 
 function getWorkspaceRoot() {
     return process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
+}
+
+let sqlJsInitPromise = null;
+
+function resolveSqlWasmPath(workspaceRoot) {
+    const candidates = [
+        path.join(workspaceRoot, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error('Unable to locate sql-wasm.wasm.');
+}
+
+async function getSqlJs(workspaceRoot) {
+    if (!sqlJsInitPromise) {
+        sqlJsInitPromise = (async () => {
+            const initSqlJsModule = require('sql.js');
+            const initSqlJs = typeof initSqlJsModule === 'function' ? initSqlJsModule : initSqlJsModule.default;
+            if (typeof initSqlJs !== 'function') {
+                throw new Error('sql.js initializer function is unavailable');
+            }
+            const wasmPath = resolveSqlWasmPath(workspaceRoot);
+            const wasmBinary = new Uint8Array(fs.readFileSync(wasmPath));
+            return initSqlJs({ wasmBinary });
+        })().catch((error) => {
+            sqlJsInitPromise = null;
+            throw error;
+        });
+    }
+    return sqlJsInitPromise;
+}
+
+async function readKanbanStateFromDb(workspaceRoot, workspaceId) {
+    const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    if (!fs.existsSync(dbPath)) return null;
+
+    try {
+        const SQL = await getSqlJs(workspaceRoot);
+        const dbBytes = fs.readFileSync(dbPath);
+        const db = new SQL.Database(new Uint8Array(dbBytes));
+        const columns = {
+            'CREATED': [],
+            'PLAN REVIEWED': [],
+            'CODED': [],
+            'CODE REVIEWED': []
+        };
+        const stmt = db.prepare(
+            `SELECT topic, session_id, created_at, kanban_column
+             FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+             ORDER BY updated_at DESC`,
+            [workspaceId]
+        );
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            const col = String(row.kanban_column || 'CREATED');
+            if (!columns[col]) columns[col] = [];
+            columns[col].push({
+                topic: row.topic || 'Untitled',
+                sessionId: row.session_id || '',
+                createdAt: row.created_at || ''
+            });
+        }
+        stmt.free();
+        if (typeof db.close === 'function') db.close();
+        return columns;
+    } catch (e) {
+        console.error(`[MCP] SQLite kanban read failed, falling back to file state: ${e.message}`);
+        return null;
+    }
 }
 
 function isStrictInboxAuthEnabledForDispatch() {
@@ -1877,19 +1953,33 @@ function registerTools(server) {
             const tombstonePath = path.join(sbDir, 'plan_tombstones.json');
             const blacklistPath = path.join(sbDir, 'brain_plan_blacklist.json');
 
-            if (!fs.existsSync(registryPath) || !fs.existsSync(identityPath)) {
-                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace or missing registry." }] };
+            if (!fs.existsSync(identityPath)) {
+                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace or missing identity." }] };
             }
 
-            let identity, registry;
+            let identity;
             try {
                 identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
-                registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
             } catch (e) {
-                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse registry/identity: ${e.message}` }] };
+                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse workspace identity: ${e.message}` }] };
             }
 
             const workspaceId = identity.workspaceId;
+            const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId);
+            if (dbColumns) {
+                return { content: [{ type: "text", text: JSON.stringify(dbColumns, null, 2) }] };
+            }
+
+            if (!fs.existsSync(registryPath)) {
+                return { isError: true, content: [{ type: "text", text: "Error: Missing registry and SQLite fallback was unavailable." }] };
+            }
+
+            let registry;
+            try {
+                registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse registry: ${e.message}` }] };
+            }
 
             let tombstones = new Set();
             let blacklist = new Set();
@@ -1915,17 +2005,6 @@ function registerTools(server) {
 
             function getBaseBrainPath(planPath) {
                 return planPath.replace(/\.resolved(\.\d+)?$/i, '');
-            }
-
-            function deriveColumn(events) {
-                for (let i = events.length - 1; i >= 0; i--) {
-                    const e = events[i];
-                    const wf = (e.workflow || '').toLowerCase();
-                    if (wf.includes('reviewer') || wf === 'review') return 'CODE REVIEWED';
-                    if (wf === 'lead' || wf === 'coder' || wf === 'handoff' || wf === 'team' || wf === 'handoff-lead') return 'CODED';
-                    if (wf === 'planner' || wf === 'enhance' || wf === 'improve-plan' || wf === 'accuracy' || wf === 'sidebar-review' || wf === 'enhanced plan' || wf === 'improved plan') return 'PLAN REVIEWED';
-                }
-                return 'CREATED';
             }
 
             const columns = {
@@ -1959,7 +2038,7 @@ function registerTools(server) {
                     const entry = registry.entries[planId];
                     if (!entry || entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
 
-                    const col = deriveColumn(sheet.events || []);
+                    const col = deriveKanbanColumn(sheet.events || []);
                     columns[col].push({
                         topic: sheet.topic || sheet.planFile || 'Untitled',
                         sessionId: sheet.sessionId,

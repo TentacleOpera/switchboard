@@ -1,55 +1,55 @@
-# Consolidate Workflows into Lightweight 'improve-plan'
+# Replace enhance.md with improve-plan.md
 
 ## Goal
-Replace the legacy `enhance.md` and `challenge.md` workflows with a single, unified `.agent/workflows/improve-plan.md` workflow. The new workflow guides the agent to perform plan enhancement, deep code-level dependency checks, an adversarial critique, a balanced synthesis, and a file update all in a single, fluid pass without rigid phase-gate evidence requirements. 
+Replace the legacy `enhance.md` workflow with `.agent/workflows/improve-plan.md`. The new workflow guides the agent to perform plan enhancement, deep code-level dependency checks, an adversarial critique, a balanced synthesis, and a file update all in a single, fluid pass without rigid phase-gate evidence requirements. 
 
-This update universally applies the consolidation, cleaning up all UI references, backend IDE prompt templates, documentation, and automated test suites to completely eradicate the legacy workflows.
+This update universally applies the replacement, cleaning up all UI references, backend IDE prompt templates, documentation, and automated test suites to completely eradicate the legacy `enhance` workflow while keeping `challenge.md` intact.
 
 ## User Review Required
 > [!NOTE]
-> This permanently removes `/enhance` and `/challenge` and replaces them with `/improve-plan` across the Kanban board, sidebar copy buttons, agent documentation, the Airlock "How to Plan" guide, IDE connection templates, and test files.
+> This permanently removes `/enhance` and replaces it with `/improve-plan` across the Kanban board, sidebar copy buttons, agent documentation, the Airlock "How to Plan" guide, IDE connection templates, and test files. The `/challenge` workflow remains unchanged.
 
 ## Complexity Audit
 ### Band A — Routine
 - Creating `.agent/workflows/improve-plan.md` with the consolidated instructions.
-- Deleting `.agent/workflows/enhance.md` and `.agent/workflows/challenge.md`.
+- Deleting `.agent/workflows/enhance.md` only.
 - Updating string references in `TaskViewerProvider.ts`, `KanbanProvider.ts`, `InteractiveOrchestrator.ts`, and `PipelineOrchestrator.ts` to trigger `improve-plan`.
 - Updating the Airlock `how_to_plan.md` generator in `TaskViewerProvider.ts`.
 - Updating `chat.md` consultative guidance.
 - Updating `AGENTS.md`, `README.md`, and the `templates/` registry tables.
 
 ### Band B — Complex / Risky
-- Replacing the `enhance` and `challenge` state machine definitions in `src/mcp-server/workflows.js` with a minimal, single-step `improve-plan` FSM.
+- Replacing the `enhance` state machine definition in `src/mcp-server/workflows.js` with a minimal, single-step `improve-plan` FSM.
 - Updating `src/mcp-server/register-tools.js` to authorize the new workflow.
 - **CRITICAL:** Ensuring legacy workflow names remain in `KanbanProvider._deriveColumn` and `register-tools.js` mappings so existing Kanban cards do not disappear.
-- Refactoring `workflow-controls.test.js` and `send-message-guards.test.js` to rely on `improve-plan` so the CI pipeline doesn't break when `challenge` is deleted.
+- Refactoring `workflow-controls.test.js` and `send-message-guards.test.js` to rely on `improve-plan` so the CI pipeline doesn't break when `enhance` is deleted.
 
 ## Edge-Case & Dependency Audit
 - **Race Conditions:** None.
 - **Security:** None.
-- **Side Effects:** Agents executing `/improve-plan` will output their critique and synthesis directly into the chat and immediately update the plan file, saving significant token costs and execution time compared to the old multi-step FSMs. Legacy plans marked with `enhance` or `challenge` in their run sheets will continue to map correctly to `PLAN REVIEWED`.
+- **Side Effects:** Agents executing `/improve-plan` will output their critique and synthesis directly into the chat and immediately update the plan file, saving significant token costs and execution time compared to the old multi-step FSMs. Legacy plans marked with `enhance` in their run sheets will continue to map correctly to `PLAN REVIEWED`.
 
 ## Enhancement Findings & Cross-Plan Conflict Audit
 - **Cross-Plan Conflicts Detected:** 
-  - `feature_plan_20260314_092454_include_challenge_step_in_lead_review_coder_prompt.md` and `feature_plan_20260314_092325_prompt_for_plan_created_should_reference_challenge_workflow.md` explicitly rely on the `challenge` workflow which we are deleting. These plans must either be cancelled, or their implementation must pivot to reference `improve-plan` instead.
-- **Code Dependencies:** `send-message-guards.test.js` and `workflow-controls.test.js` strictly depend on specific FSM states. Removing `challenge` requires updating test assertions to expect `improve-plan` state routing.
+  - `feature_plan_20260314_092454_include_challenge_step_in_lead_review_coder_prompt.md` and `feature_plan_20260314_092325_prompt_for_plan_created_should_reference_challenge_workflow.md` explicitly rely on the `challenge` workflow which remains unchanged. No action needed for these plans.
+- **Code Dependencies:** `send-message-guards.test.js` and `workflow-controls.test.js` strictly depend on specific FSM states. Removing `enhance` requires updating test assertions to expect `improve-plan` state routing.
 
 ## Adversarial Synthesis
 ### Grumpy Critique
 You're modifying tests, documentation, IDE templates, and the core Orchestrators all at once! If you miss a single string replacement in `send-message-guards.test.js`, the CI is going to fail because it tests strict FSM gating! Also, if you replace the workflow with a single step that says "do everything at once," the agent might just output the chat messages and forget to actually update the plan file using `replace_file_content`!
 
 ### Balanced Response
-Grumpy is right about the blast radius—this touches many files. However, a sweeping cleanup is required to prevent agents from hallucinating deleted workflows. The `send-message-guards.test.js` will explicitly be updated to test `improve-plan` gating instead of `challenge`. Regarding FSM strictness, the "light review" prompt format has already been proven to work reliably when dispatched by the backend Orchestrator. We will explicitly structure `improve-plan.md` to emphasize that updating the plan file is the mandatory final action. If it fails occasionally, the user can simply ask it to apply the update, which is still a far better UX than clicking through 5 mandatory phase gates every time.
+Grumpy is right about the blast radius—this touches many files. However, a sweeping cleanup is required to prevent agents from hallucinating deleted workflows. The `send-message-guards.test.js` will explicitly be updated to test `improve-plan` gating instead of `enhance`. Regarding FSM strictness, the "light review" prompt format has already been proven to work reliably when dispatched by the backend Orchestrator. We will explicitly structure `improve-plan.md` to emphasize that updating the plan file is the mandatory final action. If it fails occasionally, the user can simply ask it to apply the update, which is still a far better UX than clicking through 5 mandatory phase gates every time.
 
 ## Proposed Changes
 ### 1. Create the Consolidated Workflow
 #### [CREATE] `.agent/workflows/improve-plan.md`
 - Provide a single-pass process requiring enhancement, code-level dependency checks, Grumpy critique, Balanced synthesis, and plan updating in one prompt.
-#### [DELETE] `.agent/workflows/enhance.md` & `.agent/workflows/challenge.md`
+#### [DELETE] `.agent/workflows/enhance.md` only
 
 ### 2. Update Runtime FSM
 #### [MODIFY] `src/mcp-server/workflows.js`
-- Remove `enhance` and `challenge` blocks. Add an `improve-plan` block with a single execution step.
+- Remove `enhance` block only. Keep `challenge` block intact. Add an `improve-plan` block with a single execution step.
 #### [MODIFY] `src/mcp-server/register-tools.js`
 - Update workflow gates to allow `execute` under `improve-plan`. Keep legacy FSM checks for Kanban mapping in `deriveColumn`.
 
@@ -137,10 +137,6 @@ This workflow combines deep plan enhancement, dependency validation, and an adve
 -        name: "Enhance - Deep Planning & Structural Audit",
 -        ...
 -    },
--    challenge: {
--        name: "Challenge (Internal Adversarial Review)",
--        ...
--    },
 +    'improve-plan': {
 +        name: "Improve Plan - Enhancement & Review",
 +        persona: "You are a senior systems analyst and internal reviewer. Consolidate structure and stress-test assumptions. No implementation work.",
@@ -153,6 +149,10 @@ This workflow combines deep plan enhancement, dependency validation, and an adve
 +            }
 +        ]
 +    },
+     challenge: {
+         name: "Challenge (Internal Adversarial Review)",
+         ...
+     },
 
 --- src/mcp-server/register-tools.js
 +++ src/mcp-server/register-tools.js
@@ -162,7 +162,7 @@ This workflow combines deep plan enhancement, dependency validation, and an adve
 @@ -... +... @@
      const ACTION_REQUIRED_WORKFLOWS = {
 -        'execute': ['handoff', 'challenge', 'handoff-lead'],
-+        'execute': ['handoff', 'improve-plan', 'handoff-lead'],
++        'execute': ['handoff', 'challenge', 'improve-plan', 'handoff-lead'],
          'delegate_task': ['handoff'],
      };
 
@@ -261,44 +261,43 @@ This workflow combines deep plan enhancement, dependency validation, and an adve
 @@ -... +... @@
 -- If the plan needs deep structure: Recommend `/enhance`.
 +- If the plan needs deep structure: Recommend `/improve-plan`.
-
 --- AGENTS.md
 +++ AGENTS.md
 @@ -... +... @@
 -| `/enhance` | **`enhance.md`** | Deep planning and structural audit before challenge/handoff. |
--| `/challenge` | **`challenge.md`** | Adversarial code review |
-+| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
+| `/challenge` | **`challenge.md`** | Adversarial code review |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
 @@ -... +... @@
 -├──► /challenge      Internal adversarial review (grumpy + synthesis)
-+├──► /improve-plan   Deep planning, dependency checks, and adversarial review
+├──► /improve-plan   Deep planning, dependency checks, and adversarial review
 
 --- README.md
 +++ README.md
 @@ -... +... @@
 -| `/enhance` | Deepen and stress-test an existing plan. |
--| `/challenge` | Adversarial review — a grumpy persona finds flaws, then synthesizes fixes. |
-+| `/improve-plan` | Deep planning, dependency checks, and adversarial review. |
+| `/challenge` | Adversarial review — a grumpy persona finds flaws, then synthesizes fixes. |
+| `/improve-plan` | Deep planning, dependency checks, and adversarial review. |
 
 --- .github/copilot-instructions.md
 +++ .github/copilot-instructions.md
 @@ -... +... @@
 -| `/enhance` | enhance | Deep planning and structural audit before challenge/handoff. |
--| `/challenge` | challenge | Adversarial code review |
-+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
+| `/challenge` | challenge | Adversarial code review |
+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
 
 --- templates/cursor/cursor-instructions.md.template
 +++ templates/cursor/cursor-instructions.md.template
 @@ -... +... @@
 -| `/enhance` | enhance | Deep planning and structural audit before challenge/handoff. |
--| `/challenge` | challenge | Adversarial code review |
-+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
+| `/challenge` | challenge | Adversarial code review |
+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
 
 --- templates/windsurf/windsurf-instructions.md.template
 +++ templates/windsurf/windsurf-instructions.md.template
 @@ -... +... @@
 -| `/enhance` | enhance | Deep planning and structural audit before challenge/handoff. |
--| `/challenge` | challenge | Adversarial code review |
-+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
+| `/challenge` | challenge | Adversarial code review |
+| `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review. |
 ```
 
 ### 4. Automated Tests Update

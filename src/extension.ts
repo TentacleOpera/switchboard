@@ -26,6 +26,10 @@ function getWorkspaceSourceMcpDirectory(workspaceRoot: string): string {
     return path.join(workspaceRoot, 'src', 'mcp-server');
 }
 
+function getWorkspaceSourceServicesDirectory(workspaceRoot: string): string {
+    return path.join(workspaceRoot, 'src', 'services');
+}
+
 function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean): { value: boolean; ignoredWorkspaceOverride: boolean } {
     const config = vscode.workspace.getConfiguration('switchboard');
     const inspected = config.inspect<boolean>(key);
@@ -58,15 +62,37 @@ async function getOrCreateDispatchSigningKey(context: vscode.ExtensionContext): 
     return generated;
 }
 
-function resolveBundledMcpSourceDirectory(extensionPath: string, workspaceRoot: string): string | undefined {
-    const candidates = [
-        getWorkspaceSourceMcpDirectory(workspaceRoot),
-        path.join(workspaceRoot, 'dist', 'mcp-server'),
-        path.join(extensionPath, 'dist', 'mcp-server'),
-        path.join(extensionPath, 'src', 'mcp-server')
-    ];
+function resolveBundledMcpSourceDirectory(extensionPath: string, workspaceRoot: string, workspaceMode: boolean): string | undefined {
+    const candidates = workspaceMode
+        ? [
+            getWorkspaceSourceMcpDirectory(workspaceRoot),
+            path.join(extensionPath, 'src', 'mcp-server'),
+            path.join(workspaceRoot, 'dist', 'mcp-server'),
+            path.join(extensionPath, 'dist', 'mcp-server')
+        ]
+        : [
+            path.join(workspaceRoot, 'dist', 'mcp-server'),
+            path.join(extensionPath, 'dist', 'mcp-server'),
+            getWorkspaceSourceMcpDirectory(workspaceRoot),
+            path.join(extensionPath, 'src', 'mcp-server')
+        ];
 
     return candidates.find(candidate => fs.existsSync(path.join(candidate, 'mcp-server.js')));
+}
+
+function isLockError(error: unknown): boolean {
+    const code = (error as NodeJS.ErrnoException | undefined)?.code;
+    return code === 'EBUSY' || code === 'EPERM';
+}
+
+function logMcpRuntimeLockWarning(error: unknown): void {
+    if (!isLockError(error)) return;
+    if (!mcpOutputChannel) {
+        mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
+    }
+    const code = (error as NodeJS.ErrnoException | undefined)?.code || 'UNKNOWN';
+    const message = (error as Error | undefined)?.message || String(error);
+    mcpOutputChannel.appendLine(`[MCP] WARNING: Could not update MCP runtime files (${code}: ${message}). Kill orphan node processes using .switchboard\\MCP and restart.`);
 }
 
 async function copyDirectoryRecursive(sourceDir: string, destinationDir: string): Promise<void> {
@@ -89,9 +115,11 @@ async function copyDirectoryRecursive(sourceDir: string, destinationDir: string)
 }
 
 async function ensureWorkspaceMcpServerFiles(extensionPath: string, workspaceRoot: string): Promise<string> {
-    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot);
+    const workspaceMode = isWorkspaceRuntimeModeEnabled();
+    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot, workspaceMode);
     if (!sourceDir) {
-        throw new Error('Could not locate bundled mcp-server source directory in extension package.');
+        const modeLabel = workspaceMode ? 'workspace source mode' : 'bundled mode';
+        throw new Error(`Could not locate MCP server source directory for ${modeLabel}.`);
     }
 
     const bundledEntry = path.join(sourceDir, 'mcp-server.js');
@@ -102,7 +130,34 @@ async function ensureWorkspaceMcpServerFiles(extensionPath: string, workspaceRoo
     // Always copy to workspace so IDEs can discover and launch it via their MCP config.
     // The extension internally spawns from the immutable bundle (see spawnBundledMcpServer).
     const workspaceMcpDir = getWorkspaceMcpDirectory(workspaceRoot);
-    await copyDirectoryRecursive(sourceDir, workspaceMcpDir);
+    try {
+        await copyDirectoryRecursive(sourceDir, workspaceMcpDir);
+    } catch (e) {
+        logMcpRuntimeLockWarning(e);
+        throw e;
+    }
+
+    // Workspace runtime mode uses raw source files, so copy the cross-directory service dependency
+    // that register-tools.js requires via ../services/kanbanColumnDerivation.
+    if (workspaceMode) {
+        const serviceSourceCandidates = [
+            path.join(getWorkspaceSourceServicesDirectory(workspaceRoot), 'kanbanColumnDerivation.js'),
+            path.join(extensionPath, 'src', 'services', 'kanbanColumnDerivation.js')
+        ];
+        const serviceSourcePath = serviceSourceCandidates.find(candidate => fs.existsSync(candidate));
+        if (!serviceSourcePath) {
+            throw new Error('Workspace runtime mode requires services/kanbanColumnDerivation.js, but no source file was found.');
+        }
+
+        const workspaceServicesDir = path.join(workspaceRoot, '.switchboard', 'services');
+        try {
+            await fs.promises.mkdir(workspaceServicesDir, { recursive: true });
+            await fs.promises.copyFile(serviceSourcePath, path.join(workspaceServicesDir, 'kanbanColumnDerivation.js'));
+        } catch (e) {
+            logMcpRuntimeLockWarning(e);
+            throw e;
+        }
+    }
     return path.join(workspaceMcpDir, 'mcp-server.js');
 }
 
@@ -2689,7 +2744,8 @@ interface McpStatus {
 }
 
 /**
- * Check MCP connection status — simplified to file existence check
+ * Check MCP connection status using static setup signals only.
+ * No IPC probing or polling: we only verify config presence + server file presence.
  */
 async function checkMcpConnection(context: vscode.ExtensionContext, workspaceRoot: string): Promise<McpStatus> {
     const status: McpStatus = {
@@ -2706,29 +2762,38 @@ async function checkMcpConnection(context: vscode.ExtensionContext, workspaceRoo
         });
     };
 
-    // Check if mcp-server.js exists in the extension's bundled dist directory
-    const serverPath = vscode.Uri.joinPath(context.extensionUri, 'dist', 'mcp-server', 'mcp-server.js').fsPath;
-    const fileExists = fs.existsSync(serverPath);
-
-    if (fileExists) {
+    // Primary check: packaged extension dist runtime.
+    // Fallback: source layout used in some dev/preview extension runs.
+    const serverFileDetected = [
+        path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js'),
+        path.join(context.extensionPath, 'src', 'mcp-server', 'mcp-server.js')
+    ].some(candidatePath => fs.existsSync(candidatePath));
+    if (serverFileDetected) {
         status.serverRunning = true;
         status.toolReachable = true;
     }
 
     // Check VS Code workspace settings
+    let configReadFailed = false;
     try {
         const workspaceMcpServers = vscode.workspace.getConfiguration().get('mcpServers') as any;
         if (hasActiveSwitchboardEntry(workspaceMcpServers)) {
             status.ideConfigured = true;
         }
-    } catch { }
+    } catch (error) {
+        configReadFailed = true;
+        const details = error instanceof Error ? error.message : String(error);
+        mcpOutputChannel?.appendLine(`[MCP] Failed to read mcpServers config: ${details}`);
+    }
 
-    if (!status.ideConfigured) {
+    if (configReadFailed) {
+        status.diagnostic = 'Unable to read IDE MCP config';
+    } else if (!status.ideConfigured) {
         status.diagnostic = 'IDE MCP config not found or disabled';
     } else if (!status.serverRunning) {
         status.diagnostic = 'MCP server file not found';
     } else {
-        status.diagnostic = 'MCP tools reachable';
+        status.diagnostic = 'MCP server file detected';
     }
 
     return status;

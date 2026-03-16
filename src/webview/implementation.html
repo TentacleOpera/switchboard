@@ -2971,11 +2971,13 @@
             batchSelect.addEventListener('change', () => {
                 autobanState.batchSize = parseInt(batchSelect.value, 10) || 3;
                 // Re-evaluate all interval warnings with new batch size
-                columnTransitions.forEach(({ column, floorPerPlan }) => {
-                    const input = document.getElementById('interval-input-' + column);
-                    const label = document.getElementById('warn-label-' + column);
+                columnTransitions.forEach(({ column, floorPerPlan, defaultMin }) => {
+                    const idSuffix = getAutobanRuleIdSuffix(column);
+                    const input = document.getElementById('interval-input-' + idSuffix);
+                    const label = document.getElementById('warn-label-' + idSuffix);
+                    const currentValue = autobanState.rules[column]?.intervalMinutes ?? defaultMin;
                     if (input && label) {
-                        evaluateIntervalWarning(column, autobanState.rules[column]?.intervalMinutes || 0,
+                        evaluateIntervalWarning(column, currentValue,
                             autobanState.batchSize, floorPerPlan, input, label);
                     }
                 });
@@ -3003,6 +3005,7 @@
                 { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED → CODED', defaultMin: 20, floorPerPlan: 5 },
                 { column: 'CODED', label: 'CODED → CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
             ];
+            const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
 
             function evaluateIntervalWarning(column, val, batchSz, floorPerPlan, inputEl, warnEl) {
                 const floor = batchSz * floorPerPlan;
@@ -3022,6 +3025,7 @@
             }
 
             columnTransitions.forEach(({ column, label, defaultMin, floorPerPlan }) => {
+                const idSuffix = getAutobanRuleIdSuffix(column);
                 const rule = autobanState.rules[column] || { enabled: true, intervalMinutes: defaultMin };
                 const ruleRow = document.createElement('div');
                 ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
@@ -3050,7 +3054,7 @@
                 minInput.type = 'number';
                 minInput.min = '1';
                 minInput.max = '60';
-                minInput.id = 'interval-input-' + column;
+                minInput.id = 'interval-input-' + idSuffix;
                 minInput.value = String(rule.intervalMinutes);
                 minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
                 minInput.addEventListener('change', () => {
@@ -3069,7 +3073,7 @@
                 minLbl.textContent = 'min';
 
                 const warnLabel = document.createElement('div');
-                warnLabel.id = 'warn-label-' + column;
+                warnLabel.id = 'warn-label-' + idSuffix;
                 warnLabel.style.cssText = 'font-size:9px; padding:1px 8px 4px; font-family:var(--font-mono); min-height:12px;';
 
                 ruleRow.appendChild(checkbox);
