@@ -355,7 +355,7 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId) {
         if (typeof db.close === 'function') db.close();
         return columns;
     } catch (e) {
-        console.error(`[MCP] SQLite kanban read failed, falling back to file state: ${e.message}`);
+        console.warn(`[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale. ${e.message}`);
         return null;
     }
 }
@@ -1969,6 +1969,7 @@ function registerTools(server) {
             if (dbColumns) {
                 return { content: [{ type: "text", text: JSON.stringify(dbColumns, null, 2) }] };
             }
+            console.warn('[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale.');
 
             if (!fs.existsSync(registryPath)) {
                 return { isError: true, content: [{ type: "text", text: "Error: Missing registry and SQLite fallback was unavailable." }] };

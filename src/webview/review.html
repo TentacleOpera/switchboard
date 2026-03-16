@@ -4,11 +4,12 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Plan Review</title>
+    <title>Plan Ticket</title>
     <style>
         :root {
             --bg: #0f1117;
             --panel: #161b22;
+            --panel-alt: #0b0d12;
             --border: #2d333b;
             --text: #d1d7e0;
             --muted: #8b949e;
@@ -30,121 +31,210 @@
             color: var(--text);
             font-family: var(--font-family);
             height: 100vh;
-            display: flex;
-            flex-direction: column;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
         }
 
         .header {
             display: flex;
-            align-items: center;
+            align-items: flex-start;
             justify-content: space-between;
             gap: 16px;
-            padding: 10px 14px;
+            padding: 14px 18px;
             border-bottom: 1px solid var(--border);
             background: var(--panel);
         }
 
-        .title {
-            font-size: 12px;
+        .header-copy {
+            min-width: 0;
+        }
+
+        .eyebrow {
+            font-size: 11px;
             text-transform: uppercase;
-            letter-spacing: 1.5px;
+            letter-spacing: 1.4px;
             color: var(--accent);
             font-family: var(--mono);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
+            margin-bottom: 6px;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0;
+            word-break: break-word;
         }
 
         .subtitle {
             font-size: 12px;
             color: var(--muted);
-            white-space: nowrap;
-            overflow: hidden;
-            text-overflow: ellipsis;
-            max-width: 50vw;
-            text-align: right;
+            margin-top: 6px;
+            word-break: break-all;
         }
 
-        .content {
-            flex: 1;
-            overflow: auto;
-            padding: 20px;
-            line-height: 1.6;
-            position: relative;
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-shrink: 0;
         }
 
-        .markdown-body {
-            max-width: 980px;
-            margin: 0 auto;
-            padding-bottom: 64px;
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(4, minmax(0, 1fr));
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg);
         }
 
-        .comment-popup {
-            position: fixed;
-            z-index: 999;
-            width: min(420px, calc(100vw - 24px));
-            background: var(--panel);
-            border: 1px solid var(--border);
-            border-radius: 6px;
-            padding: 10px;
-            box-shadow: var(--shadow);
-            display: none;
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
         }
 
-        .comment-popup.visible {
-            display: block;
+        .field.dependencies {
+            grid-column: span 4;
         }
 
-        .popup-label {
+        .field label {
             font-size: 11px;
             color: var(--muted);
-            margin-bottom: 6px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
             font-family: var(--mono);
         }
 
-        .selected-preview {
-            font-size: 12px;
+        input,
+        select,
+        textarea,
+        button {
+            font: inherit;
+        }
+
+        input,
+        select,
+        textarea {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-alt);
             color: var(--text);
-            background: rgba(61, 219, 217, 0.08);
-            border: 1px solid rgba(61, 219, 217, 0.22);
-            border-radius: 4px;
-            padding: 8px;
-            margin-bottom: 8px;
-            max-height: 80px;
+            padding: 10px 12px;
+        }
+
+        input:focus,
+        select:focus,
+        textarea:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        .editor-shell {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            padding: 0 18px 18px;
+            gap: 10px;
+        }
+
+        .editor-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-top: 14px;
+        }
+
+        .editor-title {
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--mono);
+        }
+
+        .editor-hint {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .editor {
+            min-height: 0;
+            resize: none;
+            font-family: var(--mono);
+            line-height: 1.55;
+            padding: 16px;
+        }
+
+        .log-shell {
+            border-top: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        .log-shell details {
+            padding: 12px 18px 16px;
+        }
+
+        .log-shell summary {
+            cursor: pointer;
+            color: var(--text);
+            font-weight: 600;
+            list-style: none;
+        }
+
+        .log-shell summary::-webkit-details-marker {
+            display: none;
+        }
+
+        .log-list {
+            margin-top: 14px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+            max-height: 240px;
             overflow: auto;
         }
 
-        textarea {
-            width: 100%;
-            min-height: 76px;
-            resize: vertical;
-            background: #0b0d12;
-            color: var(--text);
+        .log-item {
             border: 1px solid var(--border);
-            border-radius: 4px;
-            padding: 8px;
-            font-family: var(--font-family);
-            font-size: 13px;
-            margin-bottom: 10px;
+            border-radius: 6px;
+            background: var(--panel-alt);
+            padding: 10px 12px;
         }
 
-        .popup-actions {
+        .log-head {
             display: flex;
-            justify-content: flex-end;
-            gap: 8px;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 12px;
+            margin-bottom: 4px;
+        }
+
+        .log-workflow {
+            color: var(--accent);
+            font-family: var(--mono);
+        }
+
+        .log-timestamp,
+        .log-details,
+        .empty-state {
+            color: var(--muted);
+            font-size: 12px;
         }
 
         button {
             border: 1px solid var(--border);
             background: transparent;
             color: var(--text);
-            border-radius: 4px;
-            padding: 6px 10px;
-            font-size: 12px;
+            border-radius: 6px;
+            padding: 8px 12px;
             cursor: pointer;
         }
 
-        button:hover {
+        button:hover:not(:disabled) {
             border-color: var(--accent);
             color: var(--accent);
         }
@@ -155,197 +245,375 @@
             color: var(--accent);
         }
 
-        .toast {
-            position: fixed;
-            bottom: 12px;
-            right: 12px;
-            z-index: 1100;
-            max-width: 460px;
-            padding: 10px 12px;
-            border-radius: 6px;
-            border: 1px solid var(--border);
-            background: var(--panel);
-            box-shadow: var(--shadow);
-            display: none;
+        button:disabled,
+        input:disabled,
+        select:disabled,
+        textarea:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .statusbar {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 18px;
+            border-top: 1px solid var(--border);
             font-size: 12px;
+            color: var(--muted);
+            background: var(--panel);
         }
 
-        .toast.visible {
-            display: block;
-        }
-
-        .toast.success {
-            border-color: rgba(63, 185, 80, 0.55);
+        .statusbar.success {
             color: var(--success);
         }
 
-        .toast.error {
-            border-color: rgba(248, 81, 73, 0.55);
+        .statusbar.error {
             color: var(--danger);
+        }
+
+        @media (max-width: 960px) {
+            .meta-grid {
+                grid-template-columns: repeat(2, minmax(0, 1fr));
+            }
+
+            .field.dependencies {
+                grid-column: span 2;
+            }
+        }
+
+        @media (max-width: 640px) {
+            body {
+                grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+            }
+
+            .header {
+                flex-direction: column;
+            }
+
+            .header-actions {
+                width: 100%;
+                justify-content: flex-start;
+            }
+
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .field.dependencies {
+                grid-column: span 1;
+            }
         }
     </style>
 </head>
 
 <body>
     <div class="header">
-        <div class="title" id="topic">Plan Review</div>
-        <div class="subtitle" id="path"></div>
-    </div>
-
-    <div class="content" id="content">
-        <article id="markdown-content" class="markdown-body"></article>
-    </div>
-
-    <div class="comment-popup" id="comment-popup">
-        <div class="popup-label">Comment on selection</div>
-        <div class="selected-preview" id="selected-preview"></div>
-        <textarea id="comment-input" placeholder="Add your contextual feedback..."></textarea>
-        <div class="popup-actions">
-            <button id="cancel-comment">Cancel</button>
-            <button class="primary" id="submit-comment">Submit Comment</button>
+        <div class="header-copy">
+            <div class="eyebrow">Ticket View</div>
+            <h1 class="title" id="header-title">Plan Ticket</h1>
+            <div class="subtitle" id="header-path"></div>
+        </div>
+        <div class="header-actions">
+            <button id="reload-ticket">Reload</button>
+            <button class="primary" id="save-plan">Save</button>
         </div>
     </div>
 
-    <div class="toast" id="toast"></div>
+    <div class="meta-grid">
+        <div class="field">
+            <label for="topic-input">Topic</label>
+            <input id="topic-input" type="text" />
+        </div>
+        <div class="field">
+            <label for="column-select">Column</label>
+            <select id="column-select"></select>
+        </div>
+        <div class="field">
+            <label for="complexity-select">Complexity</label>
+            <select id="complexity-select">
+                <option value="Unknown">Unknown</option>
+                <option value="Low">Low</option>
+                <option value="High">High</option>
+            </select>
+        </div>
+        <div class="field">
+            <label for="session-display">Session</label>
+            <input id="session-display" type="text" readonly />
+        </div>
+        <div class="field dependencies">
+            <label for="dependencies-input">Dependencies</label>
+            <input id="dependencies-input" type="text" placeholder="Comma-separated session IDs or topic names" />
+        </div>
+    </div>
+
+    <div class="editor-shell">
+        <div class="editor-toolbar">
+            <div class="editor-title">Plan Text</div>
+            <div class="editor-hint">Use Ctrl/Cmd+S to save changes</div>
+        </div>
+        <textarea class="editor" id="plan-editor" spellcheck="false"></textarea>
+    </div>
+
+    <div class="log-shell">
+        <details open>
+            <summary>Action Log</summary>
+            <div class="log-list" id="action-log"></div>
+        </details>
+    </div>
+
+    <div class="statusbar" id="statusbar">
+        <span id="status-message">Loading ticket…</span>
+        <span id="mtime-message"></span>
+    </div>
 
     <script>
         const vscode = acquireVsCodeApi();
 
-        const topicEl = document.getElementById('topic');
-        const pathEl = document.getElementById('path');
-        const markdownContentEl = document.getElementById('markdown-content');
-        const popupEl = document.getElementById('comment-popup');
-        const selectedPreviewEl = document.getElementById('selected-preview');
-        const commentInputEl = document.getElementById('comment-input');
-        const toastEl = document.getElementById('toast');
+        const headerTitleEl = document.getElementById('header-title');
+        const headerPathEl = document.getElementById('header-path');
+        const topicInputEl = document.getElementById('topic-input');
+        const columnSelectEl = document.getElementById('column-select');
+        const complexitySelectEl = document.getElementById('complexity-select');
+        const sessionDisplayEl = document.getElementById('session-display');
+        const dependenciesInputEl = document.getElementById('dependencies-input');
+        const planEditorEl = document.getElementById('plan-editor');
+        const actionLogEl = document.getElementById('action-log');
+        const savePlanButtonEl = document.getElementById('save-plan');
+        const reloadTicketButtonEl = document.getElementById('reload-ticket');
+        const statusbarEl = document.getElementById('statusbar');
+        const statusMessageEl = document.getElementById('status-message');
+        const mtimeMessageEl = document.getElementById('mtime-message');
 
         const state = {
             sessionId: '',
-            topic: '',
             planFileAbsolute: '',
-            selectedText: ''
+            topic: '',
+            column: '',
+            complexity: 'Unknown',
+            dependencies: [],
+            planText: '',
+            planMtimeMs: 0,
+            canEditMetadata: false,
+            pendingCount: 0
         };
 
-        function hidePopup(clear = false) {
-            popupEl.classList.remove('visible');
-            if (clear) {
-                commentInputEl.value = '';
-                state.selectedText = '';
-            }
+        function setBusy(isBusy) {
+            state.pendingCount = Math.max(0, state.pendingCount + (isBusy ? 1 : -1));
+            const disabled = state.pendingCount > 0;
+            savePlanButtonEl.disabled = disabled;
+            reloadTicketButtonEl.disabled = disabled;
+            const editable = !disabled && state.canEditMetadata;
+            topicInputEl.disabled = !editable;
+            columnSelectEl.disabled = !editable;
+            complexitySelectEl.disabled = !editable;
+            dependenciesInputEl.disabled = !editable;
+            planEditorEl.disabled = disabled;
         }
 
-        function showToast(message, kind) {
-            toastEl.textContent = message;
-            toastEl.className = 'toast visible ' + (kind === 'success' ? 'success' : 'error');
-            setTimeout(() => {
-                toastEl.className = 'toast';
-            }, 2600);
+        function setStatus(message, kind = '') {
+            statusMessageEl.textContent = message;
+            statusbarEl.className = `statusbar${kind ? ` ${kind}` : ''}`;
         }
 
-        function showPopup(rect, selectedText) {
-            const maxLeft = window.innerWidth - popupEl.offsetWidth - 12;
-            const targetLeft = Math.max(12, Math.min(rect.left, maxLeft > 12 ? maxLeft : rect.left));
-            const targetTop = Math.min(window.innerHeight - 12, rect.bottom + 10);
-
-            popupEl.style.left = `${targetLeft}px`;
-            popupEl.style.top = `${targetTop}px`;
-            selectedPreviewEl.textContent = selectedText;
-            popupEl.classList.add('visible');
-            commentInputEl.focus();
+        function formatTimestamp(ts) {
+            if (!ts) return '';
+            const date = new Date(ts);
+            if (Number.isNaN(date.getTime())) return ts;
+            return date.toLocaleString();
         }
 
-        function handleSelectionEvent() {
-            const selection = window.getSelection();
-            if (!selection || selection.rangeCount === 0) {
-                hidePopup();
-                return;
-            }
-
-            const text = selection.toString().trim();
-            if (!text) {
-                hidePopup();
-                return;
-            }
-
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            const payloadRect = {
-                top: rect.top,
-                left: rect.left,
-                width: rect.width,
-                height: rect.height,
-                bottom: rect.bottom,
-                right: rect.right
-            };
-
-            state.selectedText = text;
-            vscode.postMessage({
-                type: 'selectionChanged',
-                selectedText: text,
-                selectionRect: payloadRect
+        function renderColumns(columns, selected) {
+            columnSelectEl.innerHTML = '';
+            columns.forEach((column) => {
+                const option = document.createElement('option');
+                option.value = column.id;
+                option.textContent = column.label;
+                option.selected = column.id === selected;
+                columnSelectEl.appendChild(option);
             });
-
-            showPopup(rect, text);
+            if (!columns.some(column => column.id === selected) && selected) {
+                const option = document.createElement('option');
+                option.value = selected;
+                option.textContent = selected;
+                option.selected = true;
+                columnSelectEl.appendChild(option);
+            }
         }
 
-        document.getElementById('cancel-comment').addEventListener('click', () => {
-            hidePopup(true);
-        });
-
-        document.getElementById('submit-comment').addEventListener('click', () => {
-            const comment = commentInputEl.value.trim();
-            if (!state.selectedText) {
-                showToast('Select text before submitting a comment.', 'error');
-                return;
-            }
-            if (!comment) {
-                showToast('Comment is required.', 'error');
+        function renderActionLog(entries) {
+            actionLogEl.innerHTML = '';
+            if (!Array.isArray(entries) || entries.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.textContent = 'No action log entries yet.';
+                actionLogEl.appendChild(empty);
                 return;
             }
 
-            vscode.postMessage({
-                type: 'submitComment',
+            entries.forEach((entry) => {
+                const item = document.createElement('div');
+                item.className = 'log-item';
+                item.innerHTML = `
+                    <div class="log-head">
+                        <span class="log-workflow">${escapeHtml(entry.workflow || 'unknown')}</span>
+                        <span class="log-timestamp">${escapeHtml(formatTimestamp(entry.timestamp || ''))}</span>
+                    </div>
+                    <div class="log-details">${escapeHtml(entry.details || 'No additional details')}</div>
+                `;
+                actionLogEl.appendChild(item);
+            });
+        }
+
+        function renderTicketData(message) {
+            state.sessionId = message.sessionId || '';
+            state.planFileAbsolute = message.planFileAbsolute || '';
+            state.topic = message.topic || '';
+            state.column = message.column || '';
+            state.complexity = message.complexity || 'Unknown';
+            state.dependencies = Array.isArray(message.dependencies) ? message.dependencies.slice() : [];
+            state.planText = message.planText || '';
+            state.planMtimeMs = Number(message.planMtimeMs || 0);
+            state.canEditMetadata = message.canEditMetadata !== false;
+
+            headerTitleEl.textContent = state.topic || 'Ticket';
+            headerPathEl.textContent = state.planFileAbsolute;
+            topicInputEl.value = state.topic;
+            sessionDisplayEl.value = state.sessionId || 'No session';
+            renderColumns(Array.isArray(message.columns) ? message.columns : [], state.column);
+            complexitySelectEl.value = state.complexity;
+            dependenciesInputEl.value = state.dependencies.join(', ');
+            planEditorEl.value = state.planText;
+            renderActionLog(Array.isArray(message.actionLog) ? message.actionLog : []);
+            mtimeMessageEl.textContent = state.planMtimeMs ? `Loaded: ${formatTimestamp(state.planMtimeMs)}` : '';
+            setStatus('Ticket loaded.');
+            setBusy(false);
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function postUpdate(payload) {
+            if (!state.sessionId) {
+                setStatus('This ticket is not associated with a session.', 'error');
+                return;
+            }
+            setBusy(true);
+            setStatus('Saving ticket changes…');
+            vscode.postMessage(payload);
+        }
+
+        function handleTopicCommit() {
+            const nextTopic = topicInputEl.value.trim();
+            if (!nextTopic || nextTopic === state.topic) {
+                topicInputEl.value = state.topic;
+                return;
+            }
+            postUpdate({
+                type: 'setTopic',
                 sessionId: state.sessionId,
-                topic: state.topic,
-                planFileAbsolute: state.planFileAbsolute,
-                selectedText: state.selectedText,
-                comment
+                topic: nextTopic
+            });
+        }
+
+        function handleDependenciesCommit() {
+            const nextDependencies = dependenciesInputEl.value
+                .split(',')
+                .map(item => item.trim())
+                .filter(Boolean);
+            if (JSON.stringify(nextDependencies) === JSON.stringify(state.dependencies)) {
+                dependenciesInputEl.value = state.dependencies.join(', ');
+                return;
+            }
+            postUpdate({
+                type: 'setDependencies',
+                sessionId: state.sessionId,
+                dependencies: nextDependencies
+            });
+        }
+
+        function savePlanText() {
+            setBusy(true);
+            setStatus('Saving plan text…');
+            vscode.postMessage({
+                type: 'savePlanText',
+                sessionId: state.sessionId,
+                content: planEditorEl.value,
+                expectedMtimeMs: state.planMtimeMs
+            });
+        }
+
+        savePlanButtonEl.addEventListener('click', () => {
+            savePlanText();
+        });
+
+        reloadTicketButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Reloading ticket…');
+            vscode.postMessage({ type: 'ready' });
+        });
+
+        topicInputEl.addEventListener('blur', handleTopicCommit);
+
+        columnSelectEl.addEventListener('change', () => {
+            if (!columnSelectEl.value || columnSelectEl.value === state.column) return;
+            postUpdate({
+                type: 'setColumn',
+                sessionId: state.sessionId,
+                column: columnSelectEl.value
             });
         });
 
-        document.addEventListener('mouseup', () => {
-            setTimeout(handleSelectionEvent, 0);
+        complexitySelectEl.addEventListener('change', () => {
+            if (!complexitySelectEl.value || complexitySelectEl.value === state.complexity) return;
+            postUpdate({
+                type: 'setComplexity',
+                sessionId: state.sessionId,
+                complexity: complexitySelectEl.value
+            });
         });
 
-        document.addEventListener('mousedown', (event) => {
-            if (!popupEl.contains(event.target)) {
-                const selection = window.getSelection();
-                const selectedText = selection ? selection.toString().trim() : '';
-                if (!selectedText) {
-                    hidePopup();
-                }
+        dependenciesInputEl.addEventListener('blur', handleDependenciesCommit);
+        dependenciesInputEl.addEventListener('keydown', (event) => {
+            if (event.key === 'Enter') {
+                event.preventDefault();
+                handleDependenciesCommit();
+                dependenciesInputEl.blur();
             }
+        });
+
+        window.addEventListener('keydown', (event) => {
+            const isSaveShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's';
+            if (!isSaveShortcut) return;
+            event.preventDefault();
+            savePlanText();
         });
 
         window.addEventListener('message', (event) => {
             const message = event.data;
             switch (message.type) {
-                case 'renderPlan':
-                    state.sessionId = message.sessionId || '';
-                    state.topic = message.topic || 'Plan Review';
-                    state.planFileAbsolute = message.planFileAbsolute || '';
-                    topicEl.textContent = state.topic;
-                    pathEl.textContent = state.planFileAbsolute;
-                    markdownContentEl.innerHTML = message.renderedHtml || '';
-                    hidePopup(true);
+                case 'ticketData':
+                    renderTicketData(message);
+                    break;
+                case 'ticketUpdateResult':
+                    setBusy(false);
+                    if (message.ok) {
+                        setStatus(message.message || 'Ticket updated.', 'success');
+                    } else {
+                        setStatus(message.message || 'Ticket update failed.', 'error');
+                    }
                     break;
                 case 'commentResult':
                     if (message.ok) {
-                        const target = message.targetAgent ? ` -> ${message.targetAgent}` : '';
-                        showToast(`Comment sent${target}`, 'success');
-                        hidePopup(true);
+                        setStatus(message.message || 'Comment sent.', 'success');
                     } else {
-                        showToast(message.message || 'Failed to send comment.', 'error');
+                        setStatus(message.message || 'Failed to send comment.', 'error');
                     }
                     break;
             }

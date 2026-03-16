@@ -92,3 +92,47 @@
 - `task.md:8-10`: Checklist state is manually maintained and can become inaccurate if commands are re-run but status lines are not updated in lockstep.
 - `task.md:47-55`: Verification records can become stale if new command runs occur after edits and the log is not appended.
 - `task.md:57-64`: Red-team findings are point-in-time; future refactors can invalidate line references without obvious signal.
+
+## Kanban controls strip execution (feature_plan_20260316_065159_add_main_controls_strip_at_top_of_kanban_board)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces (`src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, related types/tests).
+- [x] Run baseline verification (`npm run compile`, `npm run lint`) and capture status.
+- [x] Perform inline adversarial review and apply corrections before coding.
+- [x] Implement controls strip UI wiring in `src/webview/kanban.html`.
+- [x] Implement backend handlers/prompts/auto-advance logic in `src/services/KanbanProvider.ts`.
+- [x] Verify implementation gate (`npm run compile`) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Verification Record (Kanban controls strip)
+
+- Baseline `npm run compile`: FAIL (pre-existing TypeScript syntax errors in `src/services/KanbanDatabase.ts`, e.g. around lines 175/187/197/202).
+- Baseline `npm run lint`: NOT RUN (compile failed first in chained baseline command).
+- Post-change `npm run compile` (first pass): FAIL (pre-existing `src/services/KanbanDatabase.ts` parse/syntax errors in workspace state during that run).
+- Final `npm run compile`: PASS.
+- Final `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- `npm test`: FAIL at pretest lint step (same pre-existing ESLint config issue); compile/tests setup otherwise reaches `compile-tests` and webpack compile.
+- Diff/readback review completed for: `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/services/TaskViewerProvider.ts`, `src/extension.ts`.
+
+### Red Team Findings (Kanban controls strip)
+
+- `src/webview/kanban.html:455-465` — Failure mode: controls strip can wrap on narrow width and push action order around; mitigation: keep actions id-based and avoid positional assumptions in listeners.
+- `src/webview/kanban.html:657-666` — Failure mode: Jules button visibility can stale if no `visibleAgents` message arrives yet; mitigation: initialize with hidden default + call `updateJulesButtonVisibility()` at startup.
+- `src/webview/kanban.html:989-1004` — Failure mode: rapid multi-click on batch buttons can issue duplicate backend actions; mitigation: backend re-validates current column before advancing sessions.
+
+- `src/services/KanbanProvider.ts:374-439` — Failure mode: stale UI snapshots could move cards already changed by other flows; mitigation: `_advanceSessionsInColumn` re-derives current column from runsheet before writing workflow event.
+- `src/services/KanbanProvider.ts:781-816` — Failure mode: batch prompt buttons could claim advancement despite partial eligibility; mitigation: status messages now report actual advanced count after guarded checks.
+- `src/services/KanbanProvider.ts:819-826` — Failure mode: Jules dispatch could run while Jules is disabled; mitigation: explicit `visibleAgents.jules` guard and warning before dispatch.
+
+- `src/services/TaskViewerProvider.ts:1007-1022` — Failure mode: UI toggle desync if autoban state persisted but engine not restarted/stopped; mitigation: method updates workspace state and applies the same start/stop semantics as sidebar updates.
+- `src/services/TaskViewerProvider.ts:1012-1019` — Failure mode: enabling while already enabled could keep stale timer config; mitigation: restarts engine when enabled to rehydrate active timers/rules.
+- `src/services/TaskViewerProvider.ts:1021` — Failure mode: kanban indicator lag after toggle; mitigation: `_postAutobanState()` rebroadcasts to both sidebar and kanban views.
+
+- `src/extension.ts:829-832` — Failure mode: missing command registration would make AUTOBAN button no-op; mitigation: explicit command registration routes to `TaskViewerProvider.setAutobanEnabledFromKanban`.
+- `src/extension.ts:829-832` — Failure mode: non-boolean payload from webview could produce inconsistent state; mitigation: command coerces with `!!enabled`.
+- `src/extension.ts:829-832` — Failure mode: un-awaited state transition could race with subsequent UI refresh; mitigation: registration awaits provider method.
+
+- `task.md:96-136` — Failure mode: checklist drift if another edit happens after verification; mitigation: this block records exact command outcomes and touched files for this run only.
+- `task.md:112-117` — Failure mode: lint/test failures could be misattributed to this feature; mitigation: records unchanged pre-existing ESLint config blocker explicitly.
+- `task.md:120-136` — Failure mode: line references may age as files move; mitigation: references are scoped to this execution snapshot and should be refreshed on future edits.

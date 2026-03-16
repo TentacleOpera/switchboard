@@ -109,7 +109,12 @@ export class KanbanDatabase {
     public async ensureReady(): Promise<boolean> {
         if (this._db) return true;
         if (!this._initPromise) {
-            this._initPromise = this._initialize();
+            this._initPromise = this._initialize().then((ready) => {
+                if (!ready) {
+                    this._initPromise = null;
+                }
+                return ready;
+            });
         }
         return this._initPromise;
     }
@@ -164,6 +169,56 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    public async hasActivePlans(workspaceId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const stmt = this._db.prepare(
+            'SELECT 1 FROM plans WHERE workspace_id = ? AND status = ? LIMIT 1',
+            [workspaceId, 'active']
+        );
+        try {
+            return stmt.step();
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async hasPlan(sessionId: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const stmt = this._db.prepare('SELECT 1 FROM plans WHERE session_id = ? LIMIT 1', [sessionId]);
+        try {
+            return stmt.step();
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async updateColumn(sessionId: string, newColumn: string): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?',
+            [newColumn, new Date().toISOString(), sessionId]
+        );
+    }
+
+    public async updateComplexity(sessionId: string, complexity: 'Unknown' | 'Low' | 'High'): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET complexity = ?, updated_at = ? WHERE session_id = ?',
+            [complexity, new Date().toISOString(), sessionId]
+        );
+    }
+
+    public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET status = ?, updated_at = ? WHERE session_id = ?',
+            [status, new Date().toISOString(), sessionId]
+        );
+    }
+
+    public async updateTopic(sessionId: string, topic: string): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET topic = ?, updated_at = ? WHERE session_id = ?',
+            [topic, new Date().toISOString(), sessionId]
+        );
+    }
     public async markMissingAsArchived(workspaceId: string, activePlanIds: Set<string>): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         const existing = await this.getBoard(workspaceId);
@@ -251,24 +306,35 @@ export class KanbanDatabase {
         }
     }
 
+    private async _persistedUpdate(sql: string, params: unknown[]): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(sql, params);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to update record:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
     private _readRows(stmt: ReturnType<SqlJsDatabase['prepare']>): KanbanPlanRecord[] {
         const rows: KanbanPlanRecord[] = [];
         try {
             while (stmt.step()) {
                 const row = stmt.getAsObject();
                 rows.push({
-                    planId: String(row.plan_id || ''),
-                    sessionId: String(row.session_id || ''),
-                    topic: String(row.topic || ''),
-                    planFile: String(row.plan_file || ''),
-                    kanbanColumn: String(row.kanban_column || 'CREATED'),
-                    status: String(row.status || 'active') as KanbanPlanStatus,
-                    complexity: String(row.complexity || 'Unknown') as 'Unknown' | 'Low' | 'High',
-                    workspaceId: String(row.workspace_id || ''),
-                    createdAt: String(row.created_at || ''),
-                    updatedAt: String(row.updated_at || ''),
-                    lastAction: String(row.last_action || ''),
-                    sourceType: (String(row.source_type || 'local') === 'brain' ? 'brain' : 'local')
+                    planId: String(row.plan_id || ""),
+                    sessionId: String(row.session_id || ""),
+                    topic: String(row.topic || ""),
+                    planFile: String(row.plan_file || ""),
+                    kanbanColumn: String(row.kanban_column || "CREATED"),
+                    status: String(row.status || "active") as KanbanPlanStatus,
+                    complexity: String(row.complexity || "Unknown") as "Unknown" | "Low" | "High",
+                    workspaceId: String(row.workspace_id || ""),
+                    createdAt: String(row.created_at || ""),
+                    updatedAt: String(row.updated_at || ""),
+                    lastAction: String(row.last_action || ""),
+                    sourceType: (String(row.source_type || "local") === "brain" ? "brain" : "local")
                 });
             }
         } finally {
@@ -312,3 +378,5 @@ export class KanbanDatabase {
         throw new Error('Unable to locate sql-wasm.wasm. Ensure sql.js is installed.');
     }
 }
+
+

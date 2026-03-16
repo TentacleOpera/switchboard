@@ -24,6 +24,48 @@ export type ReviewCommentResult = {
     preferredRole?: string;
 };
 
+export type ReviewTicketColumnOption = {
+    id: string;
+    label: string;
+};
+
+export type ReviewTicketLogEntry = {
+    timestamp: string;
+    workflow: string;
+    details: string;
+};
+
+export type ReviewTicketData = {
+    sessionId?: string;
+    topic: string;
+    planFileAbsolute: string;
+    column: string;
+    complexity: 'Unknown' | 'Low' | 'High';
+    dependencies: string[];
+    planText: string;
+    planMtimeMs: number;
+    actionLog: ReviewTicketLogEntry[];
+    columns: ReviewTicketColumnOption[];
+    canEditMetadata: boolean;
+};
+
+export type ReviewTicketUpdateRequest = {
+    type: 'setColumn' | 'setComplexity' | 'setDependencies' | 'setTopic' | 'savePlanText';
+    sessionId?: string;
+    column?: string;
+    complexity?: 'Unknown' | 'Low' | 'High';
+    dependencies?: string[];
+    topic?: string;
+    content?: string;
+    expectedMtimeMs?: number;
+};
+
+export type ReviewTicketUpdateResult = {
+    ok: boolean;
+    message: string;
+    data?: ReviewTicketData;
+};
+
 /**
  * Provides a dedicated Review webview panel for contextual comments on plan markdown.
  */
@@ -102,6 +144,13 @@ export class ReviewProvider implements vscode.Disposable {
                 }
                 break;
             }
+            case 'setColumn':
+            case 'setComplexity':
+            case 'setDependencies':
+            case 'setTopic':
+            case 'savePlanText':
+                await this._applyTicketUpdate(msg as ReviewTicketUpdateRequest);
+                break;
             case 'submitComment': {
                 try {
                     if (!this._currentPlan) {
@@ -150,21 +199,114 @@ export class ReviewProvider implements vscode.Disposable {
     private async _renderCurrentPlan(): Promise<void> {
         if (!this._panel || !this._currentPlan) return;
 
-        const markdownSource = await fs.promises.readFile(this._currentPlan.planFileAbsolute, 'utf8');
-        const renderedHtml = await vscode.commands.executeCommand<string>('markdown.api.render', markdownSource);
-        if (typeof renderedHtml !== 'string') {
-            throw new Error('Markdown renderer returned no output.');
+        const ticketData = await this._loadCurrentTicketData();
+        await this._renderTicketData(ticketData);
+    }
+
+    private async _loadCurrentTicketData(): Promise<ReviewTicketData> {
+        if (!this._currentPlan) {
+            throw new Error('No plan loaded in review panel.');
         }
 
-        const title = this._currentPlan.topic?.trim() || path.basename(this._currentPlan.planFileAbsolute);
-        this._panel.title = `Review: ${title}`;
-        this._panel.webview.postMessage({
-            type: 'renderPlan',
-            topic: title,
+        if (this._currentPlan.sessionId) {
+            const data = await vscode.commands.executeCommand<ReviewTicketData>(
+                'switchboard.getReviewTicketData',
+                this._currentPlan.sessionId
+            );
+            if (!data) {
+                throw new Error('Failed to load ticket data.');
+            }
+            return data;
+        }
+
+        const planText = await fs.promises.readFile(this._currentPlan.planFileAbsolute, 'utf8');
+        const stats = await fs.promises.stat(this._currentPlan.planFileAbsolute);
+        return {
             sessionId: this._currentPlan.sessionId,
+            topic: this._currentPlan.topic?.trim() || path.basename(this._currentPlan.planFileAbsolute),
             planFileAbsolute: this._currentPlan.planFileAbsolute,
-            renderedHtml
+            column: '',
+            complexity: 'Unknown',
+            dependencies: [],
+            planText,
+            planMtimeMs: stats.mtimeMs,
+            actionLog: [],
+            columns: [],
+            canEditMetadata: false
+        };
+    }
+
+    private async _renderTicketData(ticketData: ReviewTicketData): Promise<void> {
+        if (!this._panel || !this._currentPlan) return;
+
+        this._currentPlan = {
+            ...this._currentPlan,
+            sessionId: ticketData.sessionId || this._currentPlan.sessionId,
+            topic: ticketData.topic,
+            planFileAbsolute: ticketData.planFileAbsolute
+        };
+
+        const title = ticketData.topic?.trim() || path.basename(ticketData.planFileAbsolute);
+        this._panel.title = `Ticket: ${title}`;
+        this._panel.webview.postMessage({
+            type: 'ticketData',
+            ...ticketData
         });
+    }
+
+    private async _applyTicketUpdate(msg: ReviewTicketUpdateRequest): Promise<void> {
+        if (!this._panel || !this._currentPlan) return;
+
+        try {
+            if (msg.type === 'savePlanText' && !this._currentPlan.sessionId) {
+                const content = typeof msg.content === 'string' ? msg.content : '';
+                const expectedMtimeMs = Number(msg.expectedMtimeMs);
+                const currentStats = await fs.promises.stat(this._currentPlan.planFileAbsolute);
+                if (Number.isFinite(expectedMtimeMs) && Math.abs(currentStats.mtimeMs - expectedMtimeMs) > 1) {
+                    throw new Error('Plan file changed on disk since this ticket was opened. Reload the ticket and try again.');
+                }
+                await fs.promises.writeFile(this._currentPlan.planFileAbsolute, content, 'utf8');
+                const ticketData = await this._loadCurrentTicketData();
+                await this._renderTicketData(ticketData);
+                this._panel.webview.postMessage({ type: 'ticketUpdateResult', ok: true, message: 'Plan saved.' });
+                return;
+            }
+
+            if (!this._currentPlan.sessionId) {
+                throw new Error('Ticket metadata is only available for session-backed plans.');
+            }
+
+            const result = await vscode.commands.executeCommand<ReviewTicketUpdateResult>(
+                'switchboard.updateReviewTicket',
+                {
+                    ...msg,
+                    sessionId: this._currentPlan.sessionId
+                } as ReviewTicketUpdateRequest
+            );
+
+            const normalizedResult: ReviewTicketUpdateResult = result && typeof result.ok === 'boolean'
+                ? result
+                : { ok: false, message: 'Ticket update failed (no response).' };
+
+            if (!normalizedResult.ok || !normalizedResult.data) {
+                this._panel.webview.postMessage({
+                    type: 'ticketUpdateResult',
+                    ok: false,
+                    message: normalizedResult.message || 'Ticket update failed.'
+                });
+                return;
+            }
+
+            await this._renderTicketData(normalizedResult.data);
+            this._panel.webview.postMessage({
+                type: 'ticketUpdateResult',
+                ok: true,
+                message: normalizedResult.message || 'Ticket updated.'
+            });
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            this._panel.webview.postMessage({ type: 'ticketUpdateResult', ok: false, message });
+        }
     }
 
     private async _getHtml(webview: vscode.Webview): Promise<string> {

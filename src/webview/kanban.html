@@ -43,12 +43,15 @@
             display: flex;
             align-items: center;
             justify-content: space-between;
+            gap: 12px;
             padding: 12px 20px;
             border-bottom: 1px solid var(--border-color);
             background: var(--panel-bg);
         }
 
         .kanban-title {
+            flex: 1;
+            min-width: 0;
             font-family: var(--font-mono);
             font-size: 11px;
             letter-spacing: 2px;
@@ -57,7 +60,65 @@
             text-shadow: var(--glow-teal);
         }
 
-        .btn-refresh {
+        .kanban-title.triggers-off {
+            color: color-mix(in srgb, var(--accent-teal) 55%, var(--text-secondary));
+            text-shadow: none;
+        }
+
+        .header-controls {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            flex-wrap: wrap;
+        }
+
+        .cli-toggle {
+            display: inline-flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.6px;
+            color: var(--accent-teal);
+            user-select: none;
+            cursor: pointer;
+            text-transform: uppercase;
+        }
+
+        .cli-toggle input[type="checkbox"] {
+            width: 12px;
+            height: 12px;
+            accent-color: var(--accent-teal);
+            cursor: pointer;
+        }
+
+        .cli-toggle.is-off .toggle-label {
+            color: var(--accent-orange);
+        }
+
+        .triggers-off-badge {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.6px;
+            color: var(--accent-orange);
+            border: 1px solid color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            background: color-mix(in srgb, var(--accent-orange) 15%, transparent);
+            padding: 2px 6px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            white-space: nowrap;
+        }
+
+        .strip-btn {
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -71,10 +132,17 @@
             transition: all 0.15s;
         }
 
-        .btn-refresh:hover {
+        .strip-btn:hover {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: var(--accent-teal-dim);
             color: var(--accent-teal);
+        }
+
+        .strip-btn.is-active {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
         .btn-add-plan {
@@ -106,7 +174,7 @@
             display: flex;
             gap: 12px;
             padding: 16px;
-            height: calc(100vh - 50px);
+            height: calc(100vh - 50px - 36px);
             overflow-x: auto;
         }
 
@@ -380,10 +448,21 @@
     </style>
 </head>
 
-<body>
+    <body>
     <div class="kanban-header">
-        <div class="kanban-title">⚡ CLI-BAN - Drag plan cards to trigger CLI Agent actions | Copy prompts to send to external IDE agents</div>
-        <button class="btn-refresh" id="btn-refresh">Refresh</button>
+        <div class="kanban-title" id="kanban-title">⚡ CLI-BAN - Drag plan cards to trigger CLI Agent actions | Copy prompts to send to external IDE agents</div>
+    </div>
+    <div class="controls-strip">
+        <button class="strip-btn" id="btn-autoban" title="Toggle Autoban engine">⚡ AUTOBAN</button>
+        <label class="cli-toggle" id="cli-toggle" title="When OFF, drag-drop moves cards without triggering CLI agent actions">
+            <input type="checkbox" id="cli-triggers-toggle" checked>
+            <span class="toggle-label">CLI Triggers</span>
+        </label>
+        <span class="triggers-off-badge" id="triggers-off-badge" hidden>⚠ TRIGGERS OFF</span>
+        <button class="strip-btn" id="btn-batch-planner" title="Copy improve-plan prompt for all CREATED plans">📋 Batch Planner</button>
+        <button class="strip-btn" id="btn-batch-low" title="Copy coding prompt for low-complexity PLAN REVIEWED plans">📋 Batch Low</button>
+        <button class="strip-btn" id="btn-jules-low" title="Send low-complexity plans to Jules" style="display:none">🚀 Jules Low</button>
+        <button class="strip-btn" id="btn-refresh-strip" title="Refresh board">↻ Refresh</button>
     </div>
     <div class="kanban-board" id="kanban-board"></div>
 
@@ -401,9 +480,29 @@
         let lastAgentNames = {};
         let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
         let currentCodedTarget = 'lead';
+        let cliTriggersEnabled = true;
         let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
+
+        function updateCliToggleUi() {
+            const toggle = document.getElementById('cli-triggers-toggle');
+            const toggleLabel = document.getElementById('cli-toggle');
+            const offBadge = document.getElementById('triggers-off-badge');
+            const titleEl = document.getElementById('kanban-title');
+            if (toggle) {
+                toggle.checked = !!cliTriggersEnabled;
+            }
+            if (toggleLabel) {
+                toggleLabel.classList.toggle('is-off', !cliTriggersEnabled);
+            }
+            if (offBadge) {
+                offBadge.hidden = !!cliTriggersEnabled;
+            }
+            if (titleEl) {
+                titleEl.classList.toggle('triggers-off', !cliTriggersEnabled);
+            }
+        }
 
         function escapeAttr(value) {
             return String(value || '').replace(/"/g, '&quot;');
@@ -555,6 +654,19 @@
             });
         }
 
+        function updateJulesButtonVisibility() {
+            const julesBtn = document.getElementById('btn-jules-low');
+            if (!julesBtn) return;
+            julesBtn.style.display = lastVisibleAgents.jules === false ? 'none' : 'inline-flex';
+        }
+
+        function updateAutobanButtonState() {
+            const autobanBtn = document.getElementById('btn-autoban');
+            if (!autobanBtn) return;
+            const isEnabled = !!(autobanConfig && autobanConfig.enabled);
+            autobanBtn.classList.toggle('is-active', isEnabled);
+        }
+
         function renderBoard(cards) {
             const viewState = captureBoardViewState();
             currentCards = cards;
@@ -584,12 +696,6 @@
             document.querySelectorAll('.kanban-card').forEach(el => {
                 el.addEventListener('dragstart', handleDragStart);
                 el.addEventListener('dragend', handleDragEnd);
-            });
-
-            document.querySelectorAll('.card-btn.view').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'viewPlan', sessionId: btn.dataset.session });
-                });
             });
 
             document.querySelectorAll('.card-btn.review').forEach(btn => {
@@ -637,8 +743,7 @@
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${complexity}</span> · ${timeAgo}</div>
                     <div class="card-actions">
                         <button class="card-btn copy" data-session="${card.sessionId}">${copyLabel}</button>
-                        <button class="card-btn view" data-session="${card.sessionId}">View</button>
-                        <button class="card-btn review" data-session="${card.sessionId}">Review</button>
+                        <button class="card-btn review" data-session="${card.sessionId}">Ticket</button>
                         <button class="card-btn complete" data-session="${card.sessionId}">Complete</button>
                     </div>
                 </div>`;
@@ -680,7 +785,7 @@
         function handleDragOver(e) {
             e.preventDefault();
             const col = e.currentTarget.closest('.kanban-column')?.dataset?.column;
-            e.dataTransfer.dropEffect = (col && !isColumnAgentAvailable(col)) ? 'none' : 'move';
+            e.dataTransfer.dropEffect = (cliTriggersEnabled && col && !isColumnAgentAvailable(col)) ? 'none' : 'move';
         }
 
         function handleDragEnter(e) {
@@ -706,7 +811,7 @@
             if (!sessionId) return;
 
             // Reject drop if the target column has no active assignment
-            if (!isColumnAgentAvailable(targetColumn)) {
+            if (cliTriggersEnabled && !isColumnAgentAvailable(targetColumn)) {
                 const agentEl = document.getElementById('agent-' + targetColumn);
                 if (agentEl) {
                     agentEl.style.transition = 'color 0.15s';
@@ -803,10 +908,15 @@
                     lastAgentNames = msg.agentNames || {};
                     updateAllColumnAgents();
                     break;
+                case 'cliTriggersState':
+                    cliTriggersEnabled = msg.enabled !== false;
+                    updateCliToggleUi();
+                    break;
                 case 'visibleAgents':
                     if (msg.agents) {
                         lastVisibleAgents = { ...lastVisibleAgents, ...msg.agents };
                         updateAllColumnAgents();
+                        updateJulesButtonVisibility();
                     }
                     break;
                 case 'copyPlanLinkResult':
@@ -833,6 +943,7 @@
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     updateAutobanIndicators();
+                    updateAutobanButtonState();
                     break;
             }
         });
@@ -865,14 +976,37 @@
                     indicator.className = 'autoban-indicator';
                 }
             });
+            updateAutobanButtonState();
         }
 
-        document.getElementById('btn-refresh').addEventListener('click', () => {
+        document.getElementById('btn-autoban')?.addEventListener('click', () => {
+            const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
+            vscode.postMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
+        });
+        document.getElementById('btn-batch-planner')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'batchPlannerPrompt' });
+        });
+        document.getElementById('btn-batch-low')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'batchLowComplexity' });
+        });
+        document.getElementById('btn-jules-low')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'julesLowComplexity' });
+        });
+        document.getElementById('btn-refresh-strip').addEventListener('click', () => {
             vscode.postMessage({ type: 'refresh' });
         });
+        document.getElementById('cli-triggers-toggle').addEventListener('change', (event) => {
+            const checked = !!event.target?.checked;
+            cliTriggersEnabled = checked;
+            updateCliToggleUi();
+            vscode.postMessage({ type: 'toggleCliTriggers', enabled: checked });
+        });
 
+        updateCliToggleUi();
         renderColumns();
         renderBoard([]);
+        updateJulesButtonVisibility();
+        updateAutobanButtonState();
     </script>
 </body>
 

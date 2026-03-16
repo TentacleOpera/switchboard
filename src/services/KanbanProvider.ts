@@ -37,15 +37,22 @@ export class KanbanProvider implements vscode.Disposable {
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _codedColumnTarget: string;
+    private _cliTriggersEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
     private _autobanState?: AutobanConfigState;
     private _kanbanDb?: KanbanDatabase;
+    private _lastCards: KanbanCard[] = [];
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
         private readonly _context: vscode.ExtensionContext
     ) {
         this._codedColumnTarget = this._context.workspaceState.get<string>('kanban.codedTarget') || 'lead';
+        this._cliTriggersEnabled = this._context.workspaceState.get<boolean>('kanban.cliTriggersEnabled', true);
+    }
+
+    public get cliTriggersEnabled(): boolean {
+        return this._cliTriggersEnabled;
     }
 
     dispose() {
@@ -95,6 +102,11 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel = undefined;
             this._lastColumnsSignature = null;
         }, null, this._disposables);
+
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (workspaceRoot) {
+            void this._getKanbanDb(workspaceRoot).ensureReady();
+        }
 
         // Initial data push after a short delay for webview mount
         setTimeout(() => this._refreshBoard(), 150);
@@ -243,22 +255,28 @@ export class KanbanProvider implements vscode.Disposable {
                 complexity: row.complexity
             }));
 
-            if (workspaceId) {
-                const db = this._getKanbanDb(workspaceRoot);
-                if (await db.ensureReady()) {
-                    const synced = await KanbanMigration.bootstrapAndSync(db, workspaceId, legacySnapshot.filter(row => row.planId && row.sessionId && row.workspaceId));
-                    if (synced) {
-                        const dbRows = await db.getBoard(workspaceId);
-                        cards = dbRows.map(row => ({
-                            sessionId: row.sessionId,
-                            topic: row.topic || row.planFile || 'Untitled',
-                            planFile: row.planFile || '',
-                            column: row.kanbanColumn || 'CREATED',
-                            lastActivity: row.updatedAt || row.createdAt || '',
-                            complexity: row.complexity
-                        }));
-                    }
+            const db = this._getKanbanDb(workspaceRoot);
+            const snapshotRows = legacySnapshot.filter(row => row.planId && row.sessionId && row.workspaceId);
+            if (workspaceId && await db.ensureReady()) {
+                const bootstrapped = await KanbanMigration.bootstrapIfNeeded(db, workspaceId, snapshotRows);
+                const synced = bootstrapped
+                    ? await KanbanMigration.syncNewPlansOnly(db, workspaceId, snapshotRows)
+                    : false;
+                if (synced) {
+                    const dbRows = await db.getBoard(workspaceId);
+                    cards = dbRows.map(row => ({
+                        sessionId: row.sessionId,
+                        topic: row.topic || row.planFile || 'Untitled',
+                        planFile: row.planFile || '',
+                        column: row.kanbanColumn || 'CREATED',
+                        lastActivity: row.updatedAt || row.createdAt || '',
+                        complexity: row.complexity
+                    }));
+                } else {
+                    console.warn('[KanbanProvider] Kanban DB sync failed, using file-derived fallback for this refresh.');
                 }
+            } else if (workspaceId) {
+                console.warn(`[KanbanProvider] Kanban DB unavailable, using file-derived fallback: ${db.lastInitError || 'unknown error'}`);
             }
 
             const agentNames = await this._getAgentNames(workspaceRoot);
@@ -269,8 +287,10 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateColumns', columns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
+            this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards });
             this._panel.webview.postMessage({ type: 'updateTarget', column: 'CODED', target: this._codedColumnTarget });
+            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
             if (this._autobanState) {
@@ -288,6 +308,134 @@ export class KanbanProvider implements vscode.Disposable {
             role: col.role ?? null,
             autobanEnabled: !!col.autobanEnabled
         })));
+    }
+
+    private _isLowComplexity(card: KanbanCard): boolean {
+        return String(card.complexity || '').toLowerCase() === 'low';
+    }
+
+    private _resolvePlanFilePath(workspaceRoot: string, planFile: string): string {
+        const normalized = String(planFile || '').trim();
+        if (!normalized) return '';
+        return path.isAbsolute(normalized) ? normalized : path.resolve(workspaceRoot, normalized);
+    }
+
+    private _formatCardsForPrompt(cards: KanbanCard[], workspaceRoot: string, includeComplexity: boolean): string {
+        return cards.map((card, index) => {
+            const resolvedPath = this._resolvePlanFilePath(workspaceRoot, card.planFile);
+            const complexitySuffix = includeComplexity ? ` (${card.complexity})` : '';
+            return `${index + 1}. ${card.topic}${complexitySuffix} - ${resolvedPath || card.planFile || '[missing plan path]'}`;
+        }).join('\n');
+    }
+
+    private _generateBatchPlannerPrompt(cards: KanbanCard[], workspaceRoot: string): string {
+        return `Run the /improve-plan workflow on all ${cards.length} plans in the CREATED column. Use the get_kanban_state MCP tool to identify all plans instantly (column filter: "CREATED"). If MCP unavailable, plans are listed below with absolute paths.
+
+For each plan:
+1. Read the plan file to understand scope
+2. Read referenced source files (grep for classes/functions mentioned in the plan)
+3. Check for dependency conflicts with other plans (search .switchboard/plans/ for overlaps)
+4. Run internal adversarial review (Grumpy critique + balanced synthesis)
+5. Update the plan file with: detailed steps, file paths, line numbers, dependencies, complexity audit, and agent recommendation
+6. Move to next plan without pausing
+
+Key source context locations:
+- Kanban webview: src/webview/kanban.html
+- Kanban backend: src/services/KanbanProvider.ts, src/services/TaskViewerProvider.ts
+- Column definitions: src/services/agentConfig.ts
+- DB layer: src/services/KanbanDatabase.ts, src/services/KanbanMigration.ts
+- MCP tools: src/mcp-server/register-tools.js
+- Workflows: src/mcp-server/workflows.js
+
+Plans to improve:
+${this._formatCardsForPrompt(cards, workspaceRoot, false)}
+
+Work through all plans in one continuous session. Do not stop after each plan for confirmation.`;
+    }
+
+    private _generateBatchLowComplexityPrompt(cards: KanbanCard[], workspaceRoot: string): string {
+        return `Implement all ${cards.length} LOW-complexity plans from the PLAN REVIEWED column. Use get_kanban_state MCP tool with complexity filter if available. If MCP unavailable, plans are listed below.
+
+For each plan:
+1. Read the plan file for implementation steps
+2. Read the referenced source files
+3. Make the changes as specified (use multi_edit for multiple changes to same file)
+4. Verify with npm run compile
+5. Move to next plan
+
+Work serially through all plans. Each plan is small scope (routine changes, single-file edits, or simple UI additions). Do not stop between plans.
+
+Plans to implement:
+${this._formatCardsForPrompt(cards, workspaceRoot, true)}
+
+After completing all plans, summarize what was changed and any verification steps needed.`;
+    }
+
+    private async _getEligibleSessionIds(sessionIds: string[], expectedColumn: string): Promise<string[]> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || sessionIds.length === 0) {
+            return [];
+        }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const log = this._getSessionLog(workspaceRoot);
+        const customAgents = await this._getCustomAgents(workspaceRoot);
+        const eligible: string[] = [];
+
+        for (const sessionId of sessionIds) {
+            const sheet = await log.getRunSheet(sessionId);
+            if (!sheet || sheet.completed === true) {
+                continue;
+            }
+            const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
+            const currentColumn = deriveKanbanColumn(events, customAgents);
+            if (currentColumn === expectedColumn) {
+                eligible.push(sessionId);
+            }
+        }
+
+        return eligible;
+    }
+
+    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string): Promise<string[]> {
+        const workspaceFolders = vscode.workspace.workspaceFolders;
+        if (!workspaceFolders || sessionIds.length === 0) {
+            return [];
+        }
+        const workspaceRoot = workspaceFolders[0].uri.fsPath;
+        const log = this._getSessionLog(workspaceRoot);
+        const customAgents = await this._getCustomAgents(workspaceRoot);
+        const advanced: string[] = [];
+
+        for (const sessionId of sessionIds) {
+            const sheet = await log.getRunSheet(sessionId);
+            if (!sheet || sheet.completed === true) {
+                continue;
+            }
+            const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
+            const currentColumn = deriveKanbanColumn(events, customAgents);
+            if (currentColumn !== expectedColumn) {
+                continue;
+            }
+
+            await log.updateRunSheet(sessionId, (runSheet: any) => {
+                if (!Array.isArray(runSheet.events)) {
+                    runSheet.events = [];
+                }
+                const lastEvent = runSheet.events[runSheet.events.length - 1];
+                if (lastEvent && lastEvent.workflow === workflow && lastEvent.action === 'start') {
+                    return null;
+                }
+                runSheet.events.push({
+                    workflow,
+                    action: 'start',
+                    timestamp: new Date().toISOString()
+                });
+                return runSheet;
+            });
+            advanced.push(sessionId);
+        }
+
+        return advanced;
     }
 
     private async _getActiveSheets(workspaceRoot: string): Promise<any[]> {
@@ -536,10 +684,11 @@ export class KanbanProvider implements vscode.Disposable {
             const bandBMatch = afterAudit.match(/\bBand\s+B\b/i);
             if (!bandBMatch) return 'Low';
 
-            // Extract text after "Band B" until next heading or "Band C/D" marker
+            // Extract text after "Band B" until the next section boundary.
+            // Stop at headings, later band markers, recommendation lines, or horizontal rules.
             const bandBStart = bandBMatch.index! + bandBMatch[0].length;
             const afterBandB = afterAudit.slice(bandBStart);
-            const nextSection = afterBandB.match(/^#{1,4}\s|\bBand\s+[C-Z]\b/im);
+            const nextSection = afterBandB.match(/^\s*(?:#{1,4}\s+|Band\s+[C-Z]\b|\*\*Recommendation\*\*\s*:|Recommendation\s*:|---+\s*$)/im);
             const bandBContent = nextSection
                 ? afterBandB.slice(0, nextSection.index).trim()
                 : afterBandB.trim();
@@ -551,14 +700,29 @@ export class KanbanProvider implements vscode.Disposable {
                 .map(line => line.trim())
                 .filter(line => line.length > 0);
 
-            // Remove leading label line (e.g. "— Complex / Risky", "— High Complexity")
-            if (lines.length > 0 && /^—\s/.test(lines[0])) {
+            // Remove leading label line (e.g. "— Complex / Risky", "- High Complexity")
+            if (lines.length > 0 && /^(?:—|-)\s*(?:complex|high)\b/i.test(lines[0])) {
                 lines.shift();
             }
 
-            // Normalize remaining lines: strip markdown list markers and check for empty/None markers
-            const noneMarker = /^[\*\-\+\s]*(none\.?|n\/?a\.?|—|-)\b/i;
-            const meaningful = lines.filter(line => !noneMarker.test(line));
+            // Normalize markdown variants so "- **None**" / "* none" / "N/A" are treated as empty.
+            const normalizedLines = lines
+                .map(line => line
+                    .replace(/^[\s>*\-+]+/, '')
+                    .replace(/[*_`~]/g, '')
+                    .replace(/\s+/g, ' ')
+                    .trim()
+                    .toLowerCase()
+                )
+                .filter(line => line.length > 0);
+
+            const isEmptyMarker = (line: string): boolean => {
+                if (!line) return true;
+                if (/^[—-]+$/.test(line)) return true;
+                return /^(none|n\/?a)\.?$/.test(line);
+            };
+
+            const meaningful = normalizedLines.filter(line => !isEmptyMarker(line) && !/^recommendation\b/.test(line));
             const isEmpty = meaningful.length === 0;
 
             return isEmpty ? 'Low' : 'High';
@@ -572,22 +736,113 @@ export class KanbanProvider implements vscode.Disposable {
             case 'refresh':
                 await this._refreshBoard();
                 break;
+            case 'toggleAutoban': {
+                const enabled = !!msg.enabled;
+                if (this._autobanState) {
+                    this._autobanState = { ...this._autobanState, enabled };
+                }
+                await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
+                break;
+            }
             case 'triggerAction': {
+                if (!this._cliTriggersEnabled) {
+                    break;
+                }
                 // Drag-drop triggered a column transition
                 const { sessionId, targetColumn } = msg;
                 const role = this._columnToRole(targetColumn);
-                if (role) {
-                    // Reject if the target agent is hidden or unassigned
-                    const workspaceFolders = vscode.workspace.workspaceFolders;
-                    if (workspaceFolders) {
-                        const workspaceRoot = workspaceFolders[0].uri.fsPath;
-                        if (!(await this._canAssignRole(workspaceRoot, role))) {
-                            break;
-                        }
-                    }
-                    const instruction = role === 'planner' ? 'enhance' : undefined;
-                    await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sessionId, instruction);
+                if (!role) {
+                    break;
                 }
+
+                // Reject if the target agent is hidden or unassigned
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                let workspaceRoot: string | undefined;
+                let canDispatch = true;
+                if (workspaceFolders) {
+                    workspaceRoot = workspaceFolders[0].uri.fsPath;
+                    canDispatch = await this._canAssignRole(workspaceRoot, role);
+                }
+                if (!canDispatch) {
+                    break;
+                }
+
+                const instruction = role === 'planner' ? 'enhance' : undefined;
+                const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction);
+                if (dispatched && workspaceRoot) {
+                    await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
+                }
+                break;
+            }
+            case 'toggleCliTriggers':
+                this._cliTriggersEnabled = !!msg.enabled;
+                await this._context.workspaceState.update('kanban.cliTriggersEnabled', this._cliTriggersEnabled);
+                break;
+            case 'batchPlannerPrompt': {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (!workspaceFolders) {
+                    break;
+                }
+                const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                await this._refreshBoard();
+                const sourceCards = this._lastCards.filter(card => card.column === 'CREATED');
+                if (sourceCards.length === 0) {
+                    vscode.window.showInformationMessage('No CREATED plans available for batch planner prompt.');
+                    break;
+                }
+                const prompt = this._generateBatchPlannerPrompt(sourceCards, workspaceRoot);
+                await vscode.env.clipboard.writeText(prompt);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan');
+                await this._refreshBoard();
+                vscode.window.showInformationMessage(`Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`);
+                break;
+            }
+            case 'batchLowComplexity': {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (!workspaceFolders) {
+                    break;
+                }
+                const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                await this._refreshBoard();
+                const sourceCards = this._lastCards.filter(card => card.column === 'PLAN REVIEWED' && this._isLowComplexity(card));
+                if (sourceCards.length === 0) {
+                    vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for batch coding prompt.');
+                    break;
+                }
+                const prompt = this._generateBatchLowComplexityPrompt(sourceCards, workspaceRoot);
+                await vscode.env.clipboard.writeText(prompt);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff');
+                await this._refreshBoard();
+                vscode.window.showInformationMessage(`Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODED.`);
+                break;
+            }
+            case 'julesLowComplexity': {
+                const workspaceFolders = vscode.workspace.workspaceFolders;
+                if (!workspaceFolders) {
+                    break;
+                }
+                const workspaceRoot = workspaceFolders[0].uri.fsPath;
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (visibleAgents.jules === false) {
+                    vscode.window.showWarningMessage('Jules is currently disabled in setup.');
+                    break;
+                }
+                await this._refreshBoard();
+                const sourceCards = this._lastCards.filter(card => card.column === 'PLAN REVIEWED' && this._isLowComplexity(card));
+                if (sourceCards.length === 0) {
+                    vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for Jules dispatch.');
+                    break;
+                }
+                const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED');
+                let dispatchedCount = 0;
+                for (const sessionId of eligibleSessionIds) {
+                    const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId);
+                    if (dispatched) {
+                        dispatchedCount++;
+                    }
+                }
+                await this._refreshBoard();
+                vscode.window.showInformationMessage(`Dispatched ${dispatchedCount} LOW-complexity plans to Jules.`);
                 break;
             }
             case 'setColumnTarget': {

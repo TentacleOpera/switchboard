@@ -7,7 +7,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
-import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewPlanContext } from './services/ReviewProvider';
+import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
 // Status bar item for setup notification
@@ -790,6 +790,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(kanbanProvider);
     context.subscriptions.push(reviewProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
+    if (workspaceRoot) {
+        void taskViewerProvider.initializeKanbanDbOnStartup();
+    }
     const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async () => {
         await kanbanProvider.open();
     });
@@ -797,7 +800,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string) => {
-        taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction);
+        return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
 
@@ -825,6 +828,11 @@ export async function activate(context: vscode.ExtensionContext) {
         taskViewerProvider.handleKanbanReviewPlan(sessionId);
     });
     context.subscriptions.push(reviewPlanFromKanbanDisposable);
+
+    const setAutobanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
+        await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
+    });
+    context.subscriptions.push(setAutobanFromKanbanDisposable);
 
     const refreshMcpStatus = async () => {
         if (!workspaceRoot) return;
@@ -1453,6 +1461,22 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(sendReviewCommentDisposable);
+
+    const getReviewTicketDataDisposable = vscode.commands.registerCommand(
+        'switchboard.getReviewTicketData',
+        async (sessionId: string): Promise<ReviewTicketData> => {
+            return taskViewerProvider.getReviewTicketData(sessionId);
+        }
+    );
+    context.subscriptions.push(getReviewTicketDataDisposable);
+
+    const updateReviewTicketDisposable = vscode.commands.registerCommand(
+        'switchboard.updateReviewTicket',
+        async (request: ReviewTicketUpdateRequest): Promise<ReviewTicketUpdateResult> => {
+            return taskViewerProvider.updateReviewTicket(request);
+        }
+    );
+    context.subscriptions.push(updateReviewTicketDisposable);
 
     async function createAgentGrid() {
         if (!workspaceRoot) {
