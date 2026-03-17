@@ -8,6 +8,7 @@ export type ReviewPlanContext = {
     topic?: string;
     planFileAbsolute: string;
     workspaceRoot?: string;
+    initialMode?: 'edit' | 'review';
 };
 
 export type ReviewCommentRequest = {
@@ -34,6 +35,13 @@ export type ReviewTicketLogEntry = {
     timestamp: string;
     workflow: string;
     details: string;
+};
+
+export type ReviewOpenPlanOption = {
+    sessionId: string;
+    topic: string;
+    column: string;
+    planFileAbsolute: string;
 };
 
 export type ReviewTicketData = {
@@ -195,6 +203,98 @@ export class ReviewProvider implements vscode.Disposable {
                 }
                 break;
             }
+            case 'copyPlanLink': {
+                try {
+                    if (!this._currentPlan?.planFileAbsolute) {
+                        throw new Error('No plan loaded in review panel.');
+                    }
+                    await vscode.env.clipboard.writeText(this._currentPlan.planFileAbsolute);
+                    this._panel.webview.postMessage({ type: 'copyPlanLinkResult', ok: true, message: 'Plan path copied.' });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel.webview.postMessage({ type: 'copyPlanLinkResult', ok: false, message });
+                }
+                break;
+            }
+            case 'getOpenPlans': {
+                try {
+                    if (!this._currentPlan?.sessionId) {
+                        this._panel.webview.postMessage({ type: 'openPlansData', plans: [] });
+                        break;
+                    }
+                    const plans = await vscode.commands.executeCommand<ReviewOpenPlanOption[]>(
+                        'switchboard.getReviewOpenPlans',
+                        this._currentPlan.sessionId
+                    );
+                    this._panel.webview.postMessage({ type: 'openPlansData', plans: Array.isArray(plans) ? plans : [] });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel.webview.postMessage({ type: 'openPlansData', plans: [], error: message });
+                }
+                break;
+            }
+            case 'sendToAgent': {
+                try {
+                    if (!this._currentPlan?.sessionId) {
+                        throw new Error('This ticket is not associated with a session.');
+                    }
+                    const result = await vscode.commands.executeCommand<{ ok: boolean; message: string }>(
+                        'switchboard.reviewSendToAgent',
+                        this._currentPlan.sessionId
+                    );
+                    if (!result?.ok) {
+                        throw new Error(result?.message || 'Failed to send plan to the next agent.');
+                    }
+                    await this._renderCurrentPlan();
+                    this._panel.webview.postMessage({ type: 'ticketActionResult', ok: true, message: result.message });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel.webview.postMessage({ type: 'ticketActionResult', ok: false, message });
+                }
+                break;
+            }
+            case 'completePlan': {
+                try {
+                    if (!this._currentPlan?.sessionId) {
+                        throw new Error('This ticket is not associated with a session.');
+                    }
+                    const ok = await vscode.commands.executeCommand<boolean>(
+                        'switchboard.completePlanFromKanban',
+                        this._currentPlan.sessionId,
+                        this._currentPlan.workspaceRoot
+                    );
+                    if (!ok) {
+                        throw new Error('Failed to complete plan.');
+                    }
+                    vscode.window.showInformationMessage('Plan completed.');
+                    this._panel.dispose();
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel.webview.postMessage({ type: 'ticketActionResult', ok: false, message });
+                }
+                break;
+            }
+            case 'deletePlan': {
+                try {
+                    if (!this._currentPlan?.sessionId) {
+                        throw new Error('This ticket is not associated with a session.');
+                    }
+                    const ok = await vscode.commands.executeCommand<boolean>(
+                        'switchboard.deletePlanFromReview',
+                        this._currentPlan.sessionId,
+                        this._currentPlan.workspaceRoot
+                    );
+                    if (!ok) {
+                        throw new Error('Plan deletion was cancelled or failed.');
+                    }
+                    vscode.window.showInformationMessage('Plan deleted.');
+                    this._panel.dispose();
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel.webview.postMessage({ type: 'ticketActionResult', ok: false, message });
+                }
+                break;
+            }
         }
     }
 
@@ -265,8 +365,10 @@ export class ReviewProvider implements vscode.Disposable {
         this._panel.title = `Ticket: ${title}`;
         this._panel.webview.postMessage({
             type: 'ticketData',
-            ...ticketData
+            ...ticketData,
+            initialMode: this._currentPlan.initialMode
         });
+        this._currentPlan.initialMode = undefined;
     }
 
     private async _applyTicketUpdate(msg: ReviewTicketUpdateRequest): Promise<void> {

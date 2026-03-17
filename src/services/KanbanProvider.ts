@@ -9,7 +9,7 @@ import { KanbanDatabase } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 
 export type KanbanColumn = string;
-type AutobanConfigState = { enabled: boolean; batchSize: number; rules: Record<string, { enabled: boolean; intervalMinutes: number }> };
+type AutobanConfigState = { enabled: boolean; batchSize: number; rules: Record<string, { enabled: boolean; intervalMinutes: number }>; lastTickAt?: Record<string, number> };
 
 /** Column ordering: each column maps to its next column. */
 const NEXT_COLUMN: Record<string, KanbanColumn | null> = {};
@@ -751,15 +751,11 @@ After completing all plans, summarize what was changed and any verification step
                 .map(line => line.trim())
                 .filter(line => line.length > 0);
 
-            // Remove leading label line (e.g. "— Complex / Risky", "- High Complexity")
-            if (lines.length > 0 && /^(?:—|-)\s*(?:complex|high)\b/i.test(lines[0])) {
-                lines.shift();
-            }
-
             // Normalize markdown variants so "- **None**" / "* none" / "N/A" are treated as empty.
             const normalizedLines = lines
                 .map(line => line
                     .replace(/^[\s>*\-+]+/, '')
+                    .replace(/^[\s:–—-]*(?:\([^)]*\)|[–—-]\s*)?(?:complex(?:\/|\s+\/\s+|\s+and\s+)?risky|complex|high\s+complexity|risky)\b[\s:–—-]*$/i, '')
                     .replace(/[*_`~]/g, '')
                     .replace(/\s+/g, ' ')
                     .trim()
@@ -843,6 +839,14 @@ After completing all plans, summarize what was changed and any verification step
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (Array.isArray(sessionIds) && sessionIds.length > 0) {
                     await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', sessionIds, targetColumn, workspaceRoot);
+                }
+                break;
+            }
+            case 'moveCardForward': {
+                const { sessionIds, targetColumn } = msg;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
             }

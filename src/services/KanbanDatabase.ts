@@ -221,6 +221,14 @@ export class KanbanDatabase {
             [topic, new Date().toISOString(), sessionId]
         );
     }
+
+    public async updatePlanFile(sessionId: string, planFile: string): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
+            [planFile, new Date().toISOString(), sessionId]
+        );
+    }
+
     public async getBoard(workspaceId: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const stmt = this._db.prepare(
@@ -228,8 +236,8 @@ export class KanbanDatabase {
                     workspace_id, created_at, updated_at, last_action, source_type
              FROM plans
              WHERE workspace_id = ? AND status = 'active'
-             ORDER BY updated_at DESC`,
-            [workspaceId]
+             ORDER BY updated_at ASC`,
+             [workspaceId]
         );
         return this._readRows(stmt);
     }
@@ -384,5 +392,4 @@ export class KanbanDatabase {
         throw new Error(`Unable to locate sql-wasm.wasm. Checked: ${candidates.join(', ')}`);
     }
 }
-
 

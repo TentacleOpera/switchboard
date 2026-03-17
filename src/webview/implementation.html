@@ -1522,7 +1522,7 @@
             if (_planModalFromAirlock) {
                 sendBtn.innerText = 'REVIEW PLAN';
             } else {
-                sendBtn.innerText = 'SEND TO PLANNER';
+                sendBtn.innerText = 'OPEN TICKET';
             }
             initiatePlanModal.classList.remove('hidden');
             setTimeout(() => initiatePlanTitleInput.focus(), 0);
@@ -1532,7 +1532,7 @@
             initiatePlanModal.classList.add('hidden');
             _planModalFromAirlock = false;
             const sendBtn = document.getElementById('btn-send-planner');
-            sendBtn.innerText = 'SEND TO PLANNER';
+            sendBtn.innerText = 'OPEN TICKET';
         }
 
         function sanitizeCustomAgentId(value) {
@@ -1680,6 +1680,8 @@
             let mode = action;
             if (_planModalFromAirlock) {
                 mode = action === 'send' ? 'review' : 'local';
+            } else if (action === 'send') {
+                mode = 'ticket';
             }
 
             vscode.postMessage({
@@ -1998,6 +2000,12 @@
 
         function formatActivitySummary(event) {
             const payload = event && event.payload ? event.payload : {};
+            if (event.type === 'autoban_dispatch') {
+                const count = Number(payload.batchSize || (Array.isArray(payload.sessionIds) ? payload.sessionIds.length : 0) || 0);
+                const sourceColumn = (payload.sourceColumn || 'Unknown').toString();
+                const targetRole = roleLabel((payload.targetRole || '').toString());
+                return `⚡ Autoban: moved ${count} plan(s) from ${sourceColumn} -> ${targetRole}`;
+            }
             if (payload.message && payload.message.toString().trim().length > 0) {
                 return payload.message.toString();
             }
@@ -2025,14 +2033,20 @@
                 const target = payload.topic || payload.planFile || '';
                 return target ? `${operation}: ${target}` : operation;
             }
+            if (event.type === 'autoban_dispatch') {
+                const targetRole = payload.targetRole ? ` (${roleLabel(payload.targetRole)})` : '';
+                return `autoban dispatch${targetRole}`;
+            }
             return (event.type || 'event').toString();
         }
 
         function renderRecentActivity() {
             if (!activityList) return;
             activityList.innerHTML = '';
-            // Only show summary events (human-readable "SENT TO" / "RECEIVED FROM" messages)
-            const summaryEvents = (recentActivityEvents || []).filter(e => (e.type || '').toString().toLowerCase() === 'summary');
+            const summaryEvents = (recentActivityEvents || []).filter(e => {
+                const type = (e.type || '').toString().toLowerCase();
+                return type === 'summary' || type === 'autoban_dispatch';
+            });
             if (summaryEvents.length === 0) {
                 const empty = document.createElement('div');
                 empty.style.textAlign = 'center';
@@ -2313,44 +2327,23 @@
                     break;
                 }
                 case 'airlock_planSaved': {
-                    const pBtn = document.getElementById('airlock-plan-btn');
-                    const pPlannerBtn = document.getElementById('airlock-planner-btn');
                     const pStatus = document.getElementById('webai-status');
-                    const pTa = document.getElementById('airlock-textarea');
-                    const pTitle = document.getElementById('airlock-title-input');
-                    if (pBtn) { pBtn.disabled = false; pBtn.innerText = 'SAVE PLAN'; }
-                    if (pPlannerBtn) { pPlannerBtn.disabled = false; pPlannerBtn.innerText = 'SAVE AND SEND TO PLANNER'; }
                     if (pStatus) pStatus.innerText = '✓ Plan saved — ' + new Date().toLocaleTimeString();
-                    if (pTa) { pTa.value = ''; }
-                    if (pTitle) { pTitle.value = ''; }
-                    _airlockTextareaValue = '';
                     break;
                 }
                 case 'airlock_planError': {
-                    const pBtn2 = document.getElementById('airlock-plan-btn');
-                    const pPlannerBtn2 = document.getElementById('airlock-planner-btn');
                     const pStatus2 = document.getElementById('webai-status');
-                    const pTa = document.getElementById('airlock-textarea');
-                    if (pBtn2) { pBtn2.disabled = false; pBtn2.innerText = 'SAVE PLAN'; }
-                    if (pPlannerBtn2) { pPlannerBtn2.disabled = false; pPlannerBtn2.innerText = 'SAVE AND SEND TO PLANNER'; }
                     if (pStatus2) pStatus2.innerText = '⚠ ' + (message.message || 'Plan save failed');
-                    if (_airlockLastText) { _airlockTextareaValue = _airlockLastText; if (pTa) pTa.value = _airlockLastText; }
                     break;
                 }
                 case 'airlock_coderSent': {
-                    const cBtn = document.getElementById('airlock-coder-btn');
                     const cStatus = document.getElementById('webai-status');
-                    if (cBtn) { cBtn.disabled = false; cBtn.innerText = 'SEND TO CODER'; }
                     if (cStatus) cStatus.innerText = '✓ Sent to coder — ' + new Date().toLocaleTimeString();
                     break;
                 }
                 case 'airlock_coderError': {
-                    const cBtn2 = document.getElementById('airlock-coder-btn');
                     const cStatus2 = document.getElementById('webai-status');
-                    const cTa = document.getElementById('airlock-textarea');
-                    if (cBtn2) { cBtn2.disabled = false; cBtn2.innerText = 'SEND TO CODER'; }
                     if (cStatus2) cStatus2.innerText = '⚠ ' + (message.message || 'Send to coder failed');
-                    if (_airlockLastText) { _airlockTextareaValue = _airlockLastText; if (cTa) cTa.value = _airlockLastText; }
                     break;
                 }
             }
@@ -2612,9 +2605,7 @@
             agentListStandard.innerHTML = '';
             agentListAutoban.innerHTML = '';
 
-            // Skip webai teardown if the airlock textarea exists and the webai tab is active.
-            // This prevents mid-typing DOM destruction caused by external state changes.
-            const webaiTabActive = currentAgentTab === 'webai' && !!document.getElementById('airlock-textarea');
+            const webaiTabActive = currentAgentTab === 'webai';
             if (!webaiTabActive) {
                 agentListWebai.innerHTML = '';
             }
@@ -2711,9 +2702,6 @@
             switchAgentTab(currentAgentTab);
         }
 
-        // Preserve airlock textarea content across re-renders
-        let _airlockTextareaValue = '';
-        let _airlockLastText = ''; // Backup for restore-on-error after optimistic clear
         let _planModalFromAirlock = false;
 
         function createWebAiAirlockPanel() {
@@ -2755,7 +2743,7 @@
 
             const s1Desc = document.createElement('div');
             s1Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s1Desc.innerText = 'Package code into docx files for NotebookLM compatibility.';
+            s1Desc.innerText = 'Package code into docx files for NotebookLM compatibility. Configure the workspace files you want to bundle.';
             container.appendChild(s1Desc);
 
             const exportBtn = document.createElement('button');
@@ -2807,72 +2795,16 @@
 
             container.appendChild(s2BtnRow);
 
-            // Step 3: Paste Response & Create Plan
+            // Step 3: Create plan from response
             const s3Header = document.createElement('div');
             s3Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
-            s3Header.innerText = '3. CREATE PLAN';
+            s3Header.innerText = '3. CREATE PLAN FROM RESPONSE';
             container.appendChild(s3Header);
 
             const s3Desc = document.createElement('div');
             s3Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s3Desc.innerText = 'Ask Notebook to make a plan following the How to Plan guide and paste response to save to .switchboard/plans and the Antigravity brain (if using Antigravity).';
+            s3Desc.innerText = 'Have Notebook make a Feature plan using the How to plan guide. When the plan is ready, use Create Plan to save the result and add to your Kanban. If the plan needs improvement, use Autoban or manually send to the Planner agent.';
             container.appendChild(s3Desc);
-
-            const titleInput = document.createElement('input');
-            titleInput.type = 'text';
-            titleInput.id = 'airlock-title-input';
-            titleInput.className = 'agent-input';
-            titleInput.style.cssText = 'width:calc(100% - 16px); margin:4px 8px;';
-            titleInput.placeholder = 'Plan title (e.g. Add auth)';
-            container.appendChild(titleInput);
-
-            const textarea = document.createElement('textarea');
-            textarea.id = 'airlock-textarea';
-            textarea.className = 'agent-input';
-            textarea.style.cssText = 'width:calc(100% - 16px); margin:4px 8px; min-height:120px; max-height:400px; resize:vertical;';
-            textarea.placeholder = 'Paste response here...';
-            textarea.value = _airlockTextareaValue;
-            textarea.addEventListener('input', () => { _airlockTextareaValue = textarea.value; });
-            container.appendChild(textarea);
-
-            const btnRow = document.createElement('div');
-            btnRow.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:4px 8px 8px;';
-
-            const planBtn = document.createElement('button');
-            planBtn.className = 'secondary-btn';
-            planBtn.id = 'airlock-plan-btn';
-            planBtn.innerText = 'SAVE PLAN';
-            planBtn.onclick = () => {
-                const title = titleInput.value.trim();
-                const text = textarea.value.trim();
-                const status = document.getElementById('webai-status');
-                if (!title) { if (status) status.innerText = '⚠ Enter a plan title'; return; }
-                if (!text) { if (status) status.innerText = '⚠ Paste response first'; return; }
-                planBtn.disabled = true;
-                planBtn.innerText = 'SAVING...';
-                if (status) status.innerText = 'Saving plan...';
-                vscode.postMessage({ type: 'initiatePlan', title, idea: text, mode: 'local', isAirlock: true });
-            };
-
-            const plannerBtn = document.createElement('button');
-            plannerBtn.className = 'secondary-btn is-teal';
-            plannerBtn.id = 'airlock-planner-btn';
-            plannerBtn.innerText = 'SAVE AND SEND TO PLANNER';
-            plannerBtn.onclick = () => {
-                const title = titleInput.value.trim();
-                const text = textarea.value.trim();
-                const status = document.getElementById('webai-status');
-                if (!title) { if (status) status.innerText = '⚠ Enter a plan title'; return; }
-                if (!text) { if (status) status.innerText = '⚠ Paste response first'; return; }
-                plannerBtn.disabled = true;
-                plannerBtn.innerText = 'SENDING...';
-                if (status) status.innerText = 'Sending to planner...';
-                vscode.postMessage({ type: 'initiatePlan', title, idea: text, mode: 'send', isAirlock: true });
-            };
-
-            btnRow.appendChild(planBtn);
-            btnRow.appendChild(plannerBtn);
-            container.appendChild(btnRow);
 
             return container;
         }

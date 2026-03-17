@@ -32,7 +32,7 @@
             font-family: var(--font-family);
             height: 100vh;
             display: grid;
-            grid-template-rows: auto auto minmax(0, 1fr) auto auto;
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
         }
 
         .header {
@@ -76,12 +76,14 @@
             display: flex;
             gap: 10px;
             align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
             flex-shrink: 0;
         }
 
         .meta-grid {
             display: grid;
-            grid-template-columns: repeat(3, minmax(0, 1fr));
+            grid-template-columns: repeat(2, minmax(0, 1fr));
             gap: 12px;
             padding: 14px 18px;
             border-bottom: 1px solid var(--border);
@@ -96,7 +98,7 @@
         }
 
         .field.dependencies {
-            grid-column: span 4;
+            grid-column: span 2;
         }
 
         .field label {
@@ -114,9 +116,9 @@
             font: inherit;
         }
 
-        input,
         select,
-        textarea {
+        textarea,
+        input[type="text"] {
             width: 100%;
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -125,11 +127,62 @@
             padding: 10px 12px;
         }
 
-        input:focus,
         select:focus,
-        textarea:focus {
+        textarea:focus,
+        input[type="text"]:focus {
             outline: none;
             border-color: var(--accent);
+        }
+
+        button {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        button:hover:not(:disabled) {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        button.primary {
+            background: rgba(61, 219, 217, 0.14);
+            border-color: rgba(61, 219, 217, 0.35);
+            color: var(--accent);
+        }
+
+        button.danger {
+            border-color: rgba(248, 81, 73, 0.35);
+            color: var(--danger);
+        }
+
+        button.danger:hover:not(:disabled) {
+            border-color: var(--danger);
+            background: rgba(248, 81, 73, 0.14);
+            color: var(--danger);
+        }
+
+        button:disabled,
+        select:disabled,
+        textarea:disabled,
+        input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .dependency-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .dependency-summary {
+            font-size: 12px;
+            color: var(--muted);
         }
 
         .editor-shell {
@@ -156,11 +209,6 @@
             font-family: var(--mono);
         }
 
-        .editor-hint {
-            font-size: 12px;
-            color: var(--muted);
-        }
-
         .editor {
             min-height: 0;
             resize: none;
@@ -169,90 +217,25 @@
             padding: 16px;
         }
 
-        .log-shell {
-            border-top: 1px solid var(--border);
-            background: var(--panel);
-        }
-
-        .log-shell details {
-            padding: 12px 18px 16px;
-        }
-
-        .log-shell summary {
-            cursor: pointer;
-            color: var(--text);
-            font-weight: 600;
-            list-style: none;
-        }
-
-        .log-shell summary::-webkit-details-marker {
-            display: none;
-        }
-
-        .log-list {
-            margin-top: 14px;
-            display: flex;
-            flex-direction: column;
-            gap: 10px;
-            max-height: 120px;
+        .markdown-body {
+            font-family: var(--font-family);
+            line-height: 1.6;
+            font-size: 14px;
+            padding: 16px;
             overflow: auto;
-            font-size: 11px;
-        }
-
-        .log-item {
+            display: none;
+            min-height: 0;
+            background: #0b0d12;
             border: 1px solid var(--border);
             border-radius: 6px;
-            background: var(--panel-alt);
-            padding: 6px 10px;
         }
 
-        .log-head {
-            display: flex;
-            justify-content: space-between;
-            gap: 10px;
-            font-size: 11px;
-            margin-bottom: 2px;
+        .markdown-body.active {
+            display: block;
         }
 
-        .log-workflow {
-            color: var(--accent);
-            font-family: var(--mono);
-            font-size: 10px;
-        }
-
-        .log-timestamp,
-        .log-details,
-        .empty-state {
-            color: var(--muted);
-            font-size: 11px;
-        }
-
-        button {
-            border: 1px solid var(--border);
-            background: transparent;
-            color: var(--text);
-            border-radius: 6px;
-            padding: 8px 12px;
-            cursor: pointer;
-        }
-
-        button:hover:not(:disabled) {
-            border-color: var(--accent);
-            color: var(--accent);
-        }
-
-        button.primary {
-            background: rgba(61, 219, 217, 0.14);
-            border-color: rgba(61, 219, 217, 0.35);
-            color: var(--accent);
-        }
-
-        button:disabled,
-        input:disabled,
-        select:disabled,
-        textarea:disabled {
-            opacity: 0.6;
-            cursor: not-allowed;
+        .editor.hidden {
+            display: none;
         }
 
         .statusbar {
@@ -272,28 +255,6 @@
 
         .statusbar.error {
             color: var(--danger);
-        }
-
-        .markdown-body {
-            font-family: var(--font-family);
-            line-height: 1.6;
-            font-size: 14px;
-            padding: 16px;
-            overflow: auto;
-            display: none;
-            flex: 1;
-            min-height: 0;
-            background: #0b0d12;
-            border: 1px solid var(--border);
-            border-radius: 6px;
-        }
-
-        .markdown-body.active {
-            display: block;
-        }
-
-        .editor.hidden {
-            display: none;
         }
 
         .comment-popup {
@@ -345,29 +306,122 @@
             margin-bottom: 10px;
         }
 
-        .popup-actions {
+        .popup-actions,
+        .modal-actions {
             display: flex;
             justify-content: flex-end;
             gap: 8px;
         }
 
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(0, 0, 0, 0.48);
+            z-index: 998;
+        }
+
+        .modal-overlay.hidden {
+            display: none;
+        }
+
+        .modal-card {
+            width: min(720px, 100%);
+            max-height: min(80vh, 720px);
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 16px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        .modal-heading {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .modal-body {
+            min-height: 0;
+            overflow: auto;
+        }
+
+        .deps-list,
+        .log-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .deps-list {
+            max-height: 50vh;
+            overflow: auto;
+        }
+
+        .deps-item,
+        .log-item {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-alt);
+            padding: 10px 12px;
+        }
+
+        .deps-item {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .deps-item input {
+            width: auto;
+            margin-top: 2px;
+        }
+
+        .deps-topic {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .deps-meta,
+        .log-timestamp,
+        .log-details,
+        .empty-state {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .log-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .log-workflow {
+            color: var(--accent);
+            font-family: var(--mono);
+            font-size: 10px;
+        }
+
         @media (max-width: 960px) {
             .meta-grid {
-                grid-template-columns: repeat(2, minmax(0, 1fr));
+                grid-template-columns: 1fr;
             }
 
             .field.dependencies {
-                grid-column: span 2;
+                grid-column: span 1;
             }
-        }
-
-        #session-display-field {
-            display: none;
         }
 
         @media (max-width: 640px) {
             body {
-                grid-template-rows: auto auto auto minmax(0, 1fr) auto;
+                grid-template-rows: auto auto minmax(0, 1fr) auto;
             }
 
             .header {
@@ -377,14 +431,6 @@
             .header-actions {
                 width: 100%;
                 justify-content: flex-start;
-            }
-
-            .meta-grid {
-                grid-template-columns: 1fr;
-            }
-
-            .field.dependencies {
-                grid-column: span 1;
             }
         }
     </style>
@@ -398,16 +444,17 @@
             <div class="subtitle" id="header-path"></div>
         </div>
         <div class="header-actions">
+            <button id="copy-plan-link">Copy Link</button>
+            <button id="open-log-modal">Log</button>
+            <button id="send-to-agent">Send to Agent</button>
+            <button id="complete-plan">Complete</button>
+            <button id="delete-plan" class="danger">Delete</button>
             <button id="reload-ticket">Reload</button>
             <button class="primary" id="save-plan">Save</button>
         </div>
     </div>
 
     <div class="meta-grid">
-        <div class="field">
-            <label for="topic-input">Topic</label>
-            <input id="topic-input" type="text" />
-        </div>
         <div class="field">
             <label for="column-select">Column</label>
             <select id="column-select"></select>
@@ -421,32 +468,25 @@
             </select>
         </div>
         <div class="field dependencies">
-            <label for="dependencies-input">Dependencies</label>
-            <input id="dependencies-input" type="text" placeholder="Comma-separated session IDs or topic names" />
+            <label>Dependencies</label>
+            <div class="dependency-row">
+                <button id="open-deps-modal">Manage Dependencies</button>
+                <span class="dependency-summary" id="dependencies-summary">No dependencies selected</span>
+            </div>
         </div>
     </div>
 
     <div class="editor-shell">
         <div class="editor-toolbar">
-            <div class="editor-title">Plan Text</div>
-            <div style="display:flex; align-items:center; gap: 8px;">
-                <div class="editor-hint">Use Ctrl/Cmd+S to save changes</div>
-                <button id="toggle-preview" class="secondary-btn" style="padding: 2px 6px; font-size: 11px;">Preview</button>
-            </div>
+            <div class="editor-title" id="editor-title">Review plan - select text and submit comment to send to planner agent</div>
+            <button id="toggle-preview" class="secondary-btn" style="padding: 2px 8px; font-size: 11px;">Edit Plan</button>
         </div>
-        <textarea class="editor" id="plan-editor" spellcheck="false"></textarea>
-        <div id="markdown-content" class="markdown-body"></div>
-    </div>
-
-    <div class="log-shell">
-        <details open>
-            <summary>Action Log</summary>
-            <div class="log-list" id="action-log"></div>
-        </details>
+        <textarea class="editor hidden" id="plan-editor" spellcheck="false"></textarea>
+        <div id="markdown-content" class="markdown-body active"></div>
     </div>
 
     <div class="statusbar" id="statusbar">
-        <span id="status-message">Loading ticket…</span>
+        <span id="status-message">Loading ticket...</span>
         <span id="mtime-message"></span>
     </div>
 
@@ -460,24 +500,58 @@
         </div>
     </div>
 
+    <div class="modal-overlay hidden" id="deps-modal">
+        <div class="modal-card">
+            <div class="modal-heading">Manage Dependencies</div>
+            <div class="modal-body">
+                <div class="deps-list" id="deps-list"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="close-deps-modal">Cancel</button>
+                <button class="primary" id="save-deps-modal">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="log-modal">
+        <div class="modal-card">
+            <div class="modal-heading">Action Log</div>
+            <div class="modal-body">
+                <div class="log-list" id="action-log"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="close-log-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         const vscode = acquireVsCodeApi();
 
         const headerTitleEl = document.getElementById('header-title');
         const headerPathEl = document.getElementById('header-path');
-        const topicInputEl = document.getElementById('topic-input');
         const columnSelectEl = document.getElementById('column-select');
         const complexitySelectEl = document.getElementById('complexity-select');
-        const dependenciesInputEl = document.getElementById('dependencies-input');
+        const dependenciesSummaryEl = document.getElementById('dependencies-summary');
         const planEditorEl = document.getElementById('plan-editor');
         const markdownContentEl = document.getElementById('markdown-content');
         const togglePreviewBtn = document.getElementById('toggle-preview');
+        const editorTitleEl = document.getElementById('editor-title');
         const popupEl = document.getElementById('comment-popup');
         const selectedPreviewEl = document.getElementById('selected-preview');
         const commentInputEl = document.getElementById('comment-input');
         const actionLogEl = document.getElementById('action-log');
         const savePlanButtonEl = document.getElementById('save-plan');
         const reloadTicketButtonEl = document.getElementById('reload-ticket');
+        const copyPlanLinkButtonEl = document.getElementById('copy-plan-link');
+        const openLogModalButtonEl = document.getElementById('open-log-modal');
+        const sendToAgentButtonEl = document.getElementById('send-to-agent');
+        const completePlanButtonEl = document.getElementById('complete-plan');
+        const deletePlanButtonEl = document.getElementById('delete-plan');
+        const openDepsModalButtonEl = document.getElementById('open-deps-modal');
+        const depsModalEl = document.getElementById('deps-modal');
+        const logModalEl = document.getElementById('log-modal');
+        const depsListEl = document.getElementById('deps-list');
         const statusbarEl = document.getElementById('statusbar');
         const statusMessageEl = document.getElementById('status-message');
         const mtimeMessageEl = document.getElementById('mtime-message');
@@ -494,10 +568,11 @@
             canEditMetadata: false,
             pendingCount: 0,
             selectedText: '',
-            isPreview: false
+            isPreview: true,
+            openPlans: []
         };
 
-        function hidePopup(clear = false) {
+        function hidePopup(clear) {
             popupEl.classList.remove('visible');
             if (clear) {
                 commentInputEl.value = '';
@@ -509,7 +584,6 @@
             const maxLeft = window.innerWidth - popupEl.offsetWidth - 12;
             const targetLeft = Math.max(12, Math.min(rect.left, maxLeft > 12 ? maxLeft : rect.left));
             const targetTop = Math.min(window.innerHeight - 12, rect.bottom + 10);
-
             popupEl.style.left = `${targetLeft}px`;
             popupEl.style.top = `${targetTop}px`;
             selectedPreviewEl.textContent = selectedText;
@@ -517,118 +591,77 @@
             commentInputEl.focus();
         }
 
-        function handleSelectionEvent() {
-            const selection = window.getSelection();
-            if (!selection || selection.rangeCount === 0 || !state.isPreview) {
-                hidePopup();
-                return;
-            }
-
-            const text = selection.toString().trim();
-            if (!text) {
-                hidePopup();
-                return;
-            }
-
-            const range = selection.getRangeAt(0);
-            const rect = range.getBoundingClientRect();
-            const payloadRect = {
-                top: rect.top,
-                left: rect.left,
-                width: rect.width,
-                height: rect.height,
-                bottom: rect.bottom,
-                right: rect.right
-            };
-
-            state.selectedText = text;
-            vscode.postMessage({
-                type: 'selectionChanged',
-                selectedText: text,
-                selectionRect: payloadRect
-            });
-
-            showPopup(rect, text);
-        }
-
-        document.addEventListener('mouseup', () => {
-            setTimeout(handleSelectionEvent, 0);
-        });
-
-        document.addEventListener('mousedown', (event) => {
-            if (!popupEl.contains(event.target)) {
-                const selection = window.getSelection();
-                const selectedText = selection ? selection.toString().trim() : '';
-                if (!selectedText) {
-                    hidePopup();
-                }
-            }
-        });
-
-        document.getElementById('cancel-comment').addEventListener('click', () => {
-            hidePopup(true);
-        });
-
-        document.getElementById('submit-comment').addEventListener('click', () => {
-            const comment = commentInputEl.value.trim();
-            if (!state.selectedText) {
-                setStatus('Select text before submitting a comment.', 'error');
-                return;
-            }
-            if (!comment) {
-                setStatus('Comment is required.', 'error');
-                return;
-            }
-
-            setBusy(true);
-            setStatus('Sending comment...');
-            vscode.postMessage({
-                type: 'submitComment',
-                sessionId: state.sessionId,
-                topic: state.topic,
-                planFileAbsolute: state.planFileAbsolute,
-                selectedText: state.selectedText,
-                comment
-            });
-        });
-
-        togglePreviewBtn.addEventListener('click', () => {
-            state.isPreview = !state.isPreview;
+        function applyMode() {
             if (state.isPreview) {
                 planEditorEl.classList.add('hidden');
                 markdownContentEl.classList.add('active');
-                togglePreviewBtn.textContent = 'Edit';
+                togglePreviewBtn.textContent = 'Edit Plan';
+                editorTitleEl.textContent = 'Review plan - select text and submit comment to send to planner agent';
             } else {
                 planEditorEl.classList.remove('hidden');
                 markdownContentEl.classList.remove('active');
-                togglePreviewBtn.textContent = 'Preview';
+                togglePreviewBtn.textContent = 'Review Plan';
+                editorTitleEl.textContent = 'Edit plan - use Ctrl/Cmd+S to save changes';
                 hidePopup(true);
             }
-        });
+        }
+
+        function updateDependenciesSummary() {
+            if (!dependenciesSummaryEl) {
+                return;
+            }
+            dependenciesSummaryEl.textContent = state.dependencies.length > 0
+                ? `${state.dependencies.length} dependenc${state.dependencies.length === 1 ? 'y' : 'ies'} selected`
+                : 'No dependencies selected';
+        }
+
+        function updateActionButtons() {
+            const disabled = state.pendingCount > 0;
+            const hasSession = !!state.sessionId;
+            const isFinalColumn = state.column === 'CODE REVIEWED';
+
+            sendToAgentButtonEl.disabled = !hasSession || disabled || isFinalColumn;
+            sendToAgentButtonEl.textContent = isFinalColumn ? 'Already Reviewed' : 'Send to Agent';
+            completePlanButtonEl.disabled = !hasSession || disabled;
+            deletePlanButtonEl.disabled = !hasSession || disabled;
+        }
 
         function setBusy(isBusy) {
             state.pendingCount = Math.max(0, state.pendingCount + (isBusy ? 1 : -1));
             const disabled = state.pendingCount > 0;
+            const editable = !disabled && state.canEditMetadata;
             savePlanButtonEl.disabled = disabled;
             reloadTicketButtonEl.disabled = disabled;
-            const editable = !disabled && state.canEditMetadata;
-            topicInputEl.disabled = !editable;
             columnSelectEl.disabled = !editable;
             complexitySelectEl.disabled = !editable;
-            dependenciesInputEl.disabled = !editable;
+            openDepsModalButtonEl.disabled = !editable;
             planEditorEl.disabled = disabled;
+            updateActionButtons();
         }
 
-        function setStatus(message, kind = '') {
+        function setStatus(message, kind) {
             statusMessageEl.textContent = message;
             statusbarEl.className = `statusbar${kind ? ` ${kind}` : ''}`;
         }
 
         function formatTimestamp(ts) {
-            if (!ts) return '';
+            if (!ts) {
+                return '';
+            }
             const date = new Date(ts);
-            if (Number.isNaN(date.getTime())) return ts;
+            if (Number.isNaN(date.getTime())) {
+                return ts;
+            }
             return date.toLocaleString();
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
         }
 
         function renderColumns(columns, selected) {
@@ -673,6 +706,93 @@
             });
         }
 
+        function renderOpenPlans(plans) {
+            state.openPlans = Array.isArray(plans) ? plans.slice() : [];
+            depsListEl.innerHTML = '';
+
+            if (state.openPlans.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.textContent = 'No other open plans available.';
+                depsListEl.appendChild(empty);
+                return;
+            }
+
+            state.openPlans.forEach((plan) => {
+                const dependencyValue = String(plan.topic || plan.sessionId || '').trim();
+                const wrapper = document.createElement('label');
+                wrapper.className = 'deps-item';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = dependencyValue;
+                checkbox.checked = state.dependencies.includes(dependencyValue);
+
+                const copy = document.createElement('div');
+                copy.innerHTML = `
+                    <div class="deps-topic">${escapeHtml(plan.topic || plan.sessionId || 'Untitled plan')}</div>
+                    <div class="deps-meta">${escapeHtml(plan.column || 'Unknown column')} · ${escapeHtml(plan.planFileAbsolute || '')}</div>
+                `;
+
+                wrapper.appendChild(checkbox);
+                wrapper.appendChild(copy);
+                depsListEl.appendChild(wrapper);
+            });
+        }
+
+        function openDepsModal() {
+            if (!state.sessionId || !state.canEditMetadata) {
+                setStatus('Dependencies are only available for session-backed tickets.', 'error');
+                return;
+            }
+            depsModalEl.classList.remove('hidden');
+            depsListEl.innerHTML = '<div class="empty-state">Loading open plans...</div>';
+            vscode.postMessage({ type: 'getOpenPlans', sessionId: state.sessionId });
+        }
+
+        function closeDepsModal() {
+            depsModalEl.classList.add('hidden');
+        }
+
+        function openLogModal() {
+            logModalEl.classList.remove('hidden');
+        }
+
+        function closeLogModal() {
+            logModalEl.classList.add('hidden');
+        }
+
+        function handleSelectionEvent() {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || !state.isPreview) {
+                hidePopup(false);
+                return;
+            }
+
+            const text = selection.toString().trim();
+            if (!text) {
+                hidePopup(false);
+                return;
+            }
+
+            const range = selection.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            state.selectedText = text;
+            vscode.postMessage({
+                type: 'selectionChanged',
+                selectedText: text,
+                selectionRect: {
+                    top: rect.top,
+                    left: rect.left,
+                    width: rect.width,
+                    height: rect.height,
+                    bottom: rect.bottom,
+                    right: rect.right
+                }
+            });
+            showPopup(rect, text);
+        }
+
         function renderTicketData(message) {
             state.sessionId = message.sessionId || '';
             state.planFileAbsolute = message.planFileAbsolute || '';
@@ -684,31 +804,27 @@
             state.planMtimeMs = Number(message.planMtimeMs || 0);
             state.canEditMetadata = message.canEditMetadata !== false;
 
+            if (message.initialMode === 'edit') {
+                state.isPreview = false;
+            } else if (message.initialMode === 'review') {
+                state.isPreview = true;
+            }
+
             headerTitleEl.textContent = state.topic || 'Ticket';
             headerPathEl.textContent = state.planFileAbsolute;
-            topicInputEl.value = state.topic;
             renderColumns(Array.isArray(message.columns) ? message.columns : [], state.column);
             complexitySelectEl.value = state.complexity;
-            dependenciesInputEl.value = state.dependencies.join(', ');
+            updateDependenciesSummary();
             planEditorEl.value = state.planText;
-            if (message.renderedHtml) {
-                markdownContentEl.innerHTML = message.renderedHtml;
-            } else {
-                markdownContentEl.innerHTML = `<pre>${escapeHtml(state.planText)}</pre>`;
-            }
+            markdownContentEl.innerHTML = message.renderedHtml
+                ? message.renderedHtml
+                : `<pre>${escapeHtml(state.planText)}</pre>`;
             renderActionLog(Array.isArray(message.actionLog) ? message.actionLog : []);
             mtimeMessageEl.textContent = state.planMtimeMs ? `Loaded: ${formatTimestamp(state.planMtimeMs)}` : '';
+            applyMode();
+            updateActionButtons();
             setStatus('Ticket loaded.');
             setBusy(false);
-        }
-
-        function escapeHtml(value) {
-            return String(value || '')
-                .replace(/&/g, '&amp;')
-                .replace(/</g, '&lt;')
-                .replace(/>/g, '&gt;')
-                .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#39;');
         }
 
         function postUpdate(payload) {
@@ -717,42 +833,13 @@
                 return;
             }
             setBusy(true);
-            setStatus('Saving ticket changes…');
+            setStatus('Saving ticket changes...');
             vscode.postMessage(payload);
-        }
-
-        function handleTopicCommit() {
-            const nextTopic = topicInputEl.value.trim();
-            if (!nextTopic || nextTopic === state.topic) {
-                topicInputEl.value = state.topic;
-                return;
-            }
-            postUpdate({
-                type: 'setTopic',
-                sessionId: state.sessionId,
-                topic: nextTopic
-            });
-        }
-
-        function handleDependenciesCommit() {
-            const nextDependencies = dependenciesInputEl.value
-                .split(',')
-                .map(item => item.trim())
-                .filter(Boolean);
-            if (JSON.stringify(nextDependencies) === JSON.stringify(state.dependencies)) {
-                dependenciesInputEl.value = state.dependencies.join(', ');
-                return;
-            }
-            postUpdate({
-                type: 'setDependencies',
-                sessionId: state.sessionId,
-                dependencies: nextDependencies
-            });
         }
 
         function savePlanText() {
             setBusy(true);
-            setStatus('Saving plan text…');
+            setStatus('Saving plan text...');
             vscode.postMessage({
                 type: 'savePlanText',
                 sessionId: state.sessionId,
@@ -761,20 +848,123 @@
             });
         }
 
+        document.addEventListener('mouseup', () => {
+            setTimeout(handleSelectionEvent, 0);
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            if (!popupEl.contains(event.target)) {
+                const selection = window.getSelection();
+                const selectedText = selection ? selection.toString().trim() : '';
+                if (!selectedText) {
+                    hidePopup(false);
+                }
+            }
+        });
+
+        document.getElementById('cancel-comment').addEventListener('click', () => {
+            hidePopup(true);
+        });
+
+        document.getElementById('submit-comment').addEventListener('click', () => {
+            const comment = commentInputEl.value.trim();
+            if (!state.selectedText) {
+                setStatus('Select text before submitting a comment.', 'error');
+                return;
+            }
+            if (!comment) {
+                setStatus('Comment is required.', 'error');
+                return;
+            }
+
+            setBusy(true);
+            setStatus('Sending comment...');
+            vscode.postMessage({
+                type: 'submitComment',
+                sessionId: state.sessionId,
+                topic: state.topic,
+                planFileAbsolute: state.planFileAbsolute,
+                selectedText: state.selectedText,
+                comment
+            });
+        });
+
+        togglePreviewBtn.addEventListener('click', () => {
+            state.isPreview = !state.isPreview;
+            applyMode();
+        });
+
         savePlanButtonEl.addEventListener('click', () => {
             savePlanText();
         });
 
         reloadTicketButtonEl.addEventListener('click', () => {
             setBusy(true);
-            setStatus('Reloading ticket…');
+            setStatus('Reloading ticket...');
             vscode.postMessage({ type: 'ready' });
         });
 
-        topicInputEl.addEventListener('blur', handleTopicCommit);
+        copyPlanLinkButtonEl.addEventListener('click', () => {
+            vscode.postMessage({ type: 'copyPlanLink', sessionId: state.sessionId });
+        });
+
+        sendToAgentButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Sending to next agent...');
+            vscode.postMessage({ type: 'sendToAgent', sessionId: state.sessionId });
+        });
+
+        completePlanButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Completing plan...');
+            vscode.postMessage({ type: 'completePlan', sessionId: state.sessionId });
+        });
+
+        deletePlanButtonEl.addEventListener('click', () => {
+            if (!confirm('Permanently delete this plan? This cannot be undone.')) {
+                return;
+            }
+            setBusy(true);
+            setStatus('Deleting plan...');
+            vscode.postMessage({ type: 'deletePlan', sessionId: state.sessionId });
+        });
+
+        openLogModalButtonEl.addEventListener('click', openLogModal);
+        document.getElementById('close-log-modal').addEventListener('click', closeLogModal);
+
+        openDepsModalButtonEl.addEventListener('click', openDepsModal);
+        document.getElementById('close-deps-modal').addEventListener('click', closeDepsModal);
+        document.getElementById('save-deps-modal').addEventListener('click', () => {
+            const nextDependencies = Array.from(depsListEl.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(input => input.value)
+                .filter(Boolean);
+            closeDepsModal();
+            if (JSON.stringify(nextDependencies) === JSON.stringify(state.dependencies)) {
+                return;
+            }
+            postUpdate({
+                type: 'setDependencies',
+                sessionId: state.sessionId,
+                dependencies: nextDependencies
+            });
+        });
+
+        depsModalEl.addEventListener('click', (event) => {
+            if (event.target === depsModalEl) {
+                closeDepsModal();
+            }
+        });
+
+        logModalEl.addEventListener('click', (event) => {
+            if (event.target === logModalEl) {
+                closeLogModal();
+            }
+        });
 
         columnSelectEl.addEventListener('change', () => {
-            if (!columnSelectEl.value || columnSelectEl.value === state.column) return;
+            if (!columnSelectEl.value || columnSelectEl.value === state.column) {
+                return;
+            }
             postUpdate({
                 type: 'setColumn',
                 sessionId: state.sessionId,
@@ -783,7 +973,9 @@
         });
 
         complexitySelectEl.addEventListener('change', () => {
-            if (!complexitySelectEl.value || complexitySelectEl.value === state.complexity) return;
+            if (!complexitySelectEl.value || complexitySelectEl.value === state.complexity) {
+                return;
+            }
             postUpdate({
                 type: 'setComplexity',
                 sessionId: state.sessionId,
@@ -791,18 +983,11 @@
             });
         });
 
-        dependenciesInputEl.addEventListener('blur', handleDependenciesCommit);
-        dependenciesInputEl.addEventListener('keydown', (event) => {
-            if (event.key === 'Enter') {
-                event.preventDefault();
-                handleDependenciesCommit();
-                dependenciesInputEl.blur();
-            }
-        });
-
         window.addEventListener('keydown', (event) => {
             const isSaveShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's';
-            if (!isSaveShortcut) return;
+            if (!isSaveShortcut) {
+                return;
+            }
             event.preventDefault();
             savePlanText();
         });
@@ -822,15 +1007,40 @@
                     }
                     break;
                 case 'commentResult':
+                    setBusy(false);
                     if (message.ok) {
+                        hidePopup(true);
                         setStatus(message.message || 'Comment sent.', 'success');
                     } else {
                         setStatus(message.message || 'Failed to send comment.', 'error');
                     }
                     break;
+                case 'openPlansData':
+                    renderOpenPlans(Array.isArray(message.plans) ? message.plans : []);
+                    if (message.error) {
+                        setStatus(message.error, 'error');
+                    }
+                    break;
+                case 'copyPlanLinkResult':
+                    if (message.ok) {
+                        setStatus(message.message || 'Plan path copied.', 'success');
+                    } else {
+                        setStatus(message.message || 'Failed to copy plan path.', 'error');
+                    }
+                    break;
+                case 'ticketActionResult':
+                    setBusy(false);
+                    if (message.ok) {
+                        setStatus(message.message || 'Ticket action completed.', 'success');
+                    } else {
+                        setStatus(message.message || 'Ticket action failed.', 'error');
+                    }
+                    break;
             }
         });
 
+        applyMode();
+        updateDependenciesSummary();
         vscode.postMessage({ type: 'ready' });
     </script>
 </body>

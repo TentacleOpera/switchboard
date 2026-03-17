@@ -37,6 +37,8 @@
             color: var(--text-primary);
             height: 100vh;
             overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
 
         .kanban-header {
@@ -90,6 +92,16 @@
             padding: 6px 16px;
             border-bottom: 1px solid var(--border-color);
             background: var(--panel-bg2);
+            flex-wrap: wrap;
+        }
+
+        .settings-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: color-mix(in srgb, var(--panel-bg2) 85%, transparent);
             flex-wrap: wrap;
         }
 
@@ -186,7 +198,8 @@
             display: flex;
             gap: 12px;
             padding: 16px;
-            height: calc(100vh - 50px - 36px);
+            flex: 1;
+            min-height: 0;
             overflow-x: auto;
         }
 
@@ -477,16 +490,18 @@
         </div>
     </div>
     <div class="controls-strip">
-        <button class="strip-btn" id="btn-autoban" title="Toggle Autoban engine">⚡ AUTOBAN</button>
+        <button class="strip-btn" id="btn-autoban" title="Start or stop the autoban engine">▶ START AUTOBAN</button>
+        <button class="strip-btn" id="btn-batch-planner" title="Copy improve-plan prompt for all CREATED plans to clipboard">📋 COPY PLANNER PROMPT</button>
+        <button class="strip-btn" id="btn-batch-low" title="Copy coding prompt for low-complexity PLAN REVIEWED plans to clipboard">📋 COPY CODER PROMPT</button>
+        <button class="strip-btn" id="btn-jules-low" title="Send low-complexity plans to Jules" style="display:none">🚀 SEND TO JULES</button>
+        <button class="strip-btn" id="btn-refresh-strip" title="Sync board with latest backend state">↻ SYNC BOARD</button>
+    </div>
+    <div class="settings-strip">
         <label class="cli-toggle" id="cli-toggle" title="When OFF, drag-drop moves cards without triggering CLI agent actions">
             <input type="checkbox" id="cli-triggers-toggle" checked>
             <span class="toggle-label">CLI Triggers</span>
         </label>
         <span class="triggers-off-badge" id="triggers-off-badge" hidden>⚠ TRIGGERS OFF</span>
-        <button class="strip-btn" id="btn-batch-planner" title="Copy improve-plan prompt for all CREATED plans">📋 Batch Planner</button>
-        <button class="strip-btn" id="btn-batch-low" title="Copy coding prompt for low-complexity PLAN REVIEWED plans">📋 Batch Low</button>
-        <button class="strip-btn" id="btn-jules-low" title="Send low-complexity plans to Jules" style="display:none">🚀 Jules Low</button>
-        <button class="strip-btn" id="btn-refresh-strip" title="Refresh board">↻ Refresh</button>
     </div>
     <div class="kanban-board" id="kanban-board"></div>
 
@@ -506,6 +521,7 @@
         let currentCodedTarget = 'lead';
         let cliTriggersEnabled = true;
         let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
+        let autobanCountdownTimer = null;
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
         let currentWorkspaceRoot = '';
@@ -712,6 +728,20 @@
             if (!autobanBtn) return;
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
             autobanBtn.classList.toggle('is-active', isEnabled);
+            autobanBtn.textContent = isEnabled ? '⏸ STOP AUTOBAN' : '▶ START AUTOBAN';
+            autobanBtn.title = isEnabled ? 'Stop the autoban engine' : 'Start the autoban engine';
+        }
+
+        function syncAutobanCountdownTimer() {
+            const shouldRun = !!(autobanConfig && autobanConfig.enabled);
+            if (shouldRun && !autobanCountdownTimer) {
+                autobanCountdownTimer = setInterval(updateAutobanIndicators, 1000);
+                return;
+            }
+            if (!shouldRun && autobanCountdownTimer) {
+                clearInterval(autobanCountdownTimer);
+                autobanCountdownTimer = null;
+            }
         }
 
         function renderBoard(cards) {
@@ -730,6 +760,7 @@
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
+                items.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -955,10 +986,14 @@
             if (validIds.length > 0) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 setTimeout(() => {
-                    if (forwardIds.length === 1) {
-                        postKanbanMessage({ type: 'triggerAction', sessionId: forwardIds[0], targetColumn, workspaceRoot });
-                    } else if (forwardIds.length > 1) {
-                        postKanbanMessage({ type: 'triggerBatchAction', sessionIds: forwardIds, targetColumn, workspaceRoot });
+                    if (cliTriggersEnabled) {
+                        if (forwardIds.length === 1) {
+                            postKanbanMessage({ type: 'triggerAction', sessionId: forwardIds[0], targetColumn, workspaceRoot });
+                        } else if (forwardIds.length > 1) {
+                            postKanbanMessage({ type: 'triggerBatchAction', sessionIds: forwardIds, targetColumn, workspaceRoot });
+                        }
+                    } else if (forwardIds.length > 0) {
+                        postKanbanMessage({ type: 'moveCardForward', sessionIds: forwardIds, targetColumn, workspaceRoot });
                     }
                     
                     if (backwardIds.length > 0) {
@@ -1046,6 +1081,7 @@
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     updateAutobanIndicators();
+                    syncAutobanCountdownTimer();
                     updateAutobanButtonState();
                     break;
             }
@@ -1072,7 +1108,13 @@
 
                 const rule = autobanConfig.rules && autobanConfig.rules[col];
                 if (rule && rule.enabled) {
-                    indicator.textContent = `Auto: ${rule.intervalMinutes}m (Batch: ${autobanConfig.batchSize})`;
+                    const lastTickAt = Number(autobanConfig.lastTickAt && autobanConfig.lastTickAt[col]) || Date.now();
+                    const intervalMs = Math.max(1, Number(rule.intervalMinutes) || 1) * 60 * 1000;
+                    const nextTickAt = lastTickAt + intervalMs;
+                    const remainingSec = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
+                    indicator.textContent = remainingSec > 0
+                        ? `Next: ${formatCountdown(remainingSec)} (Batch: ${autobanConfig.batchSize})`
+                        : 'Dispatching...';
                     indicator.className = 'autoban-indicator is-active';
                 } else {
                     indicator.textContent = 'Auto: off';
@@ -1115,6 +1157,7 @@
         renderBoard([]);
         updateJulesButtonVisibility();
         updateAutobanButtonState();
+        syncAutobanCountdownTimer();
     </script>
 </body>
 

@@ -7,7 +7,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
-import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
+import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
 // Status bar item for setup notification
@@ -833,14 +833,24 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(batchTriggerFromKanbanDisposable);
 
     const kanbanBackwardMoveDisposable = vscode.commands.registerCommand('switchboard.kanbanBackwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string) => {
-        taskViewerProvider.handleKanbanBackwardMove(sessionIds, targetColumn, workspaceRoot);
+        return taskViewerProvider.handleKanbanBackwardMove(sessionIds, targetColumn, workspaceRoot);
     });
     context.subscriptions.push(kanbanBackwardMoveDisposable);
 
+    const kanbanForwardMoveDisposable = vscode.commands.registerCommand('switchboard.kanbanForwardMove', async (sessionIds: string[], targetColumn: string, workspaceRoot?: string) => {
+        return taskViewerProvider.handleKanbanForwardMove(sessionIds, targetColumn, workspaceRoot);
+    });
+    context.subscriptions.push(kanbanForwardMoveDisposable);
+
     const completePlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.completePlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
-        taskViewerProvider.handleKanbanCompletePlan(sessionId, workspaceRoot);
+        return taskViewerProvider.handleKanbanCompletePlan(sessionId, workspaceRoot);
     });
     context.subscriptions.push(completePlanFromKanbanDisposable);
+
+    const deletePlanFromReviewDisposable = vscode.commands.registerCommand('switchboard.deletePlanFromReview', async (sessionId: string, workspaceRoot?: string) => {
+        return taskViewerProvider.handleDeletePlanFromReview(sessionId, workspaceRoot);
+    });
+    context.subscriptions.push(deletePlanFromReviewDisposable);
 
     const copyPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.copyPlanFromKanban', async (sessionId: string, column?: string, workspaceRoot?: string) => {
         return await taskViewerProvider.handleKanbanCopyPlan(sessionId, column, workspaceRoot);
@@ -1360,6 +1370,7 @@ export async function activate(context: vscode.ExtensionContext) {
             sessionId = candidate.sessionId;
             topic = candidate.topic;
             workspaceRoot = typeof candidate.workspaceRoot === 'string' ? candidate.workspaceRoot.trim() : undefined;
+            target = candidate;
         } else if (target instanceof vscode.Uri) {
             planFileAbsolute = target.fsPath;
         } else if (typeof target === 'string') {
@@ -1387,7 +1398,10 @@ export async function activate(context: vscode.ExtensionContext) {
                 sessionId,
                 topic,
                 planFileAbsolute: absolutePath,
-                workspaceRoot: resolvedWorkspaceRoot
+                workspaceRoot: resolvedWorkspaceRoot,
+                initialMode: typeof target === 'object' && !(target instanceof vscode.Uri) && 'initialMode' in target
+                    ? target.initialMode
+                    : undefined
             });
         } catch (e) {
             const message = e instanceof Error ? e.message : String(e);
@@ -1511,6 +1525,22 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     );
     context.subscriptions.push(updateReviewTicketDisposable);
+
+    const getReviewOpenPlansDisposable = vscode.commands.registerCommand(
+        'switchboard.getReviewOpenPlans',
+        async (sessionId: string): Promise<ReviewOpenPlanOption[]> => {
+            return taskViewerProvider.getReviewOpenPlans(sessionId);
+        }
+    );
+    context.subscriptions.push(getReviewOpenPlansDisposable);
+
+    const reviewSendToAgentDisposable = vscode.commands.registerCommand(
+        'switchboard.reviewSendToAgent',
+        async (sessionId: string): Promise<{ ok: boolean; message: string }> => {
+            return taskViewerProvider.sendReviewTicketToNextAgent(sessionId);
+        }
+    );
+    context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
         if (!workspaceRoot) {
