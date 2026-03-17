@@ -1098,11 +1098,6 @@ After completing all plans, summarize what was changed and any verification step
                     await vscode.commands.executeCommand('switchboard.completePlanFromKanban', msg.sessionId, msg.workspaceRoot);
                 }
                 break;
-            case 'viewPlan':
-                if (msg.sessionId) {
-                    await vscode.commands.executeCommand('switchboard.viewPlanFromKanban', msg.sessionId, msg.workspaceRoot);
-                }
-                break;
             case 'reviewPlan':
                 if (msg.sessionId) {
                     await vscode.commands.executeCommand('switchboard.reviewPlanFromKanban', msg.sessionId, msg.workspaceRoot);

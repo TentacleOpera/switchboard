@@ -38,8 +38,8 @@ function run() {
     assert.ok(!kanbanHtmlSource.includes('coded-target-select'), 'Expected the Kanban coded-target dropdown to be removed.');
     expectRegex(
         registerToolsSource,
-        /'PLAN REVIEWED': \[],[\s\S]*'LEAD CODED': \[],[\s\S]*'CODER CODED': \[],[\s\S]*'CODE REVIEWED': \[]/s,
-        'Expected MCP kanban readers to initialize the split coded columns.'
+        /const BUILTIN_KANBAN_COLUMN_DEFINITIONS = \[[\s\S]*\{ id: 'PLAN REVIEWED', label: 'Planned'[^}]*\},[\s\S]*\{ id: 'LEAD CODED', label: 'Lead Coder'[^}]*\},[\s\S]*\{ id: 'CODER CODED', label: 'Coder'[^}]*\},[\s\S]*\{ id: 'CODE REVIEWED', label: 'Reviewed'[^}]*\}/s,
+        'Expected MCP kanban readers to preserve the split coded columns in the shared column definitions.'
     );
 
     console.log('split coded columns regression test passed');

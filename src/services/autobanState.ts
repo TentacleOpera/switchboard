@@ -8,6 +8,8 @@ export type AutobanRoutingMode = 'dynamic' | 'all_coder' | 'all_lead';
 
 export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED'] as const;
 
+export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
+export const DEFAULT_AUTOBAN_BATCH_SIZE = 3;
 export const DEFAULT_AUTOBAN_MAX_SENDS_PER_TERMINAL = 10;
 export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
@@ -44,6 +46,15 @@ function normalizeFiniteCount(value: unknown, fallback: number, minimum: number,
     }
     const normalized = Math.floor(value);
     return typeof maximum === 'number' ? Math.min(normalized, maximum) : normalized;
+}
+
+export function normalizeAutobanBatchSize(value: unknown): number {
+    return normalizeFiniteCount(
+        value,
+        DEFAULT_AUTOBAN_BATCH_SIZE,
+        AUTOBAN_BATCH_SIZE_OPTIONS[0],
+        AUTOBAN_BATCH_SIZE_OPTIONS[AUTOBAN_BATCH_SIZE_OPTIONS.length - 1]
+    );
 }
 
 function normalizeCountRecord(record?: Record<string, number> | null): Record<string, number> {
@@ -167,7 +178,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
 
     return {
         enabled: state?.enabled === true,
-        batchSize: normalizeFiniteCount(state?.batchSize, 3, 1),
+        batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: state?.complexityFilter === 'low_only' || state?.complexityFilter === 'high_only'
             ? state.complexityFilter
             : 'all',

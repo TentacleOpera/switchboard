@@ -8,6 +8,7 @@ import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
+import { sendRobustText } from './services/terminalUtils';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
 // Status bar item for setup notification
@@ -258,43 +259,6 @@ async function waitWithTimeout<T>(promise: Thenable<T> | Promise<T>, timeoutMs: 
         timeoutId = setTimeout(() => resolve(defaultValue), timeoutMs);
     });
     return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
-}
-
-/**
- * Sends text to a terminal with chunking and pacing to prevent input corruption.
- */
-async function sendRobustText(terminal: vscode.Terminal, text: string, paced: boolean = true) {
-    const CHUNK_SIZE = 500;
-    const CHUNK_DELAY = 50; // ms between chunks
-    const NEWLINE_DELAY = paced ? 1000 : 100; // adaptive delay before newline
-    const COPILOT_SECOND_ENTER_DELAY = paced ? 350 : 150;
-    const needsSecondEnter = /\bcopilot\b/i.test(terminal.name);
-
-    if (text.length <= CHUNK_SIZE) {
-        // Send without newline so the paced delay below always applies before submission
-        terminal.sendText(text, false);
-    } else {
-        for (let i = 0; i < text.length; i += CHUNK_SIZE) {
-            const chunk = text.substring(i, i + CHUNK_SIZE);
-            terminal.sendText(chunk, false);
-            if (i + CHUNK_SIZE < text.length) {
-                await new Promise(r => setTimeout(r, CHUNK_DELAY));
-            }
-        }
-    }
-
-    // Paced delay before submission — prevents double-newline spam on fast sends
-    await new Promise(r => setTimeout(r, NEWLINE_DELAY));
-    terminal.sendText('', true);
-
-    // If it's a known CLI agent (Copilot, Gemini, Claude, etc.), give it an extra push.
-    const isCliAgent = /\b(copilot|gemini|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
-    if (isCliAgent || needsSecondEnter) {
-        await new Promise(r => setTimeout(r, COPILOT_SECOND_ENTER_DELAY));
-        terminal.sendText('', true);
-        await new Promise(r => setTimeout(r, COPILOT_SECOND_ENTER_DELAY));
-        terminal.sendText('', true);
-    }
 }
 
 // Terminal Command Queue Watcher
@@ -875,11 +839,6 @@ export async function activate(context: vscode.ExtensionContext) {
         return await taskViewerProvider.handleKanbanCopyPlan(sessionId, column, workspaceRoot);
     });
     context.subscriptions.push(copyPlanFromKanbanDisposable);
-
-    const viewPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.viewPlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
-        taskViewerProvider.handleKanbanViewPlan(sessionId, workspaceRoot);
-    });
-    context.subscriptions.push(viewPlanFromKanbanDisposable);
 
     const reviewPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.reviewPlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
         taskViewerProvider.handleKanbanReviewPlan(sessionId, workspaceRoot);

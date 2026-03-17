@@ -34,11 +34,12 @@ export async function sendRobustText(
 ): Promise<void> {
     const CHUNK_SIZE = 500;
     const CHUNK_DELAY = 50; // ms between chunks
-    const NEWLINE_DELAY = paced ? 1000 : 100; // ms before newline
-    const COPILOT_SECOND_ENTER_DELAY = paced ? 350 : 150;
-    const needsSecondEnter = /\bcopilot\b/i.test(terminal.name);
+    const NEWLINE_DELAY = paced ? 1000 : 100; // adaptive delay before submission
+    const CLI_CONFIRM_ENTER_DELAY = paced ? 350 : 150;
+    const isCliAgent = /\b(copilot|gemini|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
 
     if (text.length <= CHUNK_SIZE) {
+        // Send without newline so the paced delay below always applies before submission.
         terminal.sendText(text, false);
     } else {
         log?.(`Large payload (${text.length} chars), sending in ${Math.ceil(text.length / CHUNK_SIZE)} chunks...`);
@@ -51,12 +52,14 @@ export async function sendRobustText(
         }
     }
 
-    // Final delay before newline to ensure terminal is ready to accept the command
+    // Give the terminal time to settle before submitting the buffered payload.
     await new Promise(r => setTimeout(r, NEWLINE_DELAY));
-    terminal.sendText('\n', false);
-    if (needsSecondEnter) {
-        log?.(`Copilot terminal detected for '${terminal.name}', sending confirmation Enter`);
-        await new Promise(r => setTimeout(r, COPILOT_SECOND_ENTER_DELAY));
-        terminal.sendText('\n', false);
+    terminal.sendText('', true);
+    if (isCliAgent) {
+        log?.(`CLI terminal detected for '${terminal.name}', sending confirmation Enters`);
+        await new Promise(r => setTimeout(r, CLI_CONFIRM_ENTER_DELAY));
+        terminal.sendText('', true);
+        await new Promise(r => setTimeout(r, CLI_CONFIRM_ENTER_DELAY));
+        terminal.sendText('', true);
     }
 }

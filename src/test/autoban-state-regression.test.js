@@ -8,6 +8,7 @@ const {
     getNextAutobanTerminalName,
     buildAutobanBroadcastState,
     normalizeAutobanConfigState,
+    normalizeAutobanBatchSize,
     shouldSkipSharedReviewerAutobanDispatch
 } = require(path.join(process.cwd(), 'out', 'services', 'autobanState.js'));
 
@@ -57,6 +58,12 @@ async function run() {
     const emptyBroadcast = buildAutobanBroadcastState(baseState, []);
     assert.deepStrictEqual(emptyBroadcast.lastTickAt, {}, 'lastTickAt should be present even when no tick timestamps are tracked yet');
 
+    const normalizedTwo = normalizeAutobanConfigState({ batchSize: 2 });
+    assert.strictEqual(normalizedTwo.batchSize, 2, 'state normalization should preserve a supported batch size of 2');
+
+    const broadcastFour = buildAutobanBroadcastState({ ...baseState, batchSize: 4 }, []);
+    assert.strictEqual(broadcastFour.batchSize, 4, 'broadcast state should preserve a supported batch size of 4');
+
     const normalizedLegacy = normalizeAutobanConfigState({
         enabled: true,
         batchSize: 0,
@@ -65,6 +72,9 @@ async function run() {
         }
     });
     assert.strictEqual(normalizedLegacy.batchSize, 3, 'legacy states should fall back to the default batch size when persisted data is invalid');
+    assert.strictEqual(normalizeAutobanBatchSize(2), 2, 'batch-size normalization should preserve 2');
+    assert.strictEqual(normalizeAutobanBatchSize(4), 4, 'batch-size normalization should preserve 4');
+    assert.strictEqual(normalizeAutobanBatchSize(9), 5, 'batch-size normalization should clamp oversized values to 5');
     assert.strictEqual(normalizedLegacy.complexityFilter, 'all', 'legacy states should default complexity filtering to all');
     assert.strictEqual(normalizedLegacy.routingMode, 'dynamic', 'legacy states should default routing mode to dynamic');
     assert.strictEqual(normalizedLegacy.maxSendsPerTerminal, 10, 'legacy states should default per-terminal autoban caps to 10');
@@ -107,6 +117,7 @@ async function run() {
     );
 
     const normalizedNewConfig = normalizeAutobanConfigState({
+        batchSize: 8,
         maxSendsPerTerminal: 999,
         globalSessionCap: 0,
         sendCounts: { Reviewer: 2.9, '': 4 },
@@ -114,6 +125,7 @@ async function run() {
         managedTerminalPools: { reviewer: ['Reviewer Backup', ''] },
         poolCursor: { reviewer: 2.4 }
     });
+    assert.strictEqual(normalizedNewConfig.batchSize, 5, 'batch size should clamp to the supported 1..5 contract');
     assert.strictEqual(normalizedNewConfig.maxSendsPerTerminal, 100, 'per-terminal caps should clamp to the supported UI range');
     assert.strictEqual(normalizedNewConfig.globalSessionCap, 200, 'invalid global caps should fall back to the default safety cap');
     assert.deepStrictEqual(normalizedNewConfig.sendCounts, { Reviewer: 2 }, 'send counts should be normalized to non-negative integers');
@@ -185,6 +197,10 @@ async function run() {
         'TaskViewerProvider should keep the pooled-autoban selection helper and new pool-management message handlers'
     );
     assert.ok(
+        providerSource.includes('const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);'),
+        'TaskViewerProvider should reuse shared autoban batch-size normalization instead of a local numeric fallback'
+    );
+    assert.ok(
         providerSource.includes('targetTerminalOverride?: string') &&
         providerSource.includes('selection.terminalName'),
         'TaskViewerProvider should preserve the terminal-override dispatch seam for autoban pools'
@@ -202,10 +218,29 @@ async function run() {
         'autoban add-terminal flow should auto-name backups in the extension instead of prompting in the webview or VS Code'
     );
     assert.ok(
-        providerSource.includes("const reviewerLaneColumns = isSharedReviewerAutobanColumn(sourceColumn)") &&
+        providerSource.includes('private _getAutobanReviewerLaneColumns(sourceColumn: string): string[]') &&
+        providerSource.includes("const reviewerLaneColumns = this._getAutobanReviewerLaneColumns(sourceColumn);") &&
         providerSource.includes("this._collectKanbanCardsInColumns(workspaceRoot, reviewerLaneColumns)") &&
         providerSource.includes("this._autobanLaneLastDispatchAt.set('coded-reviewer', Date.now());"),
         'TaskViewerProvider should coordinate LEAD CODED and CODER CODED as one shared reviewer autoban lane'
+    );
+    assert.ok(
+        providerSource.includes('private async _reconcileAutobanPoolState(') &&
+        providerSource.includes("const alivePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(role, workspaceRoot, false);") &&
+        providerSource.includes("const effectivePool = reconciledConfiguredPool.length > 0 ? reconciledConfiguredPool : alivePrimaryRoleTerminals;") &&
+        providerSource.includes("if (this._isAutobanBackupTerminalInfo(info) && !aliveTerminals[name])") &&
+        providerSource.includes("await this._reconcileAutobanPoolState(workspaceRoot, { pruneStaleBackupRegistry: true });"),
+        'TaskViewerProvider should reconcile autoban pools against alive terminals during restore/reset and prune stale autoban-backup registry entries'
+    );
+    assert.match(
+        providerSource,
+        /private\s+async\s+_tryRestoreAutoban\(\):\s*Promise<void>\s*\{[\s\S]*await\s+this\._reconcileAutobanPoolState\(workspaceRoot,\s*\{\s*pruneStaleBackupRegistry:\s*true\s*\}\);/s,
+        'Autoban restore should reconcile pool state before rebroadcasting restored config'
+    );
+    assert.match(
+        providerSource,
+        /private\s+async\s+_resetAutobanPools\(\):\s*Promise<void>\s*\{[\s\S]*for\s*\(const\s+terminalName\s+of\s+managedTerminalNames\)[\s\S]*await\s+this\._reconcileAutobanPoolState\(workspaceRoot,\s*\{\s*pruneStaleBackupRegistry:\s*true\s*\}\);/s,
+        'CLEAR & RESET should re-run autoban pool reconciliation after closing managed backup terminals'
     );
     assert.ok(
         implementationSource.includes('MAX SENDS / TERMINAL') &&
@@ -213,6 +248,11 @@ async function run() {
         implementationSource.includes('CLEAR & RESET') &&
         implementationSource.includes("type: 'addAutobanTerminal'"),
         'implementation.html should render the send-cap control and terminal-pool management actions'
+    );
+    assert.match(
+        implementationSource,
+        /const\s+aliveRoleTerminals\s*=\s*Object\.keys\(lastTerminals\)[\s\S]*resolveTerminalLiveness\(name\)\.alive[\s\S]*const\s+alivePrimaryRoleTerminals\s*=\s*aliveRoleTerminals[\s\S]*autoban-backup[\s\S]*const\s+effectivePool\s*=\s*\(\s*configuredPool\.length\s*>\s*0\s*\?\s*configuredPool\.filter\(name\s*=>\s*aliveRoleTerminals\.includes\(name\)\)\s*:\s*alivePrimaryRoleTerminals\s*\)\.slice\(0,\s*5\);/s,
+        'Autoban webview should render configured pools through alive/effective-pool filtering and only fall back to confirmed-alive primary role terminals'
     );
 
     console.log('autoban state regression test passed');

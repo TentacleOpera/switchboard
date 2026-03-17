@@ -289,6 +289,171 @@ function getWorkspaceRoot() {
 
 let sqlJsInitPromise = null;
 
+const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
+    { id: 'CREATED', label: 'Plan Created', order: 0 },
+    { id: 'PLAN REVIEWED', label: 'Planned', order: 100 },
+    { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
+    { id: 'CODER CODED', label: 'Coder', order: 200 },
+    { id: 'CODE REVIEWED', label: 'Reviewed', order: 300 }
+];
+
+const BUILTIN_KANBAN_COLUMN_IDS = new Set(BUILTIN_KANBAN_COLUMN_DEFINITIONS.map((definition) => definition.id));
+
+const KANBAN_COLUMN_ALIASES = {
+    'CREATED': 'CREATED',
+    'NEW': 'CREATED',
+    'PLAN CREATED': 'CREATED',
+    'PLAN REVIEWED': 'PLAN REVIEWED',
+    'PLANNED': 'PLAN REVIEWED',
+    'LEAD CODED': 'LEAD CODED',
+    'LEAD CODER': 'LEAD CODED',
+    'CODER CODED': 'CODER CODED',
+    'CODER': 'CODER CODED',
+    'CODE REVIEWED': 'CODE REVIEWED',
+    'REVIEWED': 'CODE REVIEWED',
+    'CODED': 'LEAD CODED'
+};
+
+function normalizeKanbanColumnToken(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+}
+
+function humanizeKanbanColumnId(columnId) {
+    return String(columnId || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+}
+
+function parseKanbanCustomColumnDefinitions(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+
+    const seen = new Set();
+    const result = [];
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') {
+            continue;
+        }
+
+        const role = String(item.role || '').trim();
+        const name = String(item.name || '').trim();
+        if (!role || !name || item.includeInKanban !== true || BUILTIN_KANBAN_COLUMN_IDS.has(role) || seen.has(role)) {
+            continue;
+        }
+
+        const order = Number.isFinite(Number(item.kanbanOrder)) ? Number(item.kanbanOrder) : 150;
+        result.push({
+            id: role,
+            label: name,
+            order
+        });
+        seen.add(role);
+    }
+
+    return result;
+}
+
+function getKanbanColumnDefinitions(workspaceRoot) {
+    const definitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS.map((definition) => ({ ...definition }));
+    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+    if (!fs.existsSync(statePath)) {
+        return definitions;
+    }
+
+    try {
+        const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+        return [...definitions, ...parseKanbanCustomColumnDefinitions(state.customAgents)]
+            .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    } catch (e) {
+        console.warn(`[get_kanban_state] Failed to read custom column definitions: ${e.message}`);
+        return definitions;
+    }
+}
+
+function getKanbanColumnLabel(columnId, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const definition = columnDefinitions.find((item) => item.id === columnId);
+    if (definition) return definition.label;
+    return humanizeKanbanColumnId(columnId);
+}
+
+function normalizeKanbanColumnId(columnId) {
+    const normalized = typeof columnId === 'string' && columnId.trim() ? columnId.trim() : 'CREATED';
+    return normalized === 'CODED' ? 'LEAD CODED' : normalized;
+}
+
+function createEmptyKanbanColumnBuckets(columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const columns = {};
+    for (const definition of columnDefinitions) {
+        columns[definition.id] = [];
+    }
+    return columns;
+}
+
+function formatKanbanState(columns, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const knownColumnIds = new Set(columnDefinitions.map((definition) => definition.id));
+    const orderedColumnIds = [
+        ...columnDefinitions.map((definition) => definition.id),
+        ...Object.keys(columns).filter((columnId) => !knownColumnIds.has(columnId)).sort()
+    ];
+
+    const formatted = {};
+    for (const columnId of orderedColumnIds) {
+        formatted[columnId] = {
+            id: columnId,
+            label: getKanbanColumnLabel(columnId, columnDefinitions),
+            items: Array.isArray(columns[columnId]) ? columns[columnId] : []
+        };
+    }
+    return formatted;
+}
+
+function resolveRequestedKanbanColumn(column, availableColumns, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const normalized = normalizeKanbanColumnToken(column);
+    if (!normalized) return null;
+
+    const aliasMatch = KANBAN_COLUMN_ALIASES[normalized];
+    if (aliasMatch && availableColumns.includes(aliasMatch)) return aliasMatch;
+
+    const exactColumnMatch = availableColumns.find((columnId) => normalizeKanbanColumnToken(columnId) === normalized);
+    if (exactColumnMatch) return exactColumnMatch;
+
+    const labelMatch = availableColumns.find((columnId) => normalizeKanbanColumnToken(getKanbanColumnLabel(columnId, columnDefinitions)) === normalized);
+    if (labelMatch) return labelMatch;
+
+    return null;
+}
+
+function buildKanbanStateResponse(columns, requestedColumn, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const formattedColumns = formatKanbanState(columns, columnDefinitions);
+    if (!requestedColumn) {
+        return { content: [{ type: "text", text: JSON.stringify(formattedColumns, null, 2) }] };
+    }
+
+    const resolvedColumn = resolveRequestedKanbanColumn(requestedColumn, Object.keys(formattedColumns), columnDefinitions);
+    if (!resolvedColumn) {
+        return {
+            isError: true,
+            content: [{
+                type: "text",
+                text: `Error: Unknown kanban column '${requestedColumn}'. Available columns: ${Object.keys(formattedColumns).map((columnId) => `${columnId} (${formattedColumns[columnId].label})`).join(', ')}.`
+            }]
+        };
+    }
+
+    return {
+        content: [{
+            type: "text",
+            text: JSON.stringify({ [resolvedColumn]: formattedColumns[resolvedColumn] }, null, 2)
+        }]
+    };
+}
+
 function resolveSqlJsModulePath(workspaceRoot) {
     const candidates = [
         path.join(__dirname, '..', 'sql-wasm.js'),
@@ -342,7 +507,7 @@ async function getSqlJs(workspaceRoot) {
     return sqlJsInitPromise;
 }
 
-async function readKanbanStateFromDb(workspaceRoot, workspaceId) {
+async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId = null, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
     const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
     if (!fs.existsSync(dbPath)) return null;
 
@@ -350,24 +515,28 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId) {
         const SQL = await getSqlJs(workspaceRoot);
         const dbBytes = fs.readFileSync(dbPath);
         const db = new SQL.Database(new Uint8Array(dbBytes));
-        const columns = {
-            'CREATED': [],
-            'PLAN REVIEWED': [],
-            'LEAD CODED': [],
-            'CODER CODED': [],
-            'CODE REVIEWED': []
-        };
+        const columns = createEmptyKanbanColumnBuckets(columnDefinitions);
+        const whereClauses = ['workspace_id = ?', "status = 'active'"];
+        const params = [workspaceId];
+        if (requestedColumnId) {
+            if (requestedColumnId === 'LEAD CODED') {
+                whereClauses.push('kanban_column IN (?, ?)');
+                params.push('LEAD CODED', 'CODED');
+            } else {
+                whereClauses.push('kanban_column = ?');
+                params.push(requestedColumnId);
+            }
+        }
         const stmt = db.prepare(
             `SELECT topic, session_id, created_at, kanban_column
              FROM plans
-             WHERE workspace_id = ? AND status = 'active'
+             WHERE ${whereClauses.join(' AND ')}
              ORDER BY updated_at DESC`,
-            [workspaceId]
+            params
         );
         while (stmt.step()) {
             const row = stmt.getAsObject();
-            const rawColumn = String(row.kanban_column || 'CREATED');
-            const col = rawColumn === 'CODED' ? 'LEAD CODED' : rawColumn;
+            const col = normalizeKanbanColumnId(String(row.kanban_column || 'CREATED'));
             if (!columns[col]) columns[col] = [];
             columns[col].push({
                 topic: row.topic || 'Untitled',
@@ -2020,8 +2189,10 @@ function registerTools(server) {
     // Tool: get_kanban_state
     server.tool(
         "get_kanban_state",
-        {},
-        async () => {
+        {
+            column: z.string().optional().describe("Optional kanban column to return. Supports internal IDs like 'CREATED' and UI labels like 'Plan Created'.")
+        },
+        async ({ column } = {}) => {
             const workspaceRoot = getWorkspaceRoot();
             const sbDir = path.join(workspaceRoot, '.switchboard');
             const registryPath = path.join(sbDir, 'plan_registry.json');
@@ -2041,10 +2212,20 @@ function registerTools(server) {
                 return { isError: true, content: [{ type: "text", text: `Error: Failed to parse workspace identity: ${e.message}` }] };
             }
 
+            const columnDefinitions = getKanbanColumnDefinitions(workspaceRoot);
+            const availableColumnIds = columnDefinitions.map((definition) => definition.id);
+            const requestedColumnId = column
+                ? resolveRequestedKanbanColumn(column, availableColumnIds, columnDefinitions)
+                : null;
+
+            if (column && !requestedColumnId) {
+                return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), column, columnDefinitions);
+            }
+
             const workspaceId = identity.workspaceId;
-            const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId);
+            const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId, columnDefinitions);
             if (dbColumns) {
-                return { content: [{ type: "text", text: JSON.stringify(dbColumns, null, 2) }] };
+                return buildKanbanStateResponse(dbColumns, requestedColumnId, columnDefinitions);
             }
             console.warn('[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale.');
 
@@ -2085,19 +2266,13 @@ function registerTools(server) {
                 return planPath.replace(/\.resolved(\.\d+)?$/i, '');
             }
 
-            const columns = {
-                'CREATED': [],
-                'PLAN REVIEWED': [],
-                'LEAD CODED': [],
-                'CODER CODED': [],
-                'CODE REVIEWED': []
-            };
+            const columns = createEmptyKanbanColumnBuckets(columnDefinitions);
 
             let files;
             try {
                 files = fs.readdirSync(sessionsDir);
             } catch (e) {
-                return { content: [{ type: "text", text: JSON.stringify(columns, null, 2) }] };
+                return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
             }
 
             for (const file of files) {
@@ -2117,6 +2292,9 @@ function registerTools(server) {
                     const entry = registry.entries[planId];
                     if (!entry || entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
 
+                    const col = normalizeKanbanColumnId(deriveKanbanColumn(sheet.events || []));
+                    if (requestedColumnId && col !== requestedColumnId) continue;
+
                     let complexity = 'unknown';
                     try {
                         if (sheet.planFile) {
@@ -2128,8 +2306,6 @@ function registerTools(server) {
                         }
                     } catch (e) { /* non-fatal */ }
 
-                    const rawColumn = deriveKanbanColumn(sheet.events || []);
-                    const col = rawColumn === 'CODED' ? 'LEAD CODED' : rawColumn;
                     if (!columns[col]) columns[col] = [];
                     columns[col].push({
                         topic: sheet.topic || sheet.planFile || 'Untitled',
@@ -2140,7 +2316,7 @@ function registerTools(server) {
                 } catch (e) {}
             }
 
-            return { content: [{ type: "text", text: JSON.stringify(columns, null, 2) }] };
+            return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
         }
     );
 
@@ -3100,7 +3276,11 @@ module.exports = {
     registerTools,
     enforceWorkflowForAction,
     getComplexityFromContent,
+    formatKanbanState,
+    getKanbanColumnDefinitions,
     isBrainLeakage,
+    normalizeKanbanColumnId,
+    resolveRequestedKanbanColumn,
     validateRecipient,
     handleInternalRegistration,
     WORKFLOWS,

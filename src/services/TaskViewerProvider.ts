@@ -22,6 +22,7 @@ import {
     getNextAutobanTerminalName,
     isSharedReviewerAutobanColumn,
     MAX_AUTOBAN_TERMINALS_PER_ROLE,
+    normalizeAutobanBatchSize,
     normalizeAutobanConfigState,
     shouldSkipSharedReviewerAutobanDispatch
 } from './autobanState';
@@ -100,11 +101,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _fsStateWatcher?: fs.FSWatcher;
     private _fsPlansWatcher?: fs.FSWatcher;
     private _brainWatcher?: vscode.FileSystemWatcher;
+    private _configuredPlanWatcher?: vscode.FileSystemWatcher;
     private _stagingWatcher?: fs.FSWatcher;
+    private _configuredPlanFsWatcher?: fs.FSWatcher;
     // TTL-based sets for reliable loop prevention (boolean flags reset before async watcher callbacks fire)
     private _recentMirrorWrites = new Map<string, NodeJS.Timeout>();  // mirror paths we just wrote
     private _recentBrainWrites = new Map<string, NodeJS.Timeout>();   // brain paths we just wrote
     private _brainDebounceTimers = new Map<string, NodeJS.Timeout>();  // debounce brain watcher events
+    private _configuredPlanSyncTimer?: NodeJS.Timeout;
+    private _managedImportMirrorsForActiveFolder = new Set<string>();
     private _recentActionDispatches = new Map<string, NodeJS.Timeout>(); // short TTL dedupe for sidebar actions
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
@@ -162,6 +167,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _updateResolvers: (() => void)[] = [];
     private _updateTimer: NodeJS.Timeout | undefined;
     private static readonly MAX_BRAIN_PLAN_SIZE_BYTES = 500 * 1024;
+    private static readonly MANAGED_IMPORT_PREFIX = 'ingested_';
     private static readonly JULES_SESSION_RETENTION = 50;
     private static readonly JULES_BULK_POLL_TIMEOUT_MS = 8000;
     private static readonly JULES_TARGETED_POLL_TIMEOUT_MS = 6000;
@@ -203,10 +209,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Initialize ownership registry before brain watcher (async, fire-and-forget)
         this._ensureOwnershipRegistryInitialized().then(() => {
             this._setupBrainWatcher();
+            void this._refreshConfiguredPlanWatcher();
             void this._refreshRunSheets();
         }).catch(e => {
             console.error('[TaskViewerProvider] Registry initialization failed, starting brain watcher anyway:', e);
             this._setupBrainWatcher();
+            void this._refreshConfiguredPlanWatcher();
             void this._refreshRunSheets();
         });
         this._julesStatusPollTimer = setInterval(() => {
@@ -737,6 +745,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await db.updateColumn(sessionId, column);
     }
 
+    private async _getKanbanPlanRecordForSession(
+        workspaceRoot: string,
+        sessionId: string
+    ): Promise<KanbanPlanRecord | undefined> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) {
+            return undefined;
+        }
+
+        const workspaceId = this._workspaceId || await this._getOrCreateWorkspaceId(workspaceRoot);
+        return (await db.getBoard(workspaceId)).find(entry => entry.sessionId === sessionId);
+    }
+
+    private _getEffectiveKanbanColumnForSession(
+        sheet: any,
+        customAgents: CustomAgentConfig[],
+        row?: KanbanPlanRecord
+    ): string {
+        const events: any[] = Array.isArray(sheet?.events) ? sheet.events : [];
+        const derivedColumn = this._normalizeLegacyKanbanColumn(deriveKanbanColumn(events, customAgents));
+        return this._normalizeLegacyKanbanColumn(row?.kanbanColumn || derivedColumn);
+    }
+
     private async _refreshKanbanMetadataFromSheet(workspaceRoot: string, sheet: any): Promise<void> {
         if (!sheet?.sessionId) return;
         const db = await this._getKanbanDb(workspaceRoot);
@@ -926,16 +957,66 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!resolvedWorkspaceRoot) { return; }
 
         const workflowName = 'reset-to-' + targetColumn.toLowerCase().replace(/\s+/g, '-');
-        const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         for (const sessionId of sessionIds) {
-            await this._updateSessionRunSheet(sessionId, workflowName, 'User manually moved plan backwards', true, resolvedWorkspaceRoot);
-            await db?.updateColumn(sessionId, targetColumn);
+            await this._applyManualKanbanColumnChange(
+                sessionId,
+                targetColumn,
+                workflowName,
+                'User manually moved plan backwards',
+                resolvedWorkspaceRoot
+            );
         }
     }
 
     private _workflowForForwardMove(targetColumn: string): string | null {
         const normalizedTarget = String(targetColumn || '').trim().toLowerCase().replace(/\s+/g, '-');
         return normalizedTarget ? `move-to-${normalizedTarget}` : null;
+    }
+
+    private _workflowForManualColumnChange(
+        currentColumn: string,
+        targetColumn: string,
+        customAgents: CustomAgentConfig[]
+    ): string | null {
+        const normalizedCurrent = this._normalizeLegacyKanbanColumn(currentColumn);
+        const normalizedTarget = this._normalizeLegacyKanbanColumn(targetColumn);
+        if (!normalizedTarget || normalizedCurrent === normalizedTarget) {
+            return null;
+        }
+
+        const orderedColumns = buildKanbanColumns(customAgents)
+            .map(column => this._normalizeLegacyKanbanColumn(column.id));
+        const currentIndex = orderedColumns.indexOf(normalizedCurrent);
+        const targetIndex = orderedColumns.indexOf(normalizedTarget);
+        if (currentIndex >= 0 && targetIndex >= 0 && targetIndex < currentIndex) {
+            return 'reset-to-' + normalizedTarget.toLowerCase().replace(/\s+/g, '-');
+        }
+
+        return this._workflowForForwardMove(normalizedTarget);
+    }
+
+    private async _applyManualKanbanColumnChange(
+        sessionId: string,
+        targetColumn: string,
+        workflowName: string | null,
+        outcome: string,
+        workspaceRoot?: string
+    ): Promise<boolean> {
+        const resolvedWorkspaceRoot = workspaceRoot
+            ? this._resolveWorkspaceRoot(workspaceRoot)
+            : await this._resolveWorkspaceRootForSession(sessionId);
+        if (!resolvedWorkspaceRoot) {
+            return false;
+        }
+
+        const normalizedTargetColumn = this._normalizeLegacyKanbanColumn(targetColumn);
+        if (!normalizedTargetColumn || !workflowName) {
+            return false;
+        }
+
+        await this._updateSessionRunSheet(sessionId, workflowName, outcome, true, resolvedWorkspaceRoot);
+        await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, normalizedTargetColumn);
+        return true;
     }
 
     private _plannerWorkflowNameForInstruction(instruction?: string): string | undefined {
@@ -1011,10 +1092,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const workflowName = this._workflowForForwardMove(targetColumn);
         if (!workflowName) { return; }
 
-        const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         for (const sessionId of sessionIds) {
-            await this._updateSessionRunSheet(sessionId, workflowName, 'User manually moved plan forwards', true, resolvedWorkspaceRoot);
-            await db?.updateColumn(sessionId, targetColumn);
+            await this._applyManualKanbanColumnChange(
+                sessionId,
+                targetColumn,
+                workflowName,
+                'User manually moved plan forwards',
+                resolvedWorkspaceRoot
+            );
         }
     }
 
@@ -1151,11 +1236,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!targetColumn) {
             return { ok: false, message: 'Plan is already in the final column.' };
         }
-        if (!this._kanbanProvider?.cliTriggersEnabled) {
-            await this.handleKanbanForwardMove([sessionId], targetColumn, workspaceRoot);
-            return { ok: true, message: `Moved to ${targetColumn}. CLI triggers are off, so no agent was dispatched.` };
-        }
-
         const role = this._roleForKanbanColumn(targetColumn);
         if (!role) {
             await this.handleKanbanForwardMove([sessionId], targetColumn, workspaceRoot);
@@ -1169,10 +1249,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         return { ok: true, message: `Sent to ${targetColumn}.` };
-    }
-
-    public async handleKanbanViewPlan(sessionId: string, workspaceRoot?: string) {
-        await this._handleViewPlan(sessionId, workspaceRoot);
     }
 
     public async handleKanbanReviewPlan(sessionId: string, workspaceRoot?: string) {
@@ -1193,6 +1269,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return startupCommands;
         } catch {
             return {};
+        }
+    }
+
+    public async getPlanIngestionFolder(workspaceRoot?: string): Promise<string> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return '';
+        const statePath = path.join(resolvedRoot, '.switchboard', 'state.json');
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return this._normalizeConfiguredPlanFolder(state.planIngestionFolder, resolvedRoot);
+        } catch {
+            return '';
         }
     }
 
@@ -1409,6 +1498,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._limitAutobanPool(this._autobanState.managedTerminalPools[this._normalizeAutobanPoolRole(role)] || []);
     }
 
+    private _isAutobanBackupTerminalInfo(info: any): boolean {
+        return String(info?.purpose || '').trim().toLowerCase() === 'autoban-backup';
+    }
+
     private _getAutobanRoleLabel(role: string): string {
         switch (this._normalizeAutobanPoolRole(role)) {
             case 'planner': return 'Planner';
@@ -1489,22 +1582,130 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return aliveTerminals;
     }
 
-    private async _getAliveAutobanTerminalNames(role: string, workspaceRoot: string): Promise<string[]> {
-        const normalizedRole = this._normalizeAutobanPoolRole(role);
+    private async _getAliveAutobanTerminalNames(
+        role: string,
+        workspaceRoot: string,
+        includeBackups: boolean = true
+    ): Promise<string[]> {
         const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        return this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, includeBackups);
+    }
+
+    private _getAliveAutobanTerminalNamesFromRegistry(
+        role: string,
+        aliveTerminals: Record<string, any>,
+        includeBackups: boolean = true
+    ): string[] {
+        const normalizedRole = this._normalizeAutobanPoolRole(role);
         return Object.entries(aliveTerminals)
             .filter(([, info]) => this._normalizeAgentKey((info as any)?.role) === normalizedRole)
+            .filter(([, info]) => includeBackups || !this._isAutobanBackupTerminalInfo(info))
             .map(([name]) => name)
             .sort((a, b) => a.localeCompare(b));
     }
 
     private async _resolveAutobanEffectivePool(role: string, workspaceRoot: string): Promise<string[]> {
-        const aliveRoleTerminals = await this._getAliveAutobanTerminalNames(role, workspaceRoot);
+        const aliveRoleTerminals = await this._getAliveAutobanTerminalNames(role, workspaceRoot, true);
+        const alivePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(role, workspaceRoot, false);
         const configuredPool = this._getConfiguredAutobanPool(role);
         if (configuredPool.length > 0) {
             return this._limitAutobanPool(configuredPool.filter(name => aliveRoleTerminals.includes(name)));
         }
-        return this._limitAutobanPool(aliveRoleTerminals);
+        return this._limitAutobanPool(alivePrimaryRoleTerminals);
+    }
+
+    private _autobanPoolsEqual(left: string[], right: string[]): boolean {
+        return left.length === right.length && left.every((entry, index) => entry === right[index]);
+    }
+
+    private async _reconcileAutobanPoolState(
+        workspaceRoot: string,
+        options: { pruneStaleBackupRegistry?: boolean } = {}
+    ): Promise<void> {
+        const aliveTerminals = await this._getAliveAutobanTerminalRegistry(workspaceRoot);
+        const nextTerminalPools: Record<string, string[]> = {};
+        const nextManagedTerminalPools: Record<string, string[]> = {};
+        const nextPoolCursor: Record<string, number> = {};
+        const validSendCountNames = new Set<string>();
+        let stateChanged = false;
+
+        for (const rawRole of this._autobanPoolRoles()) {
+            const role = this._normalizeAutobanPoolRole(rawRole);
+            const aliveRoleTerminals = this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, true);
+            const alivePrimaryRoleTerminals = this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, false);
+            const configuredPool = this._getConfiguredAutobanPool(role);
+            const managedPool = this._getManagedAutobanPool(role);
+            const reconciledConfiguredPool = this._limitAutobanPool(
+                configuredPool.filter(name => aliveRoleTerminals.includes(name))
+            );
+            const reconciledManagedPool = this._limitAutobanPool(
+                managedPool.filter(name => reconciledConfiguredPool.includes(name))
+            );
+            const effectivePool = reconciledConfiguredPool.length > 0 ? reconciledConfiguredPool : alivePrimaryRoleTerminals;
+
+            if (!this._autobanPoolsEqual(configuredPool, reconciledConfiguredPool)) {
+                stateChanged = true;
+            }
+            if (!this._autobanPoolsEqual(managedPool, reconciledManagedPool)) {
+                stateChanged = true;
+            }
+            if (reconciledConfiguredPool.length > 0) {
+                nextTerminalPools[role] = reconciledConfiguredPool;
+            }
+            if (reconciledManagedPool.length > 0) {
+                nextManagedTerminalPools[role] = reconciledManagedPool;
+            }
+
+            const currentCursor = this._autobanState.poolCursor[role];
+            if (effectivePool.length > 0 && typeof currentCursor === 'number' && Number.isFinite(currentCursor)) {
+                nextPoolCursor[role] = currentCursor;
+            } else if (currentCursor !== undefined) {
+                stateChanged = true;
+            }
+
+            effectivePool.forEach(name => validSendCountNames.add(name));
+        }
+
+        const nextSendCounts = Object.fromEntries(
+            Object.entries(this._autobanState.sendCounts).filter(([name]) => validSendCountNames.has(name))
+        );
+        if (Object.keys(nextSendCounts).length !== Object.keys(this._autobanState.sendCounts).length) {
+            stateChanged = true;
+        }
+
+        if (Object.keys(nextPoolCursor).length !== Object.keys(this._autobanState.poolCursor).length) {
+            stateChanged = true;
+        }
+
+        if (stateChanged) {
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                terminalPools: nextTerminalPools,
+                managedTerminalPools: nextManagedTerminalPools,
+                sendCounts: nextSendCounts,
+                poolCursor: nextPoolCursor
+            });
+            await this._persistAutobanState();
+        }
+
+        if (options.pruneStaleBackupRegistry) {
+            let registryChanged = false;
+            await this.updateState(async (state) => {
+                if (!state.terminals) {
+                    return;
+                }
+                for (const [name, info] of Object.entries(state.terminals)) {
+                    if (this._isAutobanBackupTerminalInfo(info) && !aliveTerminals[name]) {
+                        delete state.terminals[name];
+                        registryChanged = true;
+                    }
+                }
+            });
+            if (registryChanged) {
+                await this._refreshTerminalStatuses();
+            }
+        }
+
     }
 
     private _getAutobanRemainingSessionCapacity(): number {
@@ -1618,7 +1819,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    private async _stopAutobanForExhaustion(message: string): Promise<void> {
+    private async _stopAutobanWithMessage(message: string, level: 'info' | 'warning' = 'warning'): Promise<void> {
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
             enabled: false
@@ -1626,7 +1827,124 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._stopAutobanEngine();
         await this._persistAutobanState();
         this._postAutobanState();
+        if (level === 'info') {
+            vscode.window.showInformationMessage(message);
+            return;
+        }
         vscode.window.showWarningMessage(message);
+    }
+
+    private async _stopAutobanForExhaustion(message: string): Promise<void> {
+        await this._stopAutobanWithMessage(message);
+    }
+
+    private async _stopAutobanForNoValidTickets(): Promise<void> {
+        await this._stopAutobanWithMessage('Autoban stopped: no more valid tickets remain in enabled columns.', 'info');
+    }
+
+    private _getEnabledAutobanSourceColumns(): string[] {
+        return Object.entries(this._autobanState.rules)
+            .filter(([, rule]) => rule.enabled)
+            .map(([column]) => column);
+    }
+
+    private _getAutobanReviewerLaneColumns(sourceColumn: string): string[] {
+        return isSharedReviewerAutobanColumn(sourceColumn)
+            ? getEnabledSharedReviewerAutobanColumns(this._autobanState.rules)
+            : [sourceColumn];
+    }
+
+    private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
+        return [...cardsInColumn]
+            .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
+            .filter(card => this._activeDispatchSessions.get(card.sessionId) !== card.sourceColumn);
+    }
+
+    private async _selectAutobanPlanReviewedCards(
+        workspaceRoot: string,
+        eligibleCards: KanbanDispatchCard[],
+        batchSize: number
+    ): Promise<Array<{ sessionId: string; complexity: 'Low' | 'High'; sourceColumn: string }>> {
+        const complexityFilter = this._autobanState.complexityFilter;
+        const selectedCards: Array<{ sessionId: string; complexity: 'Low' | 'High'; sourceColumn: string }> = [];
+
+        for (const card of eligibleCards) {
+            let complexity: 'Low' | 'High' = 'High';
+            try {
+                if (card.planFile) {
+                    complexity = this._normalizeAutobanComplexity(
+                        await this._kanbanProvider!.getComplexityFromPlan(workspaceRoot, card.planFile)
+                    );
+                }
+            } catch {
+                complexity = 'High';
+            }
+
+            if (!this._autobanMatchesComplexityFilter(complexity, complexityFilter)) {
+                continue;
+            }
+
+            selectedCards.push({ sessionId: card.sessionId, complexity, sourceColumn: card.sourceColumn });
+            if (selectedCards.length >= batchSize) {
+                break;
+            }
+        }
+
+        return selectedCards;
+    }
+
+    private async _autobanColumnHasEligibleCards(
+        sourceColumn: string,
+        cardsInColumn: KanbanDispatchCard[],
+        workspaceRoot: string
+    ): Promise<boolean> {
+        const eligibleCards = this._getEligibleAutobanCards(cardsInColumn);
+        if (eligibleCards.length === 0) {
+            return false;
+        }
+
+        if (sourceColumn !== 'PLAN REVIEWED' || !this._kanbanProvider) {
+            return true;
+        }
+
+        const selectedCards = await this._selectAutobanPlanReviewedCards(workspaceRoot, eligibleCards, 1);
+        return selectedCards.length > 0;
+    }
+
+    private async _autobanHasEligibleCardsInEnabledColumns(workspaceRoot: string): Promise<boolean> {
+        const enabledColumns = this._getEnabledAutobanSourceColumns();
+        if (enabledColumns.length === 0) {
+            return false;
+        }
+
+        const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, enabledColumns);
+        this._releaseSettledDispatchLocks(currentColumnBySession);
+
+        const cardsByColumn = new Map<string, KanbanDispatchCard[]>();
+        for (const card of cardsInColumn) {
+            const columnCards = cardsByColumn.get(card.sourceColumn) || [];
+            columnCards.push(card);
+            cardsByColumn.set(card.sourceColumn, columnCards);
+        }
+
+        for (const column of enabledColumns) {
+            if (await this._autobanColumnHasEligibleCards(column, cardsByColumn.get(column) || [], workspaceRoot)) {
+                return true;
+            }
+        }
+
+        return false;
+    }
+
+    private async _stopAutobanIfNoValidTicketsRemain(workspaceRoot: string): Promise<boolean> {
+        if (!this._autobanState.enabled) {
+            return false;
+        }
+        if (await this._autobanHasEligibleCardsInEnabledColumns(workspaceRoot)) {
+            return false;
+        }
+        await this._stopAutobanForNoValidTickets();
+        return true;
     }
 
     private async _removeAutobanTerminalReferences(terminalName: string): Promise<boolean> {
@@ -1696,8 +2014,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const roleLabel = this._getAutobanRoleLabel(normalizedRole);
 
         const configuredPool = this._getConfiguredAutobanPool(normalizedRole);
-        const liveRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot);
-        const poolSize = configuredPool.length > 0 ? configuredPool.length : liveRoleTerminals.length;
+        const livePrimaryRoleTerminals = await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
+        const poolSize = configuredPool.length > 0 ? configuredPool.length : livePrimaryRoleTerminals.length;
         if (poolSize >= MAX_AUTOBAN_TERMINALS_PER_ROLE) {
             vscode.window.showWarningMessage(`${roleLabel} already has ${MAX_AUTOBAN_TERMINALS_PER_ROLE} autoban terminals.`);
             return;
@@ -1745,7 +2063,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const seededPool = configuredPool.length > 0
             ? configuredPool
-            : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot);
+            : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
         const nextTerminalPools = {
             ...this._autobanState.terminalPools,
             [normalizedRole]: this._limitAutobanPool([...seededPool, uniqueName])
@@ -1791,6 +2109,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _resetAutobanPools(): Promise<void> {
+        const workspaceRoot = this._resolveWorkspaceRoot();
         const managedTerminalNames = Array.from(new Set(
             Object.values(this._autobanState.managedTerminalPools).flat()
         ));
@@ -1808,6 +2127,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         for (const terminalName of managedTerminalNames) {
             await this._closeTerminal(terminalName);
+        }
+
+        if (workspaceRoot) {
+            await this._reconcileAutobanPoolState(workspaceRoot, { pruneStaleBackupRegistry: true });
         }
 
         if (wasEnabled) {
@@ -1840,7 +2163,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /** Restore Autoban engine if it was running before reload. */
-    private _tryRestoreAutoban(): void {
+    private async _tryRestoreAutoban(): Promise<void> {
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (workspaceRoot) {
+            await this._reconcileAutobanPoolState(workspaceRoot, { pruneStaleBackupRegistry: true });
+        }
         this._kanbanProvider?.updateAutobanConfig(this._getAutobanBroadcastState());
         if (this._autobanState.enabled) {
             this._startAutobanEngine();
@@ -2148,9 +2475,7 @@ ${planList}`;
         const role = this._autobanColumnToRole(sourceColumn);
         if (!role) { return; }
         const instruction = this._autobanColumnToInstruction(sourceColumn);
-        const reviewerLaneColumns = isSharedReviewerAutobanColumn(sourceColumn)
-            ? getEnabledSharedReviewerAutobanColumns(this._autobanState.rules)
-            : [sourceColumn];
+        const reviewerLaneColumns = this._getAutobanReviewerLaneColumns(sourceColumn);
         const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, reviewerLaneColumns);
         this._releaseSettledDispatchLocks(currentColumnBySession);
 
@@ -2165,12 +2490,16 @@ ${planList}`;
             return;
         }
 
-        if (cardsInColumn.length === 0) { return; }
+        if (cardsInColumn.length === 0) {
+            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+            return;
+        }
 
-        // Sort oldest first, take up to batchSize, filtering out already-in-flight sessions
-        cardsInColumn.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
-        const eligibleCards = cardsInColumn
-            .filter(c => this._activeDispatchSessions.get(c.sessionId) !== c.sourceColumn);
+        const eligibleCards = this._getEligibleAutobanCards(cardsInColumn);
+        if (eligibleCards.length === 0) {
+            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+            return;
+        }
 
         const dispatchWithAutobanTerminal = async (
             targetRole: string,
@@ -2219,6 +2548,9 @@ ${planList}`;
                     : `Autoban stopped: all enabled autoban terminals are exhausted (cap ${this._autobanState.maxSendsPerTerminal} per terminal).`;
                 await this._stopAutobanForExhaustion(reason);
             }
+            if (this._autobanState.enabled) {
+                await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+            }
 
             return true;
         };
@@ -2227,32 +2559,12 @@ ${planList}`;
         if (sourceColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
             const complexityFilter = this._autobanState.complexityFilter;
             const routingMode = this._autobanState.routingMode;
-            const selectedCards: Array<{ sessionId: string; complexity: 'Low' | 'High'; sourceColumn: string }> = [];
+            const selectedCards = await this._selectAutobanPlanReviewedCards(workspaceRoot, eligibleCards, batchSize);
 
-            for (const card of eligibleCards) {
-                let complexity: 'Low' | 'High' = 'High';
-                try {
-                    const planFile = card.planFile;
-                    if (planFile) {
-                        complexity = this._normalizeAutobanComplexity(
-                            await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, planFile)
-                        );
-                    }
-                } catch {
-                    complexity = 'High';
-                }
-
-                if (!this._autobanMatchesComplexityFilter(complexity, complexityFilter)) {
-                    continue;
-                }
-
-                selectedCards.push({ sessionId: card.sessionId, complexity, sourceColumn: card.sourceColumn });
-                if (selectedCards.length >= batchSize) {
-                    break;
-                }
+            if (selectedCards.length === 0) {
+                await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+                return;
             }
-
-            if (selectedCards.length === 0) { return; }
 
             const routedSessions: Record<'coder' | 'lead', Array<{ sessionId: string; sourceColumn: string }>> = {
                 coder: [],
@@ -2275,6 +2587,12 @@ ${planList}`;
             return;
         }
 
+        const batch = eligibleCards.slice(0, batchSize);
+        if (batch.length === 0) {
+            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+            return;
+        }
+
         const selection = await this._selectAutobanTerminal(role, workspaceRoot);
         if (!selection) {
             console.warn(`[Autoban] ${sourceColumn}: all ${role} terminals are exhausted or unavailable.`);
@@ -2286,9 +2604,6 @@ ${planList}`;
             }
             return;
         }
-
-        const batch = eligibleCards.slice(0, batchSize);
-        if (batch.length === 0) { return; }
 
         // Default static routing for other columns
         console.log(`[Autoban] ${this._describeAutobanDispatchSourceColumns(batch)}: dispatching ${batch.length} card(s) to ${role} via ${selection.terminalName}`);
@@ -2308,7 +2623,7 @@ ${planList}`;
         const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumn(resolvedWorkspaceRoot, sourceColumn);
         this._releaseSettledDispatchLocks(currentColumnBySession);
 
-        const batchSize = Math.max(1, Number(this._autobanState.batchSize) || 1);
+        const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
         const orderedCandidates = [...cardsInColumn]
             .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
             .filter(card => this._activeDispatchSessions.get(card.sessionId) !== sourceColumn);
@@ -2406,7 +2721,8 @@ ${planList}`;
                         ]);
                         {
                             const cmds = await this.getStartupCommands();
-                            this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds });
+                            const planIngestionFolder = await this.getPlanIngestionFolder();
+                            this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds, planIngestionFolder });
                             const vis = await this.getVisibleAgents();
                             this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
                         }
@@ -2610,13 +2926,40 @@ ${planList}`;
                                 vscode.ConfigurationTarget.Workspace
                             );
                         }
+                        if (typeof data.planIngestionFolder === 'string') {
+                            const normalizedPlanIngestionFolder = this._normalizeConfiguredPlanFolder(data.planIngestionFolder);
+                            let validationError = this._getConfiguredPlanFolderValidationError(normalizedPlanIngestionFolder);
+                            if (!validationError && normalizedPlanIngestionFolder) {
+                                try {
+                                    const folderStat = await fs.promises.stat(normalizedPlanIngestionFolder);
+                                    if (!folderStat.isDirectory()) {
+                                        validationError = 'Plan ingestion folder must point to an existing directory.';
+                                    }
+                                } catch {
+                                    validationError = 'Plan ingestion folder must point to an existing directory.';
+                                }
+                            }
+                            if (validationError) {
+                                vscode.window.showWarningMessage(validationError);
+                            } else {
+                                await this.updateState(async (state: any) => {
+                                    if (normalizedPlanIngestionFolder) {
+                                        state.planIngestionFolder = normalizedPlanIngestionFolder;
+                                    } else {
+                                        delete state.planIngestionFolder;
+                                    }
+                                });
+                                await this._refreshConfiguredPlanWatcher();
+                            }
+                        }
                         if (data.onboardingComplete === true) {
                             this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
                         }
                         break;
                     case 'getStartupCommands': {
                         const cmds = await this.getStartupCommands();
-                        this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds });
+                        const planIngestionFolder = await this.getPlanIngestionFolder();
+                        this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds, planIngestionFolder });
                         break;
                     }
                     case 'getVisibleAgents': {
@@ -2756,7 +3099,10 @@ ${planList}`;
         this._stateWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/state.json');
 
         // Debounced: coalesces rapid file-watcher events (e.g. during batch grid creation).
-        const refreshState = () => this.refresh();
+        const refreshState = () => {
+            void this._refreshConfiguredPlanWatcher();
+            this.refresh();
+        };
 
         this._stateWatcher.onDidChange(refreshState);
         this._stateWatcher.onDidCreate(refreshState);
@@ -3085,6 +3431,204 @@ ${planList}`;
         } catch (e) {
             console.error('[TaskViewerProvider] Staging watcher failed:', e);
         }
+    }
+
+    private _normalizeConfiguredPlanFolder(folder: unknown, workspaceRoot?: string): string {
+        if (typeof folder !== 'string') return '';
+        const trimmed = folder.trim();
+        if (!trimmed) return '';
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        return path.resolve(resolvedWorkspaceRoot || process.cwd(), trimmed);
+    }
+
+    private _getConfiguredPlanFolderValidationError(configuredPlanFolder: string, workspaceRoot?: string): string | undefined {
+        if (!configuredPlanFolder) {
+            return undefined;
+        }
+
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolvedWorkspaceRoot && this._isPathWithin(resolvedWorkspaceRoot, configuredPlanFolder)) {
+            return 'Plan ingestion folder must be outside the current workspace.';
+        }
+
+        const antigravityBrainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
+        if (this._isPathWithin(antigravityBrainDir, configuredPlanFolder)) {
+            return 'Plan ingestion folder is already covered by the Antigravity brain watcher.';
+        }
+
+        return undefined;
+    }
+
+    private _getManagedImportMirrorFilename(sourcePath: string): string {
+        const stablePath = this._getStablePath(sourcePath);
+        const hash = crypto.createHash('sha256').update(stablePath).digest('hex');
+        return `${TaskViewerProvider.MANAGED_IMPORT_PREFIX}${hash}.md`;
+    }
+
+    private async _listMarkdownFilesRecursively(rootDir: string): Promise<string[]> {
+        const results: string[] = [];
+        const visit = async (dir: string): Promise<void> => {
+            const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+            for (const entry of entries) {
+                const fullPath = path.join(dir, entry.name);
+                if (entry.isDirectory()) {
+                    if (entry.name.toLowerCase() === 'completed') {
+                        continue;
+                    }
+                    await visit(fullPath);
+                } else if (entry.isFile() && /\.md$/i.test(entry.name)) {
+                    results.push(fullPath);
+                }
+            }
+        };
+        await visit(rootDir);
+        return results;
+    }
+
+    private async _removeManagedImportMirror(mirrorFilename: string, workspaceRoot: string): Promise<void> {
+        const stagingDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        const mirrorPath = path.join(stagingDir, mirrorFilename);
+        const relativePlanPath = path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
+        const log = this._getSessionLog(workspaceRoot);
+        const runSheet = await log.findRunSheetByPlanFile(relativePlanPath, { includeCompleted: true });
+        if (runSheet?.sessionId) {
+            await log.deleteRunSheet(runSheet.sessionId);
+            await log.deleteDispatchLog(runSheet.sessionId);
+        }
+
+        let registryChanged = false;
+        for (const [planId, entry] of Object.entries(this._planRegistry.entries)) {
+            if (entry.sourceType === 'local' && entry.localPlanPath === relativePlanPath) {
+                delete this._planRegistry.entries[planId];
+                registryChanged = true;
+            }
+        }
+        if (registryChanged) {
+            await this._savePlanRegistry(workspaceRoot);
+        }
+
+        if (fs.existsSync(mirrorPath)) {
+            try {
+                await fs.promises.unlink(mirrorPath);
+            } catch (e) {
+                console.error('[TaskViewerProvider] Failed to remove managed import mirror:', e);
+            }
+        }
+    }
+
+    private async _syncConfiguredPlanFolder(planFolder: string, workspaceRoot: string, cleanupMissingManagedImports: boolean = false): Promise<void> {
+        const resolvedPlanFolder = this._normalizeConfiguredPlanFolder(planFolder, workspaceRoot);
+        const stagingDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        if (!fs.existsSync(stagingDir)) {
+            await fs.promises.mkdir(stagingDir, { recursive: true });
+        }
+
+        if (!resolvedPlanFolder || !fs.existsSync(resolvedPlanFolder)) {
+            return;
+        }
+
+        await this._activateWorkspaceContext(workspaceRoot);
+        const desiredMirrors = new Set<string>();
+        const markdownFiles = await this._listMarkdownFilesRecursively(resolvedPlanFolder);
+        for (const filePath of markdownFiles) {
+            if (!(await this._isLikelyPlanFile(filePath))) {
+                continue;
+            }
+
+            const mirrorFilename = this._getManagedImportMirrorFilename(filePath);
+            desiredMirrors.add(mirrorFilename);
+            const mirrorPath = path.join(stagingDir, mirrorFilename);
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            const alreadyExists = fs.existsSync(mirrorPath);
+
+            if (alreadyExists) {
+                const existingContent = await fs.promises.readFile(mirrorPath, 'utf8');
+                if (existingContent === content) {
+                    continue;
+                }
+            }
+
+            await fs.promises.writeFile(mirrorPath, content);
+            const mirrorUri = vscode.Uri.file(mirrorPath);
+            if (alreadyExists) {
+                await this._handlePlanTitleSync(mirrorUri, workspaceRoot);
+            } else {
+                await this._handlePlanCreation(mirrorUri, workspaceRoot);
+            }
+        }
+
+        if (cleanupMissingManagedImports) {
+            for (const mirrorFilename of this._managedImportMirrorsForActiveFolder) {
+                if (!desiredMirrors.has(mirrorFilename)) {
+                    await this._removeManagedImportMirror(mirrorFilename, workspaceRoot);
+                }
+            }
+        }
+        this._managedImportMirrorsForActiveFolder = desiredMirrors;
+
+        await this._refreshRunSheets(workspaceRoot);
+    }
+
+    private _disposeConfiguredPlanWatcher() {
+        try { this._configuredPlanWatcher?.dispose(); } catch { }
+        try { this._configuredPlanFsWatcher?.close(); } catch { }
+        this._configuredPlanWatcher = undefined;
+        this._configuredPlanFsWatcher = undefined;
+        this._managedImportMirrorsForActiveFolder.clear();
+        if (this._configuredPlanSyncTimer) {
+            clearTimeout(this._configuredPlanSyncTimer);
+            this._configuredPlanSyncTimer = undefined;
+        }
+    }
+
+    private async _refreshConfiguredPlanWatcher(workspaceRoot?: string): Promise<void> {
+        this._disposeConfiguredPlanWatcher();
+
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedWorkspaceRoot) return;
+
+        const configuredPlanFolder = this._normalizeConfiguredPlanFolder(await this.getPlanIngestionFolder(resolvedWorkspaceRoot), resolvedWorkspaceRoot);
+        const scheduleSync = () => {
+            if (this._configuredPlanSyncTimer) {
+                clearTimeout(this._configuredPlanSyncTimer);
+            }
+            this._configuredPlanSyncTimer = setTimeout(() => {
+                this._configuredPlanSyncTimer = undefined;
+                void this._syncConfiguredPlanFolder(configuredPlanFolder, resolvedWorkspaceRoot, true);
+            }, 300);
+        };
+
+        if (!configuredPlanFolder || !fs.existsSync(configuredPlanFolder)) {
+            return;
+        }
+
+        const validationError = this._getConfiguredPlanFolderValidationError(configuredPlanFolder, resolvedWorkspaceRoot);
+        if (validationError) {
+            console.warn(`[TaskViewerProvider] Skipping configured plan watcher: ${validationError} (${configuredPlanFolder})`);
+            return;
+        }
+
+        try {
+            const configuredUri = vscode.Uri.file(configuredPlanFolder);
+            const configuredPattern = new vscode.RelativePattern(configuredUri, '**/*.md');
+            this._configuredPlanWatcher = vscode.workspace.createFileSystemWatcher(configuredPattern);
+            this._configuredPlanWatcher.onDidCreate(() => scheduleSync());
+            this._configuredPlanWatcher.onDidChange(() => scheduleSync());
+            this._configuredPlanWatcher.onDidDelete(() => scheduleSync());
+        } catch (e) {
+            console.error('[TaskViewerProvider] Configured plan watcher failed:', e);
+        }
+
+        try {
+            this._configuredPlanFsWatcher = fs.watch(configuredPlanFolder, { recursive: true }, (_eventType, filename) => {
+                if (!filename || !/\.md$/i.test(String(filename))) return;
+                scheduleSync();
+            });
+        } catch (e) {
+            console.error('[TaskViewerProvider] Configured plan fs.watch fallback failed (non-fatal):', e);
+        }
+
+        await this._syncConfiguredPlanFolder(configuredPlanFolder, resolvedWorkspaceRoot);
     }
 
     private _getStablePath(p: string): string {
@@ -4700,18 +5244,12 @@ ${planList}`;
         const columns = buildKanbanColumns(customAgents).map(column => ({ id: column.id, label: column.label }));
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
         const dependencies = this._parsePlanDependencies(planText);
-        const derivedColumn = deriveKanbanColumn(events, customAgents);
-        let column = derivedColumn;
+        const row = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
+        let column = this._getEffectiveKanbanColumnForSession(sheet, customAgents, row);
         let complexity: 'Unknown' | 'Low' | 'High' = 'Unknown';
 
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (db) {
-            const workspaceId = this._workspaceId || await this._getOrCreateWorkspaceId(workspaceRoot);
-            const row = (await db.getBoard(workspaceId)).find(entry => entry.sessionId === sessionId);
-            if (row) {
-                column = row.kanbanColumn || column;
-                complexity = row.complexity;
-            }
+        if (row) {
+            complexity = row.complexity;
         }
 
         if (complexity === 'Unknown' && this._kanbanProvider && typeof sheet.planFile === 'string' && sheet.planFile.trim()) {
@@ -4888,15 +5426,35 @@ ${planList}`;
         try {
             switch (request.type) {
                 case 'setColumn': {
-                    const column = String(request.column || '').trim();
+                    const column = this._normalizeLegacyKanbanColumn(String(request.column || '').trim());
                     if (!column) {
                         return { ok: false, message: 'Column is required.' };
                     }
-                    const db = await this._getKanbanDb(workspaceRoot);
-                    if (!db) {
-                        return { ok: false, message: 'Kanban DB is unavailable. Cannot update column.' };
+                    const customAgents = await this.getCustomAgents(workspaceRoot);
+                    const columns = buildKanbanColumns(customAgents).map(entry => entry.id);
+                    if (!columns.includes(column)) {
+                        return { ok: false, message: `Unknown column '${column}'.` };
                     }
-                    await db.updateColumn(sessionId, column);
+
+                    const currentRow = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
+                    const currentColumn = this._getEffectiveKanbanColumnForSession(sheet, customAgents, currentRow);
+                    if (currentColumn === column) {
+                        break;
+                    }
+
+                    const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents);
+                    if (workflowName) {
+                        const updated = await this._applyManualKanbanColumnChange(
+                            sessionId,
+                            column,
+                            workflowName,
+                            'User manually changed plan column from ticket view',
+                            workspaceRoot
+                        );
+                        if (!updated) {
+                            return { ok: false, message: 'Failed to persist ticket column change.' };
+                        }
+                    }
                     break;
                 }
                 case 'setComplexity': {
@@ -8654,6 +9212,7 @@ ${focusDirective}`);
         }
         try { this._brainWatcher?.dispose(); } catch { }
         try { this._stagingWatcher?.close(); } catch { }
+        this._disposeConfiguredPlanWatcher();
         this._gitCommitDisposable?.dispose();
         if (this._julesStatusPollTimer) {
             clearInterval(this._julesStatusPollTimer);

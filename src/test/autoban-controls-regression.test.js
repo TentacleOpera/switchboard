@@ -47,6 +47,11 @@ function run() {
         /routingLabel\.textContent\s*=\s*'ROUTING:';/,
         'Expected the Autoban panel to show a routing mode control.'
     );
+    expectRegex(
+        webviewSource,
+        /AUTOBAN_BATCH_SIZE_OPTIONS\s*=\s*\[\s*1,\s*2,\s*3,\s*4,\s*5\s*\];[\s\S]*AUTOBAN_BATCH_SIZE_OPTIONS\.forEach\(val => \{/s,
+        'Expected the Autoban batch-size selector to offer explicit values 1, 2, 3, 4, and 5.'
+    );
 
     console.log('autoban controls regression test passed');
 }

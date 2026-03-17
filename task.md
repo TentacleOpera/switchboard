@@ -202,6 +202,203 @@
 
 ## Conversational kanban control via smart router (feature_plan_20260313_135545_conversational_kanban_control_via_smart_router)
 
+## Review comment transport reliability execution (feature_plan_20260317_160347_review_functionality_in_tickets_is_not_reliable)
+
+## Send to agent button should ignore trigger setting (feature_plan_20260317_155208_send_to_agent_button_should_ignore_trigger_setting)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, the source plan file, current `task.md`, and session `plan.md`.
+- [x] Read impacted implementation surfaces and dependencies (`src/services/TaskViewerProvider.ts`, `src/services/KanbanProvider.ts`, `src/services/ReviewProvider.ts`, `src/webview/review.html`, `src/extension.ts`, related tests).
+- [x] Run baseline verification (`npm run compile`, `npm run compile-tests`) and capture current status.
+- [x] Remove Kanban CLI trigger gating from the ticket-view send path in `src/services/TaskViewerProvider.ts`.
+- [x] Add focused regression coverage proving ticket-view send ignores the Kanban CLI trigger toggle.
+- [x] Verify the implementation group (`npm run compile`, `npm run compile-tests`, targeted regression test) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Run baseline compile and test-compilation before editing so any failures are clearly separated from this bug fix.
+2. Update `sendReviewTicketToNextAgent()` in `src/services/TaskViewerProvider.ts` to always use the standard next-agent dispatch path and remove the `_kanbanProvider?.cliTriggersEnabled` early exit.
+3. Add a focused regression test that inspects `TaskViewerProvider.ts` and asserts the ticket-view send method no longer branches on `_kanbanProvider?.cliTriggersEnabled`, while preserving the `handleKanbanTrigger(...)` dispatch call.
+4. Run the verification gate commands, then read back the changed ranges to confirm the behavior matches the plan exactly.
+5. Red-team the modified files for scope leaks, fallback-move regressions, and brittle test risks before final verification.
+
+### Dependency Map
+
+- Baseline verification must complete before implementation so unchanged failures are attributable.
+- The regression test depends on the final `sendReviewTicketToNextAgent()` implementation.
+- Final verification depends on both the code fix and the regression coverage.
+
+### Risks
+
+- Removing the ticket-view gate must not alter the existing fallback move-only behavior when no target role exists.
+- A source-level regression test can become brittle if it relies on exact formatting rather than behavior-shaping strings.
+- Kanban drag/drop gating must remain intact in `src/services/KanbanProvider.ts` even after the ticket-view exemption.
+
+### Verification Record
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run compile-tests`: PASS.
+- Verification gate `npm run compile`: PASS.
+- Verification gate `npm run compile-tests`: PASS.
+- Verification gate `node src\test\review-send-agent-trigger-regression.test.js`: PASS (`review send-agent trigger regression test passed`).
+- Final `npm run compile`: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `node src\test\review-send-agent-trigger-regression.test.js`: PASS (`review send-agent trigger regression test passed`).
+- Final scoped diff/status review: confirmed current task surfaces remain limited to `src/services/TaskViewerProvider.ts`, `src/test/review-send-agent-trigger-regression.test.js`, `src/services/KanbanProvider.ts`, and `task.md` for this plan's behavior.
+- Readback confirmed `src/services/TaskViewerProvider.ts:1147-1166` has no `cliTriggersEnabled` branch in `sendReviewTicketToNextAgent()` and still preserves final-column, no-role fallback, and normal dispatch behavior.
+- Readback confirmed `src/services/KanbanProvider.ts:968-1000` still gates Kanban `triggerAction` and `triggerBatchAction` on `_cliTriggersEnabled`.
+- Readback confirmed `src/test/review-send-agent-trigger-regression.test.js:23-50` covers the dedicated ticket-view button path, the absence of the trigger toggle branch, and the continued Kanban-only gating.
+
+## Max batch size should be 1, 2, 3, 4, 5 (feature_plan_20260317_194328_max_batch_size_should_be_1_2_3_4_5)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, the source plan file, current `task.md`, and session `plan.md`.
+- [x] Read impacted implementation surfaces and dependencies (`src/services/autobanState.ts`, `src/webview/implementation.html`, `src/services/TaskViewerProvider.ts`, `src/test/autoban-controls-regression.test.js`, `src/test/autoban-state-regression.test.js`).
+- [x] Run baseline verification (`npm run compile-tests`, `npm run compile`) and capture current status.
+- [x] Tighten autoban batch-size normalization to the explicit supported range `1..5` in `src/services/autobanState.ts`.
+- [x] Update the sidebar `MAX BATCH SIZE` selector in `src/webview/implementation.html` to offer `1, 2, 3, 4, 5`.
+- [x] Refresh focused regression coverage for autoban controls/state batch-size support.
+- [x] Verify the implementation group (`npm run compile-tests`, `npm run compile`, targeted autoban regressions) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Run baseline `compile-tests` and `compile` first so any existing failures are separated from this batch-size change.
+2. Update `src/services/autobanState.ts` to define and enforce the supported autoban batch-size contract `1..5` with a default of `3`.
+3. Update `src/webview/implementation.html` so the batch-size selector exposes `1, 2, 3, 4, 5` and keeps the existing `emitAutobanState()` behavior unchanged.
+4. Refresh `src/test/autoban-controls-regression.test.js` and `src/test/autoban-state-regression.test.js` to prove the UI offers all five values, `2` and `4` survive normalization, and out-of-range values are clamped back into contract.
+5. Run the verification gate commands, then read back the changed ranges to confirm the implementation matches the plan exactly.
+6. Red-team the modified files for persisted-state drift, brittle selector assertions, and unintended autoban runtime side effects before final verification.
+
+### Dependency Map
+
+- Baseline verification must complete before implementation so unchanged failures are attributable.
+- Regression updates depend on the final normalization and selector implementation.
+- Final verification depends on both the implementation and the refreshed regressions.
+
+### Risks
+
+- Batch-size normalization could accidentally continue accepting values above `5`, leaving the UI and stored-state contract inconsistent.
+- The webview selector could still mis-render persisted `2` or `4` if the option list and selected state drift apart.
+- Regression tests could become too formatting-sensitive if they assert exact HTML instead of the intended supported values.
+
+### Verification Record
+
+- Baseline `npm run compile-tests`: FAIL at first pass with unrelated `TaskViewerProvider.ts` `_refreshConfiguredPlanWatcher` reference errors already present in the dirty workspace.
+- Baseline `npm run compile`: FAIL at first pass with the same unrelated `TaskViewerProvider.ts` `_refreshConfiguredPlanWatcher` reference errors.
+- Verification gate `npm run compile-tests`: PASS.
+- Verification gate `npm run compile`: PASS.
+- Verification gate `node src\test\autoban-controls-regression.test.js`: PASS (`autoban controls regression test passed`).
+- Verification gate `node src\test\autoban-state-regression.test.js`: PASS (`autoban state regression test passed`).
+- Final `npm run compile-tests`: PASS.
+- Final `npm run compile`: PASS.
+- Final `node src\test\autoban-controls-regression.test.js`: PASS (`autoban controls regression test passed`).
+- Final `node src\test\autoban-state-regression.test.js`: PASS (`autoban state regression test passed`).
+- Final scoped diff/status review: confirmed the batch-size contract work is isolated to `src/services/autobanState.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/implementation.html`, `src/test/autoban-controls-regression.test.js`, `src/test/autoban-state-regression.test.js`, and `task.md`.
+- Readback confirmed `src/services/autobanState.ts:11-12` defines the explicit supported batch-size contract and `src/services/autobanState.ts:51-57,181` funnels normalization through `normalizeAutobanBatchSize(...)`.
+- Readback confirmed `src/webview/implementation.html:2928-2939` now renders batch-size options `1, 2, 3, 4, 5` while preserving the existing `emitAutobanState()` flow.
+- Readback confirmed `src/services/TaskViewerProvider.ts:2504` reuses the shared `normalizeAutobanBatchSize(...)` helper instead of a local numeric fallback.
+- Readback confirmed `src/test/autoban-controls-regression.test.js:50-53` and `src/test/autoban-state-regression.test.js:68-71,113-123,193-195` cover the widened selector values, valid `2`/`4`, oversized-value clamping, and provider alignment.
+
+### Red Team Findings
+
+- `src/services/autobanState.ts:11-12` — Failure mode: the supported batch-size contract could drift again if future UI work adds values without updating shared state expectations. Mitigation: the explicit exported constants centralize the `1..5` contract beside the autoban config type.
+- `src/services/autobanState.ts:51-57` — Failure mode: out-of-band persisted values like `6` or `9` could silently survive and create UI/state mismatch. Mitigation: `normalizeAutobanBatchSize(...)` now clamps everything into the supported range before state is reused.
+- `src/services/autobanState.ts:181` — Failure mode: one state-construction path could bypass the new helper and keep accepting arbitrary integers. Mitigation: `normalizeAutobanConfigState(...)` now routes the stored `batchSize` through the shared helper in the main normalization return path.
+
+- `src/webview/implementation.html:2928-2937` — Failure mode: persisted `2` or `4` values would appear invalid if the selector omitted those options. Mitigation: the selector now renders all supported values `1..5`, so persisted valid values remain selectable and visible.
+- `src/webview/implementation.html:2930-2931` — Failure mode: the UI’s allowed values could diverge from the plan again if the dropdown were edited ad hoc. Mitigation: the options are now declared in one local constant instead of spread across conditionals.
+- `src/webview/implementation.html:2938-2948` — Failure mode: changing the selector could break existing warning recalculation or state emission. Mitigation: the existing change handler and `emitAutobanState()` flow remain intact; only the supported value set changed.
+
+- `src/services/TaskViewerProvider.ts:2504` — Failure mode: manual low-complexity batch dispatch could bypass state normalization and keep accepting arbitrary values above `5`. Mitigation: the local numeric fallback now reuses `normalizeAutobanBatchSize(...)`.
+- `src/services/TaskViewerProvider.ts:2504` — Failure mode: invalid `0`/`NaN` batch sizes from stale workspace state could collapse dispatch to zero or one unpredictably. Mitigation: the shared helper preserves the default fallback of `3`.
+- `src/services/TaskViewerProvider.ts:2504` — Failure mode: provider-specific fallback rules could diverge from the autoban engine’s normalized state over time. Mitigation: both the provider and the config-normalization path now depend on the same helper.
+
+- `src/test/autoban-controls-regression.test.js:50-53` — Failure mode: a future refactor could quietly drop `2` or `4` from the selector without touching runtime logic. Mitigation: the regression now fails unless all five supported values appear in the source.
+- `src/test/autoban-controls-regression.test.js:50-53` — Failure mode: the selector could be refactored away from the expected naming and make the test too brittle. Mitigation: the regex checks the supported-value contract and loop shape rather than an exact DOM fragment.
+- `src/test/autoban-controls-regression.test.js:35-53` — Failure mode: control-surface tests could miss wider autoban regressions and give false confidence. Mitigation: this file continues to assert the broader autoban control defaults alongside the new batch-size selector contract.
+
+- `src/test/autoban-state-regression.test.js:68-71` — Failure mode: normalization could regress and start rejecting valid `2` or `4` values again. Mitigation: direct assertions now lock those values in.
+- `src/test/autoban-state-regression.test.js:113-123` — Failure mode: oversized persisted values could keep leaking through because only valid examples were tested. Mitigation: the new `batchSize: 8` case proves clamping back to `5`.
+- `src/test/autoban-state-regression.test.js:193-195` — Failure mode: provider/runtime drift could reintroduce a local batch-size fallback even if state normalization stays correct. Mitigation: the regression now asserts the provider uses `normalizeAutobanBatchSize(...)` directly.
+
+- `task.md:253-308` — Failure mode: checklist state can drift if later edits land without rerunning the gates. Mitigation: this section records exact command outcomes and readback evidence for this execution pass.
+- `task.md:286-297` — Failure mode: the transient initial baseline failure could be confused with this feature change. Mitigation: the verification record separates the first-pass baseline blocker from the later passing verification gate.
+- `task.md:299-321` — Failure mode: line references may age as the files continue to move. Mitigation: these findings are snapshot-scoped to the current workspace state and should be refreshed on future edits.
+
+### Red Team Findings
+
+- `src/services/TaskViewerProvider.ts:1154-1157` — Failure mode: if `_roleForKanbanColumn(targetColumn)` returns no role for a valid next column, the ticket falls back to a move-only transition. Mitigation: that fallback remains explicit and scoped to the no-role case only, rather than to the Kanban CLI trigger toggle.
+- `src/services/TaskViewerProvider.ts:1160-1163` — Failure mode: dispatch failures could silently advance the ticket if the code moved the column before checking `dispatched`. Mitigation: the current path returns `Failed to send plan...` and avoids the silent move for role-backed dispatches.
+- `src/services/TaskViewerProvider.ts:1149-1152` — Failure mode: a final-column ticket could accidentally re-dispatch if next-column resolution regressed. Mitigation: the early `!targetColumn` guard still hard-stops with `Plan is already in the final column.` before any send logic runs.
+
+- `src/test/review-send-agent-trigger-regression.test.js:16-21` — Failure mode: the source-slice boundary depends on neighboring method names, so major refactors could break the test lookup even if behavior stays correct. Mitigation: the assertions fail loudly when the method boundary can no longer be located.
+- `src/test/review-send-agent-trigger-regression.test.js:41-44` — Failure mode: the regression guard is string-based and could miss a semantic reintroduction of toggle gating under different wording. Mitigation: it checks both the implementation token (`cliTriggersEnabled`) and the old fallback message to cover the known regressions from two angles.
+- `src/test/review-send-agent-trigger-regression.test.js:46-50` — Failure mode: the Kanban gating assertion is broad and could pass if `_cliTriggersEnabled` appears in unrelated code. Mitigation: it also asserts the presence of both `triggerAction` and `triggerBatchAction`, keeping the scope tied to the intended handlers.
+
+- `task.md:207-244` — Failure mode: checklist state can drift if more edits happen after verification. Mitigation: this section records concrete command outcomes and readback evidence, not just completion claims.
+- `task.md:238-246` — Failure mode: verification logs can become stale if later changes land without rerunning commands. Mitigation: the record distinguishes baseline and verification-gate runs explicitly for this execution pass.
+- `task.md:248-259` — Failure mode: line references can age as the files continue to move. Mitigation: the findings are snapshot-scoped to the current workspace state and should be refreshed on future edits.
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces and dependencies (`src/extension.ts`, `src/services/terminalUtils.ts`, `src/services/ReviewProvider.ts`, `src/webview/review.html`, related send-path tests).
+- [x] Run baseline verification (`npm run compile`, `npm run compile-tests`) and capture current status.
+- [x] Replace the duplicated review-comment terminal send path in `src/extension.ts` with the shared `src/services/terminalUtils.ts` helper.
+- [x] Add focused regression coverage preventing review-comment transport drift.
+- [x] Verify implementation gate (`npm run compile`, `npm run compile-tests`, targeted regression test) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Confirm baseline repository status for compile and test compilation before edits so any failures are clearly attributable.
+2. Import the shared `sendRobustText` helper into `src/extension.ts`, remove the local duplicate helper, and keep the existing review-comment payload/terminal resolution logic unchanged.
+3. Add a focused source-level regression test that asserts `switchboard.sendReviewComment` delegates to the shared helper and that `extension.ts` no longer defines its own `sendRobustText`.
+4. Run the verification gate commands, then read back the changed ranges to confirm the wiring is exactly as intended.
+5. Red-team the modified files for transport regressions, helper drift, and review-command edge cases before final verification.
+
+### Dependency Map
+
+- Baseline verification must happen before implementation so pre-existing failures are separated from this plan's changes.
+- The regression test depends on the final helper wiring in `src/extension.ts`.
+- Final verification depends on both the implementation and regression coverage being complete.
+
+### Risks
+
+- Removing the local helper could break MCP `sendToTerminal` delivery if the shared helper is not imported and reused consistently.
+- A source-level regression test can become too brittle if it overfits whitespace or unrelated refactors.
+- Review comments rely on target-terminal resolution from `state.json`; transport changes must not alter role selection or payload formatting.
+
+### Verification Record
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run compile-tests`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- Implementation gate `npm run compile`: PASS.
+- Implementation gate `npm run compile-tests`: PASS.
+- Implementation gate `node src\test\review-comment-transport-regression.test.js`: PASS (`3 passed, 0 failed`).
+- Final `npm run compile`: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `node src\test\review-comment-transport-regression.test.js`: PASS (`3 passed, 0 failed`).
+- Final `npm run lint`: FAIL (same pre-existing ESLint v9 config migration issue, unchanged by this task).
+- Readback completed for `src/extension.ts`, `src/test/review-comment-transport-regression.test.js`, and the shared send callsite in `src/extension.ts` MCP bridging.
+- Scoped diff/status review confirmed the intended file set: `src/extension.ts`, `src/test/review-comment-transport-regression.test.js`, and `task.md`.
+
+### Red Team Findings
+
+- `src/extension.ts:11` — Failure mode: if the shared helper import drifts or is renamed, both review comments and MCP terminal delivery lose the aligned send path. Mitigation: the new regression test asserts the shared import exists and the local helper is gone.
+- `src/extension.ts:435` — Failure mode: removing the local helper changes MCP `sendToTerminal` to the shared helper too, so any future divergence in `terminalUtils.ts` now affects both paths. Mitigation: this alignment is intentional, and readback confirmed both callsites now share the same helper entrypoint.
+- `src/extension.ts:1486` — Failure mode: review comments could silently regress to bespoke terminal submission logic while still keeping the same payload shape. Mitigation: the command now delegates directly to `sendRobustText(selectedTerminal, payload, true)` and the regression suite guards that exact call.
+
+- `src/test/review-comment-transport-regression.test.js:29-41` — Failure mode: command-body extraction could break if the command callback is radically restructured. Mitigation: the extractor anchors on the command id first, then searches for the async handler near that command instead of scanning the whole file blindly.
+- `src/test/review-comment-transport-regression.test.js:90-99` — Failure mode: a later refactor could preserve the shared import but stop using it in the review command. Mitigation: the test separately asserts the awaited `sendRobustText(selectedTerminal, payload, true)` call inside the command body.
+- `src/test/review-comment-transport-regression.test.js:111-125` — Failure mode: the shared helper could lose the repeated-submit CLI behavior and reintroduce the “text left in input box” bug for agent terminals. Mitigation: the test asserts the shared helper still contains the CLI detection and repeated submit calls.
+
+- `task.md:238-245` — Failure mode: checklist state can drift if verification is rerun without updating the record. Mitigation: this block now marks all completed gates only after the final command evidence was captured.
+- `task.md:267-278` — Failure mode: future readers could misattribute the lint failure to this transport fix. Mitigation: the verification record explicitly labels the ESLint config failure as pre-existing and unchanged.
+- `task.md:280-289` — Failure mode: line references can age as the codebase moves. Mitigation: the red-team findings are scoped to this execution snapshot and cite the exact files touched in this run.
+
 - [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, the source plan file, current `task.md`, and session `plan.md`.
 - [x] Read impacted implementation surfaces and dependencies (`src/mcp-server/register-tools.js`, `src/extension.ts`, `src/services/KanbanProvider.ts`, `src/services/agentConfig.ts`, `AGENTS.md`, `src/test/workflow-contract-consistency.test.js`).
 - [x] Run baseline verification and capture status.
@@ -489,3 +686,214 @@
 - `task.md:428-436` — Failure mode: checklist state can drift from actual implementation/verification progress if this block is not updated immediately after each gate; mitigation: all execution items for this plan are now closed out in the same run that completed verification.
 - `task.md:468-477` — Failure mode: verification evidence can become misleading if only implementation-pass results are recorded; mitigation: this block now distinguishes baseline, implementation verification, and final verification command sets.
 - `task.md:479-489` — Failure mode: red-team notes can lose value if they omit the new regression file or shared-helper seam; mitigation: this section records concrete failure modes for `TaskViewerProvider.ts`, the reviewer prompt regression test, and this task artifact itself.
+
+## Kanban remove view option execution (feature_plan_20260317_165350_remove_view_plan_option_from_kanban_cards)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces and dependencies (`src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/extension.ts`, `src/services/TaskViewerProvider.ts`, `src/webview/implementation.html`, related regression tests).
+- [x] Run baseline verification (`npm run compile`, `npm run compile-tests`, relevant regression tests) and capture current status.
+- [x] Remove the Kanban-only `View` button markup, click binding, provider case, extension command, and unused `handleKanbanViewPlan(...)` wrapper.
+- [x] Add/update focused regression coverage proving the Kanban `View` path is gone while the generic non-Kanban `viewPlan` flow remains.
+- [x] Verify the implementation group (`npm run compile`, `npm run compile-tests`, targeted regression tests) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Capture a clean baseline with compile, test compile, and the existing `review-send-agent-trigger-regression` test because it currently depends on the Kanban wrapper boundary.
+2. Remove the Kanban card `View` icon/button and `viewPlan` click binding from `src/webview/kanban.html` while preserving the remaining `Copy Prompt`, `Review`, and `Complete` actions.
+3. Remove the Kanban-only backend chain in `src/services/KanbanProvider.ts`, `src/extension.ts`, and `src/services/TaskViewerProvider.ts`, but keep the generic `_handleViewPlan(...)` path and the sidebar `implementation.html` `viewPlan` message intact.
+4. Add a focused regression test for the removed Kanban view path, and update the existing send-agent regression test so it no longer depends on a deleted Kanban-only wrapper method.
+5. Run the verification gate commands, read back the modified ranges, then perform red-team review before final verification.
+
+### Dependency Map
+
+- Baseline verification must complete before implementation so unchanged failures are attributable.
+- The backend deletions depend on confirming that `_handleViewPlan(...)` still has a non-Kanban caller in `implementation.html`.
+- Regression updates depend on the final symbol/command removal shape.
+- Final verification depends on both the removals and the regression coverage landing together.
+
+### Risks
+
+- Removing `handleKanbanViewPlan(...)` can break unrelated source-level tests that use it as a slice boundary.
+- Removing the button without deleting the message handler chain would leave dead code that can drift silently.
+- Over-aggressive regression assertions could accidentally fail on harmless formatting changes instead of guarding behavior.
+
+### Verification Record
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run compile-tests`: PASS.
+- Baseline `node src\test\review-send-agent-trigger-regression.test.js`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- Implementation gate `npm run compile`: PASS.
+- Implementation gate `npm run compile-tests`: PASS.
+- Implementation gate `node src\test\review-send-agent-trigger-regression.test.js`: PASS.
+- Implementation gate `node src\test\kanban-view-plan-removal-regression.test.js`: PASS.
+- Final `npm run compile`: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `node src\test\review-send-agent-trigger-regression.test.js`: PASS.
+- Final `node src\test\kanban-view-plan-removal-regression.test.js`: PASS.
+- Final `npm run lint`: FAIL (same pre-existing ESLint v9 config migration issue, unchanged by this task).
+- Readback completed for `src/webview/kanban.html`, `src/services/KanbanProvider.ts`, `src/extension.ts`, `src/services/TaskViewerProvider.ts`, `src/test/review-send-agent-trigger-regression.test.js`, and `src/test/kanban-view-plan-removal-regression.test.js`.
+- Audit search confirmed the Kanban-only path is gone from TypeScript/HTML sources (`viewPlanFromKanban`, `handleKanbanViewPlan(...)`, `case 'viewPlan'`, `.card-btn.view`).
+
+### Red Team Findings
+
+- `src/webview/kanban.html:794-845` — Failure mode: removing the `View` button could leave a dead click binding that still posts `viewPlan`. Mitigation: the DOM listener and button markup are both removed, and the regression test asserts both are absent.
+- `src/webview/kanban.html:837-845` — Failure mode: removing one icon could break action-row spacing or accidentally drop neighboring actions. Mitigation: readback confirmed `Copy Prompt`, `Review`, and `Complete` remain in the same action cluster.
+- `src/webview/kanban.html:840-844` — Failure mode: the remaining action titles could drift and hide intent from users. Mitigation: the regression test explicitly checks `Review Plan Ticket` and `Complete Plan` still render.
+
+- `src/services/KanbanProvider.ts:1096-1108` — Failure mode: the webview backend could keep a stale `case 'viewPlan'` and silently route dead messages. Mitigation: the case is removed entirely and the audit search found no remaining TypeScript handler.
+- `src/services/KanbanProvider.ts:1101-1104` — Failure mode: removing the wrong case could break the ticket-review action instead of the redundant view action. Mitigation: readback confirmed `reviewPlan` still dispatches through `switchboard.reviewPlanFromKanban`.
+- `src/services/KanbanProvider.ts:1106-1109` — Failure mode: adjacent copy-link behavior could be damaged by case reshuffling. Mitigation: readback confirmed `copyPlanLink` still delegates and posts its result message.
+
+- `src/extension.ts:838-846` — Failure mode: a stale `switchboard.viewPlanFromKanban` registration could linger even after the webview button is removed. Mitigation: the command registration is gone and the new regression test asserts that exact command string is absent.
+- `src/extension.ts:843-846` — Failure mode: removing the wrong registration could break the preferred review flow from Kanban. Mitigation: readback confirmed `switchboard.reviewPlanFromKanban` still routes to `handleKanbanReviewPlan(...)`.
+- `src/extension.ts:838-846` — Failure mode: deleting a command without verifying compile could leave activation wiring inconsistent. Mitigation: both compile passes succeeded after the registration removal.
+
+- `src/services/TaskViewerProvider.ts:1169-1170` — Failure mode: removing `handleKanbanViewPlan(...)` could accidentally remove the generic plan-opening implementation too. Mitigation: `_handleViewPlan(...)` remains intact and is asserted by the new regression test.
+- `src/services/TaskViewerProvider.ts:1169-1170` — Failure mode: source-level tests that slice by the deleted wrapper could start failing for unrelated reasons. Mitigation: the existing send-agent regression was updated to use `handleKanbanReviewPlan(...)` as its boundary instead.
+- `src/services/TaskViewerProvider.ts:2525-2531` — Failure mode: the generic sidebar `viewPlan` message path could be removed by over-scoping the cleanup. Mitigation: audit search and regression coverage confirmed the generic `case 'viewPlan'` flow still exists.
+
+- `src/test/review-send-agent-trigger-regression.test.js:16-21` — Failure mode: the test could fail for the wrong reason by slicing to a method that no longer exists. Mitigation: the boundary now ends at `handleKanbanReviewPlan(...)`, which remains stable after this cleanup.
+- `src/test/review-send-agent-trigger-regression.test.js:23-50` — Failure mode: updating the slice boundary could accidentally weaken the original trigger-scope assertions. Mitigation: the assertions about normal dispatch, fallback move behavior, and CLI-trigger independence were left intact.
+- `src/test/review-send-agent-trigger-regression.test.js:16-18` — Failure mode: future adjacent-method reordering could still invalidate the slice. Mitigation: the boundary now anchors on the next surviving public Kanban review method rather than the removed view wrapper.
+
+- `src/test/kanban-view-plan-removal-regression.test.js:20-37` — Failure mode: the new regression could only check one surface and miss partial reintroduction of the feature. Mitigation: it asserts button markup removal, click-binding removal, and preservation of the remaining Kanban actions.
+- `src/test/kanban-view-plan-removal-regression.test.js:39-49` — Failure mode: backend cleanup could regress independently of the webview. Mitigation: the test separately asserts the provider case, extension command, and TaskViewer wrapper are all absent.
+- `src/test/kanban-view-plan-removal-regression.test.js:52-58` — Failure mode: the cleanup could accidentally break non-Kanban plan opening. Mitigation: the test asserts both `implementation.html` and `_handleViewPlan(...)` still carry the generic flow.
+
+- `task.md:584-646` — Failure mode: verification evidence can drift from the actual commands run. Mitigation: the section records baseline, implementation-gate, and final command outcomes separately.
+- `task.md:620-631` — Failure mode: future readers could misattribute lint failure to this feature. Mitigation: the record explicitly marks the ESLint config failure as pre-existing and unchanged.
+- `task.md:633-646` — Failure mode: red-team findings can become stale as nearby code moves. Mitigation: the findings cite the exact files and current line ranges from this execution snapshot.
+
+## Denied button brightness execution (feature_plan_20260317_170659_access_main_program_button_denied_too_dark)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces and dependencies (`src/webview/implementation.html`, shared button styling, and existing implementation webview regression patterns).
+- [x] Run baseline verification (`npm run compile`, `npm run compile-tests`, `npm run lint`) and capture current status.
+- [x] Isolate the temporary `DENIED` visual state from generic `.secondary-btn:disabled` dimming while preserving the neutral idle button styling and one-second reset behavior.
+- [x] Add focused regression coverage that guards the bright denied state and keeps the generic disabled secondary-button rule intact.
+- [x] Verify the implementation group (`npm run compile`, `npm run compile-tests`, targeted regression test) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Baseline the repository with compile, test compile, and lint before changing the webview so any failures are clearly attributable.
+2. Replace the denied state's inline styling with an explicit scoped class in `implementation.html` that preserves the bright red appearance even while the button is temporarily disabled.
+3. Keep the idle `Access main program` button neutral and keep the existing label rotation / one-second deny timing unchanged.
+4. Add a focused source-level regression test that asserts the denied-state class overrides disabled dimming while the generic `.secondary-btn:disabled` rule remains present.
+5. Run the verification gate commands, read back the modified sections, then perform red-team review before final verification.
+
+### Dependency Map
+
+- Baseline verification must complete before implementation so unchanged failures are attributable.
+- The CSS class and JavaScript toggle must land together; otherwise the denied state will either never activate or stay muted.
+- The regression test depends on the final class name and denied-state logic shape.
+- Final verification depends on both the styling change and the regression coverage.
+
+### Risks
+
+- Overriding disabled styling too broadly could brighten unrelated disabled buttons in the sidebar.
+- Leaving inline styles in place while adding a class could create conflicting reset behavior after the one-second timeout.
+- A brittle regression test could overfit formatting instead of guarding the denied-state behavior.
+
+### Verification Record
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run compile-tests`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- Implementation gate `npm run compile`: PASS.
+- Implementation gate `npm run compile-tests`: PASS.
+- Implementation gate `node src\test\access-main-program-denied-regression.test.js`: PASS.
+- Final `npm run compile`: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `node src\test\access-main-program-denied-regression.test.js`: PASS.
+- Final `npm run lint`: FAIL (same pre-existing ESLint v9 config migration issue, unchanged by this task).
+- Readback completed for `src/webview/implementation.html` and `src/test/access-main-program-denied-regression.test.js`.
+- Scoped diff review confirmed the intended change set is limited to `src/webview/implementation.html`, `src/test/access-main-program-denied-regression.test.js`, and `task.md`.
+
+### Red Team Findings
+
+- `src/webview/implementation.html:758-764` — Failure mode: broad disabled-button styling could still wash out the temporary denied state. Mitigation: the generic `.secondary-btn:disabled` rule is left unchanged, and the new `.secondary-btn.is-denied:disabled` override restores `opacity: 1` only for this transient state.
+- `src/webview/implementation.html:803-814` — Failure mode: an over-broad denied-state selector could accidentally brighten unrelated secondary buttons. Mitigation: the styling is scoped to the explicit `is-denied` class and reuses existing `--accent-red` / `--glow-red` tokens instead of touching the global disabled palette.
+- `src/webview/implementation.html:1758-1771` — Failure mode: the button could get stuck red or disabled if the reset path forgets to remove the class. Mitigation: the timeout now explicitly removes `is-denied`, rotates the label, and clears `disabled` in the same reset block.
+
+- `src/test/access-main-program-denied-regression.test.js:11-31` — Failure mode: future edits could brighten the denied state by weakening the generic disabled rule instead of scoping the override. Mitigation: the regression test asserts the original `.secondary-btn:disabled` rule still contains `opacity: 0.3` while the denied-state override explicitly restores brightness.
+- `src/test/access-main-program-denied-regression.test.js:34-45` — Failure mode: the visual fix could make the button bright but accidentally re-enable click spam during the one-second denied window. Mitigation: the test asserts the handler still sets `disabled = true` on deny and `disabled = false` only on reset.
+- `src/test/access-main-program-denied-regression.test.js:48-50` — Failure mode: the idle button could regress back to a persistent red variant. Mitigation: the regression test asserts the original neutral markup for `btn-easter-egg` remains unchanged.
+
+- `task.md:693-747` — Failure mode: verification evidence could drift from the actual commands run. Mitigation: this section records baseline, implementation-gate, and final command results separately and notes the unchanged lint blocker explicitly.
+
+## Autoban CLEAR & RESET reload reconciliation execution (feature_plan_20260317_194503_in_autoban_terminals_the_clear_reset_button_does_nothing)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.
+- [x] Read impacted implementation surfaces and dependencies (`src/services/TaskViewerProvider.ts`, `src/webview/implementation.html`, `src/services/autobanState.ts`, `src/test/autoban-state-regression.test.js`, `src/test/autoban-controls-regression.test.js`).
+- [x] Run baseline verification (`npm run compile-tests`, `npm run compile`, `npm run lint`, `node src\test\autoban-state-regression.test.js`, `node src\test\autoban-controls-regression.test.js`) and capture current status.
+- [x] Reconcile persisted Autoban pool state against alive Autoban candidates during reload restore and after `CLEAR & RESET`.
+- [x] Tighten the Autoban webview pool rendering so reset no longer falls back to raw role-tagged `lastTerminals`.
+- [x] Add focused regression coverage for the reset/reload reconciliation path.
+- [x] Verify the implementation group (`npm run compile-tests`, `npm run compile`, targeted Autoban regressions) and read back modified files.
+- [x] Perform red-team self-review with concrete failure modes + line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Add a provider helper that reconciles `terminalPools`, `managedTerminalPools`, `sendCounts`, and `poolCursor` against the alive Autoban registry so reload-time stale entries are pruned consistently.
+2. Run that helper before `_tryRestoreAutoban()` broadcasts restored Autoban state and again after `_resetAutobanPools()` closes managed backup terminals.
+3. If safe, prune dead `purpose === 'autoban-backup'` records from `.switchboard/state.json` instead of waiting for the 24-hour stale-terminal housekeeping path.
+4. Update `getRolePoolEntries()` in `implementation.html` to render the same alive/effective-pool membership that the provider uses, rather than the raw `(configuredPool.length > 0 ? configuredPool : liveRoleTerminals)` fallback.
+5. Extend focused source-level regression coverage so both the provider reconciliation path and the webview fallback rule are locked in.
+
+### Dependency Map
+
+- The provider reconciliation helper must land before the restore/reset call sites can use it.
+- The webview fallback change depends on the provider-side alive/effective-pool rule being chosen first so both sides stay aligned.
+- Regression coverage depends on the final helper name and fallback shape.
+- Final verification depends on the provider change, the webview change, and the regression coverage all landing together.
+
+### Risks
+
+- Over-pruning terminal records could hide legitimate live role terminals after reload.
+- Changing the webview fallback without matching provider semantics could desynchronize the displayed pool from actual Autoban dispatch selection.
+- Closing or deleting the wrong records during reset could broaden the fix into an unsafe general terminal cleanup.
+
+### Verification Record
+
+- Baseline `npm run compile-tests`: PASS.
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config migration issue: missing `eslint.config.*`).
+- Baseline `node src\test\autoban-state-regression.test.js`: PASS.
+- Baseline `node src\test\autoban-controls-regression.test.js`: PASS.
+- Implementation gate `npm run compile-tests`: PASS.
+- Implementation gate `npm run compile`: PASS.
+- Implementation gate `node src\test\autoban-state-regression.test.js`: PASS.
+- Implementation gate `node src\test\autoban-controls-regression.test.js`: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `npm run compile`: PASS.
+- Final `npm run lint`: FAIL (same pre-existing ESLint v9 config migration issue, unchanged by this task).
+- Final `node src\test\autoban-state-regression.test.js`: PASS.
+- Final `node src\test\autoban-controls-regression.test.js`: PASS.
+- Manual reload regression check in the VS Code extension host: NOT RUN in this CLI environment.
+- Readback completed for `src/services/TaskViewerProvider.ts`, `src/webview/implementation.html`, and `src/test/autoban-state-regression.test.js`.
+- Scoped diff stat was reviewed for `src/services/TaskViewerProvider.ts`, `src/webview/implementation.html`, `src/test/autoban-state-regression.test.js`, and `task.md`; raw file-level stats are inflated because the worktree already carried unrelated edits in some of the same files, so readback was used to verify the reset-specific hunks directly.
+
+### Red Team Findings
+
+- `src/services/TaskViewerProvider.ts:1500-1501` — Failure mode: backup detection could hide a legitimate manual terminal if another feature reused the exact `purpose: 'autoban-backup'` marker. Mitigation: the new primary-terminal fallback only excludes that exact normalized purpose string and does not special-case any other terminal metadata.
+- `src/services/TaskViewerProvider.ts:1620-1688` — Failure mode: reconciliation could silently discard active pool members if alive detection diverged from dispatch selection. Mitigation: the helper reuses `_getAliveAutobanTerminalRegistry(...)` and the same alive/effective-pool contract that dispatch already depends on.
+- `src/services/TaskViewerProvider.ts:1690-1704` — Failure mode: stale backup pruning could broaden into unsafe registry cleanup after reload. Mitigation: deletion is limited to dead entries that still identify as `autoban-backup`; non-backup/manual terminals are never removed by this path.
+- `src/services/TaskViewerProvider.ts:2128-2168` — Failure mode: restore/reset could still rebroadcast ghost pool members if reconciliation happened after the UI sync. Mitigation: both `_resetAutobanPools()` and `_tryRestoreAutoban()` now await `_reconcileAutobanPoolState(...)` before the next broadcast/start step.
+
+- `src/webview/implementation.html:2863-2873` — Failure mode: the UI could remain broader than the backend if empty pools still fell back to every alive role-tagged terminal. Mitigation: the fallback now uses `alivePrimaryRoleTerminals`, matching the provider’s post-reset rule.
+- `src/webview/implementation.html:2867-2868` — Failure mode: backup terminals could still masquerade as primaries after reset. Mitigation: the fallback explicitly excludes entries whose `purpose` normalizes to `autoban-backup`.
+- `src/webview/implementation.html:2869-2873` — Failure mode: configured pools could still show offline ghosts if render-time filtering only happened in the provider. Mitigation: configured entries are intersected with currently alive role terminals before the UI maps them into pool cards.
+
+- `src/test/autoban-state-regression.test.js:227-243` — Failure mode: the new source assertions could false-fail on harmless refactors. Mitigation: the test now anchors on the reconciliation contract, restore/reset hook calls, and backup-pruning seam instead of a single implementation string.
+- `src/test/autoban-state-regression.test.js:252-255` — Failure mode: the webview assertion could miss the stricter primary-terminal fallback and allow drift back to backup ghosts. Mitigation: the regex explicitly requires `alivePrimaryRoleTerminals`, the `autoban-backup` exclusion, and the new effective-pool fallback.
+- `src/test/autoban-state-regression.test.js:227-255` — Failure mode: source-level coverage cannot prove interactive extension-host behavior on its own. Mitigation: this regression test is treated as a contract guard, while the verification record explicitly calls out the manual reload check as not run here.
+
+- `task.md:829-879` — Failure mode: task tracking could overstate completion without preserving the actual command evidence. Mitigation: baseline, implementation-gate, and final command outcomes are recorded separately, including the unchanged lint blocker.
+- `task.md:874-879` — Failure mode: readers could misread the raw diff stat as belonging only to this fix in a dirty worktree. Mitigation: the record explicitly notes that file-level diff stats were inflated and that readback was used for the reset-specific hunks.
+- `task.md:871-879` — Failure mode: the missing manual extension-host verification could get lost once the task is handed off. Mitigation: the verification record keeps that gap explicit so the remaining manual check is visible.

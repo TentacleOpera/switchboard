@@ -534,7 +534,7 @@
         const vscode = acquireVsCodeApi();
         const kanbanBoard = document.getElementById('kanban-board');
         let columnDefinitions = [
-            { id: 'CREATED', label: 'New', role: null, autobanEnabled: true },
+            { id: 'CREATED', label: 'Plan Created', role: null, autobanEnabled: true },
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', autobanEnabled: true },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },
@@ -791,12 +791,6 @@
                 el.addEventListener('dragend', handleDragEnd);
             });
 
-            document.querySelectorAll('.card-btn.view').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'viewPlan', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
-                });
-            });
-
             document.querySelectorAll('.card-btn.review').forEach(btn => {
                 btn.addEventListener('click', () => {
                     postKanbanMessage({ type: 'reviewPlan', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
@@ -843,9 +837,6 @@
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">${copyLabel}</button>
                         <div style="display: flex; gap: 4px;">
-                            <button class="card-btn icon-btn view" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="View Plan">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M1.5 8c0 0 3-4.5 6.5-4.5S14.5 8 14.5 8s-3 4.5-6.5 4.5S1.5 8 1.5 8z"/><circle cx="8" cy="8" r="2.5"/></svg>
-                            </button>
                             <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="Review Plan Ticket">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2v12h12V2H2zM2 5h12M5 2v12"/></svg>
                             </button>
