@@ -1,5 +1,71 @@
 # Task Tracking
 
+## Kanban micro-fixes execution (feature_plan_20260318_134331, feature_plan_20260318_135346, feature_plan_20260318_140355)
+
+- [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the three source plan files.
+- [x] Read impacted implementation surfaces (`src/webview/kanban.html`) and related regression coverage (`src/test/kanban-view-plan-removal-regression.test.js`).
+- [x] Run baseline verification (`npm run compile`, `npm run lint`) and capture status.
+- [x] Implement the Add Plan button centering fix in `src/webview/kanban.html`.
+- [x] Verify the Add Plan button fix (`npm run compile`) and read back changed lines.
+- [x] Implement the Jules button visibility fix in `src/webview/kanban.html`.
+- [x] Verify the Jules button fix (`npm run compile`) and read back changed lines.
+- [x] Implement the Review Plan icon swap in `src/webview/kanban.html`.
+- [x] Verify the Review Plan icon swap (`npm run compile`) and read back changed lines.
+- [x] Perform red-team self-review with concrete failure modes and line references.
+- [x] Run final verification and diff review.
+
+### Detailed Plan
+
+1. Remove the `line-height: 1` declaration from `.btn-add-plan` and verify the file still builds.
+2. Add the render-time Jules visibility guard and implement the live DOM visibility sync function, then verify the file still builds.
+3. Replace the review button SVG with the requested pencil/edit icon and verify the file still builds.
+4. Read back the modified ranges after each group, then perform a hostile self-review against all touched lines.
+5. Run final project verification and inspect the final diff for scope control.
+
+### Dependency Map
+
+- Step 2 depends on Step 1 preserving the surrounding Kanban header markup.
+- Step 3 depends on Step 2 keeping the card action structure intact.
+- Step 4 depends on all implementation groups completing.
+- Step 5 depends on Step 4 closing any issues found during self-review.
+
+### Risks
+
+- A render-time Jules guard could accidentally hide the button by default if it treats `undefined` as disabled.
+- Live visibility toggling could target the wrong buttons if the selector is broader than the Jules action button.
+- The icon swap could unintentionally alter button sizing/alignment if the replacement SVG changes dimensions or stroke behavior.
+
+### Verification Plan
+
+- `npm run compile`
+- `npm run lint` (expected to fail due to the repository's existing ESLint v9 flat-config migration gap)
+- `node src/test/kanban-view-plan-removal-regression.test.js`
+- Read back the modified `src/webview/kanban.html` ranges
+- Review the scoped `git --no-pager diff`
+
+### Verification Record
+
+- Baseline `npm run compile`: PASS.
+- Baseline `npm run lint`: FAIL (pre-existing ESLint v9 config issue: `eslint.config.*` missing).
+- Post-change `npm run compile` after Add Plan button fix: PASS.
+- Post-change `npm run compile` after Jules button visibility fix: PASS.
+- Post-change `npm run compile` after Review Plan icon swap: PASS.
+- Final `npm run compile-tests`: PASS.
+- Final `npm run compile`: PASS.
+- Final `node src/test/kanban-view-plan-removal-regression.test.js`: PASS.
+- Final `npm run lint`: FAIL (same pre-existing ESLint v9 config issue: `eslint.config.*` missing).
+- Final diff review: scoped to `src/webview/kanban.html` plus this `task.md` execution block.
+
+### Red Team Findings
+
+- `src/webview/kanban.html:172-188` — Failure mode: if a later refactor reintroduces a fixed line box on `.btn-add-plan`, the plus glyph can drift off optical center again; mitigation: the rule now relies on flex centering without a conflicting `line-height`.
+- `src/webview/kanban.html:850-853` — Failure mode: a malformed `visibleAgents` payload could set `jules` to a non-boolean value; mitigation: the guard only hides on explicit `false`, preserving the existing default-visible behavior.
+- `src/webview/kanban.html:996-999` — Failure mode: a `visibleAgents` update can arrive before or after column re-renders; mitigation: both the render-time guard and the DOM toggle are now present, so either timing still produces the right button state.
+- `src/webview/kanban.html:1119-1120` — Failure mode: swapping the icon path could unintentionally change button sizing or theme contrast; mitigation: the replacement SVG keeps the original width, height, `viewBox`, stroke width, and `currentColor` usage.
+- `task.md:3-15` — Failure mode: checklist drift if additional edits happen after this run without updating the boxes; mitigation: every completed gate in this execution block is now recorded immediately after verification.
+- `task.md:46-57` — Failure mode: verification evidence can become stale if commands are re-run later and the record is not refreshed; mitigation: this section captures the exact command outcomes for this execution snapshot.
+- `task.md:59-67` — Failure mode: line references in red-team notes can age as files evolve; mitigation: the references are explicitly tied to this completed run and should be regenerated on future edits.
+
 ## MCP polling removal execution (feature_plan_20260312_053351_remove_mcp_server_polling)
 
 - [x] Read `accuracy.md`, `.agent/rules/WORKFLOW_INTEGRITY.md`, `.agent/rules/switchboard_modes.md`, and the source plan file.

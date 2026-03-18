@@ -176,7 +176,6 @@
             font-family: var(--font-mono);
             font-size: 14px;
             font-weight: bold;
-            line-height: 1;
             width: 18px;
             height: 18px;
             display: flex;
@@ -848,7 +847,7 @@
                 // Column button area (with buttons for all columns except last, empty strip for last)
                 let buttonArea = '';
                 if (!isLastColumn) {
-                    const julesBtn = isPlanReviewed
+                    const julesBtn = (isPlanReviewed && lastVisibleAgents.jules !== false)
                         ? `<button class="column-icon-btn" data-action="julesSelected" data-column="${escapeAttr(def.id)}" title="Send selected plans to Jules">
                                <img src="${ICON_JULES}" alt="Jules">
                            </button>`
@@ -994,7 +993,10 @@
         }
 
         function updateJulesButtonVisibility() {
-            // Jules button is now per-column in PLAN REVIEWED; visibility managed by renderColumns
+            const isVisible = lastVisibleAgents.jules !== false;
+            document.querySelectorAll('[data-action="julesSelected"]').forEach(btn => {
+                btn.style.display = isVisible ? '' : 'none';
+            });
         }
 
         function updateAutobanButtonState() {
@@ -1115,7 +1117,7 @@
                         <button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">${copyLabel}</button>
                         <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="Review Plan Ticket">
-                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M2 2v12h12V2H2zM2 5h12M5 2v12"/></svg>
+                                <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>
                             <button class="card-btn icon-btn complete" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="Complete Plan">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
