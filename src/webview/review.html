@@ -469,7 +469,6 @@
             <button id="send-to-agent">Send to Agent</button>
             <button id="complete-plan">Complete</button>
             <button id="delete-plan" class="danger">Delete</button>
-            <button id="reload-ticket">Reload</button>
             <button class="primary" id="save-plan">Save</button>
         </div>
     </div>
@@ -562,7 +561,6 @@
         const commentInputEl = document.getElementById('comment-input');
         const actionLogEl = document.getElementById('action-log');
         const savePlanButtonEl = document.getElementById('save-plan');
-        const reloadTicketButtonEl = document.getElementById('reload-ticket');
         const copyPlanLinkButtonEl = document.getElementById('copy-plan-link');
         const openLogModalButtonEl = document.getElementById('open-log-modal');
         const sendToAgentButtonEl = document.getElementById('send-to-agent');
@@ -658,7 +656,6 @@
             const disabled = state.pendingCount > 0;
             const editable = !disabled && state.canEditMetadata;
             savePlanButtonEl.disabled = disabled;
-            reloadTicketButtonEl.disabled = disabled;
             headerTitleInputEl.disabled = !editable;
             columnSelectEl.disabled = !editable;
             complexitySelectEl.disabled = !editable;
@@ -961,12 +958,6 @@
 
         savePlanButtonEl.addEventListener('click', () => {
             savePlanText();
-        });
-
-        reloadTicketButtonEl.addEventListener('click', () => {
-            setBusy(true);
-            setStatus('Reloading ticket...');
-            vscode.postMessage({ type: 'ready' });
         });
 
         copyPlanLinkButtonEl.addEventListener('click', () => {

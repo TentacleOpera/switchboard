@@ -1150,9 +1150,18 @@ function resolveNodeForAgentEvidence(state, agentName) {
  */
 function isBrainLeakage(payload) {
     if (!payload) return false;
-    // Match any path containing the global brain directory
-    return payload.includes('.gemini/antigravity/brain/') ||
-        payload.includes('.gemini\\antigravity\\brain\\');
+    // Match paths containing private AI tool directories that should not leak to delegates
+    const privatePatterns = [
+        '.gemini/antigravity/brain/',
+        '.gemini\\antigravity\\brain\\',
+        '.cursor/rules/',
+        '.cursor\\rules\\',
+        '.kiro/memories/',
+        '.kiro\\memories\\',
+        '.codeium/memories/',
+        '.codeium\\memories\\'
+    ];
+    return privatePatterns.some(pattern => payload.includes(pattern));
 }
 
 /**

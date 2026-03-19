@@ -407,11 +407,12 @@ export class InboxWatcher {
         const actualName = resolved.name;
         const terminal = resolved.terminal;
 
-        // Sanitize: strip leading characters that trigger CLI modes
+        // Sanitize: strip leading characters that trigger CLI modes or shell command chaining
         // ! = Gemini shell mode, / = slash commands in many CLIs
+        // ; | & < > = shell command separators/redirectors
         let payload = message.payload;
         const originalPayload = payload;
-        payload = payload.replace(/^[!/$]+/, '');
+        payload = payload.replace(/^[!/$;|&<>]+/, '');
         if (payload !== originalPayload) {
             this.outputChannel.appendLine(
                 `[InboxWatcher] SANITIZED: Stripped leading trigger chars from payload ` +

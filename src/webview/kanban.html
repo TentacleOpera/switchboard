@@ -524,6 +524,12 @@
             min-height: 32px;
         }
 
+        /* Ensure last column (Reviewed) has same header height */
+        .kanban-column:last-child .column-button-area {
+            height: 32px;
+            min-height: 32px;
+        }
+
         .column-icon-btn {
             background: transparent;
             border: 1px solid transparent;
@@ -715,6 +721,8 @@
         const ICON_PROMPT_SELECTED = '{{ICON_22}}';
         const ICON_PROMPT_ALL = '{{ICON_115}}';
         const ICON_JULES = '{{ICON_28}}';
+        const ICON_ANALYST_MAP = '{{ICON_ANALYST_MAP}}';
+        const ICON_IMPORT_CLIPBOARD = '{{ICON_IMPORT_CLIPBOARD}}';
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
@@ -837,6 +845,7 @@
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
                             <button class="btn-add-plan" id="btn-add-plan" title="Add Plan">+</button>
+                            <button class="btn-add-plan" id="btn-import-clipboard" title="Import plan from clipboard"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import" style="width: 16px; height: 16px;"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`
                     : `<span class="column-count" id="count-${escapeAttr(def.id)}">0</span>`;
@@ -850,6 +859,11 @@
                     const julesBtn = (isPlanReviewed && lastVisibleAgents.jules !== false)
                         ? `<button class="column-icon-btn" data-action="julesSelected" data-column="${escapeAttr(def.id)}" title="Send selected plans to Jules">
                                <img src="${ICON_JULES}" alt="Jules">
+                           </button>`
+                        : '';
+                    const analystMapBtn = (isPlanReviewed && lastVisibleAgents.analyst !== false)
+                        ? `<button class="column-icon-btn" data-action="analystMapSelected" data-column="${escapeAttr(def.id)}" title="Generate context map for selected plans">
+                               <img src="${ICON_ANALYST_MAP}" alt="Analyst Map">
                            </button>`
                         : '';
                     buttonArea = `<div class="column-button-area">
@@ -866,6 +880,7 @@
                             <img src="${ICON_PROMPT_ALL}" alt="Prompt All">
                         </button>
                         ${julesBtn}
+                        ${analystMapBtn}
                     </div>`;
                 } else {
                     buttonArea = `<div class="column-button-area"></div>`;
@@ -888,6 +903,10 @@
                 postKanbanMessage({ type: 'createPlan' });
             });
 
+            document.getElementById('btn-import-clipboard')?.addEventListener('click', () => {
+                postKanbanMessage({ type: 'importFromClipboard' });
+            });
+
             // Column icon button handlers
             document.querySelectorAll('.column-icon-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
@@ -895,7 +914,7 @@
                     const action = btn.dataset.action;
                     const column = btn.dataset.column;
                     const nextCol = getNextColumn(column);
-                    if (!nextCol && action !== 'julesSelected') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'analystMapSelected') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -930,6 +949,13 @@
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
                             postKanbanMessage({ type: 'julesSelected', sessionIds: ids });
+                            ids.forEach(id => selectedCards.delete(id));
+                            break;
+                        }
+                        case 'analystMapSelected': {
+                            const ids = getSelectedInColumn(column);
+                            if (ids.length === 0) return;
+                            postKanbanMessage({ type: 'analystMapSelected', sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }

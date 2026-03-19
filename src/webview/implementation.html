@@ -1443,7 +1443,7 @@
             <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
             <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
             <label class="modal-label" for="custom-agent-order">Kanban order</label>
-            <input id="custom-agent-order" class="modal-input" type="number" value="150">
+            <input id="custom-agent-order" class="modal-input" type="number" value="400">
             <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                 <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
                 <span>Show as Kanban column</span>
@@ -1497,8 +1497,6 @@
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
-        let analystMapFeedback = null; // { text, className, expiresAt }
-        let analystMapFeedbackTimer = null;
         let editingCustomAgentId = null;
 
         function isPlanSelected() {
@@ -1579,7 +1577,7 @@
                 startupCommand,
                 promptInstructions: customAgentPromptInput.value.trim(),
                 includeInKanban: !!customAgentKanbanInput.checked,
-                kanbanOrder: Number(customAgentOrderInput.value) || 150
+                kanbanOrder: Number(customAgentOrderInput.value) || 400
             };
 
             const duplicate = lastCustomAgents.find(agent =>
@@ -1681,6 +1679,14 @@
         function closeRecoverPlansModal() {
             recoverPlansModal.classList.add('hidden');
         }
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
         function inferTopicFromPath(filePath) {
             if (!filePath) return '(untitled)';
             var name = filePath.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
@@ -1709,10 +1715,10 @@
                     displayTopic = inferTopicFromPath(plan.brainSourcePath || plan.localPlanPath);
                 }
                 item.innerHTML = '<div class="recover-item-info">'
-                    + '<div class="recover-item-topic">' + displayTopic.replace(/</g, '&lt;') + '</div>'
-                    + '<div class="recover-item-meta"><span class="recover-status-chip ' + plan.status + '">' + plan.status + '</span> · ' + plan.sourceType + ' · ' + dateStr + '</div>'
+                    + '<div class="recover-item-topic">' + escapeHtml(displayTopic) + '</div>'
+                    + '<div class="recover-item-meta"><span class="recover-status-chip ' + escapeHtml(plan.status) + '">' + escapeHtml(plan.status) + '</span> · ' + escapeHtml(plan.sourceType) + ' · ' + escapeHtml(dateStr) + '</div>'
                     + '</div>'
-                    + '<button class="recover-restore-btn" data-plan-id="' + plan.planId + '">' + btnLabel + '</button>';
+                    + '<button class="recover-restore-btn" data-plan-id="' + escapeHtml(plan.planId) + '">' + escapeHtml(btnLabel) + '</button>';
                 recoverPlanList.appendChild(item);
             }
             recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
@@ -2257,24 +2263,6 @@
                         renderAgentList();
                         break;
                     }
-                    if (role === 'analystMap') {
-                        analystMapFeedback = {
-                            text: success ? 'DISPATCHED' : 'FAILED',
-                            className: success ? 'success' : 'error',
-                            expiresAt: Date.now() + 2000
-                        };
-                        if (analystMapFeedbackTimer) {
-                            clearTimeout(analystMapFeedbackTimer);
-                            analystMapFeedbackTimer = null;
-                        }
-                        analystMapFeedbackTimer = setTimeout(() => {
-                            analystMapFeedback = null;
-                            analystMapFeedbackTimer = null;
-                            renderAgentList();
-                        }, 2000);
-                        renderAgentList();
-                        break;
-                    }
                     const buttons = getDispatchButtons(role);
                     buttons.forEach((btn) => {
                         if (!document.body.contains(btn)) return;
@@ -2790,16 +2778,40 @@
 
             container.appendChild(s2BtnRow);
 
-            // Step 3: Create plan from response
+            // Step 3: Copy Sprint Planning Prompt
             const s3Header = document.createElement('div');
             s3Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
-            s3Header.innerText = '3. CREATE PLAN FROM RESPONSE';
+            s3Header.innerText = '3. COPY SPRINT PLANNING PROMPT';
             container.appendChild(s3Header);
 
             const s3Desc = document.createElement('div');
             s3Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s3Desc.innerText = 'Have Notebook make a Feature plan using the How to plan guide. When the plan is ready, use CREATE to open a new ticket in edit mode, paste the result, and save it to your Kanban. If the plan needs improvement, use Autoban or manually send to the Planner agent.';
+            s3Desc.innerText = 'Generate a prompt for NotebookLM to create detailed implementation plans for all plans in the NEW column.';
             container.appendChild(s3Desc);
+
+            const copySprintBtn = document.createElement('button');
+            copySprintBtn.className = 'secondary-btn';
+            copySprintBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
+            copySprintBtn.innerText = 'COPY SPRINT PROMPT';
+            copySprintBtn.onclick = () => {
+                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:\n\n1. Read the "how_to_plan.md" guide to understand the planning framework\n2. Generate a highly detailed implementation plan following the guide's structure\n3. Include:\n   - Specific file paths and line numbers\n   - Step-by-step implementation instructions\n   - Dependencies and potential conflicts\n   - Complexity audit (Band A/B classification)\n   - Verification steps\n\nFormat each plan as a separate markdown block with clear headers so I can copy each plan individually.\n\nStart with the first plan and work through all plans in the list.`;
+                navigator.clipboard.writeText(prompt).then(() => {
+                    copySprintBtn.innerText = '\u2713 COPIED';
+                    setTimeout(() => { copySprintBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
+                });
+            };
+            container.appendChild(copySprintBtn);
+
+            // Step 4: Import plans from notebook
+            const s4Header = document.createElement('div');
+            s4Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s4Header.innerText = '4. IMPORT PLANS FROM NOTEBOOK';
+            container.appendChild(s4Header);
+
+            const s4Desc = document.createElement('div');
+            s4Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s4Desc.innerText = 'After NotebookLM generates the detailed plans, copy each plan individually. In the Kanban view, click the [\u22EF] "Import plan from clipboard" button in the NEW column header to import each plan. The imported plans will be added to the NEW column and can be sent to the Planner agent for review if needed.';
+            container.appendChild(s4Desc);
 
             return container;
         }
@@ -2851,7 +2863,10 @@
                 { role: 'planner', label: 'Planner' },
                 { role: 'coder', label: 'Coder' },
                 { role: 'lead', label: 'Lead Coder' },
-                { role: 'reviewer', label: 'Reviewer' }
+                { role: 'reviewer', label: 'Reviewer' },
+                ...lastCustomAgents
+                    .filter(agent => agent.includeInKanban === true)
+                    .map(agent => ({ role: agent.role, label: agent.name }))
             ];
 
             const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
@@ -3328,36 +3343,6 @@
             container.appendChild(input);
             container.appendChild(btn);
 
-            const mapBtn = document.createElement('button');
-            mapBtn.className = 'action-btn';
-            mapBtn.id = 'analyst-generate-map-btn';
-            const pendingMapDispatch = isDispatchPending('analystMap');
-            mapBtn.innerText = pendingMapDispatch ? 'GENERATING...' : 'GENERATE CONTEXT MAP';
-            mapBtn.disabled = !isReady || pendingMapDispatch;
-            mapBtn.dataset.role = 'analystMap';
-            if (pendingMapDispatch) {
-                mapBtn.classList.add('dispatching');
-            }
-            if (analystMapFeedback && Date.now() < analystMapFeedback.expiresAt) {
-                mapBtn.classList.add(analystMapFeedback.className);
-                mapBtn.innerText = analystMapFeedback.text;
-                mapBtn.disabled = true;
-            } else {
-                analystMapFeedback = null;
-            }
-            mapBtn.onclick = () => {
-                const text = input.value.trim();
-                if (!text) return;
-                markDispatchPending('analystMap');
-                mapBtn.disabled = true;
-                mapBtn.classList.add('dispatching');
-                mapBtn.innerText = 'GENERATING...';
-                vscode.postMessage({
-                    type: 'generateContextMap',
-                    featureDescription: text
-                });
-            };
-            container.appendChild(mapBtn);
 
             return container;
         }

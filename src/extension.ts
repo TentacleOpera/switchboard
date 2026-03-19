@@ -777,6 +777,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(initiatePlanDisposable);
 
+    const importFromClipboardDisposable = vscode.commands.registerCommand('switchboard.importPlanFromClipboard', async () => {
+        await taskViewerProvider?.importPlanFromClipboard();
+    });
+    context.subscriptions.push(importFromClipboardDisposable);
+
     const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async () => {
         await createAgentGrid();
     });
@@ -805,6 +810,11 @@ export async function activate(context: vscode.ExtensionContext) {
         return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot);
     });
     context.subscriptions.push(triggerFromKanbanDisposable);
+
+    const analystMapFromKanbanDisposable = vscode.commands.registerCommand('switchboard.analystMapFromKanban', async (sessionId: string, workspaceRoot?: string) => {
+        return await taskViewerProvider.handleAnalystContextMap(sessionId, workspaceRoot);
+    });
+    context.subscriptions.push(analystMapFromKanbanDisposable);
 
     const batchTriggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
         return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride);

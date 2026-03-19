@@ -35,6 +35,8 @@ const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', autobanEnabled: false },
 ];
 
+const DEFAULT_CUSTOM_AGENT_KANBAN_ORDER = Math.max(300, ...DEFAULT_KANBAN_COLUMNS.map(c => c.order)) + 100;
+
 function sanitizeId(raw: unknown): string {
     const normalized = String(raw || '')
         .toLowerCase()
@@ -88,7 +90,7 @@ export function parseCustomAgents(raw: unknown): CustomAgentConfig[] {
             continue;
         }
 
-        const kanbanOrder = Number.isFinite(Number(source.kanbanOrder)) ? Number(source.kanbanOrder) : 150;
+        const kanbanOrder = Number.isFinite(Number(source.kanbanOrder)) ? Number(source.kanbanOrder) : DEFAULT_CUSTOM_AGENT_KANBAN_ORDER;
         result.push({
             id,
             role,

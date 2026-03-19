@@ -12,6 +12,7 @@ import { PipelineOrchestrator } from './PipelineOrchestrator';
 import { bundleWorkspaceContext } from './ContextBundler';
 import { CustomAgentConfig, findCustomAgentByRole, parseCustomAgents, buildKanbanColumns } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
+import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole } from './agentPromptBuilder';
 import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import {
@@ -951,6 +952,47 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._handleTriggerAgentAction(role, sessionId, instruction, workspaceRoot);
     }
 
+    /** Called by the Kanban board to generate a context map for a plan session. */
+    public async handleAnalystContextMap(sessionId: string, workspaceRoot?: string): Promise<boolean> {
+        const resolvedWorkspaceRoot = workspaceRoot
+            ? this._resolveWorkspaceRoot(workspaceRoot)
+            : await this._resolveWorkspaceRootForSession(sessionId);
+        if (!resolvedWorkspaceRoot) { return false; }
+
+        const sessionPath = path.join(resolvedWorkspaceRoot, '.switchboard', 'sessions', `${sessionId}.json`);
+        if (!fs.existsSync(sessionPath)) {
+            console.warn(`[TaskViewerProvider] No session file for analyst map: ${sessionId}`);
+            return false;
+        }
+
+        let planFileAbsolute: string;
+        try {
+            const sessionContent = await fs.promises.readFile(sessionPath, 'utf8');
+            const session = JSON.parse(sessionContent);
+            if (!session.planFile) {
+                console.warn(`[TaskViewerProvider] No plan file in session: ${sessionId}`);
+                return false;
+            }
+            planFileAbsolute = path.resolve(resolvedWorkspaceRoot, session.planFile);
+        } catch (e) {
+            console.error(`[TaskViewerProvider] Failed to read session for analyst map: ${e}`);
+            return false;
+        }
+
+        if (!fs.existsSync(planFileAbsolute)) {
+            console.warn(`[TaskViewerProvider] Plan file not found for analyst map: ${planFileAbsolute}`);
+            return false;
+        }
+
+        try {
+            const planContent = await fs.promises.readFile(planFileAbsolute, 'utf8');
+            return this._handleAnalystMapForPlan(planFileAbsolute, planContent);
+        } catch (e) {
+            console.error(`[TaskViewerProvider] Failed to read plan for analyst map: ${e}`);
+            return false;
+        }
+    }
+
     /** Called by the Kanban board to silently reset a card to an earlier stage. */
     public async handleKanbanBackwardMove(sessionIds: string[], targetColumn: string, workspaceRoot?: string) {
         const resolvedWorkspaceRoot = workspaceRoot
@@ -1123,12 +1165,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             : await this._resolveWorkspaceRootForSession(sessionIds[0]);
         if (!resolvedWorkspaceRoot) { return false; }
         await this._activateWorkspaceContext(resolvedWorkspaceRoot);
-
-        // If only one plan, fall through to single dispatch for simplicity unless autoban
-        // needs an explicit terminal override for pooled round-robin routing.
-        if (sessionIds.length === 1 && !targetTerminalOverride) {
-            return this._handleTriggerAgentAction(role, sessionIds[0], instruction, resolvedWorkspaceRoot);
-        }
 
         const targetAgent = String(targetTerminalOverride || '').trim() || await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
         if (!targetAgent) {
@@ -1321,12 +1357,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return parseCustomAgents(raw);
     }
 
-    private _buildCustomAgentPrompt(customAgent: CustomAgentConfig, planAnchor: string, focusDirective: string): string {
-        const instructions = customAgent.promptInstructions
-            ? `${customAgent.promptInstructions}\n\n`
-            : '';
-        return `${instructions}Please execute the plan.\n\n${planAnchor}\n\n${focusDirective}`;
-    }
 
 
     private _sendInitialState() {
@@ -1476,8 +1506,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
     }
 
-    private _autobanPoolRoles(): string[] {
-        return ['planner', 'coder', 'lead', 'reviewer'];
+    private _autobanPoolRoles(customAgentRoles?: string[]): string[] {
+        const builtIn = ['planner', 'coder', 'lead', 'reviewer'];
+        if (!customAgentRoles || customAgentRoles.length === 0) {
+            return builtIn;
+        }
+        const seen = new Set(builtIn);
+        for (const role of customAgentRoles) {
+            if (role && !seen.has(role)) {
+                builtIn.push(role);
+                seen.add(role);
+            }
+        }
+        return builtIn;
     }
 
     private _normalizeAutobanPoolRole(role: string): string {
@@ -1631,7 +1672,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const validSendCountNames = new Set<string>();
         let stateChanged = false;
 
-        for (const rawRole of this._autobanPoolRoles()) {
+        const customAgents = await this.getCustomAgents(workspaceRoot);
+        const customAgentRoles = customAgents.filter(a => a.includeInKanban).map(a => a.role);
+        for (const rawRole of this._autobanPoolRoles(customAgentRoles)) {
             const role = this._normalizeAutobanPoolRole(rawRole);
             const aliveRoleTerminals = this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, true);
             const alivePrimaryRoleTerminals = this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, false);
@@ -2011,7 +2054,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const normalizedRole = this._normalizeAutobanPoolRole(role);
-        if (!this._autobanPoolRoles().includes(normalizedRole)) {
+        const customAgents = await this.getCustomAgents(workspaceRoot);
+        const customAgentRoles = customAgents.filter(a => a.includeInKanban).map(a => a.role);
+        if (!this._autobanPoolRoles(customAgentRoles).includes(normalizedRole)) {
             vscode.window.showErrorMessage(`Unsupported autoban pool role '${role}'.`);
             return;
         }
@@ -2045,8 +2090,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         let pid: number | undefined;
         try {
-            pid = await this._waitWithTimeout(terminal.processId, 5000, undefined);
-        } catch { }
+            pid = await this._waitWithTimeout(terminal.processId, 10000, undefined);
+        } catch {
+            console.warn(`[TaskViewerProvider] Failed to get PID for terminal '${uniqueName}' within 10s. Will retry.`);
+        }
+
+        // If PID capture failed, schedule a retry after 2 seconds
+        if (!pid) {
+            setTimeout(async () => {
+                try {
+                    const retryPid = await this._waitWithTimeout(terminal.processId, 5000, undefined);
+                    if (retryPid) {
+                        await this.updateState(async (state) => {
+                            if (state.terminals?.[uniqueName]) {
+                                state.terminals[uniqueName].pid = retryPid;
+                                state.terminals[uniqueName].childPid = retryPid;
+                                console.log(`[TaskViewerProvider] Retry: Updated PID for terminal '${uniqueName}' to ${retryPid}`);
+                            }
+                        });
+                        this._refreshTerminalStatuses();
+                    }
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] PID retry failed for terminal '${uniqueName}':`, e);
+                }
+            }, 2000);
+        }
 
         await this.updateState(async (state) => {
             if (!state.terminals) {
@@ -2313,94 +2381,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         instruction?: string
     ): string {
         const { baseInstruction, includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
-        const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
-        const batchExecutionRules = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.
-
-CRITICAL INSTRUCTIONS:
-1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
-2. Execute each plan fully before moving to the next (if sequential).
-3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
-        const inlineChallengeDirective = `For each plan, before implementation:
-- perform a concise adversarial review of that specific plan,
-- list at least 2 concrete flaws/edge cases and how you'll address them,
-- then execute using those corrections,
-- do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
-        const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
-        const planList = plans.map(plan => `- [${plan.topic}] Plan File: ${plan.absolutePath}`).join('\n');
-
-        if (role === 'planner') {
-            const plannerVerb = baseInstruction === 'enhance' ? 'enhance' : 'improve';
-            return `Please ${plannerVerb} the following ${plans.length} plans.
-
-${batchExecutionRules}
-
-For each plan:
-1. Read the plan file before editing.
-2. Add concrete implementation steps and referenced file paths where applicable.
-3. Capture dependency or conflict findings that materially affect execution.
-4. Update the Complexity Audit and recommendation so routing stays accurate.
-
-${focusDirective}
-
-PLANS TO PROCESS:
-${planList}`;
-        }
-
-        if (role === 'reviewer') {
-            const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
-            const reviewerExecutionIntro = this._buildReviewerExecutionIntro(plans.length);
-            const reviewerExecutionMode = this._buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
-            return `${reviewerExecutionIntro}
-
-${batchExecutionRules}
-
-${reviewerExecutionMode}
-
-For each plan:
-1. Use the plan file as the source of truth for the review criteria.
-2. Review the implementation/code against the plan requirements, not the plan text itself.
-3. Apply fixes for valid material issues before moving on when safe.
-4. Report concrete findings and validation results for that plan.
-
-${focusDirective}
-
-PLANS TO PROCESS:
-${planList}`;
-        }
-
-        if (role === 'lead') {
-            return `Please execute the following ${plans.length} plans.
-
-${batchExecutionRules}${challengeBlock}
-
-${focusDirective}
-
-PLANS TO PROCESS:
-${planList}`;
-        }
-
-        if (role === 'coder') {
-            const intro = baseInstruction === 'low-complexity'
-                ? `Please execute the following ${plans.length} low-complexity plans from PLAN REVIEWED.`
-                : `Please execute the following ${plans.length} plans.`;
-            return this._withCoderAccuracyInstruction(`${intro}
-
-${batchExecutionRules}${challengeBlock}
-
-${focusDirective}
-
-PLANS TO PROCESS:
-${planList}`);
-        }
-
-        return `Please process the following ${plans.length} plans.
-
-${batchExecutionRules}
-
-${focusDirective}
-
-PLANS TO PROCESS:
-${planList}`;
+        return buildKanbanBatchPrompt(role, plans, {
+            instruction: baseInstruction,
+            includeInlineChallenge,
+            accurateCodingEnabled: this._isAccurateCodingEnabled()
+        });
     }
 
     private _describeAutobanDispatchSourceColumns(cards: Array<Pick<KanbanDispatchCard, 'sourceColumn'>>): string {
@@ -2745,6 +2730,8 @@ ${planList}`;
                             this._view?.webview.postMessage({ type: 'startupCommands', commands: cmds, planIngestionFolder });
                             const vis = await this.getVisibleAgents();
                             this._view?.webview.postMessage({ type: 'visibleAgents', agents: vis });
+                            const customAgents = await this.getCustomAgents();
+                            this._view?.webview.postMessage({ type: 'customAgents', customAgents });
                         }
                         this._view?.webview.postMessage({ type: 'loading', value: false });
                         break;
@@ -2866,9 +2853,8 @@ ${planList}`;
                         }
                         break;
                     case 'generateContextMap':
-                        if (data.featureDescription) {
-                            await this._handleGenerateContextMap(data.featureDescription);
-                        }
+                        // Removed: sidebar context map button no longer exists.
+                        // Context map generation is now triggered from the Kanban board.
                         break;
                     case 'viewPlan':
                         if (data.sessionId) {
@@ -2974,6 +2960,11 @@ ${planList}`;
                                 });
                                 await this._refreshConfiguredPlanWatcher();
                             }
+                        }
+                        if (data.customAgents !== undefined) {
+                            await this.updateState(async (state: any) => {
+                                state.customAgents = data.customAgents;
+                            });
                         }
                         if (data.onboardingComplete === true) {
                             this._view?.webview.postMessage({ type: 'onboardingProgress', step: 'cli_saved' });
@@ -5687,21 +5678,23 @@ ${planList}`;
 
             const customAgents = await this.getCustomAgents(resolvedWorkspaceRoot);
             const effectiveColumn = this._normalizeLegacyKanbanColumn(column || deriveKanbanColumn(Array.isArray(sheet.events) ? sheet.events : [], customAgents));
-            const planUri = vscode.Uri.file(planPathAbsolute).toString();
-            const markdownLink = `[${topic}](${planUri})`;
-            let textToCopy = markdownLink;
+            
+            // For PLAN REVIEWED, use complexity-based role selection
+            let role: string;
+            if (effectiveColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
+                const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, planPathAbsolute);
+                role = complexity === 'Low' ? 'coder' : 'lead';
+            } else {
+                role = columnToPromptRole(effectiveColumn) || 'coder';
+            }
+            
+            const plan: BatchPromptPlan = { topic, absolutePath: planPathAbsolute };
+            let textToCopy = buildKanbanBatchPrompt(role, [plan], {
+                accurateCodingEnabled: this._isAccurateCodingEnabled()
+            });
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
-            if (effectiveColumn === 'CREATED') {
-                textToCopy = `Please improve the following plan. Execute the .agent/workflows/improve-plan.md workflow to perform a dependency check and adversarial review:\n\n${markdownLink}`;
-            } else if (effectiveColumn === 'PLAN REVIEWED') {
-                textToCopy = `Please execute the following plan. Use the linked file as the single source of truth:\n\n${markdownLink}`;
-            } else if (this._isCompletedCodingColumn(effectiveColumn)) {
-                textToCopy = `The implementation for the following plan is complete. Please review the code against the plan requirements and identify any defects:\n\n${markdownLink}`;
-            } else if (customAgent) {
-                textToCopy = `Please execute the following plan. Use the linked file as the single source of truth:\n\n${markdownLink}`;
-                if (customAgent.promptInstructions) {
-                    textToCopy += `\n\nAdditional Instructions: ${customAgent.promptInstructions}`;
-                }
+            if (customAgent?.promptInstructions) {
+                textToCopy += `\n\nAdditional Instructions: ${customAgent.promptInstructions}`;
             }
 
             await vscode.env.clipboard.writeText(textToCopy);
@@ -5709,7 +5702,7 @@ ${planList}`;
             const workflowName = effectiveColumn === 'CREATED'
                 ? 'improve-plan'
                 : effectiveColumn === 'PLAN REVIEWED'
-                    ? 'handoff'
+                    ? (role === 'lead' ? 'handoff-lead' : 'handoff')
                     : this._isCompletedCodingColumn(effectiveColumn)
                         ? 'reviewer-pass'
                         : undefined;
@@ -7097,10 +7090,12 @@ ${planList}`;
         }
 
         let planFileRelative: string;
+        let sessionTopic: string;
         try {
             const sessionContent = await fs.promises.readFile(sessionPath, 'utf8');
             const session = JSON.parse(sessionContent);
             planFileRelative = session.planFile;
+            sessionTopic = session.topic || session.planFile || 'Untitled';
             if (!planFileRelative) {
                 clearDispatchLock();
                 vscode.window.showErrorMessage('No plan file associated with this session.');
@@ -7146,7 +7141,7 @@ ${planList}`;
                 const coderAgent = await this._getAgentNameForRole('coder', resolvedWorkspaceRoot);
 
                 const dispatches: Array<{ role: 'lead' | 'coder'; agent: string; payload: string; metadata: Record<string, any> }> = [];
-                const focusDirective = `FOCUS DIRECTIVE: You are working on the file at ${planFileAbsolute}. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing. Treat the provided path as the single source of truth.`;
+                const teamPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute };
 
                 if (!hasBandA && !hasBandB) {
                     if (!leadAgent) {
@@ -7158,11 +7153,7 @@ ${planList}`;
                     dispatches.push({
                         role: 'lead',
                         agent: leadAgent,
-                        payload: `Please execute the plan.
-
-Additional Instructions: only do band b work.
-
-${focusDirective}`,
+                        payload: buildKanbanBatchPrompt('lead', [teamPlan]) + `\n\nAdditional Instructions: only do band b work.`,
                         metadata: { phase_gate: { enforce_persona: 'lead' } }
                     });
                 } else {
@@ -7170,11 +7161,7 @@ ${focusDirective}`,
                         dispatches.push({
                             role: 'lead',
                             agent: leadAgent,
-                            payload: `Please execute Band B work from the plan.
-
-Additional Instructions: only do band b work.
-
-${focusDirective}`,
+                            payload: buildKanbanBatchPrompt('lead', [teamPlan]) + `\n\nAdditional Instructions: only do band b work.`,
                             metadata: { phase_gate: { enforce_persona: 'lead' } }
                         });
                     }
@@ -7183,11 +7170,9 @@ ${focusDirective}`,
                         dispatches.push({
                             role: 'coder',
                             agent: coderAgent,
-                            payload: this._withCoderAccuracyInstruction(`Please execute Band A work from the plan.
-
-Additional Instructions: only do band a.
-
-${focusDirective}`),
+                            payload: buildKanbanBatchPrompt('coder', [teamPlan], {
+                                accurateCodingEnabled: this._isAccurateCodingEnabled()
+                            }) + `\n\nAdditional Instructions: only do band a.`,
                             metadata: {}
                         });
                     }
@@ -7272,241 +7257,60 @@ ${focusDirective}`),
         const teamStrictPrompts = vscode.workspace.getConfiguration('switchboard').get<boolean>('team.strictPrompts');
         const strictPlannerPrompts = teamStrictPrompts ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.strictPrompts', false);
         const strictReviewPrompts = teamStrictPrompts ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('review.strictPrompts', false);
-        const focusDirective = `FOCUS DIRECTIVE: Use the Plan File path above as the single source of truth. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
-        const planAnchor = `Plan File: ${planFileAbsolute}`;
         const { baseInstruction, includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
-        const inlineChallengeDirective = `Challenge step (inline, no workflow transitions):
-- Before implementation, perform a concise adversarial review of this plan.
-- List at least 2 concrete flaws/edge cases and how you'll address them.
-- Then execute using those corrections.
-- Do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
-        const inlineChallengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
         const customAgents = await this.getCustomAgents(resolvedWorkspaceRoot);
         const customAgent = findCustomAgentByRole(customAgents, role);
-        const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
-        const balancedReviewPath = `.switchboard/reviews/balanced_review_${sessionId}.md`;
-        const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
-        const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
+
+        // Canonical plan object for shared builder
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute };
 
         if (role === 'planner') {
-            if (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') {
-                if (strictPlannerPrompts) {
-                    messagePayload = `Please improve this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
-Do not add net-new product requirements or scope.
-You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
+            const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
+            messagePayload = buildKanbanBatchPrompt('planner', [dispatchPlan], { instruction: plannerInstruction });
 
-${planAnchor}
-
-Use the explicit three-stage review process:
-  Stage 1 — Enhancement: Fill out 'TODO' sections or underspecified parts. Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
-    MANDATORY: Ensure the plan has a "## Complexity Audit" section with "### Band A — Routine" and "### Band B — Complex / Risky" subsections.
-    - If missing, create it.
-    - If present, update it based on your analysis.
-    - Band A: List straightforward, low-risk changes.
-    - Band B: List complex/risky changes (architectural shifts, new frameworks, state management, cross-module impacts).
-    - If Band B is empty, write "- None" explicitly.
-  Stage 2 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
-  Stage 3 — Write a balanced synthesis to ${balancedReviewPath}
-
-Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Enhancement) findings directly in chat, if applicable.
-2. Post Stage 2 (Grumpy) findings directly in chat.
-3. Immediately after, post Stage 3 (Balanced) synthesis directly in chat.
-4. Update the original plan and provide the final enhancement assessment in chat.
-5. Keep file outputs as archival artifacts, not the primary user-facing output.
-
-CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
-
-At the very end of your response, explicitly recommend which agent should execute this plan:
-- If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
-- If the plan has high complexity (e.g., Band B tasks, new frameworks, tricky state management), say: "This plan requires advanced reasoning. Send it to the Lead Coder."
-
-IMPORTANT: Once the balanced review is complete, you MUST update the original feature plan with the enhancement findings. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-${focusDirective}`;
-                } else {
-                    messagePayload = `Please improve this plan. Break it down into distinct steps grouped by high complexity and low complexity. Add extra detail.
-Do not add net-new product requirements or scope.
-You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
-
-${planAnchor}
-
-Light mode rules (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Do NOT write plan/review artifact files for this pass.
-2. Stage 1 (Enhancement): Fill out any 'TODO' sections. MANDATORY: Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
-   MANDATORY: Ensure the plan has a "## Complexity Audit" section with "### Band A — Routine" and "### Band B — Complex / Risky" subsections.
-   - If missing, create it.
-   - If present, update it based on your analysis.
-   - Band A: List straightforward, low-risk changes.
-   - Band B: List complex/risky changes (architectural shifts, new frameworks, state management, cross-module impacts).
-   - If Band B is empty, write "- None" explicitly.
-3. Stage 2 (Grumpy Critique): post adversarial critique of the technical approach directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-4. Stage 3 (Balanced Synthesis): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
-5. Stage 4 (Action): Update the original plan with the enhancement findings and provide the final assessment in chat. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
-
-At the very end of your response, explicitly recommend which agent should execute this plan:
-- If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
-- If the plan has high complexity (e.g., Band B tasks, new frameworks, tricky state management), say: "This plan requires advanced reasoning. Send it to the Lead Coder."
-
-${focusDirective}`;
-                }
+            // Append dispatch-specific strict/light mode delivery extensions
+            const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
+            const balancedReviewPath = `.switchboard/reviews/balanced_review_${sessionId}.md`;
+            if (strictPlannerPrompts) {
+                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
+- Write adversarial critique to ${grumpyReviewPath}
+- Write balanced synthesis to ${balancedReviewPath}
+- Post both in chat first, then update the original plan. Keep file outputs as archival artifacts.`;
             } else {
-                const contextLine = instruction ? `
-Context: ${instruction}` : '';
-                if (strictPlannerPrompts) {
-                    messagePayload = `Please review this plan.${contextLine}
-
-${planAnchor}
-
-Use the explicit three-stage review process:
-  Stage 1 — Enhancement: Fill out 'TODO' sections or underspecified parts. Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
-  Stage 2 — Write an adversarial critique to ${grumpyReviewPath} (dramatic "Grumpy Principal Engineer" voice: incisive, specific, and theatrical, not polite)
-  Stage 3 — Write a balanced synthesis to ${balancedReviewPath}
-
-Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Enhancement) findings directly in chat, if applicable.
-2. Post Stage 2 (Grumpy) findings directly in chat.
-3. Immediately after, post Stage 3 (Balanced) synthesis directly in chat.
-4. Update the original plan and provide the final plan assessment in chat.
-5. Keep file outputs as archival artifacts, not the primary user-facing output.
-
-CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
-
-At the very end of your response, explicitly recommend which agent should execute this plan:
-- If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
-- If the plan has high complexity (e.g., Band B tasks, new frameworks, tricky state management), say: "This plan requires advanced reasoning. Send it to the Lead Coder."
-
-IMPORTANT: Once the balanced review is complete, you MUST update the original feature plan with the review feedback. This is a mandatory orchestration step, not an implementation fix. Also, ensure you edit the plan to mark items that have been completed (e.g., changing \`[ ]\` to \`[x]\`). ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-${focusDirective}`;
-                } else {
-                    messagePayload = `Please review this plan.${contextLine}
-
-${planAnchor}
-
-Light mode rules (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Do NOT write plan/review artifact files for this pass.
-2. Stage 1 (Enhancement): Fill out any 'TODO' sections. MANDATORY: Scan the Kanban board/plans folder for potential cross-plan conflicts and document them here.
-3. Stage 2 (Grumpy Critique): post adversarial critique of the technical approach directly in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-4. Stage 3 (Balanced Synthesis): Immediately after the grumpy critique, post a balanced synthesis directly in chat.
-5. Stage 4 (Action): Update the original plan with review feedback and completed items, and provide the final assessment in chat. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-CRITICAL: Do not stop early. You must complete the Enhancement (if applicable), the Grumpy review, the Balanced synthesis, and the File Update all in one continuous response.
-
-At the very end of your response, explicitly recommend which agent should execute this plan:
-- If the plan is simple (e.g., routine changes, no complex architectural shifts, only Band A tasks), say: "This is a simple plan. Send it to the Coder agent."
-- If the plan has high complexity (e.g., Band B tasks, new frameworks, tricky state management), say: "This plan requires advanced reasoning. Send it to the Lead Coder."
-
-${focusDirective}`;
-                }
+                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
+- Do NOT write plan/review artifact files for this pass.
+- Post adversarial critique and balanced synthesis directly in chat, then update the original plan.`;
             }
         } else if (role === 'reviewer') {
-            const reviewerExecutionIntro = this._buildReviewerExecutionIntro(1);
+            messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan]);
             messageMetadata.phase_gate = {
                 enforce_persona: 'reviewer',
                 review_mode: strictReviewPrompts ? 'direct_execute_strict' : 'direct_execute_light',
                 bypass_workflow_triggers: 'true'
             };
+
+            // Append dispatch-specific strict/light mode delivery extensions
+            const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
+            const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
             if (strictReviewPrompts) {
-                const reviewerExecutionMode = this._buildReviewerExecutionModeLine('Assess actual code changes against the plan requirements, then fix valid issues in code, then verify.');
-                messagePayload = `${reviewerExecutionIntro}
-
-${planAnchor}
-
-${reviewerExecutionMode}
-
-Use explicit two-stage analysis:
-- Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), minimum 5 findings, delivered in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-  Output: ${reviewerFindingsPath}
-- Stage 2 (Balanced): synthesize Stage 1 into actionable fixes, including what to keep, what to fix now, and what can defer.
-  Output: ${reviewerSynthesisPath}
-
-Required outputs:
-1. Write both review files above.
-2. Apply code fixes for valid findings.
-3. Run verification checks (typecheck/tests as applicable) and include results in the balanced review.
-4. Update the original plan file with what was fixed, files changed, validation results, and any remaining risks. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Grumpy) findings directly in chat before final verdict.
-2. Immediately after, post Stage 2 (Balanced) synthesis directly in chat before final verdict.
-3. Execute the necessary code fixes and plan update, then provide final assessment.
-4. Keep file outputs as archival artifacts, not the primary user-facing output.
-
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, the code fixes, and the File Update all in one continuous response.
-
-Strict format for balanced review:
-- Implemented Well
-- Issues Found
-- Fixes Applied
-- Validation Results
-- Remaining Risks
-- Final Verdict: Ready / Not Ready
-  - Use "Not Ready" only when there are unresolved code defects or unmet plan requirements.
-  - Do NOT use "Not Ready" solely because tests/checks were blocked by environment/tooling constraints; report those blockers under "Validation Results" and "Remaining Risks".
-
-${focusDirective}`;
+                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
+- Write Stage 1 findings to ${reviewerFindingsPath}
+- Write Stage 2 synthesis to ${reviewerSynthesisPath}
+- Post both in chat first, then apply fixes and update the plan. Keep file outputs as archival artifacts.
+- Strict format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
+- Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
             } else {
-                const reviewerExecutionMode = this._buildReviewerExecutionModeLine('Assess actual code changes against the plan requirements, fix valid material issues, then verify.');
-                messagePayload = `${reviewerExecutionIntro}
-
-${planAnchor}
-
-${reviewerExecutionMode}
-
-Use explicit two-stage analysis:
-- Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), posted in chat in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-- Stage 2 (Balanced): concise action summary (fix now vs defer), posted in chat.
-
-Required outputs:
-1. Do NOT write plan/review artifact files in light mode.
-2. Apply code fixes for valid CRITICAL/MAJOR findings.
-3. Run focused verification checks (typecheck/tests as applicable) and include results in the balanced review.
-4. Update the original plan file with fixed items, files changed, validation results, and remaining risks. ⚠️ CRITICAL: Ensure you do NOT truncate, summarize, or delete the existing implementation steps, code blocks, or goal statements when editing the plan.
-
-Delivery requirement (chat-first UX) (COMPLETE ALL STEPS IN A SINGLE RESPONSE):
-1. Post Stage 1 (Grumpy) findings directly in chat before final verdict.
-2. Immediately after, post Stage 2 (Balanced) synthesis directly in chat before final verdict.
-3. Execute the necessary code fixes and plan update, then provide final assessment.
-4. Keep file outputs as archival artifacts, not the primary user-facing output.
-
-CRITICAL: Do not stop after Stage 1. You must complete the Grumpy review, the Balanced synthesis, the code fixes, and the File Update all in one continuous response.
-
-Suggested format for balanced review:
-- Implemented Well
-- Issues Found
-- Fixes Applied
-- Validation Results
-- Remaining Risks
-- Final Verdict: Ready / Not Ready
-  - Use "Not Ready" only when there are unresolved code defects or unmet plan requirements.
-  - Do NOT use "Not Ready" solely because tests/checks were blocked by environment/tooling constraints; report those blockers under "Validation Results" and "Remaining Risks".
-
-${focusDirective}`;
+                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
+- Do NOT write plan/review artifact files in light mode.
+- Post findings and synthesis directly in chat, then apply fixes and update the plan.
+- Suggested format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
+- Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
             }
         } else if (role === 'lead') {
-            messagePayload = `Please execute the plan.
-
-${planAnchor}${inlineChallengeBlock}
-
-${focusDirective}`;
+            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { includeInlineChallenge });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
-            if (baseInstruction === 'implement-all') {
-                messagePayload = this._withCoderAccuracyInstruction(`Please execute the ENTIRE plan. Do not stop for confirmation between steps.
-
-${planAnchor}${inlineChallengeBlock}
-
-${focusDirective}`);
-            } else if (baseInstruction === 'low-complexity') {
-                messagePayload = this._withCoderAccuracyInstruction(`Please execute the low complexity steps of the plan.
-
-${planAnchor}${inlineChallengeBlock}
-
-${focusDirective}`);
-            } else if (baseInstruction === 'create-signal-file') {
+            if (baseInstruction === 'create-signal-file') {
                 messagePayload = this._withCoderAccuracyInstruction(`The first implementation phase has passed. As your next step, create a signal file to notify the Reviewer:
 
 Signal file path: .switchboard/inbox/Reviewer/${sessionId}.md
@@ -7514,14 +7318,17 @@ File content: Plan: ${planFileAbsolute}
 
 Create this file exactly as specified, then continue your work.`);
             } else {
-                messagePayload = this._withCoderAccuracyInstruction(`Please execute the plan.
-
-${planAnchor}${inlineChallengeBlock}
-
-${focusDirective}`);
+                messagePayload = buildKanbanBatchPrompt('coder', [dispatchPlan], {
+                    instruction: baseInstruction,
+                    includeInlineChallenge,
+                    accurateCodingEnabled: this._isAccurateCodingEnabled()
+                });
             }
         } else if (customAgent) {
-            messagePayload = this._buildCustomAgentPrompt(customAgent, planAnchor, focusDirective);
+            messagePayload = buildKanbanBatchPrompt(role, [dispatchPlan]);
+            if (customAgent.promptInstructions) {
+                messagePayload += `\n\nAdditional Instructions: ${customAgent.promptInstructions}`;
+            }
         } else {
             clearDispatchLock();
             vscode.window.showErrorMessage(`Unknown role: ${role}`);
@@ -7695,32 +7502,39 @@ ${focusDirective}`);
         }
     }
 
-    private async _handleGenerateContextMap(featureDescription: string) {
-        const description = (featureDescription || '').trim();
-        if (!description) {
-            this._view?.webview.postMessage({ type: 'actionTriggered', role: 'analystMap', success: false });
-            return;
+    private async _handleAnalystMapForPlan(planFilePath: string, planContent: string): Promise<boolean> {
+        const content = (planContent || '').trim();
+        if (!content) {
+            return false;
         }
 
-        const workspaceRoot = this._resolveWorkspaceRoot() || '';
-        const outputDir = path.join(workspaceRoot, '.switchboard', 'context-maps');
-        const timestamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').slice(0, 19);
-        const outputPath = path.join(outputDir, `context-map_${timestamp}.md`);
-
         const prompt = [
-            '## Context Map Generation Request',
+            '## Context Map Enhancement Request',
             '',
-            `**Feature Area:** ${description}`,
+            '**Instructions:**',
+            '1. Read the plan content below carefully',
+            '2. If a "## Context Map" section already exists, enhance it',
+            '3. If no context map exists, append a new section at the end',
+            '4. DO NOT modify, delete, or rewrite any existing sections',
+            '5. Preserve all existing content exactly as-is',
             '',
-            'Follow the Context Map Generation Protocol from your persona instructions:',
-            `1. Analyze the feature area described above.`,
-            `2. Identify core files, logic flow, key dependencies, and open questions.`,
-            `3. Write the context map as a markdown file to: ${outputPath}`,
-            `4. After writing the file, call handoff_clipboard(file: "${outputPath}", copyPathOnly: true) to copy the path to clipboard.`,
-            `5. Report completion status.`,
+            `**Plan File:** ${planFilePath}`,
+            '',
+            '**Required Context Map Contents:**',
+            '- Core files with absolute paths and line numbers',
+            '- Key functions/classes and their purposes',
+            '- Logic flow and dependencies',
+            '- Integration points and data flow',
+            '',
+            '**Existing Plan Content:**',
+            '```',
+            content,
+            '```',
+            '',
+            '**Action:** Append or enhance the "## Context Map" section only. Do not modify any other part of the plan.',
         ].join('\n');
 
-        await this._handleSendAnalystMessage(prompt, 'analystMap');
+        return this._handleSendAnalystMessage(prompt, 'analystMap');
     }
 
     private _toPlanSlug(value: string): string {
@@ -7776,6 +7590,35 @@ ${focusDirective}`);
         } catch (err: any) {
             const msg = err?.message || String(err);
             vscode.window.showErrorMessage(`Plan creation failed: ${msg}`);
+        }
+    }
+
+    public async importPlanFromClipboard(): Promise<void> {
+        const text = await vscode.env.clipboard.readText();
+
+        if (!text || !text.trim()) {
+            vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
+            return;
+        }
+        if (text.length > 200_000) {
+            vscode.window.showWarningMessage('Clipboard content is too large (>200 KB). Aborting import.');
+            return;
+        }
+
+        const h1Match = text.match(/^#\s+(.+)$/m);
+        const title = h1Match ? h1Match[1].trim() : 'Imported Plan';
+
+        if (!h1Match) {
+            vscode.window.showWarningMessage('No "# Title" found in clipboard. Importing with default title.');
+        }
+
+        try {
+            const { sessionId } = await this._createInitiatedPlan(title, text, false);
+            await this._refreshRunSheets();
+            vscode.window.showInformationMessage(`Imported plan: ${title}`);
+        } catch (err: any) {
+            const msg = err?.message || String(err);
+            vscode.window.showErrorMessage(`Clipboard import failed: ${msg}`);
         }
     }
 
@@ -8825,6 +8668,32 @@ ${focusDirective}`);
                     } catch { /* terminal may be closing */ }
                 }
 
+                // Re-resolve PIDs for terminals that have missing or null PIDs
+                for (const [key, termInfo] of Object.entries(terminalsMap)) {
+                    const ti = termInfo as any;
+                    if (!ti.pid && !ti.childPid) {
+                        const matchingTerminal = activeTerminals.find(t =>
+                            t.name === key || t.name === (ti.friendlyName || key)
+                        );
+                        if (matchingTerminal) {
+                            try {
+                                const resolvedPid = await this._waitWithTimeout(matchingTerminal.processId, 1000, undefined);
+                                if (resolvedPid) {
+                                    await this.updateState(async (state) => {
+                                        if (state.terminals?.[key]) {
+                                            state.terminals[key].pid = resolvedPid;
+                                            state.terminals[key].childPid = resolvedPid;
+                                        }
+                                    });
+                                    ti.pid = resolvedPid;
+                                    ti.childPid = resolvedPid;
+                                    activePids.add(resolvedPid);
+                                }
+                            } catch { /* PID resolution failed, terminal may be closing */ }
+                        }
+                    }
+                }
+
                 // Send ALL terminals, annotated with _isLocal
                 const enrichedTerminals: any = {};
 
@@ -9011,94 +8880,35 @@ ${focusDirective}`);
 
             // 3. Write timestamped how_to_plan.md
             const howToPlanPath = path.join(airlockDir, `${timestamp}-how_to_plan.md`);
-            await fs.promises.writeFile(howToPlanPath, [
-                '# How to Plan: The Switchboard Standard',
-                '',
-                '**🚨 STRICT DIRECTIVE FOR AI AGENTS 🚨**',
-                'Do NOT skip straight to writing code or outputting a generic implementation plan. You must perform internal cognitive reasoning first. To guarantee this, you must output your plan EXACTLY matching the "Plan Template" at the bottom of this document. The template requires you to simulate an internal adversarial review before you write the proposed changes.',
-                '',
-                'Follow these steps sequentially to formulate your plan:',
-                '',
-                '## Step 1: Understand the Goal',
-                'Identify the core problem or feature. Clarify what success looks like. If the user\'s request is ambiguous, stop and ask clarifying questions before generating a plan.',
-                '',
-                '## Step 2: Complexity, Edge-Case & Dependency Audit',
-                'Before writing any implementation steps, audit the system:',
-                '*   **Complexity:** Rate the routine vs. complex/risky parts of the request.',
-                '*   **Edge Cases:** Identify race conditions, security flaws, backward compatibility issues, and side effects.',
-                '*   **Dependencies & Conflicts:** Identify if this plan relies on other pending plans in the Kanban board, or if it will conflict with concurrent work.',
-                '',
-                '## Step 3: Improve Plan (`/improve-plan`)',
-                'Audit the strategy and stress-test the assumptions:',
-                '- Identify missing pieces, implicit dependencies, or assumptions that need hardening',
-                '- Decompose large changes into Band A (routine) and Band B (complex/risky) tasks',
-                '- **Grumpy Persona**: Aggressively critique every assumption. Find edge cases, race conditions, missing error handling, and scope creep.',
-                '- **Balanced Persona**: Synthesize the critique and finalize the plan.',
-                '',
-                '## Step 4: The Implementation Spec (Plan Template)',
-                'Output your final plan using the exact Markdown structure below. **You must include every section.**',
-                '',
-                '## 5. Exhaustive Implementation Spec',
-                'Produce a complete, copy-paste-ready implementation spec. You must maximize your context window to provide the highest level of detail possible. Include:',
-                '- Exact search/replace blocks or unified diffs for EVERY file change.',
-                '- **NO TRUNCATION:** You are strictly forbidden from using placeholders like `// ... existing code ...`, `// ... implement later`, `TODO`, or omitted middle sections for modified code. Write the exact, final state of the functions or blocks being changed.',
-                '- Deep logical breakdowns explaining the *Why* behind each architectural choice before code.',
-                '- Inline comments explaining non-obvious logic.',
-                '',
-                '---',
-                '',
-                '# [Plan Title]',
-                '',
-                '## Goal',
-                '[1-2 sentences summarizing the objective]',
-                '',
-                '## User Review Required',
-                '> [!NOTE]',
-                '> [Any user-facing warnings, breaking changes, or manual steps required]',
-                '',
-                '## Complexity Audit',
-                '### Band A — Routine',
-                '- [List routine, safe changes]',
-                '### Band B — Complex / Risky',
-                '- [List complex logic, state mutations, or risky changes]',
-                '',
-                '## Edge-Case & Dependency Audit',
-                '- **Race Conditions:** [Analysis]',
-                '- **Security:** [Analysis]',
-                '- **Side Effects:** [Analysis]',
-                '- **Dependencies & Conflicts:** [Identify if this plan relies on or conflicts with other pending Kanban plans]',
-                '',
-                '## Adversarial Synthesis',
-                '### Grumpy Critique',
-                '[Simulate the Grumpy Engineer: Attack the plan\'s weaknesses, missing error handling, and naive assumptions.]',
-                '',
-                '### Balanced Response',
-                '[Simulate the Lead Developer: Address Grumpy\'s concerns and explain how the implementation steps below have been adjusted to prevent them.]',
-                '',
-                '## Proposed Changes',
-                '> [!IMPORTANT]',
-                '> **MAXIMUM DETAIL REQUIRED:** Provide complete, fully functioning code blocks. Break down the logic step-by-step before showing code.',
-                '',
-                '### [Target File or Component 1]',
-                '#### [MODIFY / CREATE / DELETE] `path/to/file.ext`',
-                '- **Context:** [Explain exactly why this file needs to be changed]',
-                '- **Logic:** [Provide a granular, step-by-step breakdown of the logical changes required]',
-                '- **Implementation:** [Provide the complete code block, unified diff, or full function rewrite without truncation. Choose ONE primary format per change.]',
-                '- **Edge Cases Handled:** [Explain how the code above mitigates the risks identified in the Edge-Case Audit]',
-                '',
-                '### [Target File or Component 2]',
-                '...',
-                '',
-                '## Verification Plan',
-                '### Automated Tests',
-                '- [What existing or new tests need to be run/written?]',
-                '### Manual Testing',
-                '1. [Step 1 of manual verification]',
-                '2. [Step 2...]',
-                '',
-                '## Appendix: Implementation Patch',
-                '[Provide the complete generated code, unified diff, or exact file replacements needed to implement the proposed changes above in a single code block. Do not use truncated placeholders. Use `N/A` only when no code change is required.]',
-            ].join('\n'), 'utf8');
+            const rulePath = path.join(workspaceRoot, '.agent', 'rules', 'how_to_plan.md');
+            let howToPlanContent: string;
+            try {
+                howToPlanContent = await fs.promises.readFile(rulePath, 'utf8');
+            } catch (e) {
+                // Fallback if the file is missing
+                howToPlanContent = '# How to Plan\n\nRefer to the project guidelines for planning.';
+            }
+            await fs.promises.writeFile(howToPlanPath, howToPlanContent, 'utf8');
+
+            // 4. Export list of plans in NEW column for sprint planning
+            const kanbanDb = await this._getKanbanDb(workspaceRoot);
+            if (kanbanDb) {
+                const workspaceId = await this._getOrCreateWorkspaceId(workspaceRoot);
+                if (workspaceId) {
+                    const allPlans = await kanbanDb.getBoard(workspaceId);
+                    const newColumnPlans = allPlans.filter(p => p.kanbanColumn === 'CREATED');
+
+                    if (newColumnPlans.length > 0) {
+                        const plansList = newColumnPlans.map((p, idx) =>
+                            `${idx + 1}. **${p.topic}** (${p.complexity || 'unspecified'})\n   - Session: ${p.sessionId}\n   - Created: ${new Date(p.createdAt).toLocaleDateString()}`
+                        ).join('\n\n');
+
+                        const plansListPath = path.join(airlockDir, `${timestamp}-new_column_plans.md`);
+                        const plansContent = `# Plans in NEW Column\n\nTotal: ${newColumnPlans.length} plans\n\n${plansList}`;
+                        await fs.promises.writeFile(plansListPath, plansContent, 'utf8');
+                    }
+                }
+            }
 
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
             vscode.window.showInformationMessage('Airlock: Bundle exported → .switchboard/airlock/');
