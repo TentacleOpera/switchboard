@@ -1,0 +1,35 @@
+{
+  "sessionId": "sess_1773534025006",
+  "planFile": ".switchboard/plans/feature_plan_20260315_112025_compelxity_parsing_still_isn_t_fully_accurate.md",
+  "topic": "Compelxity parsing still isn't fully accurate",
+  "createdAt": "2026-03-15T00:20:25.004Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-15T00:20:25.004Z",
+      "action": "start"
+    },
+    {
+      "workflow": "improve-plan",
+      "timestamp": "2026-03-20T04:59:57.919Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-20T05:15:55.571Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:33:24.490Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-lead-coded",
+      "timestamp": "2026-03-20T12:56:15.692Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    }
+  ]
+}

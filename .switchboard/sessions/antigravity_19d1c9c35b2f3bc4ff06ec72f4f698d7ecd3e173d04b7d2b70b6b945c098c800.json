@@ -1,0 +1,66 @@
+{
+  "sessionId": "antigravity_19d1c9c35b2f3bc4ff06ec72f4f698d7ecd3e173d04b7d2b70b6b945c098c800",
+  "planFile": ".switchboard\\plans\\brain_19d1c9c35b2f3bc4ff06ec72f4f698d7ecd3e173d04b7d2b70b6b945c098c800.md",
+  "brainSourcePath": "c:\\Users\\Claretta\\.gemini\\antigravity\\brain\\d09269e6-0e90-4243-8d45-039880c79cb4\\implementation_plan.md",
+  "topic": "MCP Setup for Gemini/Antigravity — Proper Implementation Plan",
+  "createdAt": "2026-03-15T00:34:04.791Z",
+  "source": "antigravity",
+  "events": [
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-15T00:34:04.792Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-lead-coded",
+      "timestamp": "2026-03-20T02:37:56.274Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-20T03:04:12.396Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reset-to-plan-reviewed",
+      "timestamp": "2026-03-20T03:12:05.642Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-20T03:18:45.543Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-lead-coded",
+      "timestamp": "2026-03-20T04:52:47.580Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-plan-reviewed",
+      "timestamp": "2026-03-20T04:52:55.800Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-20T04:53:01.067Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:33:24.448Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-lead-coded",
+      "timestamp": "2026-03-20T12:56:13.024Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    }
+  ]
+}

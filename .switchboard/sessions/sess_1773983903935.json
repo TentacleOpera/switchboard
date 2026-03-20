@@ -1,33 +1,33 @@
 {
-  "sessionId": "sess_1773964971347",
-  "planFile": ".switchboard/plans/feature_plan_20260320_110251_optimise_inboxwatcher.md",
-  "topic": "Optimise inboxwatcher",
-  "createdAt": "2026-03-20T00:02:51.318Z",
+  "sessionId": "sess_1773983903935",
+  "planFile": ".switchboard/plans/feature_plan_20260320_161823_antigravity_agents_try_to_create_double_plans.md",
+  "topic": "Antigravity agents try to create double plans",
+  "createdAt": "2026-03-20T05:18:23.933Z",
   "events": [
     {
       "workflow": "initiate-plan",
-      "timestamp": "2026-03-20T00:02:51.318Z",
+      "timestamp": "2026-03-20T05:18:23.933Z",
       "action": "start"
     },
     {
       "workflow": "improve-plan",
-      "timestamp": "2026-03-20T05:03:35.599Z",
+      "timestamp": "2026-03-20T05:19:37.103Z",
       "action": "start"
     },
     {
       "workflow": "handoff",
-      "timestamp": "2026-03-20T05:16:01.504Z",
+      "timestamp": "2026-03-20T06:20:08.262Z",
       "action": "start"
     },
     {
       "workflow": "move-to-code-reviewed",
-      "timestamp": "2026-03-20T12:27:06.886Z",
+      "timestamp": "2026-03-20T12:27:06.928Z",
       "action": "stop",
       "outcome": "User manually moved plan forwards"
     },
     {
       "workflow": "reset-to-coder-coded",
-      "timestamp": "2026-03-20T12:56:26.347Z",
+      "timestamp": "2026-03-20T12:56:24.295Z",
       "action": "stop",
       "outcome": "User manually moved plan backwards"
     }

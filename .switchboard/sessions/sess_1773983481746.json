@@ -1,0 +1,42 @@
+{
+  "sessionId": "sess_1773983481746",
+  "planFile": ".switchboard/plans/feature_plan_20260320_161121_pair_program_icon_shows_wrongly.md",
+  "topic": "Pair program icon shows wrongly",
+  "createdAt": "2026-03-20T05:11:21.744Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-20T05:11:21.744Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-20T05:15:33.619Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-20T05:15:39.675Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:33:24.469Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-lead-coded",
+      "timestamp": "2026-03-20T12:56:17.983Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:56:38.167Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ]
+}

@@ -1,0 +1,27 @@
+{
+  "sessionId": "antigravity_0f7103412e1967b5f5a06f70d87c5425a2629622c2f41971565946c035522192",
+  "planFile": ".switchboard\\plans\\brain_0f7103412e1967b5f5a06f70d87c5425a2629622c2f41971565946c035522192.md",
+  "brainSourcePath": "c:\\Users\\Claretta\\.gemini\\antigravity\\brain\\a1337464-940c-4722-a26e-07d816acfa08\\implementation_plan.md",
+  "topic": "Fix Pair Program Icon Visibility and Position",
+  "createdAt": "2026-03-20T05:20:16.428Z",
+  "source": "antigravity",
+  "events": [
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-20T05:20:16.429Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-coder-coded",
+      "timestamp": "2026-03-20T05:22:39.905Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:27:06.906Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ]
+}

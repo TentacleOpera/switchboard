@@ -19,6 +19,18 @@
       "workflow": "handoff",
       "timestamp": "2026-03-19T18:34:54.710Z",
       "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:27:06.848Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-coder-coded",
+      "timestamp": "2026-03-20T12:56:27.915Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
     }
   ]
 }

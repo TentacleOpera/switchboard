@@ -42,6 +42,42 @@ suite('Kanban complexity parsing', () => {
         }
     });
 
+    test('treats plan as Low complexity even if "Band B" is mentioned in Band A text', async () => {
+        const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-kanban-'));
+        const planPath = path.join(tempDir, 'plan.md');
+        const provider = new KanbanProvider(
+            vscode.Uri.file(tempDir),
+            {
+                workspaceState: {
+                    get: (_key: string, defaultValue?: any) => defaultValue
+                }
+            } as unknown as vscode.ExtensionContext
+        );
+
+        try {
+            await fs.promises.writeFile(planPath, [
+                '# Test Plan',
+                '',
+                '## Complexity Audit',
+                '',
+                '### Band A (Routine)',
+                '- Update terminology instead of "Band B" or "Band A".',
+                '',
+                '### Band B (Complex/Risky)',
+                '- None',
+                '',
+                '## Goal',
+                '- Verify false positives.'
+            ].join('\n'), 'utf8');
+
+            const complexity = await provider.getComplexityFromPlan(tempDir, planPath);
+            assert.strictEqual(complexity, 'Low');
+        } finally {
+            provider.dispose();
+            await fs.promises.rm(tempDir, { recursive: true, force: true });
+        }
+    });
+
     test('treats substantive Band B tasks as High complexity', async () => {
         const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-kanban-'));
         const planPath = path.join(tempDir, 'plan.md');

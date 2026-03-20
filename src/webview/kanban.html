@@ -694,7 +694,7 @@
             </label>
             <span class="toggle-label">CLI Triggers</span>
         </label>
-        <label class="cli-toggle-inline pair-programming-toggle" id="pair-programming-toggle" title="Pair Programming: Lead does Band B, Coder auto-starts Band A simultaneously">
+        <label class="cli-toggle-inline pair-programming-toggle" id="pair-programming-toggle" title="Pair Programming: Lead does high complexity work, Coder auto-starts low complexity work simultaneously">
             <label class="toggle-switch">
                 <input type="checkbox" id="pairProgrammingCheckbox">
                 <span class="toggle-slider"></span>
@@ -1158,17 +1158,19 @@
             const complexity = card.complexity || 'Unknown';
             const complexityClass = complexity.toLowerCase();
             let copyLabel = 'Copy Prompt';
-            const pairProgramBtn = card.column === 'PLAN REVIEWED'
-                ? `<button class="card-btn pair-program-btn" data-session="${card.sessionId}" title="Pair Program: copy Band B prompt to clipboard, auto-send Band A to Coder terminal">⚡ Pair</button>`
+            const pairProgramBtn = (card.column === 'PLAN REVIEWED' && complexity === 'High')
+                ? `<button class="card-btn pair-program-btn" data-session="${card.sessionId}" title="Pair Program: copy high complexity prompt to clipboard, auto-send low complexity to Coder terminal">Pair</button>`
                 : '';
             return `
                 <div class="kanban-card" draggable="true" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
                     <div class="card-topic" title="${escapeHtml(card.topic)}">${escapeHtml(shortTopic)}</div>
-                    <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${complexity}</span> · ${timeAgo}</div>
+                    <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}" title="${complexity.toLowerCase()} complexity">${complexity}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
-                        <button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">${copyLabel}</button>
                         <div style="display: flex; gap: 4px;">
                             ${pairProgramBtn}
+                            <button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="Copy prompt to clipboard">${copyLabel}</button>
+                        </div>
+                        <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" title="Review Plan Ticket">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>

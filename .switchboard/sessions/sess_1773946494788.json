@@ -13,6 +13,28 @@
       "workflow": "Improved plan",
       "timestamp": "2026-03-19T23:53:34.996Z",
       "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-20T05:11:14.269Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reset-to-plan-reviewed",
+      "timestamp": "2026-03-20T05:14:33.072Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-20T05:15:04.531Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:16:27.582Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
     }
   ]
 }

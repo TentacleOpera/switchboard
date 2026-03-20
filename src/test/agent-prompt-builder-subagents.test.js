@@ -13,6 +13,8 @@ const plans2 = [
 ];
 
 const subagentText = 'If your platform supports parallel sub-agents';
+const executionDirective = 'AUTHORIZATION TO EXECUTE';
+const chatCritiqueText = 'verbatim in your chat response';
 
 function testSinglePlan() {
     console.log('Testing single plan (no subagent info)...');
@@ -34,9 +36,46 @@ function testMultiplePlans() {
     console.log('  PASS: Multiple plans correct for all roles');
 }
 
+function testExecutionDirective() {
+    console.log('Testing execution directive presence...');
+    const roles = ['lead', 'coder'];
+    for (const role of roles) {
+        // Test single plan
+        const prompt1 = buildKanbanBatchPrompt(role, plans1);
+        assert.ok(prompt1.includes(executionDirective), `Role ${role} SHOULD include execution directive (single plan)`);
+        
+        // Test multiple plans
+        const prompt2 = buildKanbanBatchPrompt(role, plans2);
+        assert.ok(prompt2.includes(executionDirective), `Role ${role} SHOULD include execution directive (multiple plans)`);
+    }
+    const otherRoles = ['planner', 'reviewer'];
+    for (const role of otherRoles) {
+        const prompt = buildKanbanBatchPrompt(role, plans1);
+        assert.ok(!prompt.includes(executionDirective), `Role ${role} should NOT include execution directive`);
+    }
+    console.log('  PASS: Execution directive correctly limited to lead and coder (all plan counts)');
+}
+
+function testChatCritiqueDirective() {
+    console.log('Testing chat critique directive presence...');
+    const promptRoles = ['planner', 'reviewer'];
+    for (const role of promptRoles) {
+        const prompt = buildKanbanBatchPrompt(role, plans1);
+        assert.ok(prompt.includes(chatCritiqueText), `Role ${role} SHOULD include chat critique directive`);
+    }
+    const nonCritiqueRoles = ['lead', 'coder'];
+    for (const role of nonCritiqueRoles) {
+        const prompt = buildKanbanBatchPrompt(role, plans1);
+        assert.ok(!prompt.includes(chatCritiqueText), `Role ${role} should NOT include chat critique directive`);
+    }
+    console.log('  PASS: Chat critique directive correctly limited to planner and reviewer');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
+    testExecutionDirective();
+    testChatCritiqueDirective();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {
     console.error('\nTest FAILED:', err.message);

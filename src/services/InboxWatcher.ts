@@ -218,11 +218,14 @@ export class InboxWatcher {
 
     /**
      * Polling fallback — catches anything both watchers miss.
-     * Runs every 60 seconds as a heartbeat safety net. Primary detection is via
+     * Runs every 300 seconds (5 mins) as a heartbeat safety net. Primary detection is via
      * fs.watch + FileSystemWatcher. Passive triggers (window focus) cover the gap.
      */
     private startPollTimer(): void {
-        this.pollTimer = setInterval(() => this.scanAllInboxes(), 60000);
+        if (this.pollTimer) {
+            clearInterval(this.pollTimer);
+        }
+        this.pollTimer = setInterval(() => this.scanAllInboxes(), 300000);
     }
 
     private async processUri(uri: vscode.Uri): Promise<void> {

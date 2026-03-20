@@ -393,3 +393,30 @@ npm test
 **Send to Lead Coder**
 
 Band B complexity: the per-card button combines two dispatch mechanisms (clipboard write + terminal dispatch) in a single atomic handler; the header toggle threads mode state through multiple dispatch paths; both features require coordinating with the existing terminal management and prompt builder systems.
+
+---
+
+## Reviewer Pass — 2026-03-20
+
+### Findings
+
+| # | Severity | Finding | Verdict |
+|---|----------|---------|---------|
+| 1 | NIT | Button ordering (Pair before Copy) differs from original plan but matches Plan 3 intentional reorder | **Keep** |
+| 2 | NIT | `pairProgrammingEnabled` passed for coder-only batches appends harmless "only do band a" suffix | **Defer** |
+| 3 | **MAJOR** | `_dispatchWithPairProgrammingIfNeeded` in KanbanProvider did not pass `accurateCodingEnabled` to coder prompt — inconsistent with TaskViewerProvider path | **Fixed** |
+| 4 | NIT | Pair button restricted to `High` complexity cards only (plan said all PLAN REVIEWED) — sensible UX improvement | **Keep — intentional deviation** |
+| 5 | NIT | `_lastCards.find()` used instead of proposed `_findCardBySessionId()` — functionally identical | **Keep** |
+
+### Files Changed (Reviewer)
+- `src/services/KanbanProvider.ts` — added `accurateCodingEnabled` to `_dispatchWithPairProgrammingIfNeeded` coder prompt options
+
+### Validation Results
+- **TypeScript compile**: ✅ `npx tsc --noEmit` — clean
+- **autoban-state-regression.test.js**: ✅ pass
+- **agent-prompt-builder-subagents.test.js**: ✅ pass
+- **kanban-batch-prompt-regression.test.js**: ✅ pass
+
+### Remaining Risks
+- No automated test coverage for pair programming toggle state persistence or dual-dispatch behavior (manual verification only)
+- Coder-only batch path still includes `pairProgrammingEnabled` option (cosmetic — no functional impact)

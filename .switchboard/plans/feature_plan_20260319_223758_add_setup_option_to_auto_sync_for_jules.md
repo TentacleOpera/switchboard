@@ -322,3 +322,31 @@ case 'airlock_syncStart': {
 
 ## Agent Recommendation
 **Send to Lead Coder** — Band B work is significant: the async dispatch guard in `TaskViewerProvider.ts` requires careful Promise handling with timeout, re-entrancy protection, and correct wiring of both Jules message paths. The UI changes are Band A, but the backend intercept warrants a Lead Coder execution pass.
+
+---
+
+## Reviewer Pass — 2026-03-20
+
+### Findings
+
+| # | Severity | Finding | Verdict |
+|---|----------|---------|---------|
+| 1 | NIT | Setting stored in `vscode.workspace.getConfiguration('switchboard').update('jules.autoSync')` instead of `globalState` — more discoverable, follows existing `accurateCoding.enabled` pattern | **Keep — positive deviation** |
+| 2 | NIT | Inline guard in `_handleTriggerAgentActionInternal` instead of standalone `dispatchJulesAction()` — cleaner, avoids callback plumbing | **Keep — positive deviation** |
+| 3 | — | Both Jules dispatch paths (Kanban `julesSelected` → `triggerAgentFromKanban` and sidebar `triggerAgentAction`) route through `_handleTriggerAgentActionInternal` where the auto-sync guard lives | **Verified** |
+| 4 | — | UI lifecycle: `airlock_syncStart` → button disabled + "SYNCING..." → `airlock_syncComplete` → reset; `airlock_syncError` → reset + error shown | **Verified** |
+| 5 | NIT | No Kanban-side visual feedback during sync (only sidebar shows SYNCING state) | **Defer — plan didn't require it** |
+| 6 | — | Re-entrancy guard (`_julesSyncInFlight`) + 60s timeout + finally-block cleanup all present | **Verified** |
+
+### Files Changed (Reviewer)
+- None — no code fixes required
+
+### Validation Results
+- **TypeScript compile**: ✅ `npx tsc --noEmit` — clean
+- **autoban-state-regression.test.js**: ✅ pass
+- **agent-prompt-builder-subagents.test.js**: ✅ pass
+- **kanban-batch-prompt-regression.test.js**: ✅ pass
+
+### Remaining Risks
+- No automated test for the auto-sync guard (plan specified `jules-auto-sync.test.ts` — not yet created; manual verification recommended)
+- If `_performGitSync()` hangs beyond 60s timeout AND the timeout rejection doesn't cancel the underlying git process, a zombie process could remain (low risk — OS-level process cleanup applies)

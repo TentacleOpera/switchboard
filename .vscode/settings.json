@@ -4,8 +4,7 @@
 		"switchboard": {
 			"command": "node",
 			"args": [
-				"c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js",
-				"c:/Users/patvu/Documents/GitHub/switchboard"
+				"x:/documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
 			],
 			"env": {
 				"SWITCHBOARD_WORKSPACE_ROOT": "c:/Users/patvu/Documents/GitHub/switchboard"
@@ -21,5 +20,6 @@
 		"c:/Users/patvu/.gemini/antigravity/brain/1e46edeb-72da-465b-940c-0f430d82600d/implementation_plan.md"
 	],
 	"switchboard.team.strictPrompts": false,
-	"switchboard.leadCoder.inlineChallenge": false
+	"switchboard.leadCoder.inlineChallenge": false,
+	"switchboard.jules.autoSync": false
 }

@@ -86,3 +86,27 @@ Grumpy is right to point out the flexbox layout details. We will wrap the 'copy'
 ## Verification Plan
 ### Automated Tests
 - N/A. Visual and tooltip changes only. Test manually by rendering the Kanban board and viewing the Plan Reviewed cards.
+
+---
+
+## Reviewer Pass — 2026-03-20
+
+### Findings
+
+| # | Severity | Finding | Verdict |
+|---|----------|---------|---------|
+| 1 | — | Lightning emoji (`⚡`) removed from Pair button — text is now just "Pair" | **Verified** |
+| 2 | — | Header toggle tooltip updated to "high complexity work / low complexity work" | **Verified** |
+| 3 | — | Per-card button tooltip updated to "high complexity prompt / low complexity" | **Verified** |
+| 4 | — | Pair button and Copy button grouped in left flex `<div>` with `gap: 4px`; review/complete icons in right flex group | **Verified** |
+| 5 | NIT | Pair button renders before Copy (plan proposed Copy first, then Pair) — no functional impact | **Keep** |
+
+### Files Changed (Reviewer)
+- None — no code fixes required
+
+### Validation Results
+- **TypeScript compile**: ✅ `npx tsc --noEmit` — clean
+- **Visual verification**: Layout structure matches plan intent (left group: action buttons, right group: icon buttons)
+
+### Remaining Risks
+- None

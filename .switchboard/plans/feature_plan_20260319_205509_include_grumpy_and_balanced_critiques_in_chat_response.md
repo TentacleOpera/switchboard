@@ -174,3 +174,24 @@ assert.ok(
 
 ## Agent Recommendation
 **Send to Coder** — Band A only. Pure string constant addition + one test update. No logic, state, or architecture changes.
+
+## Reviewer Pass — 2026-03-20
+
+### Validation Results
+- **TypeScript typecheck (`tsc --noEmit`)**: PASS
+- **`agent-prompt-builder-subagents.test.js`**: PASS (including new `testChatCritiqueDirective`)
+- **`autoban-reviewer-prompt-regression.test.js`**: PASS
+- **`kanban-batch-prompt-regression.test.js`**: PASS
+
+### Findings
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| 1 | MAJOR | Plan specified updating `kanban-batch-prompt-regression.test.js` but that file tests `KanbanProvider.ts`, not `agentPromptBuilder.ts`. No runtime test existed for `chatCritiqueDirective` in planner/reviewer prompts. | **FIXED**: Added `testChatCritiqueDirective()` to `agent-prompt-builder-subagents.test.js` — asserts directive present in planner+reviewer, absent from lead+coder. |
+| 2 | NIT | Plan step numbering ("insert as item 4") doesn't match implementation (it's step 5) | Cosmetic — plan text is stale relative to code |
+| 3 | NIT | `autoban-reviewer-prompt-regression.test.js` already had a source-level check (line 32-35) for the reviewer, but no runtime coverage | Covered by the new runtime test above |
+
+### Files Changed
+- `src/test/agent-prompt-builder-subagents.test.js` — added `chatCritiqueText` constant and `testChatCritiqueDirective()` function
+
+### Remaining Risks
+- None. All prompt builder roles now have runtime test coverage for the chatCritiqueDirective.

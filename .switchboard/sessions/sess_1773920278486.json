@@ -19,6 +19,18 @@
       "workflow": "handoff-lead",
       "timestamp": "2026-03-19T23:51:19.092Z",
       "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T12:16:27.557Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-lead-coded",
+      "timestamp": "2026-03-20T12:56:36.741Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
     }
   ]
 }

@@ -436,8 +436,10 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<void> {
         const pairProgrammingEnabled = this._autobanState?.pairProgrammingEnabled ?? false;
         if (!pairProgrammingEnabled) { return; }
+        const accurateCodingEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', true);
         const coderPrompt = buildKanbanBatchPrompt('coder', this._cardsToPromptPlans(cards, workspaceRoot), {
-            pairProgrammingEnabled: true
+            pairProgrammingEnabled: true,
+            accurateCodingEnabled
         });
         await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
     }
@@ -806,8 +808,10 @@ export class KanbanProvider implements vscode.Disposable {
             const auditStart = auditMatch.index! + auditMatch[0].length;
 
             // Find "Band B" within the audit section (stop at next top-level heading)
+            // Use a strict anchor to match only actual headings (e.g. `### Band B`),
+            // avoiding false positives if "Band B" appears in normal text inside Band A.
             const afterAudit = content.slice(auditStart);
-            const bandBMatch = afterAudit.match(/\bBand\s+B\b/i);
+            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?Band\s+B\b/im);
             if (!bandBMatch) return 'Low';
 
             // Extract text after "Band B" until the next section boundary.
