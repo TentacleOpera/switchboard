@@ -12,7 +12,7 @@ This workflow is for one-shot implementation of large feature requests by the Le
 ## Steps
 
 1. **Prepare/Stage Request**
-   - **Direct Path**: If a [Feature Plan](file:///c:/Users/patvu/Documents/GitHub/ai-product-manager/.switchboard/plans/features/) already exists and is approved, you may SKIP creating a new request file.
+   - **Direct Path**: If a [Feature Plan](file:///c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/plans/features/) already exists and is approved, you may SKIP creating a new request file.
    - **Staging Path**: For complex tasks without a pre-existing plan, stage context to `.switchboard/handoff/lead_request.md`.
    - Call `complete_workflow_phase(phase: 1, workflow: "handoff-lead", artifacts: [{ path: ".switchboard/plans/features/feature_plan_...", description: "Approved Feature Plan for implementation" }])`.
 

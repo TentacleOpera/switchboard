@@ -10,7 +10,7 @@ const WORKFLOWS = {
         steps: [
             {
                 id: "init",
-                instruction: "Initialize task.md and read WORKFLOW_INTEGRITY.md",
+                instruction: "Initialize task.md and read .agent/rules/WORKFLOW_INTEGRITY.md",
                 requiredEvidence: "task_file_created"
             },
             {
@@ -121,61 +121,42 @@ const WORKFLOWS = {
             }
         ]
     },
-    enhance: {
-        name: "Enhance - Deep Planning & Structural Audit",
-        persona: "You are a senior systems analyst. Harden plans via complexity and edge-case analysis. No implementation work.",
+    'improve-plan': {
+        name: "Improve Plan - Enhancement & Review",
+        persona: "You are a senior systems analyst and internal reviewer. Consolidate structure and stress-test assumptions. No implementation work.",
         prohibitedTools: ['run_in_terminal'],
         steps: [
             {
-                id: "context_loading",
-                instruction: "Load the current implementation plan and any staged antigravity planning artifacts.",
-                requiredEvidence: "context_loaded"
-            },
-            {
-                id: "analysis",
-                instruction: "Perform complexity and edge-case audits (Band A vs Band B, race/security/side effects).",
-                requiredEvidence: "analysis_completed"
-            },
-            {
-                id: "hardening",
-                instruction: "Rewrite the planning document with detailed, verifiable execution and validation steps.",
-                requiredEvidence: "plan_hardened"
-            },
-            {
-                id: "presentation",
-                instruction: "Summarize improvements and recommend the next workflow transition (/challenge or /handoff).",
-                requiredEvidence: "findings_presented"
+                id: "execute_all",
+                instruction: "Read the plan, check dependencies, simulate Grumpy/Balanced review, and update the plan file in one continuous response.",
+                requiredEvidence: "plan_updated"
             }
         ]
     },
     challenge: {
-        name: "Challenge (Internal Adversarial Review)",
-        persona: "You run internal adversarial review only. Produce a strict grumpy critique followed by a balanced lead synthesis.",
+        name: "Challenge - Internal Adversarial Review",
+        persona: "You are an internal red-team reviewer. Stress-test the plan, synthesize findings, and update the plan. Do not implement code changes.",
+        prohibitedTools: ['run_in_terminal', 'send_message'],
         steps: [
             {
                 id: "scope",
-                instruction: "Confirm review scope and target artifacts for an internal review pass.",
-                requiredEvidence: "scope_selected"
+                instruction: "Identify the exact plan scope and establish review artifact output paths.",
+                requiredEvidence: "scope_confirmed"
             },
             {
-                id: "dependency_check",
-                instruction: "MANDATORY: Read the code of any service, utility, or module being modified or worked around. Do not assume black-box behavior. Verify actual implementation before review.",
+                id: "dependencies",
+                instruction: "Read impacted dependencies and verify conflict risks before critique.",
                 requiredEvidence: "dependencies_verified"
             },
             {
-                id: "execute",
-                instruction: "Generate grumpy_critique.md and balanced_review.md locally using the two-pass adversarial format.",
-                requiredEvidence: "review_executed"
+                id: "review",
+                instruction: "Produce adversarial findings and balanced synthesis artifacts.",
+                requiredEvidence: "review_artifacts"
             },
             {
-                id: "present",
-                instruction: "Read and present internal findings and recommended actions.",
-                requiredEvidence: "findings_presented"
-            },
-            {
-                id: "finalize",
-                instruction: "Finalize internal review artifacts and close the workflow.",
-                requiredEvidence: "review_finalized"
+                id: "integrate",
+                instruction: "Integrate approved review actions into the target plan without implementing code.",
+                requiredEvidence: "plan_updated"
             }
         ]
     },
@@ -191,7 +172,7 @@ const WORKFLOWS = {
             },
             {
                 id: "onboard",
-                instruction: "Identify the core problem/opportunity and mention the /chat -> /enhance -> /challenge progression.",
+                instruction: "Identify the core problem/opportunity and mention the /chat -> /improve-plan progression.",
                 requiredEvidence: "topic_confirmed"
             },
             {
@@ -201,7 +182,7 @@ const WORKFLOWS = {
             },
             {
                 id: "transition",
-                instruction: "Route ready plans to /handoff, or recommend /enhance when deeper structure is needed.",
+                instruction: "Route ready plans to /handoff, or recommend /improve-plan when deeper structure is needed.",
                 requiredEvidence: "next_step_selected"
             }
         ]

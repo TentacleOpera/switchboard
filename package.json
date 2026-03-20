@@ -57,6 +57,10 @@
         "title": "Switchboard: Connect MCP"
       },
       {
+        "command": "switchboard.recheckMcp",
+        "title": "Switchboard: Recheck MCP Connection"
+      },
+      {
         "command": "switchboard.createAgentGrid",
         "title": "Switchboard: Open Agent Terminals"
       },
@@ -71,6 +75,14 @@
       {
         "command": "antigravity.getChromeDevtoolsMcpUrl",
         "title": "Switchboard: Get MCP Inspector URL"
+      },
+      {
+        "command": "switchboard.openKanban",
+        "title": "Switchboard: Open CLI-BAN"
+      },
+      {
+        "command": "switchboard.reviewPlan",
+        "title": "Switchboard: Review Plan"
       }
     ],
     "configuration": {
@@ -134,6 +146,16 @@
           "default": true,
           "description": "When enabled, coder prompts from sidebar actions include instructions to follow the accuracy.md workflow."
         },
+        "switchboard.leadCoder.inlineChallenge": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, Lead Coder execution prompts include an inline challenge step before implementation."
+        },
+        "switchboard.jules.autoSync": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, automatically runs git add/commit/push before sending plans to Jules. Defaults to OFF."
+        },
         "switchboard.team.strictPrompts": {
           "type": "boolean",
           "default": false,
@@ -150,14 +172,6 @@
           "default": false,
           "description": "Deprecated: use team.strictPrompts instead. Kept for backward compatibility.",
           "deprecationMessage": "Use switchboard.team.strictPrompts instead."
-        },
-        "switchboard.cliAgents": {
-          "type": "object",
-          "default": {},
-          "description": "CLI agent role-to-command mappings. Keys are role names (lead, coder, analyst, reviewer), values are command paths.",
-          "additionalProperties": {
-            "type": "string"
-          }
         },
         "switchboard.plans.defaultOpenMode": {
           "type": "string",
@@ -202,6 +216,7 @@
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
   },
   "devDependencies": {
+    "@types/adm-zip": "^0.5.7",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/vscode": "^1.90.0",
@@ -220,10 +235,13 @@
     "@types/proper-lockfile": "^4.1.4",
     "@types/uuid": "^10.0.0",
     "@vscode/codicons": "^0.0.44",
+    "adm-zip": "^0.5.16",
     "chrome-devtools-mcp": "^0.17.1",
+    "docx": "^9.6.0",
     "dompurify": "^3.3.1",
     "jsdom": "^28.0.0",
     "proper-lockfile": "^4.1.2",
+    "sql.js": "^1.14.1",
     "uuid": "^9.0.1",
     "zod": "^3.23.8"
   }

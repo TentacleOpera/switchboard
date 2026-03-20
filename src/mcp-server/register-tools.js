@@ -10,12 +10,15 @@ const z = require("zod");
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { createRequire } = require('module');
 const { execFile } = require('child_process');
 const { promisify } = require('util');
 const execFileAsync = promisify(execFile);
+const runtimeRequire = createRequire(__filename);
 
 const { loadState, updateState } = require("./state-manager");
 const { getWorkflow, WORKFLOWS } = require("./workflows");
+const { deriveKanbanColumn } = require('../services/kanbanColumnDerivation');
 
 // DYNAMICALLY derived from WORKFLOWS object keys
 const WorkflowEnum = z.enum(Object.keys(WORKFLOWS));
@@ -59,7 +62,7 @@ const WORKFLOW_ACTION_ROUTING = {
     'handoff-relay': {
         // Relay flow pauses after staging, no dispatch required.
     },
-    challenge: {
+    'improve-plan': {
         execute: 'reviewer'
     },
     accuracy: {
@@ -284,6 +287,273 @@ function getWorkspaceRoot() {
     return process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
 }
 
+let sqlJsInitPromise = null;
+
+const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
+    { id: 'CREATED', label: 'New', order: 0 },
+    { id: 'PLAN REVIEWED', label: 'Planned', order: 100 },
+    { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
+    { id: 'CODER CODED', label: 'Coder', order: 200 },
+    { id: 'CODE REVIEWED', label: 'Reviewed', order: 300 }
+];
+
+const BUILTIN_KANBAN_COLUMN_IDS = new Set(BUILTIN_KANBAN_COLUMN_DEFINITIONS.map((definition) => definition.id));
+
+const KANBAN_COLUMN_ALIASES = {
+    'CREATED': 'CREATED',
+    'NEW': 'CREATED',
+    'PLAN CREATED': 'CREATED',
+    'PLAN REVIEWED': 'PLAN REVIEWED',
+    'PLANNED': 'PLAN REVIEWED',
+    'LEAD CODED': 'LEAD CODED',
+    'LEAD CODER': 'LEAD CODED',
+    'CODER CODED': 'CODER CODED',
+    'CODER': 'CODER CODED',
+    'CODE REVIEWED': 'CODE REVIEWED',
+    'REVIEWED': 'CODE REVIEWED',
+    'CODED': 'LEAD CODED'
+};
+
+function normalizeKanbanColumnToken(value) {
+    if (typeof value !== 'string') return '';
+    return value.trim().replace(/[_-]+/g, ' ').replace(/\s+/g, ' ').toUpperCase();
+}
+
+function humanizeKanbanColumnId(columnId) {
+    return String(columnId || '')
+        .trim()
+        .replace(/[_-]+/g, ' ')
+        .split(/\s+/)
+        .filter(Boolean)
+        .map((word) => word.charAt(0).toUpperCase() + word.slice(1).toLowerCase())
+        .join(' ');
+}
+
+function parseKanbanCustomColumnDefinitions(raw) {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+
+    const seen = new Set();
+    const result = [];
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') {
+            continue;
+        }
+
+        const role = String(item.role || '').trim();
+        const name = String(item.name || '').trim();
+        if (!role || !name || item.includeInKanban !== true || BUILTIN_KANBAN_COLUMN_IDS.has(role) || seen.has(role)) {
+            continue;
+        }
+
+        const order = Number.isFinite(Number(item.kanbanOrder)) ? Number(item.kanbanOrder) : 150;
+        result.push({
+            id: role,
+            label: name,
+            order
+        });
+        seen.add(role);
+    }
+
+    return result;
+}
+
+function getKanbanColumnDefinitions(workspaceRoot) {
+    const definitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS.map((definition) => ({ ...definition }));
+    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+    if (!fs.existsSync(statePath)) {
+        return definitions;
+    }
+
+    try {
+        const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+        return [...definitions, ...parseKanbanCustomColumnDefinitions(state.customAgents)]
+            .sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    } catch (e) {
+        console.warn(`[get_kanban_state] Failed to read custom column definitions: ${e.message}`);
+        return definitions;
+    }
+}
+
+function getKanbanColumnLabel(columnId, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const definition = columnDefinitions.find((item) => item.id === columnId);
+    if (definition) return definition.label;
+    return humanizeKanbanColumnId(columnId);
+}
+
+function normalizeKanbanColumnId(columnId) {
+    const normalized = typeof columnId === 'string' && columnId.trim() ? columnId.trim() : 'CREATED';
+    return normalized === 'CODED' ? 'LEAD CODED' : normalized;
+}
+
+function createEmptyKanbanColumnBuckets(columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const columns = {};
+    for (const definition of columnDefinitions) {
+        columns[definition.id] = [];
+    }
+    return columns;
+}
+
+function formatKanbanState(columns, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const knownColumnIds = new Set(columnDefinitions.map((definition) => definition.id));
+    const orderedColumnIds = [
+        ...columnDefinitions.map((definition) => definition.id),
+        ...Object.keys(columns).filter((columnId) => !knownColumnIds.has(columnId)).sort()
+    ];
+
+    const formatted = {};
+    for (const columnId of orderedColumnIds) {
+        formatted[columnId] = {
+            id: columnId,
+            label: getKanbanColumnLabel(columnId, columnDefinitions),
+            items: Array.isArray(columns[columnId]) ? columns[columnId] : []
+        };
+    }
+    return formatted;
+}
+
+function resolveRequestedKanbanColumn(column, availableColumns, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const normalized = normalizeKanbanColumnToken(column);
+    if (!normalized) return null;
+
+    const aliasMatch = KANBAN_COLUMN_ALIASES[normalized];
+    if (aliasMatch && availableColumns.includes(aliasMatch)) return aliasMatch;
+
+    const exactColumnMatch = availableColumns.find((columnId) => normalizeKanbanColumnToken(columnId) === normalized);
+    if (exactColumnMatch) return exactColumnMatch;
+
+    const labelMatch = availableColumns.find((columnId) => normalizeKanbanColumnToken(getKanbanColumnLabel(columnId, columnDefinitions)) === normalized);
+    if (labelMatch) return labelMatch;
+
+    return null;
+}
+
+function buildKanbanStateResponse(columns, requestedColumn, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const formattedColumns = formatKanbanState(columns, columnDefinitions);
+    if (!requestedColumn) {
+        return { content: [{ type: "text", text: JSON.stringify(formattedColumns, null, 2) }] };
+    }
+
+    const resolvedColumn = resolveRequestedKanbanColumn(requestedColumn, Object.keys(formattedColumns), columnDefinitions);
+    if (!resolvedColumn) {
+        return {
+            isError: true,
+            content: [{
+                type: "text",
+                text: `Error: Unknown kanban column '${requestedColumn}'. Available columns: ${Object.keys(formattedColumns).map((columnId) => `${columnId} (${formattedColumns[columnId].label})`).join(', ')}.`
+            }]
+        };
+    }
+
+    return {
+        content: [{
+            type: "text",
+            text: JSON.stringify({ [resolvedColumn]: formattedColumns[resolvedColumn] }, null, 2)
+        }]
+    };
+}
+
+function resolveSqlJsModulePath(workspaceRoot) {
+    const candidates = [
+        path.join(__dirname, '..', 'sql-wasm.js'),
+        path.join(__dirname, '..', '..', 'sql-wasm.js'),
+        path.join(process.cwd(), 'dist', 'sql-wasm.js'),
+        path.join(workspaceRoot, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+        path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+        path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+        path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+        path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.js')
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error(`Unable to locate sql-wasm.js. Checked: ${candidates.join(', ')}`);
+}
+
+function resolveSqlWasmPath(workspaceRoot) {
+    const candidates = [
+        path.join(__dirname, '..', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', '..', 'sql-wasm.wasm'),
+        path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),
+        path.join(workspaceRoot, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(__dirname, '..', '..', '..', 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+        path.join(process.cwd(), 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm')
+    ];
+    for (const candidate of candidates) {
+        if (fs.existsSync(candidate)) return candidate;
+    }
+    throw new Error('Unable to locate sql-wasm.wasm.');
+}
+
+async function getSqlJs(workspaceRoot) {
+    if (!sqlJsInitPromise) {
+        sqlJsInitPromise = (async () => {
+            const initSqlJsModule = runtimeRequire(resolveSqlJsModulePath(workspaceRoot));
+            const initSqlJs = typeof initSqlJsModule === 'function' ? initSqlJsModule : initSqlJsModule.default;
+            if (typeof initSqlJs !== 'function') {
+                throw new Error('sql.js initializer function is unavailable');
+            }
+            const wasmPath = resolveSqlWasmPath(workspaceRoot);
+            const wasmBinary = new Uint8Array(fs.readFileSync(wasmPath));
+            return initSqlJs({ wasmBinary });
+        })().catch((error) => {
+            sqlJsInitPromise = null;
+            throw error;
+        });
+    }
+    return sqlJsInitPromise;
+}
+
+async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId = null, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS) {
+    const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    if (!fs.existsSync(dbPath)) return null;
+
+    try {
+        const SQL = await getSqlJs(workspaceRoot);
+        const dbBytes = fs.readFileSync(dbPath);
+        const db = new SQL.Database(new Uint8Array(dbBytes));
+        const columns = createEmptyKanbanColumnBuckets(columnDefinitions);
+        const whereClauses = ['workspace_id = ?', "status = 'active'"];
+        const params = [workspaceId];
+        if (requestedColumnId) {
+            if (requestedColumnId === 'LEAD CODED') {
+                whereClauses.push('kanban_column IN (?, ?)');
+                params.push('LEAD CODED', 'CODED');
+            } else {
+                whereClauses.push('kanban_column = ?');
+                params.push(requestedColumnId);
+            }
+        }
+        const stmt = db.prepare(
+            `SELECT topic, session_id, created_at, kanban_column
+             FROM plans
+             WHERE ${whereClauses.join(' AND ')}
+             ORDER BY updated_at DESC`,
+            params
+        );
+        while (stmt.step()) {
+            const row = stmt.getAsObject();
+            const col = normalizeKanbanColumnId(String(row.kanban_column || 'CREATED'));
+            if (!columns[col]) columns[col] = [];
+            columns[col].push({
+                topic: row.topic || 'Untitled',
+                sessionId: row.session_id || '',
+                createdAt: row.created_at || '',
+                complexity: 'unknown'
+            });
+        }
+        stmt.free();
+        if (typeof db.close === 'function') db.close();
+        return columns;
+    } catch (e) {
+        console.warn(`[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale. ${e.message}`);
+        return null;
+    }
+}
+
 function isStrictInboxAuthEnabledForDispatch() {
     const raw = process.env.SWITCHBOARD_STRICT_INBOX_AUTH;
     if (typeof raw !== 'string' || !raw.trim()) return false;
@@ -367,6 +637,63 @@ async function appendWorkflowAuditEvent(type, payload, workspaceRoot = getWorksp
         await fs.promises.appendFile(path.join(sessionsDir, ACTIVITY_LOG_FILENAME), `${JSON.stringify(row)}\n`, 'utf8');
     } catch (error) {
         console.error(`[audit] Failed to append workflow audit event '${type}': ${error?.message || error}`);
+    }
+}
+
+async function appendRunSheetEvent(sessionId, eventPayload, workspaceRoot = getWorkspaceRoot()) {
+    if (!sessionId) return;
+    try {
+        const filePath = path.join(workspaceRoot, '.switchboard', 'sessions', `${sessionId}.json`);
+        let sheet;
+        try {
+            const content = await fs.promises.readFile(filePath, 'utf8');
+            sheet = JSON.parse(content);
+        } catch {
+            return; // Only append if runsheet exists
+        }
+        if (!Array.isArray(sheet.events)) {
+            sheet.events = [];
+        }
+        sheet.events.push({
+            timestamp: new Date().toISOString(),
+            ...eventPayload
+        });
+        await fs.promises.writeFile(filePath, JSON.stringify(sheet, null, 2), 'utf8');
+    } catch (e) {
+        console.error(`[audit] Failed to append runsheet event to ${sessionId}: ${e?.message || e}`);
+    }
+}
+
+/**
+ * Find the most recently active (non-completed) run sheet.
+ * Returns the sheet object, or null if none found.
+ */
+async function findMostRecentActiveRunSheet(workspaceRoot = getWorkspaceRoot()) {
+    try {
+        const sessionsDir = path.join(workspaceRoot, '.switchboard', 'sessions');
+        if (!fs.existsSync(sessionsDir)) return null;
+        const files = await fs.promises.readdir(sessionsDir);
+        const sheets = [];
+        for (const file of files) {
+            if (!file.endsWith('.json') || file === ACTIVITY_LOG_FILENAME) continue;
+            try {
+                const content = await fs.promises.readFile(path.join(sessionsDir, file), 'utf8');
+                const sheet = JSON.parse(content);
+                if (sheet.completed !== true && sheet.sessionId) {
+                    sheets.push(sheet);
+                }
+            } catch { }
+        }
+        if (sheets.length === 0) return null;
+        sheets.sort((a, b) => {
+            const aTime = a.lastActivity || a.createdAt || '';
+            const bTime = b.lastActivity || b.createdAt || '';
+            return bTime.localeCompare(aTime);
+        });
+        return sheets[0];
+    } catch (e) {
+        console.error(`[audit] Failed to find most recent run sheet: ${e?.message || e}`);
+        return null;
     }
 }
 
@@ -475,6 +802,68 @@ function coercePositiveInt(value, fallback) {
     const parsed = Number(value);
     if (!Number.isFinite(parsed) || parsed <= 0) return fallback;
     return Math.floor(parsed);
+}
+
+// Keep this logic aligned with KanbanProvider.ts `getComplexityFromPlan`.
+function normalizeBandBLine(line) {
+    return String(line || '')
+        .replace(/^[\s>*\-+\u2013\u2014:]+/, '')
+        .replace(/[*_`~]/g, '')
+        .trim()
+        .replace(/\((?:complex(?:\s*[\/&]\s*|\s+)risky|complex|risky|high complexity)\)/gi, '')
+        .replace(/^\((.*)\)$/, '$1')
+        .replace(/[\s:\u2013\u2014-]+$/g, '')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .toLowerCase();
+}
+
+function isBandBLabel(line) {
+    return /^(complex(?:\s*(?:\/|and)\s*|\s+)risky|complex|risky|high complexity)\.?$/.test(line);
+}
+
+function isEmptyBandBLine(line) {
+    if (!line) return true;
+    if (/^(?:\u2014|-)+$/.test(line)) return true;
+    return /^(none|n\/?a|unknown)\.?$/.test(line);
+}
+
+function getComplexityFromContent(content) {
+    if (!content) return 'unknown';
+
+    // Highest priority: explicit manual complexity override (user-set via dropdown).
+    const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(Low|High|Unknown)/i);
+    if (overrideMatch) {
+        return overrideMatch[1].toLowerCase();
+    }
+
+    // Agent Recommendation: check before Band B parsing (matches KanbanProvider.ts priority).
+    const leadCoderRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
+    const coderAgentRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
+    if (leadCoderRec.test(content)) return 'high';
+    if (coderAgentRec.test(content)) return 'low';
+
+    const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
+    if (!auditMatch) {
+        return 'unknown';
+    }
+    const afterAudit = content.slice(auditMatch.index + auditMatch[0].length);
+    const bandBMatch = afterAudit.match(/\bBand\s+B\b/i);
+    if (!bandBMatch) return 'low';
+    const bandBStart = bandBMatch.index + bandBMatch[0].length;
+    const afterBandB = afterAudit.slice(bandBStart);
+    const nextSection = afterBandB.match(/^\s*(?:#{1,4}\s+|Band\s+[C-Z]\b|\*\*Recommendation\*\*\s*:|Recommendation\s*:|---+\s*$)/im);
+    const bandBContent = nextSection
+        ? afterBandB.slice(0, nextSection.index).trim()
+        : afterBandB.trim();
+    const meaningful = bandBContent
+        .split(/\r?\n/)
+        .map(line => line.trim())
+        .filter(line => line.length > 0)
+        .map(normalizeBandBLine)
+        .filter(line => line.length > 0)
+        .filter(line => !isEmptyBandBLine(line) && !isBandBLabel(line) && !/^recommendation\b/.test(line));
+    return meaningful.length === 0 ? 'low' : 'high';
 }
 
 function sanitizeIsoTimestamp(value) {
@@ -764,9 +1153,18 @@ function resolveNodeForAgentEvidence(state, agentName) {
  */
 function isBrainLeakage(payload) {
     if (!payload) return false;
-    // Match any path containing the global brain directory
-    return payload.includes('.gemini/antigravity/brain/') ||
-        payload.includes('.gemini\\antigravity\\brain\\');
+    // Match paths containing private AI tool directories that should not leak to delegates
+    const privatePatterns = [
+        '.gemini/antigravity/brain/',
+        '.gemini\\antigravity\\brain\\',
+        '.cursor/rules/',
+        '.cursor\\rules\\',
+        '.kiro/memories/',
+        '.kiro\\memories\\',
+        '.codeium/memories/',
+        '.codeium\\memories\\'
+    ];
+    return privatePatterns.some(pattern => payload.includes(pattern));
 }
 
 /**
@@ -775,7 +1173,7 @@ function isBrainLeakage(payload) {
  * the tool call is REJECTED Ã¢â‚¬â€ not warned, rejected.
  */
 const ACTION_REQUIRED_WORKFLOWS = {
-    'execute': ['handoff', 'challenge', 'handoff-lead'],
+    'execute': ['handoff', 'improve-plan', 'handoff-lead'],
     'delegate_task': ['handoff'],
 };
 
@@ -1388,7 +1786,7 @@ function registerTools(server) {
     server.tool(
         "start_workflow",
         {
-            name: z.string().min(1),
+            name: WorkflowEnum,
             initialContext: z.string().optional(),
             targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, starts workflow on session."),
             force: z.boolean().optional().describe("If true, forcibly stop any active workflow on the target before starting the new one.")
@@ -1430,6 +1828,8 @@ function registerTools(server) {
             let targetLabel = targetAgent ? `agent '${targetAgent}'` : 'session';
             let forcedStopWorkflow = null;
             let autoDetectedPlanPath = null;
+
+            let currentSessionId = null;
 
             await updateState((current) => {
                 const target = resolveWorkflowTarget(current, targetAgent);
@@ -1493,7 +1893,8 @@ function registerTools(server) {
                 let normalizedInitialContext = typeof initialContext === 'string' ? initialContext : '';
 
                 if (target.kind === 'session') {
-                    target.node.id = `sess_${Date.now()}`;
+                    target.node.id = target.node.id || `sess_${Date.now()}`;
+                    currentSessionId = target.node.id;
                     target.node.status = "IN_PROGRESS";
                     target.node.startTime = now;
                 } else {
@@ -1521,6 +1922,10 @@ function registerTools(server) {
                 target: targetLabel,
                 forcedStopWorkflow: forcedStopWorkflow || null
             });
+
+            if (currentSessionId && targetLabel === 'session') {
+                await appendRunSheetEvent(currentSessionId, { action: 'start', workflow: workflowName });
+            }
 
             return {
                 content: [{
@@ -1764,8 +2169,8 @@ function registerTools(server) {
     // Tool: handoff_clipboard
     server.tool(
         "handoff_clipboard",
-        { file: z.string() },
-        async ({ file }) => {
+        { file: z.string(), copyPathOnly: z.boolean().optional() },
+        async ({ file, copyPathOnly }) => {
             const workspaceRoot = getWorkspaceRoot();
             const resolved = resolveWorkspacePathToken(file, workspaceRoot);
             if (!resolved) {
@@ -1783,17 +2188,191 @@ function registerTools(server) {
                 return { isError: true, content: [{ type: "text", text: "Ã¢ Å’ File not found." }] };
             }
 
-            const content = fs.readFileSync(resolved, 'utf8');
+            const payload = copyPathOnly ? resolved : fs.readFileSync(resolved, 'utf8');
 
             try {
                 const cmd = process.platform === 'win32' ? 'clip' : 'pbcopy';
                 const child = require('child_process').spawn(cmd, { stdio: ['pipe', 'ignore', 'ignore'] });
-                child.stdin.write(content);
+                child.stdin.write(payload);
                 child.stdin.end();
+                if (copyPathOnly) {
+                    return { content: [{ type: "text", text: "✅ File path copied to clipboard." }] };
+                }
                 return { content: [{ type: "text", text: "Ã¢Å“â€¦ Content copied to clipboard (Secure Read)." }] };
             } catch (e) {
                 return { isError: true, content: [{ type: "text", text: `Ã¢ Å’ Clipboard failed: ${e.message}` }] };
             }
+        }
+    );
+
+    // Tool: get_kanban_state
+    server.tool(
+        "get_kanban_state",
+        {
+            column: z.string().optional().describe("Optional kanban column to return. Supports internal IDs like 'CREATED' and UI labels like 'New'.")
+        },
+        async ({ column } = {}) => {
+            const workspaceRoot = getWorkspaceRoot();
+            const sbDir = path.join(workspaceRoot, '.switchboard');
+            const registryPath = path.join(sbDir, 'plan_registry.json');
+            const identityPath = path.join(sbDir, 'workspace_identity.json');
+            const sessionsDir = path.join(sbDir, 'sessions');
+            const tombstonePath = path.join(sbDir, 'plan_tombstones.json');
+            const blacklistPath = path.join(sbDir, 'brain_plan_blacklist.json');
+
+            if (!fs.existsSync(identityPath)) {
+                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace or missing identity." }] };
+            }
+
+            let identity;
+            try {
+                identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse workspace identity: ${e.message}` }] };
+            }
+
+            const columnDefinitions = getKanbanColumnDefinitions(workspaceRoot);
+            const availableColumnIds = columnDefinitions.map((definition) => definition.id);
+            const requestedColumnId = column
+                ? resolveRequestedKanbanColumn(column, availableColumnIds, columnDefinitions)
+                : null;
+
+            if (column && !requestedColumnId) {
+                return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), column, columnDefinitions);
+            }
+
+            const workspaceId = identity.workspaceId;
+            const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId, columnDefinitions);
+            if (dbColumns) {
+                return buildKanbanStateResponse(dbColumns, requestedColumnId, columnDefinitions);
+            }
+            console.warn('[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale.');
+
+            if (!fs.existsSync(registryPath)) {
+                return { isError: true, content: [{ type: "text", text: "Error: Missing registry and SQLite fallback was unavailable." }] };
+            }
+
+            let registry;
+            try {
+                registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse registry: ${e.message}` }] };
+            }
+
+            let tombstones = new Set();
+            let blacklist = new Set();
+            try {
+                if (fs.existsSync(tombstonePath)) {
+                    tombstones = new Set(JSON.parse(fs.readFileSync(tombstonePath, 'utf8')));
+                }
+                if (fs.existsSync(blacklistPath)) {
+                    const parsed = JSON.parse(fs.readFileSync(blacklistPath, 'utf8'));
+                    const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
+                    blacklist = new Set(rawEntries);
+                }
+            } catch (e) {
+                // Non-fatal: proceed without tombstone/blacklist filtering
+            }
+
+            function getStablePath(planPath) {
+                const normalized = path.normalize(planPath);
+                const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
+                const rootPath = path.parse(stable).root;
+                return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
+            }
+
+            function getBaseBrainPath(planPath) {
+                return planPath.replace(/\.resolved(\.\d+)?$/i, '');
+            }
+
+            const columns = createEmptyKanbanColumnBuckets(columnDefinitions);
+
+            let files;
+            try {
+                files = fs.readdirSync(sessionsDir);
+            } catch (e) {
+                return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
+            }
+
+            for (const file of files) {
+                if (!file.endsWith('.json') || file === 'activity.json') continue;
+                try {
+                    const sheet = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf8'));
+                    if (sheet.completed) continue;
+
+                    let planId = sheet.sessionId;
+                    if (sheet.brainSourcePath) {
+                        const stablePath = getStablePath(getBaseBrainPath(path.resolve(workspaceRoot, sheet.brainSourcePath)));
+                        if (blacklist.has(stablePath)) continue;
+                        planId = crypto.createHash('sha256').update(stablePath).digest('hex');
+                        if (tombstones.has(planId)) continue;
+                    }
+
+                    const entry = registry.entries[planId];
+                    if (!entry || entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
+
+                    const col = normalizeKanbanColumnId(deriveKanbanColumn(sheet.events || []));
+                    if (requestedColumnId && col !== requestedColumnId) continue;
+
+                    let complexity = 'unknown';
+                    try {
+                        if (sheet.planFile) {
+                            const planPath = path.resolve(workspaceRoot, sheet.planFile);
+                            if (fs.existsSync(planPath)) {
+                                const planContent = fs.readFileSync(planPath, 'utf8');
+                                complexity = getComplexityFromContent(planContent);
+                            }
+                        }
+                    } catch (e) { /* non-fatal */ }
+
+                    if (!columns[col]) columns[col] = [];
+                    columns[col].push({
+                        topic: sheet.topic || sheet.planFile || 'Untitled',
+                        sessionId: sheet.sessionId,
+                        createdAt: sheet.createdAt,
+                        complexity
+                    });
+                } catch (e) {}
+            }
+
+            return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
+        }
+    );
+
+    // Tool: move_kanban_card
+    server.tool(
+        "move_kanban_card",
+        {
+            sessionId: z.string().describe("The session ID of the plan to route (for example 'sess_12345')."),
+            target: z.string().describe("Conversational destination. Can be a kanban column label (for example 'PLAN REVIEWED', 'LEAD CODED', or 'CODER CODED') or an explicit role/custom kanban agent name.")
+        },
+        async ({ sessionId, target }) => {
+            const trimmedSessionId = String(sessionId || '').trim();
+            const trimmedTarget = String(target || '').trim();
+
+            if (!trimmedSessionId) {
+                return { isError: true, content: [{ type: "text", text: "❌ sessionId is required." }] };
+            }
+            if (!trimmedTarget) {
+                return { isError: true, content: [{ type: "text", text: "❌ target is required." }] };
+            }
+            if (!process.send) {
+                return { isError: true, content: [{ type: "text", text: "❌ IPC not available. Cannot communicate with the Switchboard host." }] };
+            }
+
+            process.send({
+                type: 'triggerKanbanMove',
+                sessionId: trimmedSessionId,
+                target: trimmedTarget,
+                workspaceRoot: getWorkspaceRoot()
+            });
+
+            return {
+                content: [{
+                    type: "text",
+                    text: `✅ Plan '${trimmedSessionId}' queued for routing to '${trimmedTarget}'. Switchboard will resolve the conversational target and advance the board if the route is valid.`
+                }]
+            };
         }
     );
 
@@ -2358,9 +2937,10 @@ function registerTools(server) {
             })).optional().describe("Required artifacts to validate before marking phase complete"),
             notes: z.string().optional().describe("Optional notes about this phase completion"),
             skipReason: z.string().optional().describe("If skipping phases, provide an explicit justification here"),
-            targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, targets session.")
+            targetAgent: z.string().optional().describe("Optional terminal/chat-agent name. If omitted, targets session."),
+            sessionId: z.string().optional().describe("Session ID of the specific Kanban card to promote on workflow completion. When provided, overrides the default most-recent-session heuristic. Required for 'improve-plan' workflow to prevent promoting the wrong card.")
         },
-        async ({ workflow, phase, artifacts, notes, skipReason, targetAgent }) => {
+        async ({ workflow, phase, artifacts, notes, skipReason, targetAgent, sessionId }) => {
             const workspaceRoot = getWorkspaceRoot();
             if (artifacts && artifacts.length > 0) {
                 const missing = [];
@@ -2622,6 +3202,31 @@ function registerTools(server) {
                     };
                 }
                 autoStopText = " (Workflow Auto-Stopped)";
+
+                // Auto-promote Kanban card: write a workflow event to the target run sheet.
+                // Prefer the explicit sessionId parameter over the most-recent-session heuristic
+                // to prevent promoting the wrong card when the user creates plans during a review.
+                // KanbanProvider's file watcher picks this up automatically.
+                if (workflow === 'improve-plan') {
+                    try {
+                        let targetSessionId = sessionId || null;
+                        if (!targetSessionId) {
+                            const activeSheet = await findMostRecentActiveRunSheet(workspaceRoot);
+                            targetSessionId = activeSheet?.sessionId || null;
+                        }
+                        if (targetSessionId) {
+                            // Route through IPC so the extension's mutex serialises the write.
+                            // Direct file write here races with the extension's file-watcher write.
+                            if (process.send) {
+                                process.send({ type: 'appendRunSheetEvent', sessionId: targetSessionId, event: { workflow: 'improve-plan' } });
+                            } else {
+                                await appendRunSheetEvent(targetSessionId, { workflow: 'improve-plan' }, workspaceRoot);
+                            }
+                        }
+                    } catch (e) {
+                        console.error(`[complete_workflow_phase] Failed to write kanban event: ${e?.message || e}`);
+                    }
+                }
             } else {
                 console.error(`[complete_workflow_phase] Auto-Stop NOT Triggered: ${phase} < ${totalSteps}`);
             }
@@ -2689,9 +3294,15 @@ function registerTools(server) {
 module.exports = {
     registerTools,
     enforceWorkflowForAction,
+    getComplexityFromContent,
+    formatKanbanState,
+    getKanbanColumnDefinitions,
     isBrainLeakage,
+    normalizeKanbanColumnId,
+    resolveRequestedKanbanColumn,
     validateRecipient,
-    handleInternalRegistration
+    handleInternalRegistration,
+    WORKFLOWS,
+    PhaseGateSchema
 };
-
 

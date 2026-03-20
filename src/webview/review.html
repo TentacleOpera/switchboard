@@ -1,0 +1,1103 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Plan Ticket</title>
+    <style>
+        :root {
+            --bg: #0f1117;
+            --panel: #161b22;
+            --panel-alt: #0b0d12;
+            --border: #2d333b;
+            --text: #d1d7e0;
+            --muted: #8b949e;
+            --accent: #3ddbd9;
+            --danger: #f85149;
+            --success: #3fb950;
+            --shadow: 0 8px 24px rgba(0, 0, 0, 0.32);
+            --font-family: var(--vscode-font-family, 'Segoe UI', sans-serif);
+            --mono: var(--vscode-editor-font-family, 'Consolas', monospace);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            background: var(--bg);
+            color: var(--text);
+            font-family: var(--font-family);
+            height: 100vh;
+            display: grid;
+            grid-template-rows: auto auto minmax(0, 1fr) auto;
+        }
+
+        .header {
+            display: flex;
+            align-items: flex-start;
+            justify-content: space-between;
+            gap: 16px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            background: var(--panel);
+        }
+
+        .header-copy {
+            min-width: 0;
+        }
+
+        .eyebrow {
+            font-size: 11px;
+            text-transform: uppercase;
+            letter-spacing: 1.4px;
+            color: var(--accent);
+            font-family: var(--mono);
+            margin-bottom: 6px;
+        }
+
+        .title {
+            font-size: 18px;
+            font-weight: 600;
+            margin: 0;
+            word-break: break-word;
+        }
+
+        .title-input {
+            margin-top: 2px;
+            font-size: 18px;
+            font-weight: 600;
+            padding: 8px 10px;
+        }
+
+
+        .hidden {
+            display: none !important;
+        }
+
+        .header-actions {
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+            justify-content: flex-end;
+            flex-shrink: 0;
+        }
+
+        .meta-grid {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 12px;
+            padding: 14px 18px;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg);
+        }
+
+        .field {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            min-width: 0;
+        }
+
+        .field.dependencies {
+            grid-column: span 2;
+        }
+
+        .field label {
+            font-size: 11px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--mono);
+        }
+
+        input,
+        select,
+        textarea,
+        button {
+            font: inherit;
+        }
+
+        select,
+        textarea,
+        input[type="text"] {
+            width: 100%;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-alt);
+            color: var(--text);
+            padding: 10px 12px;
+        }
+
+        select:focus,
+        textarea:focus,
+        input[type="text"]:focus {
+            outline: none;
+            border-color: var(--accent);
+        }
+
+        button {
+            border: 1px solid var(--border);
+            background: transparent;
+            color: var(--text);
+            border-radius: 6px;
+            padding: 8px 12px;
+            cursor: pointer;
+        }
+
+        button:hover:not(:disabled) {
+            border-color: var(--accent);
+            color: var(--accent);
+        }
+
+        button.primary {
+            background: rgba(61, 219, 217, 0.14);
+            border-color: rgba(61, 219, 217, 0.35);
+            color: var(--accent);
+        }
+
+        button.danger {
+            border-color: rgba(248, 81, 73, 0.35);
+            color: var(--danger);
+        }
+
+        button.danger:hover:not(:disabled) {
+            border-color: var(--danger);
+            background: rgba(248, 81, 73, 0.14);
+            color: var(--danger);
+        }
+
+        button:disabled,
+        select:disabled,
+        textarea:disabled,
+        input:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+
+        .dependency-row {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            flex-wrap: wrap;
+        }
+
+        .dependency-summary {
+            font-size: 12px;
+            color: var(--muted);
+        }
+
+        .editor-shell {
+            min-height: 0;
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr);
+            padding: 0 18px 18px;
+            gap: 10px;
+        }
+
+        .editor-toolbar {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            gap: 12px;
+            padding-top: 14px;
+        }
+
+        .editor-title {
+            font-size: 12px;
+            color: var(--muted);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--mono);
+        }
+
+        .editor {
+            min-height: 0;
+            resize: none;
+            font-family: var(--mono);
+            line-height: 1.55;
+            padding: 16px;
+        }
+
+        .markdown-body {
+            font-family: var(--font-family);
+            line-height: 1.6;
+            font-size: 14px;
+            padding: 16px;
+            overflow: auto;
+            display: none;
+            min-height: 0;
+            background: #0b0d12;
+            border: 1px solid var(--border);
+            border-radius: 6px;
+        }
+
+        .markdown-body.active {
+            display: block;
+        }
+
+        .editor.hidden {
+            display: none;
+        }
+
+        .statusbar {
+            display: flex;
+            justify-content: space-between;
+            gap: 12px;
+            padding: 10px 18px;
+            border-top: 1px solid var(--border);
+            font-size: 12px;
+            color: var(--muted);
+            background: var(--panel);
+        }
+
+        .statusbar.success {
+            color: var(--success);
+        }
+
+        .statusbar.error {
+            color: var(--danger);
+        }
+
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: var(--shadow);
+            display: none;
+        }
+
+        .comment-popup.visible {
+            display: block;
+        }
+
+        .popup-label {
+            font-size: 11px;
+            color: var(--muted);
+            margin-bottom: 6px;
+            font-family: var(--mono);
+        }
+
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text);
+            background: rgba(61, 219, 217, 0.08);
+            border: 1px solid rgba(61, 219, 217, 0.22);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: #0b0d12;
+            color: var(--text);
+            border: 1px solid var(--border);
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+
+        .popup-actions,
+        .modal-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 24px;
+            background: rgba(0, 0, 0, 0.48);
+            z-index: 998;
+        }
+
+        .modal-overlay.hidden {
+            display: none;
+        }
+
+        .modal-card {
+            width: min(720px, 100%);
+            max-height: min(80vh, 720px);
+            display: grid;
+            grid-template-rows: auto minmax(0, 1fr) auto;
+            gap: 12px;
+            padding: 16px;
+            background: var(--panel);
+            border: 1px solid var(--border);
+            border-radius: 10px;
+            box-shadow: var(--shadow);
+        }
+
+        .modal-heading {
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .modal-body {
+            min-height: 0;
+            overflow: auto;
+        }
+
+        .deps-list,
+        .log-list {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .deps-list {
+            max-height: 50vh;
+            overflow: auto;
+        }
+
+        .deps-item,
+        .log-item {
+            border: 1px solid var(--border);
+            border-radius: 6px;
+            background: var(--panel-alt);
+            padding: 10px 12px;
+        }
+
+        .deps-item {
+            display: flex;
+            gap: 10px;
+            align-items: flex-start;
+        }
+
+        .deps-item input {
+            width: auto;
+            margin-top: 2px;
+        }
+
+        .deps-topic {
+            font-size: 13px;
+            color: var(--text);
+        }
+
+        .deps-meta,
+        .log-timestamp,
+        .log-details,
+        .empty-state {
+            font-size: 11px;
+            color: var(--muted);
+        }
+
+        .deps-orphaned-header {
+            margin-top: 12px;
+            padding: 6px 8px;
+            font-size: 12px;
+            color: var(--vscode-editorWarning-foreground, #cca700);
+            border-top: 1px solid var(--border);
+        }
+
+        .deps-orphaned-item {
+            padding: 4px 8px 4px 24px;
+            font-size: 12px;
+            color: var(--muted);
+            font-style: italic;
+        }
+
+        .log-head {
+            display: flex;
+            justify-content: space-between;
+            gap: 10px;
+            font-size: 11px;
+            margin-bottom: 4px;
+        }
+
+        .log-workflow {
+            color: var(--accent);
+            font-family: var(--mono);
+            font-size: 10px;
+        }
+
+        @media (max-width: 960px) {
+            .meta-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .field.dependencies {
+                grid-column: span 1;
+            }
+        }
+
+        @media (max-width: 640px) {
+            body {
+                grid-template-rows: auto auto minmax(0, 1fr) auto;
+            }
+
+            .header {
+                flex-direction: column;
+            }
+
+            .header-actions {
+                width: 100%;
+                justify-content: flex-start;
+            }
+        }
+    </style>
+</head>
+
+<body>
+    <div class="header">
+        <div class="header-copy">
+            <div class="eyebrow">Ticket View</div>
+            <h1 class="title" id="header-title">Plan Ticket</h1>
+            <input id="header-title-input" class="title-input hidden" type="text" />
+        </div>
+        <div class="header-actions">
+            <button id="copy-plan-link">Copy Link</button>
+            <button id="open-log-modal">Log</button>
+            <button id="send-to-agent">Send to Agent</button>
+            <button id="complete-plan">Complete</button>
+            <button id="delete-plan" class="danger">Delete</button>
+            <button class="primary" id="save-plan">Save</button>
+        </div>
+    </div>
+
+    <div class="meta-grid">
+        <div class="field">
+            <label for="column-select">Column</label>
+            <select id="column-select"></select>
+        </div>
+        <div class="field">
+            <label for="complexity-select">Complexity</label>
+            <select id="complexity-select">
+                <option value="Unknown">Unknown</option>
+                <option value="Low">Low</option>
+                <option value="High">High</option>
+            </select>
+        </div>
+        <div class="field dependencies">
+            <label>Dependencies</label>
+            <div class="dependency-row">
+                <button id="open-deps-modal">Manage Dependencies</button>
+                <span class="dependency-summary" id="dependencies-summary">No dependencies selected</span>
+            </div>
+        </div>
+    </div>
+
+    <div class="editor-shell">
+        <div class="editor-toolbar">
+            <div class="editor-title" id="editor-title">Review plan - select text and submit comment to send to planner agent</div>
+            <button id="toggle-preview" class="secondary-btn" style="padding: 2px 8px; font-size: 11px;">Edit Plan</button>
+        </div>
+        <textarea class="editor hidden" id="plan-editor" spellcheck="false"></textarea>
+        <div id="markdown-content" class="markdown-body active"></div>
+    </div>
+
+    <div class="statusbar" id="statusbar">
+        <span id="status-message">Loading ticket...</span>
+        <span id="mtime-message"></span>
+    </div>
+
+    <div class="comment-popup" id="comment-popup">
+        <div class="popup-label">Comment on selection</div>
+        <div class="selected-preview" id="selected-preview"></div>
+        <textarea id="comment-input" placeholder="Add your contextual feedback..."></textarea>
+        <div class="popup-actions">
+            <button id="cancel-comment">Cancel</button>
+            <button class="primary" id="submit-comment">Submit Comment</button>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="deps-modal">
+        <div class="modal-card">
+            <div class="modal-heading">Manage Dependencies</div>
+            <div class="modal-body">
+                <div class="deps-list" id="deps-list"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="close-deps-modal">Cancel</button>
+                <button class="primary" id="save-deps-modal">Save</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="modal-overlay hidden" id="log-modal">
+        <div class="modal-card">
+            <div class="modal-heading">Action Log</div>
+            <div class="modal-body">
+                <div class="log-list" id="action-log"></div>
+            </div>
+            <div class="modal-actions">
+                <button id="close-log-modal">Close</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        const headerTitleEl = document.getElementById('header-title');
+        const headerTitleInputEl = document.getElementById('header-title-input');
+        const columnSelectEl = document.getElementById('column-select');
+        const complexitySelectEl = document.getElementById('complexity-select');
+        const dependenciesSummaryEl = document.getElementById('dependencies-summary');
+        const planEditorEl = document.getElementById('plan-editor');
+        const markdownContentEl = document.getElementById('markdown-content');
+        const togglePreviewBtn = document.getElementById('toggle-preview');
+        const editorTitleEl = document.getElementById('editor-title');
+        const popupEl = document.getElementById('comment-popup');
+        const selectedPreviewEl = document.getElementById('selected-preview');
+        const commentInputEl = document.getElementById('comment-input');
+        const actionLogEl = document.getElementById('action-log');
+        const savePlanButtonEl = document.getElementById('save-plan');
+        const copyPlanLinkButtonEl = document.getElementById('copy-plan-link');
+        const openLogModalButtonEl = document.getElementById('open-log-modal');
+        const sendToAgentButtonEl = document.getElementById('send-to-agent');
+        const completePlanButtonEl = document.getElementById('complete-plan');
+        const deletePlanButtonEl = document.getElementById('delete-plan');
+        const openDepsModalButtonEl = document.getElementById('open-deps-modal');
+        const depsModalEl = document.getElementById('deps-modal');
+        const logModalEl = document.getElementById('log-modal');
+        const depsListEl = document.getElementById('deps-list');
+        const statusbarEl = document.getElementById('statusbar');
+        const statusMessageEl = document.getElementById('status-message');
+        const mtimeMessageEl = document.getElementById('mtime-message');
+
+        const state = {
+            sessionId: '',
+            planFileAbsolute: '',
+            topic: '',
+            column: '',
+            isCompleted: false,
+            complexity: 'Unknown',
+            dependencies: [],
+            planText: '',
+            planMtimeMs: 0,
+            canEditMetadata: false,
+            pendingCount: 0,
+            selectedText: '',
+            isPreview: true,
+            openPlans: []
+        };
+
+        function hidePopup(clear) {
+            popupEl.classList.remove('visible');
+            if (clear) {
+                commentInputEl.value = '';
+                state.selectedText = '';
+            }
+        }
+
+        function showPopup(rect, selectedText) {
+            const maxLeft = window.innerWidth - popupEl.offsetWidth - 12;
+            const targetLeft = Math.max(12, Math.min(rect.left, maxLeft > 12 ? maxLeft : rect.left));
+            const targetTop = Math.min(window.innerHeight - 12, rect.bottom + 10);
+            popupEl.style.left = `${targetLeft}px`;
+            popupEl.style.top = `${targetTop}px`;
+            selectedPreviewEl.textContent = selectedText;
+            popupEl.classList.add('visible');
+            commentInputEl.focus();
+        }
+
+        function applyMode() {
+            if (state.isPreview) {
+                headerTitleEl.classList.remove('hidden');
+                headerTitleInputEl.classList.add('hidden');
+                planEditorEl.classList.add('hidden');
+                markdownContentEl.classList.add('active');
+                togglePreviewBtn.textContent = 'Edit Plan';
+                editorTitleEl.textContent = 'Review plan - select text and submit comment to send to planner agent';
+            } else {
+                headerTitleEl.classList.add('hidden');
+                headerTitleInputEl.classList.remove('hidden');
+                planEditorEl.classList.remove('hidden');
+                markdownContentEl.classList.remove('active');
+                togglePreviewBtn.textContent = 'Review Plan';
+                editorTitleEl.textContent = 'Edit plan - use Ctrl/Cmd+S to save changes';
+                hidePopup(true);
+            }
+        }
+
+        function updateDependenciesSummary() {
+            if (!dependenciesSummaryEl) {
+                return;
+            }
+            dependenciesSummaryEl.textContent = state.dependencies.length > 0
+                ? `${state.dependencies.length} dependenc${state.dependencies.length === 1 ? 'y' : 'ies'} selected`
+                : 'No dependencies selected';
+        }
+
+        function updateActionButtons() {
+            const disabled = state.pendingCount > 0;
+            const hasSession = !!state.sessionId;
+            const isCompleted = state.isCompleted === true;
+            const isFinalColumn = state.column === 'CODE REVIEWED';
+
+            sendToAgentButtonEl.disabled = !hasSession || disabled || isCompleted || isFinalColumn;
+            sendToAgentButtonEl.textContent = isCompleted ? 'Completed' : (isFinalColumn ? 'Already Reviewed' : 'Send to Agent');
+            completePlanButtonEl.disabled = !hasSession || disabled || isCompleted;
+            completePlanButtonEl.textContent = isCompleted ? 'Completed' : 'Complete';
+            deletePlanButtonEl.disabled = !hasSession || disabled || isCompleted;
+        }
+
+        function setBusy(isBusy) {
+            state.pendingCount = Math.max(0, state.pendingCount + (isBusy ? 1 : -1));
+            const disabled = state.pendingCount > 0;
+            const editable = !disabled && state.canEditMetadata;
+            savePlanButtonEl.disabled = disabled;
+            headerTitleInputEl.disabled = !editable;
+            columnSelectEl.disabled = !editable;
+            complexitySelectEl.disabled = !editable;
+            openDepsModalButtonEl.disabled = !editable;
+            planEditorEl.disabled = disabled;
+            updateActionButtons();
+        }
+
+        function setStatus(message, kind) {
+            statusMessageEl.textContent = message;
+            statusbarEl.className = `statusbar${kind ? ` ${kind}` : ''}`;
+        }
+
+        function formatTimestamp(ts) {
+            if (!ts) {
+                return '';
+            }
+            const date = new Date(ts);
+            if (Number.isNaN(date.getTime())) {
+                return ts;
+            }
+            return date.toLocaleString();
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function renderColumns(columns, selected) {
+            columnSelectEl.innerHTML = '';
+            columns.forEach((column) => {
+                const option = document.createElement('option');
+                option.value = column.id;
+                option.textContent = column.label;
+                option.selected = column.id === selected;
+                columnSelectEl.appendChild(option);
+            });
+            if (!columns.some(column => column.id === selected) && selected) {
+                const option = document.createElement('option');
+                option.value = selected;
+                option.textContent = selected;
+                option.selected = true;
+                columnSelectEl.appendChild(option);
+            }
+        }
+
+        function renderActionLog(entries) {
+            actionLogEl.innerHTML = '';
+            if (!Array.isArray(entries) || entries.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.textContent = 'No action log entries yet.';
+                actionLogEl.appendChild(empty);
+                return;
+            }
+
+            entries.forEach((entry) => {
+                const item = document.createElement('div');
+                item.className = 'log-item';
+                item.innerHTML = `
+                    <div class="log-head">
+                        <span class="log-workflow">${escapeHtml(entry.details || 'unknown')}</span>
+                        <span class="log-timestamp">${escapeHtml(formatTimestamp(entry.timestamp || ''))}</span>
+                    </div>
+                `;
+                actionLogEl.appendChild(item);
+            });
+        }
+
+        function renderOpenPlans(plans) {
+            state.openPlans = Array.isArray(plans) ? plans.slice() : [];
+            depsListEl.innerHTML = '';
+
+            if (state.openPlans.length === 0) {
+                const empty = document.createElement('div');
+                empty.className = 'empty-state';
+                empty.textContent = 'No other open plans available.';
+                depsListEl.appendChild(empty);
+                return;
+            }
+
+            const normalizedDeps = state.dependencies.map(d => d.trim().toLowerCase());
+            const matchedDeps = new Set();
+
+            state.openPlans.forEach((plan) => {
+                const dependencyValue = String(plan.topic || plan.sessionId || '').trim();
+                const wrapper = document.createElement('label');
+                wrapper.className = 'deps-item';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.value = dependencyValue;
+
+                const normalizedValue = dependencyValue.toLowerCase();
+                const normalizedSessionId = String(plan.sessionId || '').trim().toLowerCase();
+                const isChecked = normalizedDeps.includes(normalizedValue)
+                    || (normalizedSessionId && normalizedDeps.includes(normalizedSessionId));
+                checkbox.checked = isChecked;
+                if (isChecked) {
+                    // Track which stored dependencies matched
+                    normalizedDeps.forEach(nd => {
+                        if (nd === normalizedValue || nd === normalizedSessionId) {
+                            matchedDeps.add(nd);
+                        }
+                    });
+                }
+
+                const copy = document.createElement('div');
+                copy.innerHTML = `
+                    <div class="deps-topic">${escapeHtml(plan.topic || plan.sessionId || 'Untitled plan')}</div>
+                    <div class="deps-meta">${escapeHtml(plan.column || 'Unknown column')} · ${escapeHtml(plan.planFileAbsolute || '')}</div>
+                `;
+
+                wrapper.appendChild(checkbox);
+                wrapper.appendChild(copy);
+                depsListEl.appendChild(wrapper);
+            });
+
+            // Show orphaned dependencies that didn't match any open plan
+            const orphaned = state.dependencies.filter(d => !matchedDeps.has(d.trim().toLowerCase()));
+            if (orphaned.length > 0) {
+                const divider = document.createElement('div');
+                divider.className = 'deps-orphaned-header';
+                divider.innerHTML = '⚠️ Unmatched dependencies (plan may have been renamed or deleted):';
+                depsListEl.appendChild(divider);
+                orphaned.forEach(dep => {
+                    const item = document.createElement('div');
+                    item.className = 'deps-orphaned-item';
+                    item.textContent = dep;
+                    depsListEl.appendChild(item);
+                });
+            }
+        }
+
+        function openDepsModal() {
+            if (!state.sessionId || !state.canEditMetadata) {
+                setStatus('Dependencies are only available for session-backed tickets.', 'error');
+                return;
+            }
+            depsModalEl.classList.remove('hidden');
+            depsListEl.innerHTML = '<div class="empty-state">Loading open plans...</div>';
+            vscode.postMessage({ type: 'getOpenPlans', sessionId: state.sessionId });
+        }
+
+        function closeDepsModal() {
+            depsModalEl.classList.add('hidden');
+        }
+
+        function openLogModal() {
+            logModalEl.classList.remove('hidden');
+        }
+
+        function closeLogModal() {
+            logModalEl.classList.add('hidden');
+        }
+
+        function handleSelectionEvent() {
+            const selection = window.getSelection();
+            if (!selection || selection.rangeCount === 0 || !state.isPreview) {
+                hidePopup(false);
+                return;
+            }
+
+            const text = selection.toString().trim();
+            if (!text) {
+                hidePopup(false);
+                return;
+            }
+
+            const range = selection.getRangeAt(0);
+            const rect = range.getBoundingClientRect();
+            state.selectedText = text;
+            vscode.postMessage({
+                type: 'selectionChanged',
+                selectedText: text,
+                selectionRect: {
+                    top: rect.top,
+                    left: rect.left,
+                    width: rect.width,
+                    height: rect.height,
+                    bottom: rect.bottom,
+                    right: rect.right
+                }
+            });
+            showPopup(rect, text);
+        }
+
+        function renderTicketData(message) {
+            state.sessionId = message.sessionId || '';
+            state.planFileAbsolute = message.planFileAbsolute || '';
+            state.topic = message.topic || '';
+            state.column = message.column || '';
+            state.isCompleted = message.isCompleted === true;
+            state.complexity = message.complexity || 'Unknown';
+            state.dependencies = Array.isArray(message.dependencies) ? message.dependencies.slice() : [];
+            state.planText = message.planText || '';
+            state.planMtimeMs = Number(message.planMtimeMs || 0);
+            state.canEditMetadata = message.canEditMetadata !== false;
+
+            if (message.initialMode === 'edit') {
+                state.isPreview = false;
+            } else if (message.initialMode === 'review') {
+                state.isPreview = true;
+            }
+
+            headerTitleEl.textContent = state.topic || 'Ticket';
+            headerTitleInputEl.value = state.topic;
+            renderColumns(Array.isArray(message.columns) ? message.columns : [], state.column);
+            complexitySelectEl.value = state.complexity;
+            updateDependenciesSummary();
+            planEditorEl.value = state.planText;
+            markdownContentEl.innerHTML = message.renderedHtml
+                ? message.renderedHtml
+                : `<pre>${escapeHtml(state.planText)}</pre>`;
+            renderActionLog(Array.isArray(message.actionLog) ? message.actionLog : []);
+            mtimeMessageEl.textContent = state.planMtimeMs ? `Loaded: ${formatTimestamp(state.planMtimeMs)}` : '';
+            applyMode();
+            updateActionButtons();
+            setStatus('Ticket loaded.');
+            setBusy(false);
+        }
+
+        function postUpdate(payload) {
+            if (!state.sessionId) {
+                setStatus('This ticket is not associated with a session.', 'error');
+                return;
+            }
+            setBusy(true);
+            setStatus('Saving ticket changes...');
+            vscode.postMessage(payload);
+        }
+
+        function savePlanText() {
+            const nextTopic = headerTitleInputEl.value.trim();
+            setBusy(true);
+            setStatus('Saving plan text...');
+            vscode.postMessage({
+                type: 'savePlanText',
+                sessionId: state.sessionId,
+                topic: nextTopic,
+                content: planEditorEl.value,
+                expectedMtimeMs: state.planMtimeMs
+            });
+        }
+
+        document.addEventListener('mouseup', () => {
+            setTimeout(handleSelectionEvent, 0);
+        });
+
+        document.addEventListener('mousedown', (event) => {
+            if (!popupEl.contains(event.target)) {
+                const selection = window.getSelection();
+                const selectedText = selection ? selection.toString().trim() : '';
+                if (!selectedText) {
+                    hidePopup(false);
+                }
+            }
+        });
+
+        document.getElementById('cancel-comment').addEventListener('click', () => {
+            hidePopup(true);
+        });
+
+        document.getElementById('submit-comment').addEventListener('click', () => {
+            const comment = commentInputEl.value.trim();
+            if (!state.selectedText) {
+                setStatus('Select text before submitting a comment.', 'error');
+                return;
+            }
+            if (!comment) {
+                setStatus('Comment is required.', 'error');
+                return;
+            }
+
+            setBusy(true);
+            setStatus('Sending comment...');
+            vscode.postMessage({
+                type: 'submitComment',
+                sessionId: state.sessionId,
+                topic: state.topic,
+                planFileAbsolute: state.planFileAbsolute,
+                selectedText: state.selectedText,
+                comment
+            });
+        });
+
+        togglePreviewBtn.addEventListener('click', () => {
+            state.isPreview = !state.isPreview;
+            applyMode();
+        });
+
+        headerTitleInputEl.addEventListener('input', () => {
+            headerTitleEl.textContent = headerTitleInputEl.value.trim() || 'Ticket';
+        });
+
+        savePlanButtonEl.addEventListener('click', () => {
+            savePlanText();
+        });
+
+        copyPlanLinkButtonEl.addEventListener('click', () => {
+            vscode.postMessage({ type: 'copyPlanLink', sessionId: state.sessionId });
+        });
+
+        sendToAgentButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Sending to next agent...');
+            vscode.postMessage({ type: 'sendToAgent', sessionId: state.sessionId });
+        });
+
+        completePlanButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Completing plan...');
+            vscode.postMessage({ type: 'completePlan', sessionId: state.sessionId });
+        });
+
+        deletePlanButtonEl.addEventListener('click', () => {
+            setBusy(true);
+            setStatus('Deleting plan...');
+            vscode.postMessage({ type: 'deletePlan', sessionId: state.sessionId });
+        });
+
+        openLogModalButtonEl.addEventListener('click', openLogModal);
+        document.getElementById('close-log-modal').addEventListener('click', closeLogModal);
+
+        openDepsModalButtonEl.addEventListener('click', openDepsModal);
+        document.getElementById('close-deps-modal').addEventListener('click', closeDepsModal);
+        document.getElementById('save-deps-modal').addEventListener('click', () => {
+            const nextDependencies = Array.from(depsListEl.querySelectorAll('input[type="checkbox"]:checked'))
+                .map(input => input.value)
+                .filter(Boolean);
+            closeDepsModal();
+            // Normalized comparison: treat as unchanged if the same topics match ignoring case/whitespace
+            const normalize = arr => arr.map(d => d.trim().toLowerCase()).sort().join('\n');
+            if (normalize(nextDependencies) === normalize(state.dependencies)) {
+                return;
+            }
+            postUpdate({
+                type: 'setDependencies',
+                sessionId: state.sessionId,
+                dependencies: nextDependencies
+            });
+        });
+
+        depsModalEl.addEventListener('click', (event) => {
+            if (event.target === depsModalEl) {
+                closeDepsModal();
+            }
+        });
+
+        logModalEl.addEventListener('click', (event) => {
+            if (event.target === logModalEl) {
+                closeLogModal();
+            }
+        });
+
+        columnSelectEl.addEventListener('change', () => {
+            if (!columnSelectEl.value || columnSelectEl.value === state.column) {
+                return;
+            }
+            postUpdate({
+                type: 'setColumn',
+                sessionId: state.sessionId,
+                column: columnSelectEl.value
+            });
+        });
+
+        complexitySelectEl.addEventListener('change', () => {
+            if (!complexitySelectEl.value || complexitySelectEl.value === state.complexity) {
+                return;
+            }
+            postUpdate({
+                type: 'setComplexity',
+                sessionId: state.sessionId,
+                complexity: complexitySelectEl.value
+            });
+        });
+
+        window.addEventListener('keydown', (event) => {
+            const isSaveShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === 's';
+            if (!isSaveShortcut) {
+                return;
+            }
+            event.preventDefault();
+            savePlanText();
+        });
+
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            switch (message.type) {
+                case 'ticketData':
+                    renderTicketData(message);
+                    break;
+                case 'ticketUpdateResult':
+                    setBusy(false);
+                    if (message.ok) {
+                        setStatus(message.message || 'Ticket updated.', 'success');
+                    } else {
+                        setStatus(message.message || 'Ticket update failed.', 'error');
+                    }
+                    break;
+                case 'commentResult':
+                    setBusy(false);
+                    if (message.ok) {
+                        hidePopup(true);
+                        setStatus(message.message || 'Comment sent.', 'success');
+                    } else {
+                        setStatus(message.message || 'Failed to send comment.', 'error');
+                    }
+                    break;
+                case 'openPlansData':
+                    renderOpenPlans(Array.isArray(message.plans) ? message.plans : []);
+                    if (message.error) {
+                        setStatus(message.error, 'error');
+                    }
+                    break;
+                case 'copyPlanLinkResult':
+                    if (message.ok) {
+                        setStatus(message.message || 'Plan path copied.', 'success');
+                    } else {
+                        setStatus(message.message || 'Failed to copy plan path.', 'error');
+                    }
+                    break;
+                case 'ticketActionResult':
+                    setBusy(false);
+                    if (message.ok) {
+                        setStatus(message.message || 'Ticket action completed.', 'success');
+                    } else {
+                        setStatus(message.message || 'Ticket action failed.', 'error');
+                    }
+                    break;
+            }
+        });
+
+        applyMode();
+        updateDependenciesSummary();
+        vscode.postMessage({ type: 'ready' });
+    </script>
+</body>
+
+</html>

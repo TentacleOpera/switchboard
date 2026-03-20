@@ -95,7 +95,7 @@ async function seedState({ sessionWorkflow = 'handoff', includeWorker = true } =
 async function seedCanonicalRoleTerminals() {
     await updateState(state => {
         state.session = state.session || {};
-        state.session.activeWorkflow = 'challenge';
+        state.session.activeWorkflow = 'improve-plan';
         state.session.status = 'IN_PROGRESS';
         state.session.currentStep = 1;
 
@@ -114,7 +114,7 @@ async function seedCanonicalRoleTerminals() {
 async function seedLockedReviewerState() {
     await updateState(state => {
         state.session = state.session || {};
-        state.session.activeWorkflow = 'challenge';
+        state.session.activeWorkflow = 'improve-plan';
         state.session.status = 'IN_PROGRESS';
         state.session.currentStep = 1;
 
@@ -124,7 +124,7 @@ async function seedLockedReviewerState() {
             interface: 'gemini',
             role: 'reviewer',
             status: 'working',
-            activeWorkflow: 'challenge',
+            activeWorkflow: 'improve-plan',
             currentStep: 1,
             activeWorkflowPhase: 1,
             activePersona: null,
@@ -164,8 +164,8 @@ async function run() {
         assert.ok(files.length > 0, 'Expected delegated message in coder inbox');
     });
 
-    await test('routes execute in challenge to reviewer', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+    await test('routes execute in improve-plan to reviewer', async () => {
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const result = await sendMessage({
             action: 'execute',
@@ -178,8 +178,8 @@ async function run() {
         assert.ok(files.length > 0, 'Expected reviewer recipient message in reviewer inbox');
     });
 
-    await test('routes execute in challenge to reviewer', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+    await test('routes execute in improve-plan to reviewer', async () => {
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const result = await sendMessage({
             action: 'execute',
@@ -193,7 +193,7 @@ async function run() {
     });
 
     await test('execute is permissive without registered reviewer and reports terminal push failure', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const result = await sendMessage({
             action: 'execute',
@@ -259,8 +259,8 @@ async function run() {
         assert.match(readText(result), /is not valid for workflow/i);
     });
 
-    await test('challenge execute no longer requires review metadata', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+    await test('improve-plan execute no longer requires review metadata', async () => {
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const result = await sendMessage({
             action: 'execute',
@@ -270,8 +270,8 @@ async function run() {
         assert.ok(!result.isError, readText(result));
     });
 
-    await test('challenge execute enriches review metadata', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+    await test('improve-plan execute enriches review metadata', async () => {
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const result = await sendMessage({
             action: 'execute',
@@ -279,7 +279,7 @@ async function run() {
             metadata: {
                 review: {
                     authorized_plan: '.switchboard/handoff/implementation_plan.md',
-                    report_path: '.switchboard/handoff/challenge_report_test.md'
+                    report_path: '.switchboard/handoff/improve_plan_report_test.md'
                 }
             }
         });
@@ -298,7 +298,7 @@ async function run() {
     });
 
     await test('execute payload is compact enough for chat delivery limits', async () => {
-        await seedState({ sessionWorkflow: 'challenge', includeWorker: false });
+        await seedState({ sessionWorkflow: 'improve-plan', includeWorker: false });
 
         const verbosePayload = 'Review this implementation and list all concerns.\n' + 'details '.repeat(500);
         const result = await sendMessage({
@@ -318,8 +318,8 @@ async function run() {
     await test('all execute-routing workflows keep raw payload (no envelope wrapping)', async () => {
         const cases = [
             { workflow: 'handoff', recipient: 'coder' },
-            { workflow: 'challenge', recipient: 'reviewer' },
-            { workflow: 'challenge', recipient: 'reviewer' }
+            { workflow: 'improve-plan', recipient: 'reviewer' },
+            { workflow: 'improve-plan', recipient: 'reviewer' }
         ];
 
         const rawPayload = 'Perform review and execution checks.\n' + 'x '.repeat(700);

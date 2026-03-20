@@ -79,6 +79,27 @@ function run() {
         );
     });
 
+    test('orchestrator dispatch callback keeps role/session/instruction signature', () => {
+        expectRegex(
+            orchestratorSource,
+            /await\s+this\._dispatchCallback\(stage\.role,\s*sessionId,\s*stage\.instruction\);/,
+            'Expected pipeline dispatch callback to preserve the original role/session/instruction signature.'
+        );
+    });
+
+    test('planner stage defaults to improve-plan and recognizes improved-plan completion', () => {
+        expectRegex(
+            orchestratorSource,
+            /if\s*\(\s*!lastWorkflow\s*\)\s*\{\s*return\s*\{\s*role:\s*'planner',\s*instruction:\s*'improve-plan',\s*label:\s*'Planner'\s*\};/s,
+            'Expected planner default stage to dispatch improve-plan.'
+        );
+        expectRegex(
+            orchestratorSource,
+            /lastWorkflow\s*===\s*'sidebar-review'\s*\|\|\s*lastWorkflow\s*===\s*'Enhanced plan'\s*\|\|\s*lastWorkflow\s*===\s*'Improved plan'/,
+            'Expected pipeline stage detection to advance after both legacy and new planner completion events.'
+        );
+    });
+
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     if (failed > 0) {
         process.exit(1);

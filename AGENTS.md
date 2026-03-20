@@ -1,6 +1,6 @@
-﻿# AGENTS.md - Switchboard Protocol
+# AGENTS.md - Switchboard Protocol
 
-## ðŸš¨ STRICT PROTOCOL ENFORCEMENT ðŸš¨
+## 🚨 STRICT PROTOCOL ENFORCEMENT 🚨
 
 This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 
@@ -14,24 +14,25 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
-| `/challenge`, `/challenge --self`, `challenge --self` | **`challenge.md`** | Internal adversarial review (Grumpy Persona + Balanced Synthesis). No external agent needed. |
 | `/handoff`, `/handoff --all`, `handoff --all` | **`handoff.md`** | Default terminal delegation workflow. Optional `--all` only. |
 | `/handoff-chat`, `/handoff chat`, `handoff-chat`, `handoff chat` | **`handoff-chat.md`** | Clipboard/chat delegation workflow. Optional `--all` only. |
 | `/handoff-relay`, `/handoff relay`, `handoff-relay`, `handoff relay` | **`handoff-relay.md`** | Relay workflow: execute complex work now, stage remainder, then pause for model switch. |
 | `/handoff-lead`, `/handoff lead`, `handoff-lead`, `handoff lead` | **`handoff-lead.md`** | Lead Coder one-shot execution workflow for large feature requests. |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/enhance` | **`enhance.md`** | Deep planning and structural audit before challenge/handoff. |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
+| `/challenge`, `/challenge --self` | **`challenge.md`** | Internal adversarial review workflow (no delegation). |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
 
 
-### âš ï¸ MANDATORY PRE-FLIGHT CHECK
+### ⚠️ MANDATORY PRE-FLIGHT CHECK
 
 Before EVERY response, you MUST:
 
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
 3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **If no match is found**: Respond normally.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `get_kanban_state` MCP tool to instantly identify the target plans.
+5. **If no match is found**: Respond normally.
 
 ### Execution Rules
 
@@ -48,10 +49,10 @@ The following actions are enforced at the tool level and WILL be rejected if mis
 
 | Action | Required Active Workflow |
 | :--- | :--- |
-| `execute` | `handoff`, `challenge`, or `handoff-lead` |
+| `execute` | `handoff`, `improve-plan`, or `handoff-lead` |
 | `delegate_task` | `handoff` |
-| `submit_result` | *(no restriction â€” this is a response)* |
-| `status_update` | *(no restriction â€” informational)* |
+| `submit_result` | *(no restriction — this is a response)* |
+| `status_update` | *(no restriction — informational)* |
 
 Sending to non-existent recipients is always rejected (even when auto-routed).
 
@@ -59,9 +60,9 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 
 ```
 User ──► Switchboard Operator (chat.md)
-              │  Plans captured in .switchboard/plans/features/
+              │  Plans captured in .switchboard/plans/
               │
-              ├──► /challenge      Internal adversarial review (grumpy + synthesis)
+              ├──► /improve-plan   Deep planning, dependency checks, and adversarial review
               ├──► /handoff-lead   One-shot Lead Coder execution (large features)
               ├──► /handoff --all  Bulk terminal delegation (small features)
 
@@ -69,6 +70,8 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 All inter-agent completion signals use the yield pattern (NO POLLING).
 All CLI terminal payloads MUST be a single line: "Please execute the plan at: [ABSOLUTE PATH]"
 ```
+
+Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer `move_kanban_card(sessionId, target)` over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
 
 ### ⏱️ Timeout & Completion
 

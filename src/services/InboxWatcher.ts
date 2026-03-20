@@ -116,7 +116,11 @@ export class InboxWatcher {
         if (this.housekeepingDebounceTimer) clearTimeout(this.housekeepingDebounceTimer);
         if (this.scanDebounceTimer) clearTimeout(this.scanDebounceTimer);
         
-        this.outputChannel.appendLine('[InboxWatcher] Stopped');
+        try {
+            this.outputChannel.appendLine('[InboxWatcher] Stopped');
+        } catch {
+            // Output channel may already be disposed during extension shutdown
+        }
     }
 
     public async runHousekeepingNow(): Promise<void> {
@@ -269,6 +273,16 @@ export class InboxWatcher {
         const filePath = uri.fsPath;
         const fileName = path.basename(filePath);
 
+        // PATH VALIDATION: Ensure file is within the expected inbox directory before any processing
+        const expectedInboxDir = path.join(this.workspaceRoot, '.switchboard', 'inbox');
+        const normalizedFilePath = path.resolve(filePath);
+        const normalizedInboxDir = path.resolve(expectedInboxDir);
+        const relPath = path.relative(normalizedInboxDir, normalizedFilePath);
+        if (relPath.startsWith('..') || path.isAbsolute(relPath)) {
+            this.outputChannel.appendLine(`[InboxWatcher] REJECTED: Path traversal detected — ${filePath} is outside inbox directory`);
+            return;
+        }
+
         // CONCURRENCY LOCK: Prevent double-processing (scan vs watcher events)
         if (this.processingFiles.has(filePath)) return;
         if (!fs.existsSync(filePath)) return;
@@ -407,11 +421,12 @@ export class InboxWatcher {
         const actualName = resolved.name;
         const terminal = resolved.terminal;
 
-        // Sanitize: strip leading characters that trigger CLI modes
+        // Sanitize: strip leading characters that trigger CLI modes or shell command chaining
         // ! = Gemini shell mode, / = slash commands in many CLIs
+        // ; | & < > = shell command separators/redirectors
         let payload = message.payload;
         const originalPayload = payload;
-        payload = payload.replace(/^[!/$]+/, '');
+        payload = payload.replace(/^[!/$;|&<>]+/, '');
         if (payload !== originalPayload) {
             this.outputChannel.appendLine(
                 `[InboxWatcher] SANITIZED: Stripped leading trigger chars from payload ` +

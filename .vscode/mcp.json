@@ -3,12 +3,13 @@
         "switchboard": {
             "command": "node",
             "args": [
-                "${workspaceFolder}/src/mcp-server/mcp-server.js"
+                "./.switchboard/MCP/mcp-server.js",
+                "."
             ],
             "env": {
-        "SWITCHBOARD_WORKSPACE_ROOT": "${workspaceFolder}",
-        "NODE_OPTIONS": "--max-old-space-size=4096"
-      }
+                "SWITCHBOARD_WORKSPACE_ROOT": ".",
+                "NODE_OPTIONS": "--max-old-space-size=4096"
+            }
         }
     }
 }

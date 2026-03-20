@@ -8,28 +8,31 @@
     <title>Switchboard</title>
     <style>
         :root {
-            /* Industrial / Cyber Theme - Glowing Green Edition */
-            --bg-color: #0a0e13;
-            --panel-bg: #0f1419;
-            --panel-bg2: #131920;
-            --border-color: #1e2830;
-            --border-bright: #2a3a48;
-            --text-primary: #c9d1d9;
-            --text-secondary: #6b7c8d;
+            --bg-color: #0d0d0d;
+            --panel-bg: #000000;
+            --panel-bg2: #050505;
+            --border-color: #222222;
+            --border-bright: #444444;
+            --text-primary: #e0e0e0;
+            --text-secondary: #777777;
 
-            --accent-cyan: #2f81f7;
-            --accent-green: #3fb950;
-            /* Muted success green aligned with dark editor themes */
-            --accent-green-dim: #238636;
-            --accent-red: #da3633;
-            --accent-orange: #d29922;
+            --accent-cyan: #3ddbd9;
+            --accent-teal: #3ddbd9;
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            --accent-green: #4ec9b0;
+            --accent-green-dim: #2d7a6a;
+            --accent-red: #f85149;
+            --accent-orange: #d18616;
+            --accent-purple: #ab7df8;
 
-            --glow-green: 0 0 6px rgba(63, 185, 80, 0.3), 0 0 12px rgba(63, 185, 80, 0.1);
-            --glow-green-btn: 0 0 4px rgba(63, 185, 80, 0.25), inset 0 1px 0 rgba(63, 185, 80, 0.1);
-            --glow-cyan: 0 0 8px rgba(47, 129, 247, 0.4);
+            --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
+            --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
+            --glow-green-btn: 0 0 6px rgba(78, 201, 176, 0.15), inset 0 1px 0 rgba(255, 255, 255, 0.08);
+            --glow-cyan: 0 0 8px rgba(55, 148, 255, 0.3);
 
-            --font-family: 'Segoe UI', 'Roboto', sans-serif;
-            --font-mono: 'Consolas', 'Courier New', monospace;
+            --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
 
         * {
@@ -44,10 +47,6 @@
             background: var(--bg-color);
             font-size: 13px;
             overflow-x: hidden;
-            background-image:
-                linear-gradient(rgba(63, 185, 80, 0.01) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(63, 185, 80, 0.01) 1px, transparent 1px);
-            background-size: 20px 20px;
         }
 
         /* Utility Classes */
@@ -132,9 +131,9 @@
         .icon-btn {
             min-width: 20px;
             height: 20px;
-            border: 1px solid var(--border-bright);
+            background: transparent;
+            border: 1px solid var(--border-color);
             border-radius: 2px;
-            background: #0b1116;
             color: var(--text-secondary);
             cursor: pointer;
             display: inline-flex;
@@ -148,9 +147,27 @@
         }
 
         .icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 15%, transparent);
+            border-color: var(--border-bright);
             color: var(--text-primary);
-            border-color: var(--accent-cyan);
-            box-shadow: var(--glow-cyan);
+        }
+
+        .icon-btn.recover:hover:not(:disabled) {
+            color: var(--accent-green);
+            border-color: color-mix(in srgb, var(--accent-green) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-green) 20%, transparent);
+        }
+
+        .icon-btn.delete:hover:not(:disabled) {
+            color: var(--accent-red);
+            border-color: color-mix(in srgb, var(--accent-red) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-red) 20%, transparent);
+        }
+
+        .icon-btn.merge:hover:not(:disabled) {
+            color: var(--accent-cyan);
+            border-color: color-mix(in srgb, var(--accent-cyan) 50%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-cyan) 20%, transparent);
         }
 
         .icon-btn:disabled {
@@ -160,14 +177,14 @@
 
         .icon-btn.success {
             color: var(--accent-green);
-            border-color: rgba(63, 185, 80, 0.4);
-            box-shadow: 0 0 6px rgba(63, 185, 80, 0.2);
+            border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 20%, transparent);
         }
 
         .icon-btn.error {
-            color: var(--accent-red);
-            border-color: rgba(218, 54, 51, 0.45);
-            box-shadow: 0 0 10px rgba(218, 54, 51, 0.3);
+            color: var(--accent-red) !important;
+            border-color: color-mix(in srgb, var(--accent-red) 60%, transparent) !important;
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 30%, transparent) !important;
         }
 
         .dropdown-container {
@@ -176,9 +193,9 @@
 
         .plan-select {
             width: 100%;
-            background: #060a0e;
+            background: #0a0a0a;
             color: var(--text-primary);
-            border: 1px solid var(--border-bright);
+            border: 1px solid var(--border-color);
             padding: 7px 10px;
             font-size: 11px;
             font-family: var(--font-mono);
@@ -186,12 +203,12 @@
             cursor: pointer;
             appearance: none;
             letter-spacing: 0.5px;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5);
         }
 
+        .plan-select:hover,
         .plan-select:focus {
-            border-color: var(--accent-green);
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.5), 0 0 4px rgba(63, 185, 80, 0.12);
+            border-color: var(--border-bright);
+            outline: none;
         }
 
         .select-arrow {
@@ -215,7 +232,7 @@
 
         .tab-btn {
             flex: 1;
-            background: #0b1116;
+            background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
             font-family: var(--font-mono);
@@ -227,10 +244,16 @@
             border-radius: 2px 2px 0 0;
         }
 
+        .tab-btn:hover {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
         .tab-btn.is-active {
             color: var(--accent-green);
-            border-color: rgba(63, 185, 80, 0.35);
-            box-shadow: inset 0 -1px 0 rgba(63, 185, 80, 0.2);
+            border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
+            box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent-green) 20%, transparent);
         }
 
         .sub-tab-bar {
@@ -243,7 +266,7 @@
 
         .sub-tab-btn {
             flex: 1;
-            background: #0b1116;
+            background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
             font-family: var(--font-mono);
@@ -256,14 +279,15 @@
         }
 
         .sub-tab-btn:hover {
-            color: var(--text-primary);
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
             border-color: var(--border-bright);
+            color: var(--text-primary);
         }
 
         .sub-tab-btn.is-active {
             color: var(--accent-green);
-            border-color: rgba(63, 185, 80, 0.35);
-            box-shadow: inset 0 -1px 0 rgba(63, 185, 80, 0.2);
+            border-color: color-mix(in srgb, var(--accent-green) 35%, transparent);
+            box-shadow: inset 0 -1px 0 color-mix(in srgb, var(--accent-green) 20%, transparent);
         }
 
         .tab-panel {
@@ -303,7 +327,6 @@
 
         .activity-row {
             border: 1px solid var(--border-color);
-            border-left: 2px solid var(--accent-cyan);
             background: var(--panel-bg);
             padding: 8px;
             border-radius: 2px;
@@ -341,10 +364,9 @@
         }
 
         .activity-row.summary {
-            border-left-color: var(--accent-green);
-            border-color: rgba(63, 185, 80, 0.3);
-            background: linear-gradient(180deg, rgba(7, 18, 12, 0.95) 0%, rgba(9, 23, 15, 0.9) 100%);
-            box-shadow: 0 0 6px rgba(63, 185, 80, 0.08);
+            border-color: color-mix(in srgb, var(--accent-green) 30%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 5%, var(--panel-bg));
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 8%, transparent);
         }
 
         .activity-summary-message {
@@ -370,21 +392,25 @@
             flex-direction: column;
             gap: 5px;
             background: var(--panel-bg);
-            border: 1px solid var(--border-color);
-            border-left: 2px solid var(--border-bright);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
             padding: 8px 10px;
             border-radius: 2px;
             transition: border-color 0.3s ease;
         }
 
         .agent-row:has(.status-dot.green) {
-            border-left-color: var(--accent-green);
-            box-shadow: -2px 0 6px rgba(63, 185, 80, 0.1);
+            box-shadow: -2px 0 6px color-mix(in srgb, var(--accent-green) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 2%, var(--panel-bg));
         }
 
         .agent-row:has(.status-dot.green-pulse) {
-            border-left-color: var(--accent-green);
-            box-shadow: -2px 0 8px rgba(63, 185, 80, 0.16);
+            box-shadow: -2px 0 8px color-mix(in srgb, var(--accent-green) 16%, transparent);
+            background: color-mix(in srgb, var(--accent-green) 3%, var(--panel-bg));
+        }
+
+        .agent-row:has(.status-dot.red) {
+            box-shadow: -2px 0 6px color-mix(in srgb, var(--accent-red) 10%, transparent);
+            background: color-mix(in srgb, var(--accent-red) 2%, var(--panel-bg));
         }
 
         .row-header {
@@ -404,8 +430,8 @@
             width: 9px;
             height: 9px;
             border-radius: 50%;
-            background: #1e2830;
-            border: 1px solid #2a3a48;
+            background: var(--border-color);
+            border: 1px solid var(--border-bright);
             box-shadow: none;
             transition: all 0.3s ease;
             flex-shrink: 0;
@@ -421,7 +447,13 @@
             background: var(--accent-green);
             border-color: var(--accent-green);
             box-shadow: var(--glow-green);
-            animation: pulse-green 1.5s infinite;
+            animation: pulse-green 2s infinite ease-in-out;
+        }
+
+        .status-dot.red {
+            background: var(--accent-red);
+            border-color: var(--accent-red);
+            box-shadow: var(--glow-red);
         }
 
         .status-dot.orange {
@@ -432,17 +464,20 @@
         @keyframes pulse-green {
             0% {
                 opacity: 1;
-                box-shadow: 0 0 6px rgba(63, 185, 80, 0.35), 0 0 12px rgba(63, 185, 80, 0.15);
+                transform: scale(1);
+                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 40%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 20%, transparent);
             }
 
             50% {
-                opacity: 0.7;
-                box-shadow: 0 0 3px rgba(63, 185, 80, 0.2);
+                opacity: 0.6;
+                transform: scale(0.95);
+                box-shadow: 0 0 2px color-mix(in srgb, var(--accent-green) 15%, transparent);
             }
 
             100% {
                 opacity: 1;
-                box-shadow: 0 0 6px rgba(63, 185, 80, 0.35), 0 0 12px rgba(63, 185, 80, 0.15);
+                transform: scale(1);
+                box-shadow: 0 0 6px color-mix(in srgb, var(--accent-green) 40%, transparent), 0 0 12px color-mix(in srgb, var(--accent-green) 20%, transparent);
             }
         }
 
@@ -462,7 +497,7 @@
         .locate-btn {
             background: none;
             border: none;
-            color: #3a5a7a;
+            color: var(--text-secondary);
             cursor: pointer;
             font-family: var(--font-mono);
             font-size: 10px;
@@ -476,7 +511,7 @@
         .locate-btn:hover {
             opacity: 1;
             color: var(--accent-cyan);
-            text-shadow: 0 0 5px rgba(47, 129, 247, 0.5);
+            text-shadow: 0 0 5px color-mix(in srgb, var(--accent-cyan) 50%, transparent);
         }
 
         .locate-btn:disabled {
@@ -485,13 +520,13 @@
             opacity: 0.25;
         }
 
-        /* Action Buttons - Glowing Green Tactile Style */
+        /* Action Buttons */
         .action-btn {
             width: 100%;
-            background: linear-gradient(180deg, #0e1e16 0%, #0a1610 100%);
-            border: 1px solid #1a3a28;
-            border-bottom-color: #0d2018;
-            color: #3a7a55;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            text-shadow: none;
             padding: 9px;
             font-size: 11px;
             font-weight: 600;
@@ -501,26 +536,24 @@
             cursor: pointer;
             transition: all 0.15s ease;
             text-align: center;
-            box-shadow: 0 2px 4px rgba(0, 0, 0, 0.5), inset 0 1px 0 rgba(255, 255, 255, 0.03);
             border-radius: 2px;
         }
 
         .action-btn:hover:not(:disabled) {
-            background: linear-gradient(180deg, #122a1e 0%, #0e1e16 100%);
-            border-color: rgba(63, 185, 80, 0.35);
-            color: var(--accent-green);
-            box-shadow: 0 0 8px rgba(63, 185, 80, 0.15), inset 0 1px 0 rgba(63, 185, 80, 0.08);
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }
 
         .action-btn:active:not(:disabled) {
             transform: translateY(1px);
-            box-shadow: 0 1px 2px rgba(0, 0, 0, 0.5), inset 0 2px 4px rgba(0, 0, 0, 0.3);
         }
 
         .action-btn:disabled {
             opacity: 0.3;
             cursor: not-allowed;
-            color: #2a3a30;
+            color: var(--vscode-disabledForeground, var(--text-secondary));
             border-color: var(--border-color);
         }
 
@@ -557,8 +590,8 @@
         }
 
         .mini-action-btn {
-            background: #0b1116;
-            border: 1px solid var(--border-bright);
+            background: transparent;
+            border: 1px solid var(--border-color);
             color: var(--text-secondary);
             font-family: var(--font-mono);
             font-size: 9px;
@@ -569,15 +602,15 @@
         }
 
         .mini-action-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border-color: var(--border-bright);
             color: var(--text-primary);
-            border-color: var(--accent-cyan);
-            box-shadow: var(--glow-cyan);
         }
 
         .mini-action-btn.is-active {
             color: var(--accent-cyan);
-            border-color: rgba(47, 129, 247, 0.55);
-            box-shadow: 0 0 8px rgba(47, 129, 247, 0.25);
+            border-color: color-mix(in srgb, var(--accent-cyan) 55%, transparent);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-cyan) 25%, transparent);
         }
 
         .mini-action-btn:disabled {
@@ -588,24 +621,23 @@
         /* Standby Input Area */
         .agent-input {
             width: 100%;
-            background: #060a0e;
-            border: 1px solid var(--border-bright);
-            color: var(--text-secondary);
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
             font-family: var(--font-mono);
             font-size: 11px;
-            padding: 6px 8px;
+            padding: 8px 10px;
             resize: none;
-            height: 40px;
+            height: 48px;
             margin-bottom: 4px;
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4);
             border-radius: 2px;
+            line-height: 1.4;
         }
 
-        .agent-input:focus {
+        .agent-input:focus,
+        .agent-input:hover {
+            border-color: var(--accent-green-dim);
             outline: none;
-            border-color: rgba(63, 185, 80, 0.35);
-            color: var(--text-primary);
-            box-shadow: inset 0 2px 4px rgba(0, 0, 0, 0.4), 0 0 4px rgba(63, 185, 80, 0.08);
         }
 
         /* Scrollbar Styling */
@@ -618,17 +650,17 @@
         }
 
         ::-webkit-scrollbar-thumb {
-            background: #1e2830;
+            background: var(--vscode-scrollbarSlider-background, var(--border-color));
         }
 
         ::-webkit-scrollbar-thumb:hover {
-            background: #2a3a48;
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--border-bright));
         }
 
         /* Status Bar (Bottom) */
         .status-footer {
             padding: 6px 12px;
-            background: #060a0e;
+            background: var(--vscode-statusBar-background, var(--bg-color));
             border-top: 1px solid var(--border-color);
             display: flex;
             justify-content: space-between;
@@ -653,7 +685,7 @@
 
         .tiny-dot.green {
             background: var(--accent-green);
-            box-shadow: 0 0 4px rgba(63, 185, 80, 0.35);
+            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-green) 35%, transparent);
         }
 
         .tiny-dot.orange {
@@ -703,31 +735,89 @@
         }
 
         .secondary-btn {
-            background: linear-gradient(180deg, #0f1419 0%, #0a1014 100%);
-            border: 1px solid var(--border-bright);
-            border-bottom-color: #0d1419;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
             color: var(--text-secondary);
-            padding: 6px;
+            padding: 8px;
             font-size: 10px;
             font-family: var(--font-mono);
             text-transform: uppercase;
-            letter-spacing: 1px;
+            letter-spacing: 1.2px;
             cursor: pointer;
-            transition: all 0.15s;
-            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.4);
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: none;
             border-radius: 2px;
         }
 
         .secondary-btn:hover {
-            border-color: var(--text-secondary);
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
             color: var(--text-primary);
-            background: #131920;
+        }
+
+        .secondary-btn:disabled {
+            opacity: 0.3;
+            cursor: not-allowed;
+            color: var(--vscode-disabledForeground, var(--text-secondary));
+            border-color: var(--border-color);
+            box-shadow: none;
+        }
+
+        .secondary-btn.dispatching {
+            opacity: 0.7;
+            cursor: wait;
+        }
+
+        .secondary-btn.is-cyan {
+            color: var(--accent-cyan);
+            border-color: color-mix(in srgb, var(--accent-cyan) 40%, transparent);
+        }
+
+        .secondary-btn.is-cyan:hover {
+            border-color: var(--accent-cyan);
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-cyan) 20%, transparent);
+        }
+
+        .secondary-btn.is-teal {
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-teal) 5%, var(--panel-bg2));
+        }
+
+        .secondary-btn.is-teal:hover {
+            border-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, var(--panel-bg2));
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        .secondary-btn.success {
+            color: var(--accent-green);
+            border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
+        }
+
+        .secondary-btn.error {
+            color: var(--accent-red);
+            border-color: color-mix(in srgb, var(--accent-red) 45%, transparent);
+        }
+
+        .secondary-btn.is-denied,
+        .secondary-btn.is-denied:hover,
+        .secondary-btn.is-denied:disabled {
+            background: var(--accent-red);
+            color: #ffffff;
+            border-color: color-mix(in srgb, var(--accent-red) 85%, #ffffff 15%);
+            box-shadow: var(--glow-red);
+        }
+
+        .secondary-btn.is-denied:disabled {
+            opacity: 1;
+            cursor: not-allowed;
         }
 
         .modal-overlay {
             position: fixed;
             inset: 0;
-            background: rgba(0, 0, 0, 0.65);
+            background: rgba(0, 0, 0, 0.45);
             display: flex;
             align-items: center;
             justify-content: center;
@@ -737,7 +827,7 @@
 
         .modal-card {
             width: 100%;
-            max-width: 420px;
+            max-width: 800px;
             background: var(--panel-bg);
             border: 1px solid var(--border-bright);
             border-radius: 4px;
@@ -765,18 +855,95 @@
         .modal-input,
         .modal-textarea {
             width: 100%;
-            background: #060a0e;
+            background: #0a0a0a;
             color: var(--text-primary);
-            border: 1px solid var(--border-bright);
+            border: 1px solid var(--border-color);
             padding: 7px;
             font-family: var(--font-mono);
             font-size: 11px;
             margin-bottom: 10px;
         }
 
+        .modal-input:hover,
+        .modal-input:focus,
+        .modal-textarea:hover,
+        .modal-textarea:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
         .modal-textarea {
-            min-height: 90px;
+            min-height: 200px;
             resize: vertical;
+        }
+
+        .recover-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            margin-bottom: 4px;
+            font-size: 11px;
+        }
+
+        .recover-item-info {
+            flex: 1;
+            min-width: 0;
+            overflow: hidden;
+        }
+
+        .recover-item-topic {
+            color: var(--text-primary);
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .recover-item-meta {
+            font-size: 9px;
+            color: var(--text-secondary);
+            margin-top: 2px;
+        }
+
+        .recover-status-chip {
+            display: inline-block;
+            font-size: 9px;
+            padding: 1px 5px;
+            border-radius: 2px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            font-family: var(--font-mono);
+        }
+
+        .recover-status-chip.archived {
+            background: color-mix(in srgb, var(--accent-purple) 20%, transparent);
+            color: #cccccc;
+        }
+
+        .recover-status-chip.orphan {
+            background: color-mix(in srgb, var(--accent-orange) 20%, transparent);
+            color: #aaaaaa;
+        }
+
+        .recover-restore-btn {
+            flex-shrink: 0;
+            margin-left: 8px;
+            padding: 3px 10px;
+            font-size: 10px;
+            font-family: var(--font-mono);
+            background: transparent;
+            color: var(--accent-green);
+            border: 1px solid color-mix(in srgb, var(--accent-green) 40%, transparent);
+            border-radius: 2px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .recover-restore-btn:hover {
+            background: color-mix(in srgb, var(--accent-green) 12%, transparent);
         }
 
         /* Agent Startup Config */
@@ -827,31 +994,32 @@
 
         .startup-row input {
             width: 100%;
-            background: #060a0e;
+            background: #0a0a0a;
             color: var(--text-primary);
-            border: 1px solid var(--border-bright);
+            border: 1px solid var(--border-color);
             padding: 5px 7px;
             font-family: var(--font-mono);
             font-size: 11px;
         }
 
-        .startup-row input:focus {
+        .startup-row input:focus,
+        .startup-row input:hover {
+            border-color: var(--border-bright);
             outline: none;
-            border-color: var(--accent-green);
         }
 
         /* Action Button Feedback Animations */
-        @keyframes success-glow {
+        @keyframes pulse-green {
             0% {
-                box-shadow: 0 0 0 0 rgba(63, 185, 80, 0.3);
+                box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent-green) 30%, transparent);
             }
 
-            50% {
-                box-shadow: 0 0 8px 3px rgba(63, 185, 80, 0.2);
+            70% {
+                box-shadow: 0 0 8px 3px color-mix(in srgb, var(--accent-green) 20%, transparent);
             }
 
             100% {
-                box-shadow: 0 0 0 0 rgba(63, 185, 80, 0);
+                box-shadow: 0 0 0 0 transparent;
             }
         }
 
@@ -892,14 +1060,14 @@
             border-color: var(--accent-green) !important;
             color: var(--accent-green) !important;
             animation: success-glow 1.2s ease-out;
-            background: linear-gradient(90deg, transparent 0%, rgba(63, 185, 80, 0.06) 50%, transparent 100%);
+            background: linear-gradient(90deg, transparent 0%, color-mix(in srgb, var(--accent-green) 60%, transparent) 50%, transparent 100%);
             background-size: 200% 100%;
             animation: success-glow 1.2s ease-out, sweep 1s ease-out;
         }
 
         .action-btn.error {
-            border-color: #ff5252 !important;
-            color: #ff5252 !important;
+            border-color: var(--accent-red) !important;
+            color: var(--accent-red) !important;
             animation: error-shake 0.4s ease-out;
         }
 
@@ -969,14 +1137,14 @@
 
         .orchestrator-controls .action-btn.stop-btn {
             color: var(--accent-red);
-            border-color: rgba(218, 54, 51, 0.4);
+            border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
             flex: 0 0 auto;
             width: 70px;
         }
 
         .orchestrator-controls .action-btn.stop-btn:hover:not(:disabled) {
             border-color: var(--accent-red);
-            box-shadow: 0 0 8px rgba(218, 54, 51, 0.3);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-red) 30%, transparent);
         }
 
         .orchestrator-interval {
@@ -996,29 +1164,122 @@
 
         .orchestrator-interval input {
             width: 60px;
-            background: #060a0e;
-            border: 1px solid var(--border-bright);
+            background: #0a0a0a;
             color: var(--text-primary);
+            border: 1px solid var(--border-color);
             font-family: var(--font-mono);
             font-size: 11px;
             padding: 3px 6px;
             text-align: center;
         }
+
+        .orchestrator-interval input:hover,
+        .orchestrator-interval input:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .onboard-step .startup-row {
+            margin-bottom: 6px;
+        }
     </style>
 </head>
 
 <body>
-    <div class="container">
+    <!-- ONBOARDING CONTAINER (shown when needsSetup is true) -->
+    <div id="onboarding-container" class="container hidden">
+        <!-- Step 1: Welcome -->
+        <div id="onboard-step-welcome" class="onboard-step">
+            <div style="text-align:center; padding: 30px 16px 10px;">
+                <div style="font-size: 28px; margin-bottom: 12px;">⚡</div>
+                <div
+                    style="font-family: var(--font-mono); font-size: 13px; letter-spacing: 2px; text-transform: uppercase; color: var(--accent-green); text-shadow: var(--glow-green); margin-bottom: 8px;">
+                    Welcome to Switchboard</div>
+                <div
+                    style="font-size: 12px; color: var(--text-secondary); line-height: 1.5; max-width: 280px; margin: 0 auto;">
+                    Cross-IDE agent orchestration — workflow routing, terminal targeting, and multi-agent coordination.
+                </div>
+            </div>
+            <div style="padding: 20px 16px;">
+                <button id="btn-onboard-init" class="secondary-btn w-full"
+                    style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">INITIALIZE
+                    SWITCHBOARD</button>
+                <div id="onboard-init-status"
+                    style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">
+                </div>
+            </div>
+        </div>
+
+        <!-- Step 2: CLI Config -->
+        <div id="onboard-step-cli" class="onboard-step hidden">
+            <div style="padding: 16px;">
+                <div class="section-label" style="margin-bottom: 12px;">CONFIGURE CLI AGENTS</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.4;">
+                    Set commands for each agent role. Uncheck to hide an agent from the sidebar. Leave command empty to skip.
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="lead" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Lead Coder</label><input type="text" id="onboard-cli-lead"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="coder" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Coder</label><input type="text" id="onboard-cli-coder"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="reviewer" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Reviewer</label><input type="text" id="onboard-cli-reviewer"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" id="onboard-cli-planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Analyst</label><input type="text" id="onboard-cli-analyst"
+                        placeholder="e.g. qwen" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="jules" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Jules</label>
+                    <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
+                </div>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:4px;">
+                    <input id="onboard-jules-auto-sync" type="checkbox" style="width:auto; margin:0;">
+                    <span style="font-size:10px; color:var(--text-secondary);">Auto-sync repo before sending to Jules (default OFF)</span>
+                </label>
+                <div style="margin-top: 12px; display: flex; gap: 8px;">
+                    <button id="btn-onboard-save" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);">SAVE
+                        &amp; FINISH</button>
+                    <button id="btn-onboard-skip" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px;">SKIP</button>
+                </div>
+                <div id="onboard-cli-status"
+                    style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- MAIN CONTAINER (normal sidebar) -->
+    <div id="main-container" class="container">
         <!-- HEADER: PLAN SELECTION -->
         <div class="header-section">
             <div class="section-header">
-                <div class="section-label">PLAN SELECT <span class="tooltip-icon" title="If the dropdown is incorrect, ask an agent to run the 'fix plans dropdown' skill.">ⓘ</span></div>
+                <div class="section-label">PLAN SELECT <span class="tooltip-icon"
+                        title="If the plan select dropdown does not appear correct, use the Recover menu or ask an agent to run the Fix Plans Dropdown skill.">ⓘ</span>
+                </div>
                 <div class="flex gap-2" style="align-items: center;">
-                    <button id="btn-delete-plan" class="icon-btn" style="color: var(--accent-red);"
-                        title="Delete active plan" aria-label="Delete plan">DELETE</button>
-                    <button id="btn-copy-plan-link" class="icon-btn" title="Copy Markdown link for active plan"
-                        aria-label="Copy plan link"
-                        style="color: var(--accent-cyan); border-color: rgba(47, 129, 247, 0.5); font-weight: 600; opacity: 1;">COPY PLAN</button>
+                    <button id="btn-recover-plans" class="icon-btn recover" title="Recover archived or orphaned plans"
+                        aria-label="Recover plans">RECOVER</button>
+                    <button id="btn-delete-plan" class="icon-btn delete" title="Delete active plan"
+                        aria-label="Delete plan">DELETE</button>
+                    <button id="btn-merge-all-plans" class="icon-btn merge" title="Merge all plans into a single file"
+                        aria-label="Merge all plans">MERGE ALL</button>
                 </div>
             </div>
             <div class="dropdown-container">
@@ -1028,11 +1289,13 @@
                 <div class="select-arrow">▼</div>
             </div>
             <div class="flex gap-2" style="margin-top: 6px;">
-                <button id="btn-complete-plan" class="secondary-btn w-full">MARK COMPLETE</button>
-                <button id="btn-merge-all-plans" class="secondary-btn w-full">MERGE ALL</button>
+                <button id="btn-complete-plan" class="secondary-btn w-full">COMPLETE</button>
+                <button id="btn-copy-plan-link" class="secondary-btn w-full" title="Copy Markdown link for active plan"
+                    aria-label="Copy plan link">COPY</button>
+                <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
             </div>
             <div style="margin-top: 6px;">
-                <button id="btn-create-plan" class="secondary-btn w-full">CREATE PLAN</button>
+                <button id="btn-open-kanban" class="secondary-btn is-teal w-full">OPEN CLI-BAN</button>
             </div>
         </div>
 
@@ -1040,16 +1303,16 @@
         <div id="panel-agents" class="tab-panel">
             <div class="sub-tab-bar">
                 <button class="sub-tab-btn is-active" data-tab="agents">Agents</button>
-                <button class="sub-tab-btn" data-tab="auto">Auto</button>
-                <button class="sub-tab-btn" data-tab="cloud">Cloud</button>
+                <button class="sub-tab-btn" data-tab="webai">Airlock</button>
+                <button class="sub-tab-btn" data-tab="autoban">Autoban</button>
             </div>
             <div id="agent-list-standard" class="agent-list">
                 <div style="text-align: center; padding: 20px; color: var(--text-secondary);">
                     Initializing...
                 </div>
             </div>
-            <div id="agent-list-auto" class="agent-list hidden"></div>
-            <div id="agent-list-cloud" class="agent-list hidden"></div>
+            <div id="agent-list-autoban" class="agent-list hidden"></div>
+            <div id="agent-list-webai" class="agent-list hidden"></div>
         </div>
 
         <!-- LIVE ACTIVITY FEED -->
@@ -1075,13 +1338,12 @@
                 <span class="chevron open" id="terminal-operations-chevron">▶</span>
             </div>
             <div class="panel-fields open" id="terminal-operations-fields">
-                <button id="createAgentGrid" class="secondary-btn w-full">OPEN AGENT TERMINALS</button>
-                <button id="btn-deregister-all" class="secondary-btn w-full"
-                    style="color: var(--accent-red); border-color: rgba(218, 54, 51, 0.3);">RESET ALL AGENTS</button>
-            </div>
-        </div>
-
-        <!-- SETUP -->
+                <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
+                <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
+                <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
+                </div>
+                </div>
+                <!-- SETUP -->
         <div class="startup-section">
             <div class="startup-toggle" id="startup-toggle">
                 <div class="section-label" style="margin:0">SETUP</div>
@@ -1089,28 +1351,66 @@
             </div>
             <div class="startup-fields" id="startup-fields">
                 <div class="flex gap-2">
-                    <button id="btn-initialize" class="secondary-btn w-full">INIT PROTOCOLS</button>
-                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
+                    <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>       
+                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>      
                 </div>
-                <div class="startup-row"><label>Lead Coder</label><input type="text" data-role="lead"
-                        placeholder="e.g. copilot --allow-all-tools"></div>
-                <div class="startup-row"><label>Coder</label><input type="text" data-role="coder"
-                        placeholder="e.g. codex --full-auto"></div>
-                <div class="startup-row"><label>Reviewer</label><input type="text" data-role="reviewer"
-                        placeholder="e.g. gemini"></div>
-                <div class="startup-row"><label>Planner</label><input type="text" data-role="planner"
-                        placeholder="e.g. gemini"></div>
-                <div class="startup-row"><label>Analyst</label><input type="text" data-role="analyst"
-                        placeholder="e.g. qwen"></div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">AGENT VISIBILITY &amp; CLI COMMANDS</div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="coder" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Coder</label><input type="text" data-role="coder"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
+                        placeholder="e.g. qwen" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="jules" checked style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Jules</label>
+                    <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
+                </div>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                    <input id="jules-auto-sync-toggle" type="checkbox" style="width:auto; margin:0;">
+                    <span>Auto-sync repo before sending to Jules</span>
+                </label>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
                     <span>Accurate coding mode for Coder prompts</span>
                 </label>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                    <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
+                    <span>Inline challenge step for Lead Coder prompts</span>
+                </label>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">PLAN INGESTION</div>
+                <label class="startup-row" style="display:block; margin-top:6px;">
+                    <span style="display:block; margin-bottom:4px;">Additional plan folder</span>
+                    <input id="plan-ingestion-folder-input" type="text" placeholder="e.g. C:\Plans\Switchboard" style="width:100%;">
+                </label>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">CUSTOM AGENTS</div>
+                <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
                 <button id="btn-save-startup" class="secondary-btn w-full"
-                    style="margin-top:4px; color: var(--accent-green); border-color: rgba(63,185,80,0.25);">SAVE STARTUP
-                    COMMANDS</button>
-                <button id="btn-archive-all-completed" class="secondary-btn w-full" style="margin-top:4px;">🗄 Archive
-                    All Completed</button>
+                    style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE
+                    CONFIGURATION</button>
+                <button id="btn-open-docs" class="secondary-btn w-full"
+                    style="margin-top:4px;">OPEN DOCS</button>
+
             </div>
         </div>
 
@@ -1123,22 +1423,43 @@
             <div class="status-indicator" id="mcp-status-footer">
                 <div class="tiny-dot" id="mcp-dot"></div>
                 <span id="mcp-text">MCP: CHECKING</span>
+                <span id="mcp-recheck" title="Recheck MCP connection" style="cursor:pointer; margin-left:4px; opacity:0.6; font-size:11px;" onclick="vscode.postMessage({ type: 'recheckMcpConnection' })">&#x21bb;</span>
             </div>
         </div>
     </div>
 
-    <div id="initiate-plan-modal" class="modal-overlay hidden">
-        <div class="modal-card">
-            <div class="modal-title">INITIATE PLAN</div>
-            <label class="modal-label" for="init-plan-title">Plan title</label>
-            <input id="init-plan-title" class="modal-input" type="text"
-                placeholder="e.g. Improve onboarding conversion">
-            <label class="modal-label" for="init-plan-idea">Feature idea or bug</label>
-            <textarea id="init-plan-idea" class="modal-textarea"
-                placeholder="Describe what should be fixed or built..."></textarea>
-            <div class="flex gap-2">
-                <button id="btn-send-planner" class="secondary-btn w-full">SEND TO PLANNER</button>
-                <button id="btn-copy-prompt" class="secondary-btn w-full">COPY TO CLIPBOARD</button>
+    <div id="recover-plans-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 480px;">
+            <div class="modal-title">RECOVER PLANS</div>
+            <input id="recover-search" class="modal-input" type="text" placeholder="Filter plans..."
+                style="margin-bottom: 8px;">
+            <div id="recover-plan-list" style="max-height: 260px; overflow-y: auto; margin-bottom: 10px;"></div>
+            <div id="recover-empty-msg" class="hidden"
+                style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 11px;">No recoverable
+                plans found.</div>
+            <button id="btn-close-recover" class="secondary-btn w-full">CLOSE</button>
+        </div>
+    </div>
+
+    <div id="custom-agent-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 520px;">
+            <div class="modal-title">CUSTOM AGENT</div>
+            <label class="modal-label" for="custom-agent-name">Agent name</label>
+            <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+            <label class="modal-label" for="custom-agent-command">Startup command</label>
+            <input id="custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
+            <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
+            <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
+            <label class="modal-label" for="custom-agent-order">Kanban order</label>
+            <input id="custom-agent-order" class="modal-input" type="number" value="400">
+            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
+                <span>Show as Kanban column</span>
+            </label>
+            <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+                <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
+                <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
             </div>
         </div>
     </div>
@@ -1151,8 +1472,8 @@
         // DOM Elements
         const runSheetSelect = document.getElementById('run-sheet-select');
         const agentListStandard = document.getElementById('agent-list-standard');
-        const agentListAuto = document.getElementById('agent-list-auto');
-        const agentListCloud = document.getElementById('agent-list-cloud');
+        const agentListAutoban = document.getElementById('agent-list-autoban');
+        const agentListWebai = document.getElementById('agent-list-webai');
         const agentList = agentListStandard; // backward compat alias
         const activityList = document.getElementById('activity-list');
         const activityLoadMoreBtn = document.getElementById('btn-activity-load-more');
@@ -1167,34 +1488,24 @@
         const mcpText = document.getElementById('mcp-text');
         const copyPlanLinkBtn = document.getElementById('btn-copy-plan-link');
         const mergeAllPlansBtn = document.getElementById('btn-merge-all-plans');
-        const archiveAllCompletedBtn = document.getElementById('btn-archive-all-completed');
-        const initiatePlanModal = document.getElementById('initiate-plan-modal');
-        const initiatePlanTitleInput = document.getElementById('init-plan-title');
-        const initiatePlanIdeaInput = document.getElementById('init-plan-idea');
+
+        const recoverPlansModal = document.getElementById('recover-plans-modal');
+        const recoverPlanList = document.getElementById('recover-plan-list');
+        const recoverEmptyMsg = document.getElementById('recover-empty-msg');
+        const recoverSearchInput = document.getElementById('recover-search');
+        const customAgentList = document.getElementById('custom-agent-list');
+        const customAgentModal = document.getElementById('custom-agent-modal');
+        const customAgentNameInput = document.getElementById('custom-agent-name');
+        const customAgentCommandInput = document.getElementById('custom-agent-command');
+        const customAgentPromptInput = document.getElementById('custom-agent-prompt');
+        const customAgentOrderInput = document.getElementById('custom-agent-order');
+        const customAgentKanbanInput = document.getElementById('custom-agent-kanban');
+        const customAgentError = document.getElementById('custom-agent-error');
+        let recoverablePlansCache = [];
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
-        let analystMapFeedback = null; // { text, className, expiresAt }
-        let analystMapFeedbackTimer = null;
-
-        function formatOrchestratorTime(totalSeconds) {
-            const m = Math.floor(totalSeconds / 60);
-            const s = totalSeconds % 60;
-            return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
-        }
-
-        function updateOrchestratorUI(state) {
-            lastOrchestratorState = state || null;
-            if (state && Number.isFinite(Number(state.intervalSeconds))) {
-                orchIntervalSeconds = Number(state.intervalSeconds);
-            }
-            renderAgentList();
-        }
-
-        function updatePipelineUI(state) {
-            lastPipelineState = state || null;
-            renderAgentList();
-        }
+        let editingCustomAgentId = null;
 
         function isPlanSelected() {
             return Boolean(runSheetSelect && runSheetSelect.value);
@@ -1226,54 +1537,274 @@
             }, 1500);
         }
 
-        function openInitiatePlanModal() {
-            initiatePlanModal.classList.remove('hidden');
-            setTimeout(() => initiatePlanTitleInput.focus(), 0);
+        function sanitizeCustomAgentId(value) {
+            const normalized = String(value || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 48);
+            return normalized || `agent_${Date.now().toString(36)}`;
         }
 
-        function closeInitiatePlanModal() {
-            initiatePlanModal.classList.add('hidden');
+        function toCustomAgentRole(id) {
+            return `custom_agent_${sanitizeCustomAgentId(id)}`;
         }
 
-        function submitInitiatePlan(action) {
-            const title = initiatePlanTitleInput.value.trim();
-            const idea = initiatePlanIdeaInput.value.trim();
-            if (!title || !idea) {
+        function openCustomAgentModal(agent) {
+            editingCustomAgentId = agent ? agent.id : null;
+            customAgentNameInput.value = agent?.name || '';
+            customAgentCommandInput.value = agent?.startupCommand || '';
+            customAgentPromptInput.value = agent?.promptInstructions || '';
+            customAgentOrderInput.value = String(agent?.kanbanOrder ?? 150);
+            customAgentKanbanInput.checked = agent?.includeInKanban === true;
+            customAgentError.textContent = '';
+            customAgentModal.classList.remove('hidden');
+            setTimeout(() => customAgentNameInput.focus(), 0);
+        }
+
+        function closeCustomAgentModal() {
+            editingCustomAgentId = null;
+            customAgentModal.classList.add('hidden');
+            customAgentError.textContent = '';
+        }
+
+        function saveCustomAgentDraft() {
+            const name = customAgentNameInput.value.trim();
+            const startupCommand = customAgentCommandInput.value.trim();
+            if (!name || !startupCommand) {
+                customAgentError.textContent = 'Name and startup command are required.';
                 return;
             }
 
-            vscode.postMessage({
-                type: 'initiatePlan',
-                title,
-                idea,
-                mode: action
-            });
-            closeInitiatePlanModal();
-            initiatePlanTitleInput.value = '';
-            initiatePlanIdeaInput.value = '';
+            const existingId = editingCustomAgentId || sanitizeCustomAgentId(name);
+            const role = toCustomAgentRole(existingId);
+            const nextAgent = {
+                id: existingId,
+                role,
+                name,
+                startupCommand,
+                promptInstructions: customAgentPromptInput.value.trim(),
+                includeInKanban: !!customAgentKanbanInput.checked,
+                kanbanOrder: Number(customAgentOrderInput.value) || 400
+            };
+
+            const duplicate = lastCustomAgents.find(agent =>
+                agent.id !== nextAgent.id &&
+                agent.name.toLowerCase() === nextAgent.name.toLowerCase()
+            );
+            if (duplicate) {
+                customAgentError.textContent = 'Agent names must be unique.';
+                return;
+            }
+
+            lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
+            lastCustomAgents.push(nextAgent);
+            lastCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
+            if (!(nextAgent.role in lastVisibleAgents)) {
+                lastVisibleAgents[nextAgent.role] = true;
+            }
+            lastStartupCommands[nextAgent.role] = nextAgent.startupCommand;
+            renderCustomAgentConfigList();
+            renderAgentList();
+            closeCustomAgentModal();
         }
 
-        document.getElementById('btn-send-planner').addEventListener('click', () => submitInitiatePlan('send'));
-        document.getElementById('btn-copy-prompt').addEventListener('click', () => submitInitiatePlan('copy'));
-        document.getElementById('btn-create-plan').addEventListener('click', () => openInitiatePlanModal());
-
-        initiatePlanModal.addEventListener('click', (event) => {
-            if (event.target === initiatePlanModal) {
-                closeInitiatePlanModal();
+        function renderCustomAgentConfigList() {
+            if (!customAgentList) return;
+            customAgentList.innerHTML = '';
+            if (!lastCustomAgents.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-size:11px; text-align:center;';
+                empty.textContent = 'No custom agents configured.';
+                customAgentList.appendChild(empty);
+                return;
             }
+
+            lastCustomAgents.forEach(agent => {
+                const row = document.createElement('div');
+                row.className = 'startup-row';
+                row.style.cssText = 'display:flex; flex-direction:column; gap:6px; align-items:stretch;';
+
+                const top = document.createElement('div');
+                top.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                const visibility = document.createElement('input');
+                visibility.type = 'checkbox';
+                visibility.className = 'agent-visible-toggle custom-agent-visible-toggle';
+                visibility.dataset.role = agent.role;
+                visibility.checked = lastVisibleAgents[agent.role] !== false;
+                visibility.style.cssText = 'width:auto; margin:0; flex-shrink:0;';
+
+                const label = document.createElement('div');
+                label.style.cssText = 'flex:1; font-size:11px; color:var(--text-primary);';
+                label.textContent = agent.name;
+
+                const editBtn = document.createElement('button');
+                editBtn.className = 'secondary-btn';
+                editBtn.style.cssText = 'width:auto; min-width:64px;';
+                editBtn.textContent = 'EDIT';
+                editBtn.onclick = () => openCustomAgentModal(agent);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'secondary-btn';
+                deleteBtn.style.cssText = 'width:auto; min-width:64px;';
+                deleteBtn.textContent = 'DELETE';
+                deleteBtn.onclick = () => {
+                    lastCustomAgents = lastCustomAgents.filter(item => item.id !== agent.id);
+                    delete lastVisibleAgents[agent.role];
+                    delete lastStartupCommands[agent.role];
+                    renderCustomAgentConfigList();
+                    renderAgentList();
+                };
+
+                top.appendChild(visibility);
+                top.appendChild(label);
+                top.appendChild(editBtn);
+                top.appendChild(deleteBtn);
+
+                const meta = document.createElement('div');
+                meta.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+                meta.textContent = `${agent.startupCommand}${agent.includeInKanban ? ` • Kanban ${agent.kanbanOrder}` : ''}`;
+
+                row.appendChild(top);
+                row.appendChild(meta);
+                customAgentList.appendChild(row);
+            });
+        }
+
+        document.getElementById('btn-create-plan').addEventListener('click', () => {
+            vscode.postMessage({ type: 'createDraftPlanTicket' });
+        });
+
+        // Recovery Modal
+        function openRecoverPlansModal() {
+            recoverPlansModal.classList.remove('hidden');
+            recoverSearchInput.value = '';
+            recoverPlanList.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:11px;">Loading...</div>';
+            recoverEmptyMsg.classList.add('hidden');
+            vscode.postMessage({ type: 'getRecoverablePlans' });
+        }
+        function closeRecoverPlansModal() {
+            recoverPlansModal.classList.add('hidden');
+        }
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+        function inferTopicFromPath(filePath) {
+            if (!filePath) return '(untitled)';
+            var name = filePath.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
+            name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
+            name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
+            if (!name) return '(untitled)';
+            return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }).trim() || '(untitled)';
+        }
+        function renderRecoverablePlans(plans, filter) {
+            recoverablePlansCache = plans || [];
+            const q = (filter || '').toLowerCase();
+            const filtered = q ? recoverablePlansCache.filter(p => (p.topic || '').toLowerCase().includes(q)) : recoverablePlansCache;
+            recoverPlanList.innerHTML = '';
+            if (filtered.length === 0) {
+                recoverEmptyMsg.classList.remove('hidden');
+                return;
+            }
+            recoverEmptyMsg.classList.add('hidden');
+            for (const plan of filtered) {
+                const item = document.createElement('div');
+                item.className = 'recover-item';
+                const dateStr = plan.updatedAt ? new Date(plan.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() : '';
+                const btnLabel = plan.status === 'orphan' ? 'CLAIM' : 'RESTORE';
+                var displayTopic = plan.topic;
+                if (!displayTopic || displayTopic === '(untitled)') {
+                    displayTopic = inferTopicFromPath(plan.brainSourcePath || plan.localPlanPath);
+                }
+                item.innerHTML = '<div class="recover-item-info">'
+                    + '<div class="recover-item-topic">' + escapeHtml(displayTopic) + '</div>'
+                    + '<div class="recover-item-meta"><span class="recover-status-chip ' + escapeHtml(plan.status) + '">' + escapeHtml(plan.status) + '</span> · ' + escapeHtml(plan.sourceType) + ' · ' + escapeHtml(dateStr) + '</div>'
+                    + '</div>'
+                    + '<button class="recover-restore-btn" data-plan-id="' + escapeHtml(plan.planId) + '">' + escapeHtml(btnLabel) + '</button>';
+                recoverPlanList.appendChild(item);
+            }
+            recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const planId = btn.getAttribute('data-plan-id');
+                    btn.disabled = true;
+                    btn.textContent = '...';
+                    vscode.postMessage({ type: 'restorePlan', planId });
+                });
+            });
+        }
+        document.getElementById('btn-recover-plans').addEventListener('click', openRecoverPlansModal);
+        document.getElementById('btn-close-recover').addEventListener('click', closeRecoverPlansModal);
+        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
+        document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
+        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
+        recoverPlansModal.addEventListener('click', (event) => {
+            if (event.target === recoverPlansModal) closeRecoverPlansModal();
+        });
+        customAgentModal.addEventListener('click', (event) => {
+            if (event.target === customAgentModal) closeCustomAgentModal();
+        });
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') { closeRecoverPlansModal(); closeCustomAgentModal(); }
+        });
+        recoverSearchInput.addEventListener('input', () => {
+            renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
         });
 
         // Setup Buttons
-        document.getElementById('btn-initialize').addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
-        document.getElementById('btn-connect-mcp').addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
-        document.getElementById('createAgentGrid').addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
-        document.getElementById('btn-deregister-all').addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
-        document.getElementById('terminal-operations-toggle').addEventListener('click', () => {
-            const fields = document.getElementById('terminal-operations-fields');
-            const chevron = document.getElementById('terminal-operations-chevron');
-            const isOpen = fields.classList.toggle('open');
-            chevron.classList.toggle('open', isOpen);
-        });
+        const btnInit = document.getElementById('btn-initialize');
+        if (btnInit) btnInit.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
+        const btnConnect = document.getElementById('btn-connect-mcp');
+        if (btnConnect) btnConnect.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
+        const btnGrid = document.getElementById('createAgentGrid');
+        if (btnGrid) btnGrid.addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
+        const btnDeregister = document.getElementById('btn-deregister-all');
+        if (btnDeregister) btnDeregister.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
+        const btnKanban = document.getElementById('btn-open-kanban');
+        if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
+
+        // Easter egg button - Jurassic Park reference
+        const btnEasterEgg = document.getElementById('btn-easter-egg');
+        if (btnEasterEgg) {
+            const labels = ['Access main program', 'Access main security', 'Access main program grid'];
+            let currentIndex = 0;
+            let isDenied = false;
+
+            btnEasterEgg.addEventListener('click', () => {
+                if (isDenied) return;
+
+                isDenied = true;
+                btnEasterEgg.textContent = 'DENIED';
+                btnEasterEgg.classList.add('is-denied');
+                btnEasterEgg.disabled = true;
+
+                setTimeout(() => {
+                    btnEasterEgg.classList.remove('is-denied');
+                    currentIndex = (currentIndex + 1) % labels.length;
+                    btnEasterEgg.textContent = labels[currentIndex];
+                    btnEasterEgg.disabled = false;
+                    isDenied = false;
+                }, 1000);
+            });
+        }
+
+        const termOpsToggle = document.getElementById('terminal-operations-toggle');
+        if (termOpsToggle) {
+            termOpsToggle.addEventListener('click', () => {
+                const fields = document.getElementById('terminal-operations-fields');
+                const chevron = document.getElementById('terminal-operations-chevron');
+                if (fields && chevron) {
+                    const isOpen = fields.classList.toggle('open');
+                    chevron.classList.toggle('open', isOpen);
+                }
+            });
+        }
+
         if (liveFeedToggle && liveFeedFields && liveFeedChevron) {
             liveFeedToggle.addEventListener('click', () => {
                 const isOpen = liveFeedFields.classList.toggle('open');
@@ -1283,50 +1814,91 @@
         }
 
         // Startup Commands
-        document.getElementById('startup-toggle').addEventListener('click', () => {
-            const fields = document.getElementById('startup-fields');
-            const chevron = document.getElementById('startup-chevron');
-            const isOpen = fields.classList.toggle('open');
-            chevron.classList.toggle('open', isOpen);
-            if (isOpen) vscode.postMessage({ type: 'getStartupCommands' });
-            if (isOpen) vscode.postMessage({ type: 'getAccurateCodingSetting' });
-        });
-        document.getElementById('btn-save-startup').addEventListener('click', () => {
-            const commands = { ...lastStartupCommands };
-            document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
-                const role = input.dataset.role;
-                const value = input.value.trim();
-                if (!role) return;
-                if (value) commands[role] = value;
-                else delete commands[role];
+        const startupToggle = document.getElementById('startup-toggle');
+        if (startupToggle) {
+            startupToggle.addEventListener('click', () => {
+                const fields = document.getElementById('startup-fields');
+                const chevron = document.getElementById('startup-chevron');
+                if (fields && chevron) {
+                    const isOpen = fields.classList.toggle('open');
+                    chevron.classList.toggle('open', isOpen);
+                    if (isOpen) {
+                        vscode.postMessage({ type: 'getStartupCommands' });
+                        vscode.postMessage({ type: 'getAccurateCodingSetting' });
+                        vscode.postMessage({ type: 'getLeadChallengeSetting' });
+                        vscode.postMessage({ type: 'getJulesAutoSyncSetting' });
+                        vscode.postMessage({ type: 'getVisibleAgents' });
+                        vscode.postMessage({ type: 'getCustomAgents' });
+                    }
+                }
             });
-            const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-            vscode.postMessage({ type: 'saveStartupCommands', commands, accurateCodingEnabled });
-            const btn = document.getElementById('btn-save-startup');
-            btn.textContent = 'SAVED ✓';
-            setTimeout(() => { btn.textContent = 'SAVE STARTUP COMMANDS'; }, 1500);
-        });
-        document.getElementById('btn-complete-plan').addEventListener('click', () => {
-            const sessionId = runSheetSelect.value;
-            if (!sessionId) return;
-            vscode.postMessage({ type: 'completePlan', sessionId });
-        });
-        document.getElementById('btn-delete-plan').addEventListener('click', () => {
-            const sessionId = runSheetSelect.value;
-            if (!sessionId) return;
-            vscode.postMessage({ type: 'deletePlan', sessionId });
-        });
-        mergeAllPlansBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'mergeAllPlans' });
-        });
-        archiveAllCompletedBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'archiveAllCompleted' });
-        });
-        copyPlanLinkBtn.addEventListener('click', () => {
-            const sessionId = runSheetSelect.value;
-            if (!sessionId) return;
-            vscode.postMessage({ type: 'copyPlanLink', sessionId });
-        });
+        }
+
+        const btnSaveStartup = document.getElementById('btn-save-startup');
+        if (btnSaveStartup) {
+            btnSaveStartup.addEventListener('click', () => {
+                const commands = { ...lastStartupCommands };
+                document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
+                    const role = input.dataset.role;
+                    commands[role] = input.value.trim();
+                });
+                const visibleAgents = {};
+                document.querySelectorAll('#startup-fields input[type="checkbox"][data-role]').forEach(cb => {
+                    const role = cb.dataset.role;
+                    if (role) visibleAgents[role] = cb.checked;
+                });
+                const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
+                const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
+                const julesAutoSyncEnabled = !!document.getElementById('jules-auto-sync-toggle')?.checked;
+                const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
+                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, leadChallengeEnabled, julesAutoSyncEnabled, planIngestionFolder, customAgents: lastCustomAgents });
+                lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
+                lastPlanIngestionFolder = planIngestionFolder;
+                renderCustomAgentConfigList();
+                renderAgentList();
+                btnSaveStartup.textContent = 'SAVED';
+                setTimeout(() => { btnSaveStartup.textContent = 'SAVE CONFIGURATION'; }, 1500);
+            });
+        }
+
+        const btnOpenDocs = document.getElementById('btn-open-docs');
+        if (btnOpenDocs) {
+            btnOpenDocs.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openDocs' });
+            });
+        }
+
+        const btnComplete = document.getElementById('btn-complete-plan');
+        if (btnComplete) {
+            btnComplete.addEventListener('click', () => {
+                const sessionId = runSheetSelect ? runSheetSelect.value : null;
+                if (!sessionId) return;
+                vscode.postMessage({ type: 'completePlan', sessionId });
+            });
+        }
+
+        const btnDelete = document.getElementById('btn-delete-plan');
+        if (btnDelete) {
+            btnDelete.addEventListener('click', () => {
+                const sessionId = runSheetSelect ? runSheetSelect.value : null;
+                if (!sessionId) return;
+                vscode.postMessage({ type: 'deletePlan', sessionId });
+            });
+        }
+
+        if (mergeAllPlansBtn) {
+            mergeAllPlansBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'mergeAllPlans' });
+            });
+        }
+
+        if (copyPlanLinkBtn) {
+            copyPlanLinkBtn.addEventListener('click', () => {
+                const sessionId = runSheetSelect ? runSheetSelect.value : null;
+                if (!sessionId) return;
+                vscode.postMessage({ type: 'copyPlanLink', sessionId });
+            });
+        }
 
         // State
         let currentRunSheets = [];
@@ -1337,13 +1909,29 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastOrchestratorState = null;
-        let lastPipelineState = null;
-        let orchIntervalSeconds = 300;
-        // Maps for Coder→Reviewer workflow UI state.
-        const coderReviewerPhases = {};
-        const coderReviewerPhaseSinceMs = {};
-        let coderReviewerPollingTicker = null;
+        let lastPlanIngestionFolder = '';
+        let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        let lastCustomAgents = [];
+        // Autoban engine state (received from backend)
+        let autobanState = {
+            enabled: false,
+            batchSize: 3,
+            complexityFilter: 'all',
+            routingMode: 'dynamic',
+            maxSendsPerTerminal: 10,
+            globalSessionCap: 200,
+            sessionSendCount: 0,
+            sendCounts: {},
+            terminalPools: {},
+            managedTerminalPools: {},
+            poolCursor: {},
+            rules: {
+                CREATED: { enabled: true, intervalMinutes: 10 },
+                'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
+                'LEAD CODED': { enabled: true, intervalMinutes: 15 },
+                'CODER CODED': { enabled: true, intervalMinutes: 15 }
+            }
+        };
         let userInitiatedChange = false;
         let activeTab = 'agents';
         let recentActivityEvents = [];
@@ -1371,6 +1959,10 @@
 
         function isDispatchPending(role) {
             return pendingDispatches.has(getDispatchKey(role));
+        }
+
+        function getDispatchButtons(role) {
+            return Array.from(document.querySelectorAll(`[data-dispatch-role="${role}"]`));
         }
 
         function setActiveTab(tab, persist = true) {
@@ -1403,11 +1995,27 @@
                 analyst: 'Analyst',
                 jules: 'Jules'
             };
-            return roleMap[role] || 'Agent';
+            if (roleMap[role]) return roleMap[role];
+            const customAgent = lastCustomAgents.find(agent => agent.role === role);
+            return customAgent ? customAgent.name : 'Agent';
         }
 
         function formatActivitySummary(event) {
             const payload = event && event.payload ? event.payload : {};
+            if (event.type === 'autoban_dispatch') {
+                const count = Number(payload.batchSize || (Array.isArray(payload.sessionIds) ? payload.sessionIds.length : 0) || 0);
+                const sourceColumn = (payload.sourceColumn || 'Unknown').toString();
+                const targetRole = roleLabel((payload.targetRole || '').toString());
+                let topicsStr = '';
+                if (Array.isArray(payload.sessionIds) && payload.sessionIds.length > 0) {
+                    const topics = payload.sessionIds.map(function(id) {
+                        const sheet = currentRunSheets.find(function(s) { return s.sessionId === id; });
+                        return sheet && sheet.topic ? sheet.topic : id;
+                    });
+                    topicsStr = ' (' + topics.join(', ') + ')';
+                }
+                return `⚡ Autoban: moved ${count} plan(s)${topicsStr} from ${sourceColumn} -> ${targetRole}`;
+            }
             if (payload.message && payload.message.toString().trim().length > 0) {
                 return payload.message.toString();
             }
@@ -1435,14 +2043,20 @@
                 const target = payload.topic || payload.planFile || '';
                 return target ? `${operation}: ${target}` : operation;
             }
+            if (event.type === 'autoban_dispatch') {
+                const targetRole = payload.targetRole ? ` (${roleLabel(payload.targetRole)})` : '';
+                return `autoban dispatch${targetRole}`;
+            }
             return (event.type || 'event').toString();
         }
 
         function renderRecentActivity() {
             if (!activityList) return;
             activityList.innerHTML = '';
-            // Only show summary events (human-readable "SENT TO" / "RECEIVED FROM" messages)
-            const summaryEvents = (recentActivityEvents || []).filter(e => (e.type || '').toString().toLowerCase() === 'summary');
+            const summaryEvents = (recentActivityEvents || []).filter(e => {
+                const type = (e.type || '').toString().toLowerCase();
+                return type === 'summary' || type === 'autoban_dispatch';
+            });
             if (summaryEvents.length === 0) {
                 const empty = document.createElement('div');
                 empty.style.textAlign = 'center';
@@ -1482,27 +2096,29 @@
 
         if (tabAgentsBtn) tabAgentsBtn.addEventListener('click', () => setActiveTab('agents'));
         if (tabActivityBtn) tabActivityBtn.addEventListener('click', () => setActiveTab('activity'));
-        activityLoadMoreBtn.addEventListener('click', () => requestRecentActivity(true));
+        if (activityLoadMoreBtn) activityLoadMoreBtn.addEventListener('click', () => requestRecentActivity(true));
 
-        runSheetSelect.addEventListener('change', () => {
-            renderAgentList();
-            updatePlanActionStates();
-            const sessionId = runSheetSelect.value;
-            vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: sessionId || null });
-            if (userInitiatedChange && sessionId) {
-                vscode.postMessage({ type: 'viewPlan', sessionId });
-            }
-            userInitiatedChange = false;
-        });
-        runSheetSelect.addEventListener('mousedown', () => {
-            userInitiatedChange = true;
-        });
-        runSheetSelect.addEventListener('keydown', () => {
-            userInitiatedChange = true;
-        });
-        runSheetSelect.addEventListener('blur', () => {
-            userInitiatedChange = false;
-        });
+        if (runSheetSelect) {
+            runSheetSelect.addEventListener('change', () => {
+                renderAgentList();
+                updatePlanActionStates();
+                const sessionId = runSheetSelect.value;
+                vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: sessionId || null });
+                if (userInitiatedChange && sessionId) {
+                    vscode.postMessage({ type: 'viewPlan', sessionId });
+                }
+                userInitiatedChange = false;
+            });
+            runSheetSelect.addEventListener('mousedown', () => {
+                userInitiatedChange = true;
+            });
+            runSheetSelect.addEventListener('keydown', () => {
+                userInitiatedChange = true;
+            });
+            runSheetSelect.addEventListener('blur', () => {
+                userInitiatedChange = false;
+            });
+        }
 
         // --- Message Handling ---
 
@@ -1513,6 +2129,15 @@
                 case 'mcpStatus':
                     updateMcpStatus(message);
                     setActiveTab(message.activeTab || 'agents', false);
+                    if (message.type === 'initialState') {
+                        toggleOnboarding(message.needsSetup === true);
+                    }
+                    break;
+                case 'setupStatus':
+                    toggleOnboarding(message.needsSetup === true);
+                    break;
+                case 'onboardingProgress':
+                    handleOnboardingProgress(message);
                     break;
                 case 'terminalStatuses':
                     lastTerminals = message.terminals || {};
@@ -1540,18 +2165,84 @@
                 case 'copyPlanLinkResult':
                     showCopyPlanLinkFeedback(message.success === true);
                     break;
+                case 'recoverablePlans':
+                    renderRecoverablePlans(message.plans || [], recoverSearchInput.value);
+                    break;
+                case 'restorePlanResult':
+                    if (message.success) {
+                        closeRecoverPlansModal();
+                    } else {
+                        recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
+                            if (btn.getAttribute('data-plan-id') === message.planId) {
+                                btn.disabled = false;
+                                btn.textContent = btn.closest('.recover-item')?.querySelector('.recover-status-chip.orphan') ? 'CLAIM' : 'RESTORE';
+                            }
+                        });
+                    }
+                    break;
                 case 'startupCommands':
                     if (message.commands) {
                         lastStartupCommands = message.commands;
-                        document.querySelectorAll('#startup-fields input[data-role]').forEach(input => {
+                        lastPlanIngestionFolder = message.planIngestionFolder || '';
+                        document.querySelectorAll('#startup-fields input[type="text"][data-role]').forEach(input => {
                             input.value = message.commands[input.dataset.role] || '';
                         });
+                        const planIngestionFolderInput = document.getElementById('plan-ingestion-folder-input');
+                        if (planIngestionFolderInput) {
+                            planIngestionFolderInput.value = lastPlanIngestionFolder;
+                        }
+                        const onboardingFields = {
+                            lead: document.getElementById('onboard-cli-lead'),
+                            coder: document.getElementById('onboard-cli-coder'),
+                            reviewer: document.getElementById('onboard-cli-reviewer'),
+                            planner: document.getElementById('onboard-cli-planner'),
+                            analyst: document.getElementById('onboard-cli-analyst')
+                        };
+                        Object.entries(onboardingFields).forEach(([role, input]) => {
+                            if (input) input.value = message.commands[role] || '';
+                        });
+                    }
+                    break;
+                case 'visibleAgents':
+                    if (message.agents) {
+                        lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
+                        document.querySelectorAll('#startup-fields .agent-visible-toggle').forEach(cb => {
+                            const role = cb.dataset.role;
+                            if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
+                        });
+                        document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
+                            const role = cb.dataset.role;
+                            if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
+                        });
+                        renderCustomAgentConfigList();
+                        renderAgentList();
+                    }
+                    break;
+                case 'customAgents':
+                    if (Array.isArray(message.customAgents)) {
+                        lastCustomAgents = message.customAgents;
+                        renderCustomAgentConfigList();
+                        renderAgentList();
                     }
                     break;
                 case 'accurateCodingSetting': {
                     const toggle = document.getElementById('accurate-coding-toggle');
                     if (toggle) {
                         toggle.checked = message.enabled !== false;
+                    }
+                    break;
+                }
+                case 'leadChallengeSetting': {
+                    const toggle = document.getElementById('lead-challenge-toggle');
+                    if (toggle) {
+                        toggle.checked = message.enabled === true;
+                    }
+                    break;
+                }
+                case 'julesAutoSyncSetting': {
+                    const toggle = document.getElementById('jules-auto-sync-toggle');
+                    if (toggle) {
+                        toggle.checked = message.enabled === true;
                     }
                     break;
                 }
@@ -1573,7 +2264,7 @@
                     clearDispatchPending(role);
                     if (role === 'analyst') {
                         analystButtonFeedback = {
-                            text: success ? 'DISPATCHED ✓' : 'FAILED ✗',
+                            text: success ? 'DISPATCHED' : 'FAILED',
                             className: success ? 'success' : 'error',
                             expiresAt: Date.now() + 2000
                         };
@@ -1589,64 +2280,78 @@
                         renderAgentList();
                         break;
                     }
-                    if (role === 'analystMap') {
-                        analystMapFeedback = {
-                            text: success ? 'DISPATCHED ✓' : 'FAILED ✗',
-                            className: success ? 'success' : 'error',
-                            expiresAt: Date.now() + 2000
-                        };
-                        if (analystMapFeedbackTimer) {
-                            clearTimeout(analystMapFeedbackTimer);
-                            analystMapFeedbackTimer = null;
-                        }
-                        analystMapFeedbackTimer = setTimeout(() => {
-                            analystMapFeedback = null;
-                            analystMapFeedbackTimer = null;
-                            renderAgentList();
-                        }, 2000);
-                        renderAgentList();
-                        break;
-                    }
-                    const btn = document.querySelector(`.action-btn[data-role="${role}"]`);
-                    if (btn && document.body.contains(btn)) {
+                    const buttons = getDispatchButtons(role);
+                    buttons.forEach((btn) => {
+                        if (!document.body.contains(btn)) return;
                         btn.classList.remove('dispatching');
                         if (success) {
                             btn.classList.add('success');
-                            btn.innerText = 'DISPATCHED ✓';
+                            btn.innerText = 'DISPATCHED';
                         } else {
                             btn.classList.add('error');
-                            btn.innerText = 'FAILED ✗';
+                            btn.innerText = 'FAILED';
                         }
-                        setTimeout(() => {
-                            if (document.body.contains(btn)) {
-                                // Recompute card state from source-of-truth (plan selection + readiness + pending state)
-                                // instead of blindly enabling the previous button instance.
-                                renderAgentList();
-                            }
-                        }, 2000);
-                    }
+                    });
+                    setTimeout(() => {
+                        renderAgentList();
+                    }, 2000);
                     break;
                 }
-                case 'orchestratorState':
-                    updateOrchestratorUI(message.state);
-                    break;
-                case 'pipelineState':
-                    updatePipelineUI(message.state);
-                    break;
-                case 'coderReviewerPhase':
-                    if (message.sessionId) {
-                        const nextPhase = message.phase || 'idle';
-                        if (coderReviewerPhases[message.sessionId] !== nextPhase) {
-                            coderReviewerPhaseSinceMs[message.sessionId] = message.timestamp || Date.now();
-                        }
-                        coderReviewerPhases[message.sessionId] = nextPhase;
-                        if (nextPhase === 'idle' || nextPhase === 'done' || nextPhase === 'timeout') {
-                            delete coderReviewerPhaseSinceMs[message.sessionId];
-                        }
-                        updateCoderReviewerPollingTicker();
+                case 'autobanStateSync':
+                    if (message.state) {
+                        autobanState = { ...autobanState, ...message.state };
                         renderAgentList();
                     }
                     break;
+                case 'airlock_exportComplete': {
+                    const expBtn = document.getElementById('webai-export-btn');
+                    const wStatus = document.getElementById('webai-status');
+                    if (expBtn) { expBtn.disabled = false; expBtn.innerText = 'BUNDLE CODE'; expBtn.classList.remove('dispatching'); }
+                    if (wStatus) wStatus.innerText = '✓ Bundled — ' + new Date().toLocaleTimeString();
+                    break;
+                }
+                case 'airlock_exportError': {
+                    const expBtn2 = document.getElementById('webai-export-btn');
+                    const wStatus2 = document.getElementById('webai-status');
+                    if (expBtn2) { expBtn2.disabled = false; expBtn2.innerText = 'BUNDLE CODE'; expBtn2.classList.remove('dispatching'); }
+                    if (wStatus2) wStatus2.innerText = '⚠ ' + (message.message || 'Bundle failed');
+                    break;
+                }
+                case 'airlock_syncStart': {
+                    const sBtn = document.getElementById('jules-sync-btn');
+                    if (sBtn) {
+                        sBtn.disabled = true;
+                        sBtn.innerText = 'SYNCING...';
+                        sBtn.classList.add('dispatching');
+                    }
+                    const statusEl = document.getElementById('jules-sync-status');
+                    if (statusEl) statusEl.innerText = 'Auto-syncing before Jules send...';
+                    break;
+                }
+                case 'airlock_syncComplete': {
+                    const sBtn = document.getElementById('jules-sync-btn');
+                    const wStatus = document.getElementById('jules-sync-status');
+                    if (sBtn) { sBtn.disabled = false; sBtn.innerText = 'SYNC REPO'; sBtn.classList.remove('dispatching'); }
+                    if (wStatus) wStatus.innerText = '✓ Synced to cloud — ' + new Date().toLocaleTimeString();
+                    break;
+                }
+                case 'airlock_syncError': {
+                    const sBtn2 = document.getElementById('jules-sync-btn');
+                    const wStatus2 = document.getElementById('jules-sync-status');
+                    if (sBtn2) { sBtn2.disabled = false; sBtn2.innerText = 'SYNC REPO'; sBtn2.classList.remove('dispatching'); }
+                    if (wStatus2) wStatus2.innerText = '⚠ ' + (message.message || 'Sync failed');
+                    break;
+                }
+                case 'airlock_coderSent': {
+                    const cStatus = document.getElementById('webai-status');
+                    if (cStatus) cStatus.innerText = '✓ Sent to coder — ' + new Date().toLocaleTimeString();
+                    break;
+                }
+                case 'airlock_coderError': {
+                    const cStatus2 = document.getElementById('webai-status');
+                    if (cStatus2) cStatus2.innerText = '⚠ ' + (message.message || 'Send to coder failed');
+                    break;
+                }
             }
         });
 
@@ -1655,10 +2360,6 @@
         function renderRunSheetDropdown(sheets) {
             const lastSelected = runSheetSelect.value;
             runSheetSelect.innerHTML = '';
-            if (archiveAllCompletedBtn) {
-                archiveAllCompletedBtn.disabled = false;
-                archiveAllCompletedBtn.title = '';
-            }
 
             if (!sheets || sheets.length === 0) {
                 const opt = document.createElement('option');
@@ -1714,9 +2415,10 @@
         }
 
         let currentAgentTab = 'agents';
+        let isAutobanPanelInteracting = false;
         function switchAgentTab(tab) {
             currentAgentTab = tab;
-            const tabs = { agents: agentListStandard, auto: agentListAuto, cloud: agentListCloud };
+            const tabs = { agents: agentListStandard, autoban: agentListAutoban, webai: agentListWebai };
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
@@ -1728,443 +2430,6 @@
         document.querySelectorAll('.sub-tab-btn').forEach(btn => {
             btn.addEventListener('click', () => switchAgentTab(btn.dataset.tab));
         });
-
-        function updateCoderReviewerPollingTicker() {
-            const hasActiveSession = Object.values(coderReviewerPhases).some(phase => phase === 'polling' || phase === 'coder_dispatched');
-            if (hasActiveSession && !coderReviewerPollingTicker) {
-                coderReviewerPollingTicker = setInterval(() => {
-                    renderAgentList();
-                }, 1000);
-            } else if (!hasActiveSession && coderReviewerPollingTicker) {
-                clearInterval(coderReviewerPollingTicker);
-                coderReviewerPollingTicker = null;
-            }
-        }
-
-        function renderAgentList() {
-            // Preserve stateful analyst input across re-renders
-            const existingInput = document.getElementById('analyst-input');
-            const analystSnapshot = {
-                value: existingInput ? existingInput.value : '',
-                focused: document.activeElement === existingInput,
-                selStart: existingInput ? existingInput.selectionStart : 0,
-                selEnd: existingInput ? existingInput.selectionEnd : 0
-            };
-
-            agentListStandard.innerHTML = '';
-            agentListAuto.innerHTML = '';
-            agentListCloud.innerHTML = '';
-
-            // === AGENTS TAB: Lead Coder, Coder, Planner, Reviewer, Analyst ===
-
-            // 1. Lead Coder
-            agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
-                'START CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
-            ));
-
-            // 2. Coder
-            agentListStandard.appendChild(createAgentRow('CODER', 'coder',
-                'START CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
-            ));
-
-            // 3. Planner
-            agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
-                'IMPROVE PLAN',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
-            ));
-
-            // 4. Reviewer
-            agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
-                'REVIEW CODE',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
-            ));
-
-            // 5. Analyst
-            agentListStandard.appendChild(createAnalystRow());
-            // Restore analyst input state after re-render
-            if (analystSnapshot.value || analystSnapshot.focused) {
-                const inp = document.getElementById('analyst-input');
-                if (inp) {
-                    inp.value = analystSnapshot.value;
-                    if (analystSnapshot.focused) {
-                        inp.focus();
-                        inp.selectionStart = analystSnapshot.selStart;
-                        inp.selectionEnd = analystSnapshot.selEnd;
-                    }
-                }
-            }
-
-            // === AUTO TAB: Auto-Agent, Lead Coder + Coder (Team) ===
-
-            agentListAuto.appendChild(createAutoAgentRow());
-
-            agentListAuto.appendChild(createPipelineRow());
-
-            const leadExists = Object.values(lastTerminals).some(t => t.role === 'lead');
-            const coderExists = Object.values(lastTerminals).some(t => t.role === 'coder');
-
-            agentListAuto.appendChild(createCompositeRow('LEAD CODER + CODER', 'START TEAM CODING', () => { }));
-
-            agentListAuto.appendChild(createCoderReviewerRow());
-
-            // === CLOUD TAB: Jules ===
-
-            agentListCloud.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
-                'START CLOUD CODING',
-                terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
-                true
-            ));
-
-            // Restore active tab visibility after re-render
-            switchAgentTab(currentAgentTab);
-        }
-
-
-        function createJulesHistoryList() {
-            const container = document.createElement('div');
-            container.className = 'jules-history';
-            // Defensive filter: exclude completed sessions from UI (backend should already filter, but this ensures immediate UI responsiveness)
-            const sessions = (lastJulesSessions || [])
-                .filter(session => session && typeof session.planName === 'string' && session.planName.trim().length > 0)
-                .filter(session => {
-                    const status = session.switchboardStatus;
-                    return status !== 'Completed' && status !== 'Completed (No Changes)';
-                })
-                .slice(0, 15);
-            if (sessions.length === 0) return container;
-
-            for (const session of sessions) {
-                const item = document.createElement('div');
-                item.className = 'jules-history-item';
-                const name = session.planName.trim();
-                const status = session.switchboardStatus || session.julesStatus || 'Unknown';
-                const nameSpan = document.createElement('span');
-                nameSpan.className = 'jules-history-name';
-                nameSpan.innerText = name;
-                const statusSpan = document.createElement('span');
-                statusSpan.className = 'jules-history-status';
-                statusSpan.innerText = status;
-                item.appendChild(nameSpan);
-                item.appendChild(statusSpan);
-                item.title = `Session: ${session.sessionId || 'unknown'}`;
-                container.appendChild(item);
-            }
-            return container;
-        }
-
-        function createPipelineRow() {
-            const container = document.createElement('div');
-            container.className = 'agent-row';
-
-            const isRoleOnline = (role) => {
-                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
-                if (!termData) return false;
-                const HEARTBEAT_THRESHOLD_MS = 60_000;
-                const lastSeenMs = Date.parse(termData.lastSeen || '');
-                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
-                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
-            };
-
-            // Pipeline readiness mirrors Auto baseline: planner + reviewer + lead
-            const pipelineReady = isRoleOnline('lead') && isRoleOnline('planner') && isRoleOnline('reviewer');
-            const ps = lastPipelineState || {};
-            const isRunning = !!ps.running;
-            const isPaused = !!ps.paused;
-
-            // Header: dot + title + timer
-            const header = document.createElement('div');
-            header.className = 'row-header';
-
-            const identity = document.createElement('div');
-            identity.className = 'agent-identity';
-
-            const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isRunning ? (isPaused ? ' orange' : ' green-pulse') : (pipelineReady ? ' green' : ''));
-            identity.appendChild(dot);
-
-            const name = document.createElement('span');
-            name.className = 'agent-name';
-            name.innerText = 'PIPELINE';
-            identity.appendChild(name);
-
-            header.appendChild(identity);
-
-            if (isRunning && typeof ps.secondsRemaining === 'number') {
-                const timerColor = isPaused ? 'var(--accent-orange)' : 'var(--accent-green)';
-                const timer = document.createElement('span');
-                timer.style.cssText = `font-family:var(--font-mono);font-size:11px;color:${timerColor};letter-spacing:1px;`;
-                timer.innerText = formatOrchestratorTime(ps.secondsRemaining);
-                header.appendChild(timer);
-            }
-
-            if (isPaused) {
-                const pausedLabel = document.createElement('span');
-                pausedLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--accent-orange);letter-spacing:1.5px;';
-                pausedLabel.innerText = 'PAUSED';
-                header.appendChild(pausedLabel);
-            }
-
-            container.appendChild(header);
-
-            // Info line
-            if (isRunning) {
-                const info = document.createElement('div');
-                info.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-secondary);letter-spacing:0.5px;margin:4px 0;';
-                const count = `${ps.pendingCount || 0} plan(s) pending`;
-                info.innerText = ps.lastAction
-                    ? `${count} · Last: ${ps.lastAction.planTitle} → ${ps.lastAction.role}`
-                    : count;
-                container.appendChild(info);
-            }
-
-            // Interval input row (always visible when stopped)
-            if (!isRunning) {
-                const intervalRow = document.createElement('div');
-                intervalRow.style.cssText = 'display:flex;align-items:center;gap:6px;margin-bottom:4px;font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);';
-                const lbl = document.createElement('span');
-                lbl.innerText = 'INTERVAL (MIN):';
-                const inp = document.createElement('input');
-                inp.id = 'pipeline-interval-input';
-                inp.type = 'number';
-                inp.min = '1';
-                inp.max = '60';
-                inp.value = String(Math.round((ps.intervalSeconds || 600) / 60));
-                inp.style.cssText = 'width:48px;background:var(--panel-bg2);border:1px solid var(--border-color);color:var(--text-primary);font-family:var(--font-mono);font-size:10px;padding:2px 4px;border-radius:3px;';
-                inp.addEventListener('change', () => {
-                    const mins = parseInt(inp.value, 10) || 10;
-                    vscode.postMessage({ type: 'pipelineSetInterval', intervalSeconds: mins * 60 });
-                });
-                intervalRow.appendChild(lbl);
-                intervalRow.appendChild(inp);
-                container.appendChild(intervalRow);
-            }
-
-            // Button row
-            const actions = document.createElement('div');
-            actions.style.cssText = 'display:flex;gap:6px;';
-
-            if (isRunning) {
-                const pauseBtn = document.createElement('button');
-                pauseBtn.className = 'action-btn';
-                pauseBtn.style.cssText = isPaused
-                    ? 'color:var(--accent-green);border-color:rgba(63,185,80,0.35);flex:0 0 auto;width:80px;'
-                    : 'color:var(--accent-orange);border-color:rgba(210,153,34,0.4);flex:0 0 auto;width:80px;';
-                pauseBtn.innerText = isPaused ? 'RESUME' : 'PAUSE';
-                pauseBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: isPaused ? 'pipelineUnpause' : 'pipelinePause' });
-                });
-                actions.appendChild(pauseBtn);
-
-                const stopBtn = document.createElement('button');
-                stopBtn.className = 'action-btn';
-                stopBtn.style.cssText = 'color:var(--accent-red);border-color:rgba(218,54,51,0.4);flex:1;';
-                stopBtn.innerText = 'STOP';
-                stopBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'pipelineStop' });
-                });
-                actions.appendChild(stopBtn);
-            } else {
-                const startBtn = document.createElement('button');
-                startBtn.className = 'action-btn';
-                startBtn.style.flex = '1';
-                startBtn.innerText = 'START';
-                startBtn.disabled = !isPlanSelected();
-                startBtn.addEventListener('click', () => {
-                    const pipelineIntervalEl = document.getElementById('pipeline-interval-input');
-                    const mins = parseInt((pipelineIntervalEl || {}).value, 10) || 10;
-                    vscode.postMessage({ type: 'pipelineStart', intervalSeconds: mins * 60 });
-                });
-                actions.appendChild(startBtn);
-            }
-
-            container.appendChild(actions);
-            return container;
-        }
-
-        function createAutoAgentRow() {
-            const container = document.createElement('div');
-            container.className = 'agent-row';
-
-            const isRoleOnline = (role) => {
-                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
-                if (!termData) return false;
-                const HEARTBEAT_THRESHOLD_MS = 60_000;
-                const lastSeenMs = Date.parse(termData.lastSeen || '');
-                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
-                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
-            };
-
-            // Availability: green when planner, reviewer, and lead are online
-            const allReady = isRoleOnline('lead') && isRoleOnline('planner') && isRoleOnline('reviewer');
-            const isRunning = lastOrchestratorState && lastOrchestratorState.running;
-            const isPaused = lastOrchestratorState && lastOrchestratorState.paused;
-
-            // Header row
-            const header = document.createElement('div');
-            header.className = 'row-header';
-
-            const identity = document.createElement('div');
-            identity.className = 'agent-identity';
-
-            const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isRunning ? (isPaused ? '' : ' green-pulse') : (allReady ? ' green' : ''));
-            identity.appendChild(dot);
-
-            const name = document.createElement('span');
-            name.className = 'agent-name';
-            name.innerText = 'AUTO-AGENT';
-            identity.appendChild(name);
-
-            header.appendChild(identity);
-
-            // Timer display (when running)
-            if (isRunning && lastOrchestratorState) {
-                const timer = document.createElement('span');
-                const timerColor = isPaused ? 'var(--accent-orange)' : 'var(--accent-green)';
-                timer.style.cssText = `font-family:var(--font-mono);font-size:11px;color:${timerColor};letter-spacing:1px;`;
-                timer.innerText = formatOrchestratorTime(lastOrchestratorState.secondsRemaining);
-                header.appendChild(timer);
-            }
-
-            // PAUSED status indicator
-            if (isPaused) {
-                const pausedLabel = document.createElement('span');
-                pausedLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--accent-orange);letter-spacing:1.5px;text-transform:uppercase;';
-                pausedLabel.innerText = 'PAUSED';
-                header.appendChild(pausedLabel);
-            }
-
-            // Show badge when orchestrator is running on a different plan than currently viewed
-            if (isRunning && lastOrchestratorState && runSheetSelect && lastOrchestratorState.sessionId !== runSheetSelect.value) {
-                const badge = document.createElement('span');
-                badge.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--accent-orange);letter-spacing:1px;';
-                badge.innerText = 'RUNNING ON OTHER PLAN';
-                header.appendChild(badge);
-            }
-
-            container.appendChild(header);
-
-            // Stage info (when running): show current dispatched stage and next scheduled stage
-            if (isRunning && lastOrchestratorState && lastOrchestratorState.stages) {
-                const stages = Array.isArray(lastOrchestratorState.stages) ? lastOrchestratorState.stages : [];
-                const currentStageIndex = Number(lastOrchestratorState.currentStageIndex) || 0;
-                const currentStage = currentStageIndex > 0 ? stages[currentStageIndex - 1] : null;
-                const nextStage = currentStageIndex < stages.length ? stages[currentStageIndex] : null;
-
-                if (currentStage || nextStage) {
-                    const stageInfo = document.createElement('div');
-                    stageInfo.style.cssText = 'font-family:var(--font-mono);font-size:9px;color:var(--text-secondary);letter-spacing:0.5px;display:flex;flex-direction:column;gap:2px;margin:4px 0;';
-
-                    if (currentStage && typeof currentStage.label === 'string') {
-                        const currentLine = document.createElement('div');
-                        const currentPrefix = document.createElement('span');
-                        currentPrefix.innerText = 'STAGE: ';
-                        const currentValue = document.createElement('span');
-                        currentValue.style.cssText = 'color:var(--accent-green);font-weight:bold;';
-                        currentValue.innerText = currentStage.label.toUpperCase();
-                        currentLine.appendChild(currentPrefix);
-                        currentLine.appendChild(currentValue);
-                        stageInfo.appendChild(currentLine);
-                    }
-
-                    if (nextStage && typeof nextStage.label === 'string') {
-                        const nextLine = document.createElement('div');
-                        nextLine.innerText = 'NEXT → ' + nextStage.label.toUpperCase();
-                        stageInfo.appendChild(nextLine);
-                    }
-
-                    container.appendChild(stageInfo);
-                }
-            }
-
-            // Interval input row (always visible when stopped)
-            if (!isRunning) {
-                const intervalRow = document.createElement('div');
-                intervalRow.className = 'orchestrator-interval';
-                const intervalLabel = document.createElement('label');
-                intervalLabel.htmlFor = 'orch-interval-input';
-                intervalLabel.innerText = 'Interval (s)';
-                const intervalInput = document.createElement('input');
-                intervalInput.id = 'orch-interval-input';
-                intervalInput.type = 'number';
-                intervalInput.value = String(orchIntervalSeconds);
-                intervalInput.min = '10';
-                intervalInput.max = '3600';
-                intervalInput.addEventListener('change', () => {
-                    const interval = parseInt(intervalInput.value, 10) || 300;
-                    orchIntervalSeconds = interval;
-                    vscode.postMessage({ type: 'orchestratorSetInterval', intervalSeconds: interval });
-                });
-                intervalRow.appendChild(intervalLabel);
-                intervalRow.appendChild(intervalInput);
-                container.appendChild(intervalRow);
-            }
-
-            // Button row
-            const actions = document.createElement('div');
-            actions.style.cssText = 'display:flex;gap:6px;';
-
-            if (isRunning) {
-                // RUNNING: show PAUSE/RESUME + ADVANCE + STOP
-                const pauseBtn = document.createElement('button');
-                pauseBtn.className = 'action-btn';
-                pauseBtn.style.flex = '0 0 auto';
-                pauseBtn.style.width = '70px';
-                pauseBtn.innerText = isPaused ? 'RESUME' : 'PAUSE';
-                if (isPaused) {
-                    pauseBtn.style.cssText = 'color:var(--accent-green);border-color:rgba(63,185,80,0.35);';
-                } else {
-                    pauseBtn.style.cssText = 'color:var(--accent-orange);border-color:rgba(210,153,34,0.4);';
-                }
-                pauseBtn.addEventListener('click', () => {
-                    if (isPaused) {
-                        vscode.postMessage({ type: 'orchestratorUnpause' });
-                    } else {
-                        vscode.postMessage({ type: 'orchestratorPause' });
-                    }
-                });
-                actions.appendChild(pauseBtn);
-
-                const advanceBtn = document.createElement('button');
-                advanceBtn.className = 'action-btn';
-                advanceBtn.style.flex = '1';
-                advanceBtn.innerText = 'ADVANCE';
-                advanceBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'orchestratorAdvance' });
-                });
-                actions.appendChild(advanceBtn);
-
-                const stopBtn = document.createElement('button');
-                stopBtn.className = 'action-btn stop-btn';
-                stopBtn.style.cssText = 'color:var(--accent-red);border-color:rgba(218,54,51,0.4);width:70px;flex:0 0 auto;';
-                stopBtn.innerText = 'STOP';
-                stopBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'orchestratorStop' });
-                });
-                actions.appendChild(stopBtn);
-            } else {
-                // STOPPED: show only START
-                const startBtn = document.createElement('button');
-                startBtn.className = 'action-btn';
-                startBtn.style.flex = '1';
-                startBtn.innerText = 'START';
-                startBtn.disabled = !isPlanSelected();
-                startBtn.addEventListener('click', () => {
-                    const sessionId = runSheetSelect.value;
-                    if (!sessionId) return;
-                    const currentIntervalInput = document.getElementById('orch-interval-input');
-                    const interval = parseInt((currentIntervalInput || {}).value, 10) || orchIntervalSeconds || 300;
-                    orchIntervalSeconds = interval;
-                    vscode.postMessage({ type: 'orchestratorStart', sessionId, intervalSeconds: interval });
-                });
-                actions.appendChild(startBtn);
-            }
-
-            container.appendChild(actions);
-            return container;
-        }
 
         function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate) {
             const container = document.createElement('div');
@@ -2223,6 +2488,7 @@
             dot.className = 'status-dot';
             if (isWorking) dot.classList.add('green-pulse');
             else if (isReady) dot.classList.add(isRecoverable ? 'orange' : 'green');
+            else dot.classList.add('red');
 
             const name = document.createElement('div');
             name.className = 'agent-name';
@@ -2269,6 +2535,7 @@
             btn.innerText = pendingDispatch ? 'DISPATCHING...' : actionLabel;
             btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
             btn.dataset.role = roleId;
+            btn.dataset.dispatchRole = roleId;
             if (pendingDispatch) {
                 btn.classList.add('dispatching');
             }
@@ -2283,12 +2550,14 @@
                 const sessionId = runSheetSelect.value;
                 if (!sessionId) return;
                 markDispatchPending(roleId);
-                btn.disabled = true;
+                getDispatchButtons(roleId).forEach((dispatchBtn) => {
+                    dispatchBtn.disabled = true;
+                });
                 btn.classList.add('dispatching');
                 btn.innerText = 'DISPATCHING...';
 
                 if (roleId === 'planner') {
-                    vscode.postMessage({ type: 'triggerAgentAction', role: 'planner', sessionFile: sessionId, instruction: 'enhance' });
+                    vscode.postMessage({ type: 'triggerAgentAction', role: 'planner', sessionFile: sessionId, instruction: 'improve-plan' });
                 } else if (roleId === 'reviewer') {
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'reviewer', sessionFile: sessionId });
                 } else if (roleId === 'coder') {
@@ -2298,10 +2567,32 @@
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'lead', sessionFile: sessionId });
                 } else if (roleId === 'jules') {
                     vscode.postMessage({ type: 'triggerAgentAction', role: 'jules', sessionFile: sessionId, instruction: 'execute' });
+                } else {
+                    vscode.postMessage({ type: 'triggerAgentAction', role: roleId, sessionFile: sessionId });
                 }
             };
 
             container.appendChild(header);
+
+            if (roleId === 'jules') {
+                const julesSync = document.createElement('button');
+                julesSync.className = 'secondary-btn is-cyan w-full';
+                julesSync.id = 'jules-sync-btn';
+                julesSync.innerText = 'SYNC REPO';
+                julesSync.onclick = () => {
+                    julesSync.disabled = true;
+                    julesSync.innerText = 'SYNCING...';
+                    julesSync.classList.add('dispatching');
+                    vscode.postMessage({ type: 'airlock_syncRepo' });
+                };
+                container.appendChild(julesSync);
+
+                const syncStatus = document.createElement('div');
+                syncStatus.id = 'jules-sync-status';
+                syncStatus.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+                container.appendChild(syncStatus);
+            }
+
             container.appendChild(btn);
 
             if (roleId === 'jules') {
@@ -2311,156 +2602,685 @@
             return container;
         }
 
-        function createCompositeRow(label, actionLabel, clickHandler) {
-            const container = document.createElement('div');
-            container.className = 'agent-row';
+        function renderAgentList() {
+            // Skip re-render when user is interacting with autoban dropdowns
+            if (isAutobanPanelInteracting && currentAgentTab === 'autoban') return;
 
-            // Use backend-computed teamReady: requires both lead and coder terminal agents alive
-            const isReady = lastTeamReady;
-
-            const header = document.createElement('div');
-            header.className = 'row-header';
-
-            const identity = document.createElement('div');
-            identity.className = 'agent-identity';
-
-            const dot = document.createElement('div');
-            dot.className = 'status-dot';
-            if (isReady) dot.classList.add('green');
-
-            const name = document.createElement('div');
-            name.className = 'agent-name';
-            name.innerText = label;
-
-            identity.appendChild(dot);
-            identity.appendChild(name);
-
-            const locateBtn = document.createElement('button');
-            locateBtn.className = 'locate-btn';
-            locateBtn.innerText = 'locate';
-            locateBtn.style.visibility = 'hidden'; // No single terminal to locate
-
-            header.appendChild(identity);
-            header.appendChild(locateBtn);
-
-            const btn = document.createElement('button');
-            btn.className = 'action-btn';
-            const pendingDispatch = isDispatchPending('team');
-            btn.innerText = pendingDispatch ? 'DISPATCHING...' : actionLabel;
-            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
-            btn.dataset.role = 'team';
-            if (pendingDispatch) {
-                btn.classList.add('dispatching');
-            }
-            btn.onclick = () => {
-                const sessionId = runSheetSelect.value;
-                if (!sessionId) return;
-                markDispatchPending('team');
-                btn.disabled = true;
-                btn.classList.add('dispatching');
-                btn.innerText = 'DISPATCHING...';
-                vscode.postMessage({ type: 'triggerAgentAction', role: 'team', sessionFile: sessionId });
+            // Preserve stateful analyst input across re-renders
+            const existingInput = document.getElementById('analyst-input');
+            const analystSnapshot = {
+                value: existingInput ? existingInput.value : '',
+                focused: document.activeElement === existingInput,
+                selStart: existingInput ? existingInput.selectionStart : 0,
+                selEnd: existingInput ? existingInput.selectionEnd : 0
             };
 
-            container.appendChild(header);
-            container.appendChild(btn);
-            return container;
+            agentListStandard.innerHTML = '';
+            agentListAutoban.innerHTML = '';
+
+            const webaiTabActive = currentAgentTab === 'webai';
+            if (!webaiTabActive) {
+                agentListWebai.innerHTML = '';
+            }
+
+            // === AGENTS TAB: Lead Coder, Coder, Planner, Reviewer, Analyst ===
+            // Filter agents based on visibility preferences
+            const va = lastVisibleAgents;
+
+            // 1. Lead Coder
+            if (va.lead !== false) {
+                agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+                ));
+            }
+
+            // 2. Coder
+            if (va.coder !== false) {
+                agentListStandard.appendChild(createAgentRow('CODER', 'coder',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+                ));
+            }
+
+            // 3. Planner
+            if (va.planner !== false) {
+                agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
+                    'IMPROVE PLAN',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'planner')
+                ));
+            }
+
+            // 4. Reviewer
+            if (va.reviewer !== false) {
+                agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
+                    'REVIEW CODE',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'reviewer')
+                ));
+            }
+
+            // 5. Analyst
+            if (va.analyst !== false) {
+                agentListStandard.appendChild(createAnalystRow());
+                // Restore analyst input state after re-render
+                if (analystSnapshot.value || analystSnapshot.focused) {
+                    const inp = document.getElementById('analyst-input');
+                    if (inp) {
+                        inp.value = analystSnapshot.value;
+                        if (analystSnapshot.focused) {
+                            inp.focus();
+                            inp.selectionStart = analystSnapshot.selStart;
+                            inp.selectionEnd = analystSnapshot.selEnd;
+                        }
+                    }
+                }
+            }
+
+            for (const customAgent of lastCustomAgents) {
+                if (va[customAgent.role] === false) continue;
+                agentListStandard.appendChild(createAgentRow(
+                    customAgent.name.toUpperCase(),
+                    customAgent.role,
+                    'EXECUTE TASK',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === customAgent.role)
+                ));
+            }
+
+            // 6. Jules
+            if (va.jules !== false) {
+                agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
+                    'START CLOUD CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'jules'),
+                    true
+                ));
+            }
+
+            // Show empty state if all agents are hidden
+            if (agentListStandard.children.length === 0) {
+                const emptyMsg = document.createElement('div');
+                emptyMsg.style.cssText = 'text-align:center; padding:20px; color:var(--text-secondary); font-family:var(--font-mono); font-size:11px;';
+                emptyMsg.textContent = 'All agents hidden. Open Setup to configure.';
+                agentListStandard.appendChild(emptyMsg);
+            }
+
+            // === AUTOBAN TAB: Kanban automation control center ===
+            agentListAutoban.appendChild(createAutobanPanel());
+
+            // === AIRLOCK TAB: Bundle, Convert to Plan, Send to Coder ===
+            if (!webaiTabActive) {
+                agentListWebai.appendChild(createWebAiAirlockPanel());
+            }
+
+            // Restore active tab visibility after re-render
+            switchAgentTab(currentAgentTab);
         }
 
-        function createCoderReviewerRow() {
+        function createWebAiAirlockPanel() {
             const container = document.createElement('div');
             container.className = 'agent-row';
-
-            const isRoleOnline = (role) => {
-                const termData = Object.values(lastTerminals || {}).find(t => t && t.type === 'terminal' && t.role === role);
-                if (!termData) return false;
-                const HEARTBEAT_THRESHOLD_MS = 60_000;
-                const lastSeenMs = Date.parse(termData.lastSeen || '');
-                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
-                return termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
-            };
-
-            const sessionId = runSheetSelect ? runSheetSelect.value : '';
-            const phase = (sessionId && coderReviewerPhases[sessionId]) || 'idle';
-            const isActive = phase !== 'idle' && phase !== 'done' && phase !== 'timeout';
-            const bothReady = isRoleOnline('coder') && isRoleOnline('reviewer');
 
             // Header
             const header = document.createElement('div');
             header.className = 'row-header';
-
             const identity = document.createElement('div');
             identity.className = 'agent-identity';
-
             const dot = document.createElement('div');
-            dot.className = 'status-dot' + (isActive ? ' green-pulse' : (bothReady ? ' green' : ''));
-            identity.appendChild(dot);
-
-            const name = document.createElement('span');
+            dot.className = 'status-dot green';
+            const name = document.createElement('div');
             name.className = 'agent-name';
-            name.innerText = 'CODER → REVIEWER';
+            name.innerText = 'AIRLOCK';
+            identity.appendChild(dot);
             identity.appendChild(name);
-
             header.appendChild(identity);
-
-            // Phase label
-            const phaseLabels = {
-                idle: 'Idle',
-                coder_dispatched: 'Dispatching Coder...',
-                polling: 'Waiting for signal...',
-                reviewer_dispatched: 'Dispatching Reviewer...',
-                done: 'Done',
-                timeout: 'Timed Out'
-            };
-            const phaseLabel = document.createElement('span');
-            phaseLabel.style.cssText = 'font-family:var(--font-mono);font-size:10px;color:var(--text-secondary);letter-spacing:0.5px;';
-            let phaseText = phaseLabels[phase] || phase;
-            if (phase === 'coder_dispatched') {
-                const sinceMs = coderReviewerPhaseSinceMs[sessionId] || Date.now();
-                const elapsedSeconds = Math.floor((Date.now() - sinceMs) / 1000);
-                const remainingSeconds = Math.max(0, 120 - elapsedSeconds); // 2 minutes = 120 seconds
-                const minutes = Math.floor(remainingSeconds / 60);
-                const seconds = remainingSeconds % 60;
-                phaseText = `Sending signal file instruction in ${minutes}m ${seconds}s`;
-            } else if (phase === 'polling') {
-                const sinceMs = coderReviewerPhaseSinceMs[sessionId] || Date.now();
-                const elapsedSeconds = Math.max(0, Math.floor((Date.now() - sinceMs) / 1000));
-                const minutes = Math.floor(elapsedSeconds / 60);
-                const seconds = elapsedSeconds % 60;
-                phaseText = `Waiting for signal (${minutes}m ${seconds}s)`;
-            }
-            phaseLabel.innerText = phaseText;
-            header.appendChild(phaseLabel);
-
             container.appendChild(header);
 
-            // Start button
-            const startBtn = document.createElement('button');
-            startBtn.className = 'action-btn';
-            startBtn.innerText = 'START';
-            startBtn.disabled = !isPlanSelected() || !bothReady || isActive;
-            startBtn.addEventListener('click', () => {
-                const sid = runSheetSelect ? runSheetSelect.value : '';
-                if (!sid) return;
-                vscode.postMessage({ type: 'startCoderReviewerWorkflow', sessionId: sid });
-            });
-            container.appendChild(startBtn);
+            // Step 0: Intro
+            const intro = document.createElement('div');
+            intro.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
+            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.';
+            container.appendChild(intro);
 
-            // Stop button (visible only while active)
-            if (isActive) {
-                const stopBtn = document.createElement('button');
-                stopBtn.className = 'action-btn';
-                stopBtn.style.marginTop = '4px';
-                stopBtn.innerText = 'STOP';
-                stopBtn.addEventListener('click', () => {
-                    const sid = runSheetSelect ? runSheetSelect.value : '';
-                    if (!sid) return;
-                    vscode.postMessage({ type: 'stopCoderReviewerWorkflow', sessionId: sid });
+            // Status line (hidden initially, used for feedback)
+            const statusLine = document.createElement('div');
+            statusLine.id = 'webai-status';
+            statusLine.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+            container.appendChild(statusLine);
+
+            // Step 1: Bundle Code
+            const s1Header = document.createElement('div');
+            s1Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s1Header.innerText = '1. BUNDLE CODE';
+            container.appendChild(s1Header);
+
+            const s1Desc = document.createElement('div');
+            s1Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s1Desc.innerText = 'Package code into docx files for NotebookLM compatibility.';
+            container.appendChild(s1Desc);
+
+            const exportBtn = document.createElement('button');
+            exportBtn.className = 'secondary-btn';
+            exportBtn.id = 'webai-export-btn';
+            exportBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
+            exportBtn.innerText = 'BUNDLE CODE';
+            exportBtn.onclick = () => {
+                exportBtn.disabled = true;
+                exportBtn.innerText = 'BUNDLING...';
+                exportBtn.classList.add('dispatching');
+                vscode.postMessage({ type: 'airlock_export' });
+            };
+            container.appendChild(exportBtn);
+
+            // Step 2: Upload to NotebookLM
+            const s2Header = document.createElement('div');
+            s2Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s2Header.innerText = '2. UPLOAD TO NOTEBOOKLM';
+            container.appendChild(s2Header);
+
+            const s2Desc = document.createElement('div');
+            s2Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s2Desc.innerText = 'Create new Notebook and upload all files in the airlock folder as sources';
+            container.appendChild(s2Desc);
+
+            const s2BtnRow = document.createElement('div');
+            s2BtnRow.style.cssText = 'display:flex; gap:8px; padding:0 8px 8px;';
+
+            const openNotebookBtn = document.createElement('button');
+            openNotebookBtn.className = 'secondary-btn is-teal';
+            openNotebookBtn.style.flex = '1';
+            openNotebookBtn.style.minWidth = '0';
+            openNotebookBtn.innerText = 'OPEN NOTEBOOKLM';
+            openNotebookBtn.onclick = () => {
+                vscode.postMessage({ type: 'airlock_openNotebookLM' });
+            };
+            s2BtnRow.appendChild(openNotebookBtn);
+
+            const openFolderBtn = document.createElement('button');
+            openFolderBtn.className = 'secondary-btn';
+            openFolderBtn.style.flex = '1';
+            openFolderBtn.style.minWidth = '0';
+            openFolderBtn.innerText = 'OPEN FOLDER';
+            openFolderBtn.onclick = () => {
+                vscode.postMessage({ type: 'airlock_openFolder' });
+            };
+            s2BtnRow.appendChild(openFolderBtn);
+
+            container.appendChild(s2BtnRow);
+
+            // Step 3: Copy Sprint Planning Prompt
+            const s3Header = document.createElement('div');
+            s3Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s3Header.innerText = '3. COPY SPRINT PLANNING PROMPT';
+            container.appendChild(s3Header);
+
+            const s3Desc = document.createElement('div');
+            s3Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s3Desc.innerText = 'Generate a prompt for NotebookLM to create detailed implementation plans for all plans in the NEW column.';
+            container.appendChild(s3Desc);
+
+            const copySprintBtn = document.createElement('button');
+            copySprintBtn.className = 'secondary-btn';
+            copySprintBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
+            copySprintBtn.innerText = 'COPY SPRINT PROMPT';
+            copySprintBtn.onclick = () => {
+                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:\n\n1. Read the "how_to_plan.md" guide to understand the planning framework\n2. Generate a highly detailed implementation plan following the guide's structure\n3. Include:\n   - Specific file paths and line numbers\n   - Step-by-step implementation instructions\n   - Dependencies and potential conflicts\n   - Complexity audit (Band A/B classification)\n   - Verification steps\n\nFormat each plan as a separate markdown block with clear headers so I can copy each plan individually.\n\nStart with the first plan and work through all plans in the list.`;
+                navigator.clipboard.writeText(prompt).then(() => {
+                    copySprintBtn.innerText = '\u2713 COPIED';
+                    setTimeout(() => { copySprintBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
                 });
-                container.appendChild(stopBtn);
-            }
+            };
+            container.appendChild(copySprintBtn);
+
+            // Step 4: Import plans from notebook
+            const s4Header = document.createElement('div');
+            s4Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            s4Header.innerText = '4. IMPORT PLANS FROM NOTEBOOK';
+            container.appendChild(s4Header);
+
+            const s4Desc = document.createElement('div');
+            s4Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
+            s4Desc.innerText = 'After NotebookLM generates the detailed plans, copy each plan individually. In the Kanban view, click the [\u22EF] "Import plan from clipboard" button in the NEW column header to import each plan. The imported plans will be added to the NEW column and can be sent to the Planner agent for review if needed.';
+            container.appendChild(s4Desc);
 
             return container;
+        }
+
+        function createJulesHistoryList() {
+            const container = document.createElement('div');
+            container.className = 'jules-history';
+            // Defensive filter: exclude completed sessions from UI (backend should already filter, but this ensures immediate UI responsiveness)
+            const sessions = (lastJulesSessions || [])
+                .filter(session => session && typeof session.planName === 'string' && session.planName.trim().length > 0)
+                .filter(session => {
+                    const status = session.switchboardStatus;
+                    return status !== 'Completed' && status !== 'Completed (No Changes)';
+                })
+                .slice(0, 15);
+            if (sessions.length === 0) return container;
+
+            for (const session of sessions) {
+                const item = document.createElement('div');
+                item.className = 'jules-history-item';
+                const name = session.planName.trim();
+                const status = session.switchboardStatus || session.julesStatus || 'Unknown';
+                const nameSpan = document.createElement('span');
+                nameSpan.className = 'jules-history-name';
+                nameSpan.innerText = name;
+                const statusSpan = document.createElement('span');
+                statusSpan.className = 'jules-history-status';
+                statusSpan.innerText = status;
+                item.appendChild(nameSpan);
+                item.appendChild(statusSpan);
+                item.title = `Session: ${session.sessionId || 'unknown'}`;
+                container.appendChild(item);
+            }
+            return container;
+        }
+
+        function createAutobanPanel() {
+            const container = document.createElement('div');
+            container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
+            const autobanSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+            const autobanNumberInputStyle = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+            const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
+            const smallButtonStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
+            const guardInteraction = (el) => {
+                el.addEventListener('focus', () => { isAutobanPanelInteracting = true; });
+                el.addEventListener('blur', () => { isAutobanPanelInteracting = false; });
+            };
+            const autobanRoles = [
+                { role: 'planner', label: 'Planner' },
+                { role: 'coder', label: 'Coder' },
+                { role: 'lead', label: 'Lead Coder' },
+                { role: 'reviewer', label: 'Reviewer' },
+                ...lastCustomAgents
+                    .filter(agent => agent.includeInKanban === true)
+                    .map(agent => ({ role: agent.role, label: agent.name }))
+            ];
+
+            const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const columnTransitions = [
+                { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
+                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> LEAD/CODER', defaultMin: 20, floorPerPlan: 5 },
+                { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
+                { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
+            ];
+
+            const resolveTerminalLiveness = (terminalName) => {
+                const terminal = lastTerminals[terminalName];
+                if (!terminal) {
+                    return { terminal: null, alive: false };
+                }
+                const heartbeatThresholdMs = 60_000;
+                const lastSeenMs = Date.parse(terminal.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < heartbeatThresholdMs;
+                const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
+                return { terminal, alive: !!alive };
+            };
+
+            const getRolePoolEntries = (role) => {
+                const configuredPool = Array.isArray(autobanState.terminalPools?.[role]) ? autobanState.terminalPools[role].filter(Boolean) : [];
+                const managedPool = new Set(Array.isArray(autobanState.managedTerminalPools?.[role]) ? autobanState.managedTerminalPools[role] : []);
+                const aliveRoleTerminals = Object.keys(lastTerminals)
+                    .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
+                    .filter(name => resolveTerminalLiveness(name).alive)
+                    .sort((a, b) => a.localeCompare(b));
+                const alivePrimaryRoleTerminals = aliveRoleTerminals
+                    .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
+                const effectivePool = (
+                    configuredPool.length > 0
+                        ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
+                        : alivePrimaryRoleTerminals
+                ).slice(0, 5);
+                return effectivePool.map(name => {
+                    const status = resolveTerminalLiveness(name);
+                    const count = Number(autobanState.sendCounts?.[name] || 0);
+                    return {
+                        name,
+                        count,
+                        max: Number(autobanState.maxSendsPerTerminal || 10),
+                        managed: managedPool.has(name),
+                        alive: status.alive,
+                        terminal: status.terminal,
+                        exhausted: count >= Number(autobanState.maxSendsPerTerminal || 10)
+                    };
+                });
+            };
+
+            const batchRow = document.createElement('div');
+            batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            const batchLabel = document.createElement('span');
+            batchLabel.textContent = 'MAX BATCH SIZE:';
+
+            const batchSelect = document.createElement('select');
+            batchSelect.style.cssText = autobanSelectStyle;
+            guardInteraction(batchSelect);
+            const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5];
+            AUTOBAN_BATCH_SIZE_OPTIONS.forEach(val => {
+                const opt = document.createElement('option');
+                opt.value = String(val);
+                opt.textContent = String(val);
+                if (val === autobanState.batchSize) opt.selected = true;
+                batchSelect.appendChild(opt);
+            });
+            batchSelect.addEventListener('change', () => {
+                autobanState.batchSize = parseInt(batchSelect.value, 10) || 3;
+                emitAutobanState();
+            });
+
+            batchRow.appendChild(batchLabel);
+            batchRow.appendChild(batchSelect);
+            container.appendChild(batchRow);
+
+            const complexityRow = document.createElement('div');
+            complexityRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            const complexityLabel = document.createElement('span');
+            complexityLabel.textContent = 'COMPLEXITY:';
+
+            const complexitySelect = document.createElement('select');
+            complexitySelect.style.cssText = autobanSelectStyle;
+            guardInteraction(complexitySelect);
+            [
+                { value: 'all', label: 'All' },
+                { value: 'low_only', label: 'Low Only' },
+                { value: 'high_only', label: 'High Only' }
+            ].forEach(({ value, label }) => {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = label;
+                if (value === autobanState.complexityFilter) opt.selected = true;
+                complexitySelect.appendChild(opt);
+            });
+            complexitySelect.title = 'Unknown complexity is treated as High. Low Only skips unknown plans.';
+            complexitySelect.addEventListener('change', () => {
+                autobanState.complexityFilter = complexitySelect.value || 'all';
+                emitAutobanState();
+            });
+
+            complexityRow.appendChild(complexityLabel);
+            complexityRow.appendChild(complexitySelect);
+            container.appendChild(complexityRow);
+
+            const routingRow = document.createElement('div');
+            routingRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            const routingLabel = document.createElement('span');
+            routingLabel.textContent = 'ROUTING:';
+
+            const routingSelect = document.createElement('select');
+            routingSelect.style.cssText = autobanSelectStyle;
+            guardInteraction(routingSelect);
+            [
+                { value: 'dynamic', label: 'Dynamic' },
+                { value: 'all_coder', label: 'All -> Coder' },
+                { value: 'all_lead', label: 'All -> Lead' }
+            ].forEach(({ value, label }) => {
+                const opt = document.createElement('option');
+                opt.value = value;
+                opt.textContent = label;
+                if (value === autobanState.routingMode) opt.selected = true;
+                routingSelect.appendChild(opt);
+            });
+            routingSelect.addEventListener('change', () => {
+                autobanState.routingMode = routingSelect.value || 'dynamic';
+                emitAutobanState();
+            });
+
+            routingRow.appendChild(routingLabel);
+            routingRow.appendChild(routingSelect);
+            container.appendChild(routingRow);
+
+            const maxSendsRow = document.createElement('div');
+            maxSendsRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            const maxSendsLabel = document.createElement('span');
+            maxSendsLabel.textContent = 'MAX SENDS / TERMINAL:';
+
+            const maxSendsInput = document.createElement('input');
+            maxSendsInput.type = 'number';
+            maxSendsInput.min = '1';
+            maxSendsInput.max = '100';
+            maxSendsInput.value = String(Number(autobanState.maxSendsPerTerminal || 10));
+            maxSendsInput.style.cssText = autobanNumberInputStyle;
+            guardInteraction(maxSendsInput);
+            maxSendsInput.addEventListener('change', () => {
+                const value = Math.max(1, Math.min(100, parseInt(maxSendsInput.value, 10) || 10));
+                autobanState.maxSendsPerTerminal = value;
+                maxSendsInput.value = String(value);
+                vscode.postMessage({ type: 'updateAutobanMaxSends', maxSendsPerTerminal: value });
+                isAutobanPanelInteracting = false;
+                renderAgentList();
+            });
+
+            const sessionCapBadge = document.createElement('span');
+            sessionCapBadge.style.cssText = chipStyle;
+            sessionCapBadge.textContent = 'SESSION ' + Number(autobanState.sessionSendCount || 0) + '/' + Number(autobanState.globalSessionCap || 200);
+
+            maxSendsRow.appendChild(maxSendsLabel);
+            maxSendsRow.appendChild(maxSendsInput);
+            maxSendsRow.appendChild(sessionCapBadge);
+            container.appendChild(maxSendsRow);
+
+            const sep = document.createElement('div');
+            sep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
+            container.appendChild(sep);
+
+            const rulesHeader = document.createElement('div');
+            rulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
+            rulesHeader.textContent = 'COLUMN RULES';
+            container.appendChild(rulesHeader);
+
+            const timingExplanation = document.createElement('div');
+            timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+            timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+            container.appendChild(timingExplanation);
+
+            columnTransitions.forEach(({ column, label, defaultMin, floorPerPlan }) => {
+                const idSuffix = getAutobanRuleIdSuffix(column);
+                const rule = autobanState.rules[column] || { enabled: true, intervalMinutes: defaultMin };
+                const ruleRow = document.createElement('div');
+                ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
+
+                const checkbox = document.createElement('input');
+                checkbox.type = 'checkbox';
+                checkbox.checked = rule.enabled;
+                checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
+                checkbox.addEventListener('change', () => {
+                    if (!autobanState.rules[column]) {
+                        autobanState.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                    }
+                    autobanState.rules[column].enabled = checkbox.checked;
+                    emitAutobanState();
+                });
+
+                const ruleLbl = document.createElement('span');
+                ruleLbl.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                ruleLbl.textContent = label;
+
+                const everyLbl = document.createElement('span');
+                everyLbl.style.cssText = 'color:var(--text-secondary);';
+                everyLbl.textContent = 'every';
+
+                const minInput = document.createElement('input');
+                minInput.type = 'number';
+                minInput.min = '1';
+                minInput.max = '60';
+                minInput.id = 'interval-input-' + idSuffix;
+                minInput.value = String(rule.intervalMinutes);
+                minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+                guardInteraction(minInput);
+                minInput.addEventListener('change', () => {
+                    if (!autobanState.rules[column]) {
+                        autobanState.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                    }
+                    const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
+                    autobanState.rules[column].intervalMinutes = val;
+                    minInput.value = String(val);
+                    emitAutobanState();
+                });
+
+                const minLbl = document.createElement('span');
+                minLbl.style.cssText = 'color:var(--text-secondary);';
+                minLbl.textContent = 'min';
+
+                ruleRow.appendChild(checkbox);
+                ruleRow.appendChild(ruleLbl);
+                ruleRow.appendChild(everyLbl);
+                ruleRow.appendChild(minInput);
+                ruleRow.appendChild(minLbl);
+                container.appendChild(ruleRow);
+            });
+
+            const poolSep = document.createElement('div');
+            poolSep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
+            container.appendChild(poolSep);
+
+            const poolsHeader = document.createElement('div');
+            poolsHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
+            poolsHeader.textContent = 'TERMINAL POOLS';
+            container.appendChild(poolsHeader);
+
+            const poolsHelp = document.createElement('div');
+            poolsHelp.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+            poolsHelp.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
+            container.appendChild(poolsHelp);
+
+            autobanRoles.forEach(({ role, label }) => {
+                const poolEntries = getRolePoolEntries(role);
+                const roleBlock = document.createElement('div');
+                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
+
+                const roleHeader = document.createElement('div');
+                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+
+                const roleTitleWrap = document.createElement('div');
+                roleTitleWrap.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0;';
+
+                const roleTitle = document.createElement('span');
+                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                roleTitle.textContent = label;
+
+                const roleCapacity = document.createElement('span');
+                roleCapacity.style.cssText = chipStyle;
+                roleCapacity.textContent = 'POOL ' + poolEntries.length + '/5';
+
+                roleTitleWrap.appendChild(roleTitle);
+                roleTitleWrap.appendChild(roleCapacity);
+
+                const addButton = document.createElement('button');
+                addButton.className = 'action-btn';
+                addButton.style.cssText = 'padding:3px 8px; font-size:9px;';
+                addButton.textContent = 'ADD TERMINAL';
+                addButton.disabled = poolEntries.length >= 5;
+                addButton.addEventListener('click', () => {
+                    vscode.postMessage({ type: 'addAutobanTerminal', role });
+                });
+
+                roleHeader.appendChild(roleTitleWrap);
+                roleHeader.appendChild(addButton);
+                roleBlock.appendChild(roleHeader);
+
+                if (poolEntries.length === 0) {
+                    const emptyState = document.createElement('div');
+                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
+                    emptyState.textContent = 'No live terminals available for this role yet.';
+                    roleBlock.appendChild(emptyState);
+                } else {
+                    poolEntries.forEach(entry => {
+                        const terminalRow = document.createElement('div');
+                        terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+
+                        const left = document.createElement('div');
+                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+
+                        const nameSpan = document.createElement('span');
+                        nameSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                        nameSpan.textContent = entry.name;
+
+                        const usageBadge = document.createElement('span');
+                        usageBadge.style.cssText = chipStyle + (entry.exhausted ? ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);' : '');
+                        usageBadge.textContent = entry.count + '/' + entry.max;
+
+                        const statusBadge = document.createElement('span');
+                        statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
+                        statusBadge.textContent = entry.alive ? (entry.exhausted ? 'EXHAUSTED' : 'READY') : 'OFFLINE';
+
+                        const kindBadge = document.createElement('span');
+                        kindBadge.style.cssText = chipStyle;
+                        kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
+
+                        left.appendChild(nameSpan);
+                        left.appendChild(usageBadge);
+                        left.appendChild(statusBadge);
+                        left.appendChild(kindBadge);
+
+                        const right = document.createElement('div');
+                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                        if (entry.terminal) {
+                            const focusButton = document.createElement('button');
+                            focusButton.style.cssText = smallButtonStyle;
+                            focusButton.textContent = 'FOCUS';
+                            focusButton.addEventListener('click', () => {
+                                vscode.postMessage({ type: 'focusTerminal', terminalName: entry.name });
+                            });
+                            right.appendChild(focusButton);
+                        }
+
+                        if (entry.managed) {
+                            const removeButton = document.createElement('button');
+                            removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
+                            removeButton.textContent = 'REMOVE';
+                            removeButton.addEventListener('click', () => {
+                                vscode.postMessage({ type: 'removeAutobanTerminal', role, terminalName: entry.name });
+                            });
+                            right.appendChild(removeButton);
+                        }
+
+                        terminalRow.appendChild(left);
+                        terminalRow.appendChild(right);
+                        roleBlock.appendChild(terminalRow);
+                    });
+                }
+
+                container.appendChild(roleBlock);
+            });
+
+            const resetRow = document.createElement('div');
+            resetRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px;';
+
+            const resetHint = document.createElement('span');
+            resetHint.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+            resetHint.textContent = 'Clear sends, restart timers, and remove autoban-created backup terminals.';
+
+            const resetButton = document.createElement('button');
+            resetButton.className = 'action-btn';
+            resetButton.style.cssText = 'padding:4px 8px; font-size:9px; color:var(--accent-red, #e55);';
+            resetButton.textContent = 'CLEAR & RESET';
+            resetButton.addEventListener('click', () => {
+                if (!window.confirm('Clear autoban send counters and remove autoban backup terminals?')) return;
+                vscode.postMessage({ type: 'resetAutobanPools' });
+            });
+
+            resetRow.appendChild(resetHint);
+            resetRow.appendChild(resetButton);
+            container.appendChild(resetRow);
+
+            return container;
+        }
+
+        function emitAutobanState() {
+            vscode.postMessage({
+                type: 'updateAutobanState',
+                state: {
+                    enabled: autobanState.enabled,
+                    batchSize: autobanState.batchSize,
+                    complexityFilter: autobanState.complexityFilter,
+                    routingMode: autobanState.routingMode,
+                    rules: autobanState.rules
+                }
+            });
         }
 
         function createAnalystRow() {
@@ -2488,6 +3308,7 @@
             const dot = document.createElement('div');
             dot.className = 'status-dot';
             if (isReady) dot.classList.add('green');
+            else dot.classList.add('red');
 
             const name = document.createElement('div');
             name.className = 'agent-name';
@@ -2521,7 +3342,7 @@
             btn.id = 'analyst-send-btn';
             const pendingDispatch = isDispatchPending('analyst');
             btn.innerText = pendingDispatch ? 'DISPATCHING...' : 'SEND QUESTION';
-            btn.disabled = !isReady || pendingDispatch || !isPlanSelected();
+            btn.disabled = !isReady || pendingDispatch;
             btn.dataset.role = 'analyst';
             if (pendingDispatch) {
                 btn.classList.add('dispatching');
@@ -2551,41 +3372,19 @@
             container.appendChild(input);
             container.appendChild(btn);
 
-            const mapBtn = document.createElement('button');
-            mapBtn.className = 'action-btn';
-            mapBtn.id = 'analyst-generate-map-btn';
-            const pendingMapDispatch = isDispatchPending('analystMap');
-            mapBtn.innerText = pendingMapDispatch ? 'GENERATING...' : 'GENERATE CONTEXT MAP';
-            mapBtn.disabled = !isReady || pendingMapDispatch || !isPlanSelected();
-            mapBtn.dataset.role = 'analystMap';
-            if (pendingMapDispatch) {
-                mapBtn.classList.add('dispatching');
-            }
-            if (analystMapFeedback && Date.now() < analystMapFeedback.expiresAt) {
-                mapBtn.classList.add(analystMapFeedback.className);
-                mapBtn.innerText = analystMapFeedback.text;
-                mapBtn.disabled = true;
-            } else {
-                analystMapFeedback = null;
-            }
-            mapBtn.onclick = () => {
-                const text = input.value.trim();
-                if (!text) return;
-                markDispatchPending('analystMap');
-                mapBtn.disabled = true;
-                mapBtn.classList.add('dispatching');
-                mapBtn.innerText = 'GENERATING...';
-                vscode.postMessage({
-                    type: 'generateContextMap',
-                    featureDescription: text
-                });
-            };
-            container.appendChild(mapBtn);
 
             return container;
         }
 
         function updateMcpStatus(msg) {
+            const recheckBtn = document.getElementById('mcp-recheck');
+            if (msg.diagnostic === 'MCP: Checking...') {
+                mcpDot.className = 'tiny-dot orange';
+                mcpText.innerText = 'MCP: CHECKING';
+                if (recheckBtn) recheckBtn.style.opacity = '0.3';
+                return;
+            }
+            if (recheckBtn) recheckBtn.style.opacity = '0.6';
             if (msg.connected) {
                 mcpDot.className = 'tiny-dot green';
                 mcpText.innerText = 'MCP: ONLINE';
@@ -2597,6 +3396,75 @@
                 mcpText.innerText = 'MCP: OFFLINE';
             }
         }
+
+        // --- Onboarding Logic ---
+        const onboardingContainer = document.getElementById('onboarding-container');
+        const mainContainer = document.getElementById('main-container');
+        const onboardStepWelcome = document.getElementById('onboard-step-welcome');
+        const onboardStepCli = document.getElementById('onboard-step-cli');
+
+        function toggleOnboarding(needsSetup) {
+            if (needsSetup) {
+                onboardingContainer.classList.remove('hidden');
+                mainContainer.classList.add('hidden');
+            } else {
+                onboardingContainer.classList.add('hidden');
+                mainContainer.classList.remove('hidden');
+            }
+        }
+
+        function handleOnboardingProgress(msg) {
+            const initStatus = document.getElementById('onboard-init-status');
+            const cliStatus = document.getElementById('onboard-cli-status');
+            switch (msg.step) {
+                case 'initializing':
+                    if (initStatus) initStatus.textContent = 'Initializing protocols...';
+                    break;
+                case 'initialized':
+                    if (initStatus) initStatus.textContent = '✅ Protocols initialized';
+                    // Advance to CLI config step
+                    setTimeout(() => {
+                        onboardStepWelcome.classList.add('hidden');
+                        onboardStepCli.classList.remove('hidden');
+                    }, 600);
+                    break;
+                case 'cli_saved':
+                    if (cliStatus) cliStatus.textContent = '✅ CLI agents saved';
+                    setTimeout(() => {
+                        vscode.postMessage({ type: 'finishOnboarding' });
+                    }, 400);
+                    break;
+                case 'error':
+                    const errTarget = onboardStepCli.classList.contains('hidden') ? initStatus : cliStatus;
+                    if (errTarget) errTarget.textContent = '❌ ' + (msg.message || 'Unknown error');
+                    break;
+            }
+        }
+
+        document.getElementById('btn-onboard-init').addEventListener('click', () => {
+            vscode.postMessage({ type: 'initializeProtocols' });
+        });
+
+        document.getElementById('btn-onboard-save').addEventListener('click', () => {
+            const agents = {
+                lead: document.getElementById('onboard-cli-lead').value,
+                coder: document.getElementById('onboard-cli-coder').value,
+                reviewer: document.getElementById('onboard-cli-reviewer').value,
+                planner: document.getElementById('onboard-cli-planner').value,
+                analyst: document.getElementById('onboard-cli-analyst').value
+            };
+            const visibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+            document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
+                const role = cb.dataset.role;
+                if (role) visibleAgents[role] = cb.checked;
+            });
+            lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
+            vscode.postMessage({ type: 'saveStartupCommands', commands: agents, visibleAgents, accurateCodingEnabled: false, julesAutoSyncEnabled: !!document.getElementById('onboard-jules-auto-sync')?.checked, onboardingComplete: true });
+        });
+
+        document.getElementById('btn-onboard-skip').addEventListener('click', () => {
+            vscode.postMessage({ type: 'finishOnboarding' });
+        });
 
         // Notify extension we are ready to receive data
         updatePlanActionStates();

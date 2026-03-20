@@ -65,7 +65,7 @@ async function run() {
     await test('AP-1a: brain file is deleted before mirror file', async () => {
         const deleteOrder = [];
         const brainFile = path.join(os.homedir(), '.gemini', 'antigravity', 'brain', 'implementation_plan.md');
-        const mirrorFile = '/workspace/.switchboard/plans/antigravity_plans/implementation_plan.md';
+        const mirrorFile = '/workspace/.switchboard/plans/implementation_plan.md';
         const runSheet = '/workspace/.switchboard/sessions/abc.json';
 
         const fsImpl = {
@@ -89,7 +89,7 @@ async function run() {
     await test('AP-1b: brain unlink failure halts sequence (mirror not deleted)', async () => {
         const deleteOrder = [];
         const brainFile = path.join(os.homedir(), '.gemini', 'antigravity', 'brain', 'implementation_plan.md');
-        const mirrorFile = '/workspace/.switchboard/plans/antigravity_plans/implementation_plan.md';
+        const mirrorFile = '/workspace/.switchboard/plans/implementation_plan.md';
 
         const fsImpl = {
             existsSync: () => true,
@@ -118,7 +118,7 @@ async function run() {
     // ---- c) Missing brainSourcePath falls back to local-only delete --------
     await test('AP-4c: missing brainSourcePath falls back to local-only delete', async () => {
         const deleteOrder = [];
-        const mirrorFile = '/workspace/.switchboard/plans/antigravity_plans/implementation_plan.md';
+        const mirrorFile = '/workspace/.switchboard/plans/implementation_plan.md';
         const runSheet = '/workspace/.switchboard/sessions/abc.json';
 
         const fsImpl = {
@@ -145,7 +145,7 @@ async function run() {
         const deleteOrder = [];
         // This path is outside ~/.gemini/antigravity/brain/
         const suspiciousPath = path.join(os.homedir(), 'Documents', 'important.md');
-        const mirrorFile = '/workspace/.switchboard/plans/antigravity_plans/plan.md';
+        const mirrorFile = '/workspace/.switchboard/plans/plan.md';
 
         const fsImpl = {
             existsSync: () => true,

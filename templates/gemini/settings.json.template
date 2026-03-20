@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "switchboard": {
+      "command": "node",
+      "args": ["{{WORKSPACE_ROOT}}/.switchboard/MCP/mcp-server.js"]
+    }
+  }
+}

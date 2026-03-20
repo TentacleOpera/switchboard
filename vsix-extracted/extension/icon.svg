@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128" width="128" height="128">
+  <!-- Border (no fill, stroke only) -->
+  <rect x="4" y="4" width="120" height="120" rx="14" fill="none" stroke="currentColor" stroke-width="5"/>
+
+  <!-- Connection lines -->
+  <line x1="37" y1="28" x2="55" y2="28" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+  <line x1="64" y1="37" x2="64" y2="55" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+  <line x1="73" y1="64" x2="91" y2="64" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+  <line x1="100" y1="73" x2="100" y2="91" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+  <line x1="73" y1="100" x2="91" y2="100" stroke="currentColor" stroke-width="5" stroke-linecap="round"/>
+
+  <!-- Row 1 -->
+  <circle cx="28" cy="28" r="9" fill="currentColor"/>
+  <circle cx="64" cy="28" r="9" fill="currentColor"/>
+  <circle cx="100" cy="28" r="9" fill="currentColor"/>
+
+  <!-- Row 2 -->
+  <circle cx="28" cy="64" r="9" fill="currentColor"/>
+  <circle cx="64" cy="64" r="9" fill="currentColor"/>
+  <circle cx="100" cy="64" r="9" fill="currentColor"/>
+
+  <!-- Row 3 -->
+  <circle cx="28" cy="100" r="9" fill="currentColor"/>
+  <circle cx="64" cy="100" r="9" fill="currentColor"/>
+  <circle cx="100" cy="100" r="9" fill="currentColor"/>
+</svg>

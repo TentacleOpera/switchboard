@@ -3,7 +3,7 @@
     "switchboard": {
       "command": "node",
       "args": [
-        "C:\\Users\\patvu\\Documents\\GitHub\\ai-product-manager\\.switchboard\\MCP\\mcp-server.js"
+        "C:\\Users\\patvu\\Documents\\GitHub\\switchboard\\src\\mcp-server\\mcp-server.js"
       ]
     }
   }

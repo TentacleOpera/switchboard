@@ -1,6 +1,6 @@
 # Switchboard Technical Documentation (Comprehensive Audit)
 
-Last audited against runtime code: February 28, 2026
+Last audited against runtime code: March 19, 2026
 
 This document describes how the plugin currently works in code, not how older docs or prompts describe it.
 
@@ -31,8 +31,7 @@ At runtime:
 - `inbox/<agent>/`: incoming durable messages (JSON)
 - `outbox/<agent>/`: legacy/deprecated path still referenced by some tooling
 - `sessions/`: run sheets and `activity.jsonl` audit stream
-- `plans/features/`: locally created feature plans
-- `plans/antigravity_plans/`: mirrored Antigravity brain plans
+- `plans/`: locally created feature plans and mirrored Antigravity brain plans (unified root)
 - `brain_plan_blacklist.json`: setup-seeded blacklist of pre-existing Antigravity brain plan stable paths (hard excluded from mirror adoption and sidebar visibility)
   - persisted schema: `{ version, generatedAt, entries[] }` where `entries` are stable canonical base-plan paths
 - `context-maps/`: analyst-generated context map artifacts for planner handoff
@@ -132,8 +131,10 @@ Runtime workflows currently registered:
 - `handoff` (3 phases)
 - `handoff-chat` (3 phases)
 - `handoff-relay` (2 phases)
+- `improve-plan` (3 phases)
 - `challenge` (5 phases)
 - `chat` (4 phases)
+- `review` (used by Kanban CODE REVIEWED advance)
 
 Workflow state can be session-level or agent-level (`targetAgent`).
 
@@ -246,7 +247,7 @@ Housekeeping:
 Core responsibilities:
 
 - Webview event handling for setup, terminal actions, run-sheet actions, orchestration controls
-- state/status refresh loops for session, terminals, plans, activity, Jules, interactive orchestrator, pipeline orchestrator, and coder-reviewer workflow phases
+- state/status refresh loops for session, terminals, plans, activity, Jules, interactive orchestrator, pipeline orchestrator, AUTOBAN config, and coder-reviewer workflow phases
 - dispatch actions initiated from UI (`triggerAgentAction`)
 - lifecycle management for `InteractiveOrchestrator` and `PipelineOrchestrator` with explicit mutual exclusion (`pipelineStart` stops orchestrator, `orchestratorStart` stops pipeline)
 - Coder -> Reviewer chained workflow session tracking with timeout/interval timers and cleanup on dispose
@@ -275,8 +276,10 @@ Role-driven payload construction:
 Webview layout/runtime notes:
 
 - Agents panel is split into sub-tabs: `Agents`, `Auto`, `Cloud`
-- `Auto` tab contains Auto-Agent controls, Pipeline controls, Lead+Coder composite action, and Coder -> Reviewer controls
+- `Auto` tab contains Auto-Agent controls, Pipeline controls, Lead+Coder composite action, Coder -> Reviewer controls, and AUTOBAN configuration
 - `Cloud` tab contains Jules controls
+- `KanbanProvider` instance is owned by `TaskViewerProvider` and opened via `switchboard.openKanban` command
+- `ReviewProvider` instance is owned by `TaskViewerProvider` and opened via `reviewPlan` Kanban message or sidebar action
 - Analyst panel supports two direct actions:
   - `SEND QUESTION` (general analyst dispatch)
   - `GENERATE CONTEXT MAP` (structured prompt to produce `.switchboard/context-maps/context-map_<timestamp>.md` and call `handoff_clipboard`)
@@ -287,8 +290,8 @@ Webview layout/runtime notes:
 
 Switchboard supports two major plan sources:
 
-1. Local plan creation under `.switchboard/plans/features`
-2. Mirrored Antigravity brain plans under `.switchboard/plans/antigravity_plans`
+1. Local plan creation under `.switchboard/plans/`
+2. Mirrored Antigravity brain plans under `.switchboard/plans/` (unified with local plans)
 
 Run sheets (`.switchboard/sessions/*.json`) track:
 
@@ -316,7 +319,236 @@ Brain mirror subsystem includes:
   - `TaskViewerProvider._handlePlanCreation(...)` calls `SessionActionLog.findRunSheetByPlanFile(..., { includeCompleted: true })`
   - prevents "completed plan resurrection" as a new active session when plan files are edited later
 
-## 14) Security model summary
+## 14) Kanban board subsystem (`KanbanProvider`)
+
+The Kanban board is the central dispatch and visualization surface, rendered as a `WebviewPanel` in the editor area.
+
+### Data model
+
+- **`KanbanCard`**: `{ sessionId, topic, planFile, column, lastActivity, complexity, workspaceRoot }`
+- **`KanbanColumn`**: string ID (e.g. `CREATED`, `PLAN REVIEWED`, `LEAD CODED`, `CODER CODED`, `CODE REVIEWED`)
+- Columns are dynamically built from 5 built-in columns plus custom agents via `buildKanbanColumns(customAgents)` from `agentConfig.ts`
+- Custom agents with `includeInKanban: true` are inserted into the column ordering based on their `kanbanOrder` property
+
+### Persistence — dual-layer (SQLite + file-derived fallback)
+
+Primary state is persisted in a **local SQLite database** (`KanbanDatabase` in `src/services/KanbanDatabase.ts`):
+
+- Database file: `.switchboard/kanban.db`
+- Schema: `plans` table with `plan_id` (PK), `session_id` (unique), `topic`, `plan_file`, `kanban_column`, `status`, `complexity`, `workspace_id`, `created_at`, `updated_at`, `last_action`, `source_type`
+- Indexes on `kanban_column` and `workspace_id`
+- Uses `sql.js` (WASM SQLite) loaded via `createRequire` from the extension bundle
+- Upsert semantics via `INSERT ... ON CONFLICT(plan_id) DO UPDATE`
+- Migration tracking via `migration_meta` table
+
+Fallback: when the DB is unavailable (init failure, WASM load error), the board falls back to **file-derived state** from run-sheet events in `.switchboard/sessions/*.json`, using `deriveKanbanColumn()` from `kanbanColumnDerivation.ts`.
+
+Migration bootstrap (`KanbanMigration`):
+- On first DB-backed refresh, `KanbanMigration.bootstrapIfNeeded()` seeds the DB from the file-derived snapshot
+- Subsequent refreshes use `syncNewPlansOnly()` to add new plans without overwriting DB-managed column positions
+
+### Refresh and watchers
+
+- VS Code `FileSystemWatcher` on `**/.switchboard/sessions/*.json` and `**/.switchboard/state.json`
+- Native `fs.watch` fallback for gitignored `.switchboard/` paths
+- 300ms debounced refresh on any change
+- Workspace identity scoping via `.switchboard/workspace_identity.json`
+
+### Webview message protocol
+
+Key inbound messages from the Kanban webview:
+
+| Message type | Behavior |
+| :--- | :--- |
+| `triggerAction` | Single card drag-drop dispatch: resolves column→role, dispatches via `switchboard.triggerAgentFromKanban` |
+| `triggerBatchAction` | Multi-select drag-drop batch dispatch |
+| `moveSelected` / `moveAll` | Advance selected/all cards in a column; `PLAN REVIEWED` uses complexity-based partition routing |
+| `promptSelected` / `promptAll` | Generate batch prompt, copy to clipboard, advance cards |
+| `batchPlannerPrompt` | Generate planner prompt for all `CREATED` cards, copy to clipboard |
+| `batchLowComplexity` | Generate coder prompt for low-complexity `PLAN REVIEWED` cards |
+| `batchDispatchLow` | Dispatch low-complexity plans via command |
+| `julesLowComplexity` / `julesSelected` | Dispatch low-complexity or selected plans to Jules |
+| `moveCardForward` / `moveCardBackwards` | Non-dispatch column moves |
+| `createPlan` | Triggers `switchboard.initiatePlan` |
+| `importFromClipboard` | Triggers `switchboard.importPlanFromClipboard` |
+| `reviewPlan` | Opens the Review panel for a card |
+| `completePlan` | Marks a plan as completed |
+| `toggleAutoban` | Enables/disables AUTOBAN from the Kanban UI |
+| `toggleCliTriggers` | Enables/disables CLI trigger dispatch on drag-drop |
+| `analystMapSelected` | Sends selected plans to analyst for context map generation |
+| `selectWorkspace` | Switches active workspace in multi-root setups |
+
+### Column-to-role dispatch mapping
+
+`_columnToRole()` maps target columns:
+
+- `PLAN REVIEWED` → `planner`
+- `LEAD CODED` → `lead`
+- `CODER CODED` → `coder`
+- `CODED` → `lead` (legacy alias)
+- `CODE REVIEWED` → `reviewer`
+- Custom agent columns → their role ID
+
+### MCP integration
+
+`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the `move_kanban_card` MCP tool. It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity.
+
+## 15) Complexity classification and auto-routing
+
+`KanbanProvider.getComplexityFromPlan()` reads a plan file and returns `'Low'`, `'High'`, or `'Unknown'`. The classification drives the complexity-based auto-routing when advancing plans from the `PLAN REVIEWED` column.
+
+Priority chain:
+
+1. **Manual override**: `**Manual Complexity Override:** Low|High|Unknown` — user-set via the Review panel dropdown, supersedes all heuristics
+2. **Agent recommendation**: regex match for "Send it to the Lead Coder" → `High`, "Send it to the Coder" → `Low` — written by the improve-plan workflow
+3. **Band B fallback**: parses the Complexity Audit section for `Band B` items. Lines are normalized (stripped of markdown formatting, decorative labels like "Complex/Risky", and empty markers like "None", "N/A", "—"). If no meaningful Band B items remain → `Low`, otherwise → `High`
+
+Auto-routing behavior:
+
+- When advancing from `PLAN REVIEWED`, `_partitionByComplexityRoute()` splits session IDs into `lead` and `coder` groups
+- `_targetColumnForDispatchRole()`: `lead` → `LEAD CODED`, `coder` → `CODER CODED`
+- Both `moveSelected` and `moveAll` use this partition when the source column is `PLAN REVIEWED`
+
+The same complexity classification logic is duplicated in `register-tools.js` for the MCP `get_kanban_state` tool (kept aligned via the `normalizeBandBLine` helper).
+
+## 16) AUTOBAN automation subsystem
+
+AUTOBAN provides API-less batch automation by rotating plans across multiple terminal instances per role on configurable timers.
+
+### Configuration state (`autobanState.ts`)
+
+```
+AutobanConfigState {
+    enabled: boolean
+    batchSize: number                          // 1–5, default 3
+    complexityFilter: 'all' | 'low_only' | 'high_only'
+    routingMode: 'dynamic' | 'all_coder' | 'all_lead'
+    maxSendsPerTerminal: number                // default 10
+    globalSessionCap: number                   // default 200
+    sessionSendCount: number
+    sendCounts: Record<string, number>         // per-terminal send counts
+    terminalPools: Record<string, string[]>    // user-configured pools
+    managedTerminalPools: Record<string, string[]>  // auto-managed pools
+    poolCursor: Record<string, number>         // round-robin cursor per role
+    rules: Record<string, AutobanRuleState>    // per-column enable + interval
+    lastTickAt?: Record<string, number>        // last dispatch timestamp per column
+}
+```
+
+### Per-column rules (defaults)
+
+| Column | Enabled | Interval |
+| :--- | :--- | :--- |
+| `CREATED` | true | 10 min |
+| `PLAN REVIEWED` | true | 20 min |
+| `LEAD CODED` | true | 15 min |
+| `CODER CODED` | true | 15 min |
+
+### Terminal pool rotation
+
+- Up to `MAX_AUTOBAN_TERMINALS_PER_ROLE` (5) terminals per role
+- `getNextAutobanTerminalName()` rotates through the pool using a cursor
+- `LEAD CODED` and `CODER CODED` share a reviewer pool (`AUTOBAN_SHARED_REVIEWER_COLUMNS`)
+- `shouldSkipSharedReviewerAutobanDispatch()` prevents double-dispatching to the shared reviewer
+
+### Dispatch flow
+
+1. AUTOBAN tick fires per enabled column at configured interval
+2. Selects eligible cards (respects `complexityFilter`, `globalSessionCap`, `maxSendsPerTerminal`)
+3. Groups cards into batches of `batchSize`
+4. Selects target terminal via pool rotation
+5. Generates prompt via `buildKanbanBatchPrompt()` (same canonical builder used by manual dispatch)
+6. Dispatches to terminal via `terminal.sendText`
+7. Updates send counts and advances cards to next column
+
+### Sidebar ↔ Kanban sync
+
+- Autoban config is managed from the sidebar (`TaskViewerProvider`)
+- Config state is relayed to the Kanban webview via `updateAutobanConfig(state)` message
+- Kanban UI displays enable/disable toggle and reflects current AUTOBAN state
+
+## 17) Plan Review subsystem (`ReviewProvider`)
+
+The Review panel is a dedicated `WebviewPanel` for contextual plan inspection and inline commenting.
+
+### Core types
+
+- `ReviewPlanContext`: session ID, topic, plan file path, workspace root, initial mode (`edit` | `review`)
+- `ReviewCommentRequest`: session ID, topic, plan file path, selected text, comment
+- `ReviewCommentResult`: success flag, message, target agent, preferred role
+- `ReviewTicketData`: full plan ticket view — column, complexity, dependencies, plan text, rendered HTML, action log, mtime for optimistic concurrency
+
+### Webview message protocol
+
+| Message type | Behavior |
+| :--- | :--- |
+| `selectionChanged` | Tracks current text selection and bounding rect for comment anchoring |
+| `submitComment` | Dispatches `ReviewCommentRequest` via `switchboard.sendReviewComment` command — sends a targeted comment referencing the selected plan text to the Planner agent |
+| `setColumn` / `setComplexity` / `setDependencies` / `setTopic` / `savePlanText` | Ticket metadata updates via `_applyTicketUpdate()` |
+| `sendToAgent` | Dispatches the plan to the next agent via `switchboard.reviewSendToAgent` |
+| `completePlan` | Marks plan completed via `switchboard.completePlanFromKanban` |
+| `deletePlan` | Deletes plan with confirmation via `switchboard.deletePlanFromReview` |
+| `copyPlanLink` | Copies the plan's absolute file path to clipboard |
+| `getOpenPlans` | Returns other open plan options for navigation |
+
+### Comment dispatch flow
+
+1. User selects text within the rendered plan markdown
+2. User types a comment and submits
+3. `ReviewProvider` builds a `ReviewCommentRequest` with the selected text anchor and comment
+4. Extension dispatches to the Planner terminal via `switchboard.sendReviewComment`, which constructs a prompt referencing the exact quoted text and the user's question/comment
+5. The Planner agent responds in-terminal with targeted plan improvements
+
+### Ticket metadata editing
+
+The Review panel supports inline editing of plan metadata:
+
+- **Column**: move card to any Kanban column
+- **Complexity**: manual override (`Low` / `High` / `Unknown`) — persists as `**Manual Complexity Override:** <value>` in the plan markdown, which takes priority in `getComplexityFromPlan()`
+- **Dependencies**: list of dependency plan session IDs
+- **Topic**: plan title
+- **Plan text**: full markdown editing with optimistic concurrency via `expectedMtimeMs`
+
+## 18) MCP Kanban tools
+
+### `get_kanban_state`
+
+Registered in `register-tools.js`. Returns the full Kanban board state or a filtered single-column view.
+
+- **Parameters**: `column` (optional) — supports internal IDs (`CREATED`, `PLAN REVIEWED`, etc.) and UI labels (`New`, `Planned`, etc.)
+- **Column resolution**: `resolveRequestedKanbanColumn()` normalizes input through alias map (`KANBAN_COLUMN_ALIASES`), exact match, and label match
+- **Data source**: tries SQLite DB first via `readKanbanStateFromDb()`, falls back to file-derived state from run-sheets + plan registry
+- **Response format**: JSON map of column ID → `{ id, label, items[] }` where each item has `topic`, `sessionId`, `createdAt`
+- Custom agent columns are dynamically included via `getKanbanColumnDefinitions()` which merges built-in columns with `customAgents` from `state.json`
+
+### `move_kanban_card`
+
+Registered in `register-tools.js`. Routes a plan to a target agent/column via the Kanban dispatch pipeline.
+
+- **Parameters**: `sessionId` (required), `target` (required) — conversational destination string
+- **Dispatch path**: delegates to `KanbanProvider.handleMcpMove()` which resolves the target through the normalized alias map, checks role visibility/assignment, and dispatches via `switchboard.triggerAgentFromKanban`
+- **Complexity routing**: targets like `team` and `coded` use dynamic per-session complexity resolution
+
+## 19) Batch prompt builder (`agentPromptBuilder.ts`)
+
+All prompt-generation paths route through `buildKanbanBatchPrompt()` to ensure identical prompt text regardless of UI entry point (card copy, batch buttons, AUTOBAN dispatch, ticket-view "Send to Agent").
+
+### Prompt structure by role
+
+- **Planner**: improve/enhance instructions referencing `.agent/rules/how_to_plan.md`, with plan file list
+- **Lead Coder**: execution payload with focus directive, batch execution rules, optional inline adversarial challenge block, plan file list
+- **Coder**: same as lead but with optional `low-complexity` instruction hint and accuracy mode workflow reference (`.agent/workflows/accuracy.md`)
+- **Reviewer**: reviewer-executor payload with mode directive (no auxiliary workflow), plan file list
+
+### Key directives included in all batch prompts
+
+- **Focus directive**: "Each plan file path below is the single source of truth" — prevents confusion from directory mirroring
+- **Batch execution rules**: instructs platforms with parallel sub-agents to dispatch one sub-agent per plan for concurrent execution
+- **Critical instructions**: treat each plan as isolated context, execute fully before moving to next, report issues but continue processing
+
+`columnToPromptRole()` maps Kanban columns to prompt builder roles for the `promptSelected`/`promptAll` actions.
+
+## 20) Security model summary
 
 Implemented controls in runtime:
 
@@ -332,7 +564,7 @@ Failure mode:
 
 - if strict auth is enabled and signing key is unavailable, dispatch is rejected.
 
-## 15) Observability and audit data
+## 21) Observability and audit data
 
 Audit and activity telemetry is local-only:
 
@@ -342,7 +574,7 @@ Audit and activity telemetry is local-only:
 
 Payload sanitization is applied to audit logs for sensitive keys.
 
-## 16) Tests and verification entry points
+## 22) Tests and verification entry points
 
 Useful regression tests in `src/test`:
 
@@ -369,7 +601,7 @@ Typical maintainer checks:
 - `node src/test/tombstone-registry-regression.test.js`
 - `node src/test/workspace-scope-regression.test.js`
 
-## 17) Known runtime/documentation drift (important)
+## 23) Known runtime/documentation drift (important)
 
 1. Workflow registry drift:
    - `.agent/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
@@ -386,5 +618,12 @@ Typical maintainer checks:
    - Sidebar local/remote execute helpers can still inline persona wrappers in payload text.
 5. Setup template drift:
    - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names.
+
+6. Complexity classification duplication:
+   - `KanbanProvider.getComplexityFromPlan()` and `register-tools.js` `getComplexityFromPlan()` implement the same logic independently.
+   - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
+7. Kanban DB vs file-derived state:
+   - The SQLite DB is authoritative for column positions when available, but the file-derived fallback uses `deriveKanbanColumn()` which may disagree after manual DB column moves.
+   - `get_kanban_state` MCP tool has its own DB read path separate from `KanbanProvider._refreshBoard()`.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.

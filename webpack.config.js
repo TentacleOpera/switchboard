@@ -55,6 +55,14 @@ const extensionConfig = {
                 {
                     from: 'src/webview/external-ai-hub.html',
                     to: 'webview/[name][ext]'
+                },
+                {
+                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+                    to: 'sql-wasm.js'
+                },
+                {
+                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+                    to: 'sql-wasm.wasm'
                 }
             ]
         })

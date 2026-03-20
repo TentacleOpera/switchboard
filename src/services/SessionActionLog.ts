@@ -33,6 +33,12 @@ export class SessionActionLog {
     private readonly queue: QueueItem[] = [];
     private isFlushing = false;
     private flushScheduled = false;
+    private readonly _writeLocks = new Map<string, Promise<void>>();
+    private _titleCache: Map<string, string> | null = null;
+    private _titleCacheTimestamp = 0;
+    private readonly _archiveTitleCache = new Map<string, string>();
+    private _archiveTitleCacheLoaded = false;
+    private static readonly TITLE_CACHE_TTL_MS = 5_000;
     private static readonly MAX_RETRIES = 4;
     private static readonly BASE_BACKOFF_MS = 200;
     private static readonly MAX_STRING_LEN = 800;
@@ -151,13 +157,19 @@ export class SessionActionLog {
             const sourceSessionId = typeof sourcePayload.sessionId === 'string' ? sourcePayload.sessionId : '';
             const sourceRole = typeof sourcePayload.role === 'string' ? sourcePayload.role : '';
             const sourceType = String(source.type || '').toLowerCase();
+            if (sourceType === 'autoban_dispatch') {
+                output.push(source);
+                continue;
+            }
             const isUiTrigger = sourceType === 'ui_action'
                 && sourcePayload.action === 'triggerAgentAction'
                 && sourceSessionId.length > 0;
 
             if (!isUiTrigger) {
                 const role = sourcePayload.role || '';
-                const planTitle = sessionTitles.get(sourceSessionId) || sourceSessionId || 'System';
+                const planTitle = (typeof sourcePayload.title === 'string' && sourcePayload.title.trim())
+                    || (typeof sourcePayload.topic === 'string' && sourcePayload.topic.trim())
+                    || sessionTitles.get(sourceSessionId) || sourceSessionId || 'System';
                 const eventName = sourcePayload.event || sourcePayload.action || sourceType;
 
                 output.push({
@@ -232,7 +244,9 @@ export class SessionActionLog {
 
             if (dispatchIndex === -1 && sentIndex === -1) {
                 const role = sourcePayload.role || '';
-                const planTitle = sessionTitles.get(sourceSessionId) || sourceSessionId || 'System';
+                const planTitle = (typeof sourcePayload.title === 'string' && sourcePayload.title.trim())
+                    || (typeof sourcePayload.topic === 'string' && sourcePayload.topic.trim())
+                    || sessionTitles.get(sourceSessionId) || sourceSessionId || 'System';
                 const eventName = sourcePayload.event || sourcePayload.action || sourceType;
 
                 output.push({
@@ -256,7 +270,11 @@ export class SessionActionLog {
             if (dispatchIndex !== -1) consumed.add(dispatchIndex);
             if (sentIndex !== -1) consumed.add(sentIndex);
             const role = (typeof primaryPayload.role === 'string' && primaryPayload.role) || sourceRole;
-            const planTitle = sessionTitles.get(sourceSessionId) || sourceSessionId;
+            const planTitle = (typeof sourcePayload.title === 'string' && sourcePayload.title.trim())
+                || (typeof sourcePayload.topic === 'string' && sourcePayload.topic.trim())
+                || (typeof primaryPayload.title === 'string' && primaryPayload.title.trim())
+                || (typeof primaryPayload.topic === 'string' && primaryPayload.topic.trim())
+                || sessionTitles.get(sourceSessionId) || sourceSessionId;
 
             output.push({
                 timestamp: primary.timestamp || source.timestamp,
@@ -338,26 +356,73 @@ export class SessionActionLog {
     }
 
     private async _readSessionTitleMap(): Promise<Map<string, string>> {
-        const map = new Map<string, string>();
+        // Return cached map if still fresh (active titles only need refresh)
+        if (this._titleCache && (Date.now() - this._titleCacheTimestamp) < SessionActionLog.TITLE_CACHE_TTL_MS) {
+            return this._titleCache;
+        }
+
+        // Start with the indefinite archive cache as the base
+        const map = new Map<string, string>(this._archiveTitleCache);
+
+        // Load newly archived session titles dynamically
+        const archiveDir = path.join(path.dirname(this.sessionsDir), 'archive', 'sessions');
         try {
-            if (!fs.existsSync(this.sessionsDir)) return map;
-            const files = await fs.promises.readdir(this.sessionsDir);
-            for (const file of files) {
-                if (!file.endsWith('.json')) continue;
-                try {
-                    const content = await fs.promises.readFile(path.join(this.sessionsDir, file), 'utf8');
-                    const sheet = JSON.parse(content) as Record<string, any>;
-                    const sessionId = typeof sheet.sessionId === 'string' ? sheet.sessionId : '';
-                    if (!sessionId) continue;
-                    const title = this._derivePlanTitle(sheet);
-                    if (title) map.set(sessionId, title);
-                } catch {
-                    // Ignore malformed run sheets.
+            if (fs.existsSync(archiveDir)) {
+                const archiveFiles = await fs.promises.readdir(archiveDir);
+                for (const file of archiveFiles) {
+                    if (!file.endsWith('.json')) continue;
+                    
+                    const sessionId = file.slice(0, -5);
+                    if (this._archiveTitleCache.has(sessionId)) continue;
+
+                    try {
+                        const content = await fs.promises.readFile(path.join(archiveDir, file), 'utf8');
+                        const sheet = JSON.parse(content) as Record<string, any>;
+                        const derivedId = typeof sheet.sessionId === 'string' ? sheet.sessionId : sessionId;
+                        if (!derivedId) continue;
+                        
+                        const title = this._derivePlanTitle(sheet);
+                        if (title) {
+                            this._archiveTitleCache.set(derivedId, title);
+                            map.set(derivedId, title);
+                        } else {
+                            this._archiveTitleCache.set(derivedId, derivedId); // Cache missing titles too so we don't re-read
+                        }
+                    } catch {
+                        // Ignore malformed archived run sheets, but mark as processed so we don't retry forever
+                        this._archiveTitleCache.set(sessionId, sessionId);
+                    }
+                }
+            }
+        } catch {
+            // Ignore archive directory read failures.
+        }
+
+        // Always re-read active sessions (5-second TTL)
+        try {
+            if (fs.existsSync(this.sessionsDir)) {
+                const files = await fs.promises.readdir(this.sessionsDir);
+                for (const file of files) {
+                    if (!file.endsWith('.json')) continue;
+                    try {
+                        const content = await fs.promises.readFile(path.join(this.sessionsDir, file), 'utf8');
+                        const sheet = JSON.parse(content) as Record<string, any>;
+                        const sessionId = typeof sheet.sessionId === 'string' ? sheet.sessionId : '';
+                        if (!sessionId) continue;
+                        const title = this._derivePlanTitle(sheet);
+                        // Active sessions override archived ones (prioritize active)
+                        if (title) map.set(sessionId, title);
+                    } catch {
+                        // Ignore malformed run sheets.
+                    }
                 }
             }
         } catch {
             // Ignore title map loading failures; fallback will use session IDs.
         }
+
+        this._titleCache = map;
+        this._titleCacheTimestamp = Date.now();
         return map;
     }
 
@@ -368,6 +433,12 @@ export class SessionActionLog {
         if (planName) return planName;
         const topic = typeof runSheet.topic === 'string' ? runSheet.topic.trim() : '';
         if (topic) return topic;
+        // For brain-sourced plans, extract a readable name from the source path
+        const brainSourcePath = typeof runSheet.brainSourcePath === 'string' ? runSheet.brainSourcePath.trim() : '';
+        if (brainSourcePath) {
+            const baseName = path.basename(brainSourcePath).replace(/\.md$/i, '').replace(/\.brain$/i, '');
+            if (baseName) return baseName;
+        }
         const planFile = typeof runSheet.planFile === 'string' ? runSheet.planFile.trim() : '';
         if (!planFile) return '';
         return path.basename(planFile).replace(/\.md$/i, '');
@@ -382,6 +453,17 @@ export class SessionActionLog {
     // --- Session Run Sheet Management (Decoupled from TaskViewerProvider) ---
 
     async createRunSheet(sessionId: string, data: any): Promise<void> {
+        const tail = this._writeLocks.get(sessionId) ?? Promise.resolve();
+        const next: Promise<void> = tail.then(() => this._doCreateRunSheet(sessionId, data));
+        this._writeLocks.set(sessionId, next.catch(() => {}).finally(() => {
+            if ((this._writeLocks.get(sessionId) as unknown) === next) {
+                this._writeLocks.delete(sessionId);
+            }
+        }));
+        return next;
+    }
+
+    private async _doCreateRunSheet(sessionId: string, data: any): Promise<void> {
         try {
             await fs.promises.mkdir(this.sessionsDir, { recursive: true });
             const filePath = path.join(this.sessionsDir, `${sessionId}.json`);
@@ -402,6 +484,17 @@ export class SessionActionLog {
     }
 
     async updateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
+        const tail = this._writeLocks.get(sessionId) ?? Promise.resolve();
+        const next: Promise<void> = tail.then(() => this._doUpdateRunSheet(sessionId, updater));
+        this._writeLocks.set(sessionId, next.catch(() => {}).finally(() => {
+            if ((this._writeLocks.get(sessionId) as unknown) === next) {
+                this._writeLocks.delete(sessionId);
+            }
+        }));
+        return next;
+    }
+
+    private async _doUpdateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
         try {
             const filePath = path.join(this.sessionsDir, `${sessionId}.json`);
             if (!fs.existsSync(filePath)) return;
@@ -627,14 +720,18 @@ export class SessionActionLog {
             await fs.promises.mkdir(this.sessionsDir, { recursive: true });
 
             // Log Rotation Check (5MB limit)
+            // Guard: stat + rename is not atomic. If the file disappears between
+            // the two calls (e.g. another process rotated it first), catch ENOENT
+            // gracefully instead of crashing the flush pipeline.
             try {
-                if (fs.existsSync(this.activityLogPath)) {
-                    const stats = await fs.promises.stat(this.activityLogPath);
-                    if (stats.size > 5 * 1024 * 1024) {
-                        const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-                        const archivePath = path.join(this.sessionsDir, `activity-${timestamp}.jsonl`);
-                        await fs.promises.rename(this.activityLogPath, archivePath);
-                    }
+                const stats = await fs.promises.stat(this.activityLogPath).catch(() => null);
+                if (stats && stats.size > 5 * 1024 * 1024) {
+                    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+                    const archivePath = path.join(this.sessionsDir, `activity-${timestamp}.jsonl`);
+                    await fs.promises.rename(this.activityLogPath, archivePath).catch((renameErr: NodeJS.ErrnoException) => {
+                        if (renameErr.code !== 'ENOENT') throw renameErr;
+                        // File already rotated by another process — safe to ignore
+                    });
                 }
             } catch (e) {
                 console.error('[SessionActionLog] Log rotation failed:', e);

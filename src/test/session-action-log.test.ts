@@ -57,7 +57,7 @@ async function run() {
             if (attempts < 3) {
                 throw new Error('simulated append failure');
             }
-            return originalAppendFile(...args);
+            return (originalAppendFile as any)(...args);
         };
         await log.logEvent('workflow_event', { action: 'retry_check' });
         await waitFor(async () => {
@@ -72,7 +72,7 @@ async function run() {
     // Test 4: plan_management summary/truncation behavior
     await log.logEvent('plan_management', {
         operation: 'update_plan',
-        planFile: '.switchboard/plans/features/demo.md',
+        planFile: '.switchboard/plans/demo.md',
         content: 'line1\nline2\nline3',
         beforeContent: 'line1',
         afterContent: 'line1\nline2'
@@ -113,6 +113,10 @@ async function run() {
     // Test 6: Aggregation into summary event with plan title mapping
     const summarySessionId = 'sess_summary_1';
     await log.createRunSheet(summarySessionId, { planName: 'Alpha Plan', events: [] });
+    
+    // Invalidate title cache TTL
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
     const baseTs = Date.now() + 10_000;
     const syntheticEvents = [
         {
@@ -137,6 +141,22 @@ async function run() {
     assert.ok(summaryEvent, 'expected summary event for UI+dispatch+sent sequence');
     assert.strictEqual(summaryEvent?.payload?.planTitle, 'Alpha Plan');
     assert.ok(String(summaryEvent?.payload?.message || '').includes('SENT TO'), `expected SENT TO in message, got: ${summaryEvent?.payload?.message}`);
+
+    // Test 6b: autoban dispatch events stay typed so the live-feed renderer can format them
+    const autobanSessionId = 'sess_autoban_1';
+    await log.createRunSheet(autobanSessionId, { planName: 'Autoban Plan', events: [] });
+    await log.logEvent('autoban_dispatch', {
+        sessionId: autobanSessionId,
+        sourceColumn: 'PLAN REVIEWED',
+        targetRole: 'coder',
+        sessionIds: [autobanSessionId],
+        batchSize: 1,
+        message: 'Autoban moved 1 plan(s) from PLAN REVIEWED -> coder'
+    });
+    const autobanPage = await log.getRecentActivity(200);
+    const autobanEvent = autobanPage.events.find(event => event.type === 'autoban_dispatch' && event.payload?.sessionId === autobanSessionId);
+    assert.ok(autobanEvent, 'expected autoban_dispatch event to remain unaggregated for renderer-specific formatting');
+    assert.strictEqual(autobanEvent?.payload?.targetRole, 'coder');
 
     // Test 7: Run Sheet Management
     await log.createRunSheet('sess_test_1', { topic: 'test', events: [] });
@@ -231,6 +251,87 @@ async function run() {
     const submitEvents = submitPage.events.filter(e => e.payload?.sessionId === submitSessionId);
     assert.strictEqual(submitEvents.length, 1, `'submit_result' event should appear in live feed, got ${submitEvents.length}`);
     assert.ok(String(submitEvents[0]?.payload?.message || '').includes('COMPLETED'), `submit_result message should include 'COMPLETED', got: ${submitEvents[0]?.payload?.message}`);
+
+    // Test 9a: concurrent updateRunSheet — must not corrupt JSON
+    const raceSessionId = 'sess_race_1';
+    await log.createRunSheet(raceSessionId, { topic: 'race_base', events: [] });
+    await Promise.all(
+        Array.from({ length: 20 }, (_, i) =>
+            log.updateRunSheet(raceSessionId, (s: any) => {
+                if (!s.events) s.events = [];
+                s.events.push({ seq: i });
+                return s;
+            })
+        )
+    );
+    const raceSheet = await log.getRunSheet(raceSessionId);
+    assert.ok(raceSheet !== null, 'Race sheet must not be corrupted to null');
+    assert.strictEqual(raceSheet.events.length, 20, `Expected 20 events, got ${raceSheet.events.length}`);
+
+    // Test 9b: stale-snapshot regression — merge updater must not lose events
+    const ssId = 'sess_snapshot_1';
+    await log.createRunSheet(ssId, { topic: 'ss', events: [] });
+    await Promise.all([
+        log.updateRunSheet(ssId, (s: any) => { s.events.push({ ev: 'first' }); return s; }),
+        log.updateRunSheet(ssId, (current: any) => ({ ...current, completed: true }))
+    ]);
+    const ssSheet = await log.getRunSheet(ssId);
+    assert.ok(ssSheet.completed === true, 'completed flag must survive merge');
+    assert.ok(ssSheet.events.length >= 1, 'events must not be wiped by merge updater');
+
+    // Test 10: Archived session titles lazy-loading and caching
+    const testArchiveId = 'sess_archived_1';
+    const archiveDir = path.join(root, '.switchboard', 'archive', 'sessions');
+    fs.mkdirSync(archiveDir, { recursive: true });
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId}.json`), JSON.stringify({
+        sessionId: testArchiveId,
+        topic: 'Archived Topic'
+    }));
+
+    await log.logEvent('workflow_event', { action: 'test_archive_read' });
+    await waitFor(async () => {
+        const rows = (await fs.promises.readFile(activityPath, 'utf8')).trim().split('\n');
+        return rows.some(line => line.includes('test_archive_read'));
+    });
+
+    // Expire the cache from previous tests so the 1st read actually reads from disk
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
+    // 1st read should populate the archive cache
+    await log.getRecentActivity(10);
+
+    // Modify the file on disk. If it re-reads, the title would change.
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId}.json`), JSON.stringify({
+        sessionId: testArchiveId,
+        topic: 'MODIFIED TOPIC'
+    }));
+
+    // Expire the 5-second TTL for active sessions so it re-runs _readSessionTitleMap
+    await new Promise(resolve => setTimeout(resolve, 5100));
+
+    // Simulate a newly archived session being added
+    const testArchiveId2 = 'sess_archived_2';
+    fs.writeFileSync(path.join(archiveDir, `${testArchiveId2}.json`), JSON.stringify({
+        sessionId: testArchiveId2,
+        topic: 'Newly Archived Topic'
+    }));
+
+    // Inject synthetic events to force title resolution for these archived sessions
+    await fs.promises.appendFile(activityPath, [
+        JSON.stringify({ timestamp: new Date(Date.now() + 1000).toISOString(), type: 'workflow_event', payload: { action: 'test_read_1', sessionId: testArchiveId } }),
+        JSON.stringify({ timestamp: new Date(Date.now() + 2000).toISOString(), type: 'workflow_event', payload: { action: 'test_read_2', sessionId: testArchiveId2 } })
+    ].join('\n') + '\n', 'utf8');
+
+    // 2nd read
+    const recent = await log.getRecentActivity(50);
+    const ev1 = recent.events.find(e => e.payload?.sessionId === testArchiveId);
+    const ev2 = recent.events.find(e => e.payload?.sessionId === testArchiveId2);
+
+    assert.ok(ev1, 'Expected to find event 1');
+    assert.strictEqual(ev1?.payload?.planTitle, 'Archived Topic', 'Cache must retain the original topic and not re-read the modified file from disk');
+    
+    assert.ok(ev2, 'Expected to find event 2');
+    assert.strictEqual(ev2?.payload?.planTitle, 'Newly Archived Topic', 'Must discover new archive files without re-reading old ones');
 
     // Cleanup
     if (fs.existsSync(root)) {

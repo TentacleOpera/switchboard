@@ -24,16 +24,16 @@ function getNextStage(sheet: any): { role: string; instruction?: string; label: 
         : undefined;
 
     if (!lastWorkflow) {
-        return { role: 'planner', instruction: 'enhance', label: 'Planner' };
-    } else if (lastWorkflow === 'sidebar-review' || lastWorkflow === 'Enhanced plan') {
+        return { role: 'planner', instruction: 'improve-plan', label: 'Planner' };
+    } else if (lastWorkflow === 'sidebar-review' || lastWorkflow === 'Enhanced plan' || lastWorkflow === 'Improved plan') {
         return { role: 'lead', label: 'Lead Coder' };
     } else if (lastWorkflow === 'handoff-lead' || lastWorkflow === 'handoff') {
         return { role: 'reviewer', label: 'Reviewer' };
-    } else if (lastWorkflow === 'challenge') {
+    } else if (lastWorkflow === 'challenge' || lastWorkflow === 'reviewer-pass') {
         return 'done';
     } else {
         // Unknown last workflow — fall back to planner
-        return { role: 'planner', instruction: 'enhance', label: 'Planner' };
+        return { role: 'planner', instruction: 'improve-plan', label: 'Planner' };
     }
 }
 

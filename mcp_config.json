@@ -1,0 +1,14 @@
+{
+  "mcpServers": {
+    "switchboard": {
+      "command": "node",
+      "args": [
+        "C:\\Users\\patvu\\Documents\\GitHub\\switchboard\\.switchboard\\MCP\\mcp-server.js",
+        "C:\\Users\\patvu\\Documents\\GitHub\\switchboard"
+      ],
+      "env": {
+        "SWITCHBOARD_WORKSPACE_ROOT": "C:\\Users\\patvu\\Documents\\GitHub\\switchboard"
+      }
+    }
+  }
+}

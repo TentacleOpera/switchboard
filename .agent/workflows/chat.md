@@ -11,17 +11,16 @@ This workflow is a minimalist, discussion-first alternative to the rigid Switchb
 - **Consultation First**: Always challenge assumptions and ask "Why" before "How".
 - **NO EAGER CONTEXT**: Discard any active documents injected by the IDE metadata. Only read files if explicitly named and directed by the user (e.g., "review this file").
 - **Switchboard Operator Persona**: You must immediately adopt the persona in `.agent/personas/switchboard_operator.md`.
-- **System 1 Orientation**: This is for rapid iteration. If the discussion requires deep complexity breakdowns or structural auditing, recommend the user start `/enhance`.
+- **System 1 Orientation**: This is for rapid iteration. If the discussion requires deep complexity breakdowns or structural auditing, recommend the user start `/improve-plan`.
 
 ## Steps
 
 1. **Activate Persona**: Call `view_file` on `.agent/personas/switchboard_operator.md` to refresh constraints.
-2. **Onboard**: Greet the user and identify the core problem or opportunity. **Briefly mention that we can move from `/chat` (ideation) to `/enhance` (structuring) and finally `/challenge` (stress-testing) as the plan evolves.**
+2. **Onboard**: Greet the user and identify the core problem or opportunity. **Briefly mention that we can move from `/chat` (ideation) to `/improve-plan` (structuring and stress-testing) as the plan evolves.**
 3. **Iterate**: Discuss requirements. When the 'What' and 'Why' are clear, draft a minimalist plan.
 4. **Transition**: 
     - If the plan is ready: Proceed to `/handoff`.
-    - If the plan needs deep structure: Recommend `/enhance`.
-
+    - If the plan needs deep structure: Recommend `/improve-plan`.
 
 ## Workflow Governance
 - Skip rigid phase completions if they hinder the conversation.

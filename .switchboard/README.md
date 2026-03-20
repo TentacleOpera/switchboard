@@ -10,7 +10,7 @@ This folder contains runtime state for the Switchboard extension. It is created 
 |:-----|:--------|
 | `inbox/<agent>/` | Incoming messages for each agent |
 | `archive/<agent>/` | Processed messages (auto-cleaned by housekeeping) |
-| `plans/features/` | Plan files tracked by the sidebar |
+| `plans/` | Flat plan directory tracked by the sidebar; legacy subfolders are not used |
 | `handoff/` | Artifacts staged for delegation to other agents |
 | `sessions/` | Session run sheets and activity logs |
 | `reviews/` | Review workflow outputs |

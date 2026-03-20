@@ -5,7 +5,7 @@ import * as vscode from 'vscode';
  * Each entry maps to a role used by _handleTriggerAgentAction.
  */
 const DEFAULT_STAGE_SEQUENCE: ReadonlyArray<{ role: string; instruction?: string; label: string }> = [
-    { role: 'planner', instruction: 'enhance', label: 'Planner' },
+    { role: 'planner', instruction: 'improve-plan', label: 'Planner' },
     { role: 'lead', label: 'Lead Coder' },
     { role: 'reviewer', label: 'Reviewer' },
 ];

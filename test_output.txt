@@ -1,0 +1,74 @@
+
+> switchboard@1.4.1 pretest
+> npm run compile-tests && npm run compile && npm run lint
+
+
+> switchboard@1.4.1 compile-tests
+> tsc -p . --outDir out
+
+
+> switchboard@1.4.1 compile
+> webpack
+
+    [webpack-cli] Compiler starting... 
+    [webpack-cli] Compiler is using config: 'C:\Users\patvu\Documents\GitHub\switchboard\webpack.config.js'
+    [webpack-cli] Compiler finished
+assets by path [1m[32m*.js[39m[22m 1.59 MiB
+  asset [1m[32mextension.js[39m[22m 1.53 MiB [1m[32m[emitted][39m[22m (name: main) 1 related asset
+  asset [1m[32msql-wasm.js[39m[22m 45.3 KiB [1m[33m[compared for emit][39m[22m [from: node_modules/sql.js/dist/sql-wasm.js] [1m[32m[copied][39m[22m
+  asset [1m[32m1.extension.js[39m[22m 19.5 KiB [1m[33m[compared for emit][39m[22m (id hint: vendors) 1 related asset
+assets by path [1m[32mwebview/*.html[39m[22m 231 KiB
+  asset [1m[32mwebview/implementation.html[39m[22m 144 KiB [1m[33m[compared for emit][39m[22m [from: src/webview/implementation.html] [1m[32m[copied][39m[22m
+  asset [1m[32mwebview/kanban.html[39m[22m 50 KiB [1m[33m[compared for emit][39m[22m [from: src/webview/kanban.html] [1m[32m[copied][39m[22m
+  asset [1m[32mwebview/review.html[39m[22m 36.7 KiB [1m[33m[compared for emit][39m[22m [from: src/webview/review.html] [1m[32m[copied][39m[22m
+asset [1m[32msql-wasm.wasm[39m[22m 644 KiB [1m[33m[compared for emit][39m[22m [from: node_modules/sql.js/dist/sql-wasm.wasm] [1m[32m[copied][39m[22m
+runtime modules 2.39 KiB 7 modules
+cacheable modules 1.53 MiB
+  modules by path [1m./node_modules/[39m[22m 856 KiB 30 modules
+  modules by path [1m./src/[39m[22m 713 KiB
+    modules by path [1m./src/services/*.ts[39m[22m 574 KiB 13 modules
+    modules by path [1m./src/services/*.js[39m[22m 4.5 KiB
+      [1m./src/services/mirrorSync.js[39m[22m 2.64 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+      [1m./src/services/kanbanColumnDerivation.js[39m[22m 1.86 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    [1m./src/extension.ts[39m[22m 126 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    [1m./src/lifecycle/cleanWorkspace.ts[39m[22m 7.84 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
++ 12 modules
+webpack 5.104.1 compiled [1m[32msuccessfully[39m[22m in 12374 ms
+
+asset [1m[32mmcp-server.js[39m[22m 1.44 MiB [1m[33m[compared for emit][39m[22m (name: main) 1 related asset
+runtime modules 123 bytes 1 module
+modules by path [1m./node_modules/[39m[22m 1.26 MiB
+  javascript modules 1.26 MiB 221 modules
+  json modules 3.07 KiB
+    [1m./node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/json-schema...(truncated)[39m[22m 2.72 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    [1m./node_modules/@modelcontextprotocol/sdk/node_modules/ajv/dist/refs/data.json[39m[22m 360 bytes [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+modules by path [1m./src/[39m[22m 161 KiB
+  modules by path [1m./src/mcp-server/*.js[39m[22m 159 KiB
+    [1m./src/mcp-server/mcp-server.js[39m[22m 6.85 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    [1m./src/mcp-server/state-manager.js[39m[22m 7.17 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    + 2 modules
+  modules by path [1m./src/services/[39m[22m 2.12 KiB
+    [1m./src/services/kanbanColumnDerivation.ts[39m[22m 262 bytes [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
+    [1m./src/services/kanbanColumnDerivation.js[39m[22m 1.86 KiB [1m[33m[built][39m[22m [1m[33m[code generated][39m[22m
++ 11 modules
+webpack 5.104.1 compiled [1m[32msuccessfully[39m[22m in 11687 ms
+
+> switchboard@1.4.1 lint
+> eslint src
+
+
+Oops! Something went wrong! :(
+
+ESLint: 9.39.2
+
+ESLint couldn't find an eslint.config.(js|mjs|cjs) file.
+
+From ESLint v9.0.0, the default configuration file is now eslint.config.js.
+If you are using a .eslintrc.* file, please follow the migration guide
+to update your configuration file to the new format:
+
+https://eslint.org/docs/latest/use/configure/migration-guide
+
+If you still have problems after following the migration guide, please stop by
+https://eslint.org/chat/help to chat with the team.
+
