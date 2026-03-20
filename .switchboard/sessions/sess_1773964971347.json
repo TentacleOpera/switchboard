@@ -30,6 +30,12 @@
       "timestamp": "2026-03-20T12:56:26.347Z",
       "action": "stop",
       "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-20T13:43:15.681Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
     }
   ]
 }
