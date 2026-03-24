@@ -1399,6 +1399,15 @@ export async function activate(context: vscode.ExtensionContext) {
     const connectMcpDisposable = vscode.commands.registerCommand('switchboard.connectMcp', async () => {
         if (workspaceRoot) {
             await restartLocalMcpServer(context, workspaceRoot, taskViewerProvider);
+
+            // Always attempt to write the global Antigravity MCP config.
+            // This is the primary action users expect from "Connect MCP" — without it,
+            // the Gemini Desktop / Antigravity client has no config file to discover.
+            try {
+                await setupGlobalAntigravityMcpConfig(workspaceRoot);
+            } catch (e) {
+                mcpOutputChannel?.appendLine(`[ConnectMCP] Global Antigravity config failed: ${e}`);
+            }
         } else {
             // Fallback for non-workspace context if needed
             await handleMcpSetup(context, taskViewerProvider);
