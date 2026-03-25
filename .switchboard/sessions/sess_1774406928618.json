@@ -1,0 +1,24 @@
+{
+  "sessionId": "sess_1774406928618",
+  "planFile": ".switchboard/plans/feature_plan_20260325_134848_db_driven_plugin.md",
+  "topic": "db driven plugin",
+  "createdAt": "2026-03-25T02:48:48.617Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-25T02:48:48.617Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-lead-coded",
+      "timestamp": "2026-03-25T02:49:20.968Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-25T04:06:47.672Z",
+      "action": "start"
+    }
+  ]
+}

@@ -8,6 +8,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
+import { KanbanDatabase } from './services/KanbanDatabase';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { sendRobustText } from './services/terminalUtils';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
@@ -122,12 +123,16 @@ async function setupGlobalAntigravityMcpConfig(workspaceRoot: string): Promise<v
     }
 
     // Show confirmation with diff preview
-    const selection = await vscode.window.showInformationMessage(
+    const selectionPromise = vscode.window.showInformationMessage(
         'Update global Antigravity MCP config (~/.gemini/antigravity/mcp_config.json)?',
         'Write to file',
         'Copy to clipboard',
         'Skip'
     );
+    const timeoutPromise = new Promise<string | undefined>(resolve =>
+        setTimeout(() => resolve('Write to file'), 10_000)
+    );
+    const selection = await Promise.race([selectionPromise, timeoutPromise]);
 
     if (selection === 'Write to file') {
         try {
@@ -979,6 +984,12 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(openKanbanDisposable);
 
+    // Full sync: file→DB sync + refresh both sidebar and kanban from DB
+    const fullSyncDisposable = vscode.commands.registerCommand('switchboard.fullSync', async () => {
+        await taskViewerProvider.fullSync();
+    });
+    context.subscriptions.push(fullSyncDisposable);
+
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string) => {
         return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot);
@@ -1402,22 +1413,15 @@ export async function activate(context: vscode.ExtensionContext) {
             try {
                 await handleMcpSetup(context, taskViewerProvider);
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[ConnectMCP] handleMcpSetup failed: ${e}`);
+                mcpOutputChannel?.appendLine(`[Connect MCP] VS Code config failed: ${e}`);
             }
 
-            // 2. Restart the in-process MCP server
-            await restartLocalMcpServer(context, workspaceRoot, taskViewerProvider);
-
-            // 3. Write global Antigravity MCP config (~/.gemini/antigravity/mcp_config.json)
+            // 2. Setup global Antigravity config
             try {
                 await setupGlobalAntigravityMcpConfig(workspaceRoot);
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[ConnectMCP] Global Antigravity config failed: ${e}`);
+                mcpOutputChannel?.appendLine(`[Connect MCP] Antigravity config failed: ${e}`);
             }
-
-            // 4. Write IDE-specific MCP configs from templates.
-            // This ensures all IDE config files (Windsurf, Cursor, Claude, Gemini, Kiro)
-            // have a valid MCP entry with the correct workspace root.
             try {
                 await writeAllIdeMcpConfigs(context, workspaceRoot);
             } catch (e) {
@@ -1437,12 +1441,48 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(connectMcpDisposable);
 
+    const copyMcpConfigDisposable = vscode.commands.registerCommand('switchboard.copyMcpConfig', async () => {
+        const wsRoot = getPreferredWorkspaceRoot();
+        if (!wsRoot) {
+            vscode.window.showErrorMessage('No workspace folder open.');
+            return;
+        }
+
+        const serverPath = path.join(wsRoot, '.switchboard', 'MCP', 'mcp-server.js');
+        if (!fs.existsSync(serverPath)) {
+            vscode.window.showWarningMessage('MCP server not found. Run Init Plugin first.');
+            return;
+        }
+
+        const serverPathForward = serverPath.replace(/\\/g, '/');
+        const wsRootForward = wsRoot.replace(/\\/g, '/');
+
+        const config = {
+            mcpServers: {
+                switchboard: {
+                    command: 'node',
+                    args: [serverPathForward],
+                    env: {
+                        SWITCHBOARD_WORKSPACE_ROOT: wsRootForward
+                    }
+                }
+            }
+        };
+
+        const json = JSON.stringify(config, null, 2);
+        await vscode.env.clipboard.writeText(json);
+        vscode.window.showInformationMessage('✅ MCP config copied to clipboard. Paste into your IDE\'s mcp_config.json.');
+    });
+
+    context.subscriptions.push(copyMcpConfigDisposable);
+
     // Register MCP setup command (legacy — writes to VS Code workspace settings)
     const setupMcpDisposable = vscode.commands.registerCommand('switchboard.setupMcp', async () => {
         await handleMcpSetup(context, taskViewerProvider);
     });
     context.subscriptions.push(setupMcpDisposable);
 
+// ... (rest of the code remains the same)
     // Register focus terminal command
     // NOTE: vscode.window.terminals[n].processId returns the HOST shell PID (e.g., powershell.exe),
     // not necessarily the child workers running inside it.
@@ -2495,12 +2535,23 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
         try { await fs.promises.rmdir(legacyDir); } catch { }
     }
 
-    // Persist updated registry
+    // Persist updated registry to DB (legacy file no longer used)
     if (registryModified && registry) {
         try {
-            const tmpPath = registryPath + `.${Date.now()}.tmp`;
-            await fs.promises.writeFile(tmpPath, JSON.stringify(registry, null, 2));
-            await fs.promises.rename(tmpPath, registryPath);
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            if (await db.ensureReady()) {
+                for (const entry of Object.values(registry.entries)) {
+                    if (entry.localPlanPath || entry.mirrorPath) {
+                        const plan = await db.getPlanBySessionId(entry.planId || '');
+                        if (plan) {
+                            await db.updatePlanFile(plan.sessionId, entry.localPlanPath || plan.planFile);
+                            if (entry.mirrorPath) {
+                                await db.updateBrainPaths(plan.sessionId, plan.brainSourcePath, entry.mirrorPath);
+                            }
+                        }
+                    }
+                }
+            }
         } catch { }
     }
 }
@@ -2762,22 +2813,26 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
     await vscode.window.withProgress({
         location: vscode.ProgressLocation.Notification,
         title: 'Setting up Switchboard configurations...',
-        cancellable: false
-    }, async (progress) => {
+        cancellable: true
+    }, async (progress, token) => {
         progress.report({ increment: 0 });
 
+        if (token.isCancellationRequested) return;
         await persistTeamRigor();
 
         // Run unified setup first (Project structure and .agent assets)
+        if (token.isCancellationRequested) return;
         await performSetup(vscode.Uri.file(workspaceRoot), context.extensionUri, { silent: false });
         if (taskViewerProvider) {
             try {
+                if (token.isCancellationRequested) return;
                 await taskViewerProvider.seedBrainPlanBlacklistFromCurrentBrainSnapshot();
             } catch (e) {
                 mcpOutputChannel?.appendLine(`[Setup] Brain blacklist seeding failed (non-fatal): ${e}`);
             }
         }
 
+        if (token.isCancellationRequested) return;
         const templatesBaseUri = vscode.Uri.joinPath(context.extensionUri, 'templates');
         const results = { success: [] as string[], skipped: [] as string[], errors: [] as string[] };
         const absWorkspaceRoot = workspaceRoot.replace(/\\/g, '/');
@@ -2872,6 +2927,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         }
 
         // Auto-configure MCP as part of unified setup
+        if (token.isCancellationRequested) return;
         progress.report({ message: 'Configuring MCP server...' });
         try {
             await handleMcpSetup(context, taskViewerProvider!);
@@ -2883,6 +2939,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         // is available. The function auto-creates ~/.gemini/antigravity/ if missing and
         // is idempotent (no-op if already configured). This ensures new-machine clones
         // do not require the user to manually select 'Gemini' as a setup target.
+        if (token.isCancellationRequested) return;
         if (workspaceRoot) {
             try {
                 await setupGlobalAntigravityMcpConfig(workspaceRoot);

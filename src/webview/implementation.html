@@ -1354,6 +1354,7 @@
                     <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>       
                     <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>      
                 </div>
+                <button id="btn-copy-mcp-config" class="secondary-btn w-full" style="margin-top: 4px;">COPY MCP CONFIG</button>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">AGENT VISIBILITY &amp; CLI COMMANDS</div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked style="width:auto; margin:0; flex-shrink:0;">
@@ -1774,6 +1775,8 @@
         if (btnInit) btnInit.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         const btnConnect = document.getElementById('btn-connect-mcp');
         if (btnConnect) btnConnect.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
+        const btnCopyMcp = document.getElementById('btn-copy-mcp-config');
+        if (btnCopyMcp) btnCopyMcp.addEventListener('click', () => vscode.postMessage({ type: 'copyMcpConfig' }));
         const btnGrid = document.getElementById('createAgentGrid');
         if (btnGrid) btnGrid.addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
         const btnDeregister = document.getElementById('btn-deregister-all');

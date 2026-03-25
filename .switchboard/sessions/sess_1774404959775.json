@@ -1,0 +1,28 @@
+{
+  "sessionId": "sess_1774404959775",
+  "planFile": ".switchboard/plans/feature_plan_20260325_131559_replace_copy_prompt_button_in_completed_cards.md",
+  "topic": "Replace Copy Prompt Button in Completed Cards",
+  "createdAt": "2026-03-25T02:15:59.774Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-25T02:15:59.774Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-25T02:24:44.535Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-25T04:08:05.732Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-25T04:10:58.296Z",
+      "action": "start"
+    }
+  ]
+}

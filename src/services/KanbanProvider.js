@@ -290,7 +290,7 @@ class KanbanProvider {
         if (!resolvedWorkspaceRoot)
             return;
         try {
-            const activeSheets = await this._getActiveSheets(resolvedWorkspaceRoot);
+            const { activeSheets, completedSessionIds } = await this._getActiveSheets(resolvedWorkspaceRoot);
             const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
             const columns = (0, agentConfig_1.buildKanbanColumns)(customAgents);
             const workspaceId = await this._readWorkspaceId(resolvedWorkspaceRoot);
@@ -321,6 +321,8 @@ class KanbanProvider {
                 complexity: row.complexity,
                 workspaceRoot: resolvedWorkspaceRoot
             }));
+            let dbUnavailable = false;
+
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
             const snapshotRows = legacySnapshot.filter(row => row.planId && row.sessionId && row.workspaceId);
             if (workspaceId && await db.ensureReady()) {
@@ -329,7 +331,47 @@ class KanbanProvider {
                     ? await KanbanMigration_1.KanbanMigration.syncPlansMetadata(db, workspaceId, snapshotRows)
                     : false;
                 if (synced) {
-                    const dbRows = await db.getBoard(workspaceId);
+                    let dbRows = await db.getBoard(workspaceId);
+
+                    // Reconcile: force-complete any DB records that the filesystem shows as completed.
+                    if (completedSessionIds.size > 0) {
+                        for (const row of dbRows) {
+                            if (row.status !== 'completed' && completedSessionIds.has(row.sessionId)) {
+                                try {
+                                    await db.updateStatus(row.sessionId, 'completed');
+                                    await db.updateColumn(row.sessionId, 'COMPLETED');
+                                    console.log(`[KanbanProvider] Reconciled stale DB entry: ${row.sessionId} -> completed`);
+                                } catch (e) {
+                                    console.warn(`[KanbanProvider] Failed to reconcile stale DB entry ${row.sessionId}:`, e);
+                                }
+                            }
+                        }
+                        dbRows = dbRows.filter(row => !completedSessionIds.has(row.sessionId));
+                    }
+
+                    // Reconcile orphaned active DB rows whose session files no longer exist
+                    if (snapshotRows.length > 0) {
+                        const snapshotSessionIds = new Set(snapshotRows.map(row => row.sessionId));
+                        const snapshotPlanIds = new Set(snapshotRows.map(row => row.planId));
+                        const orphanedRows = dbRows.filter(row =>
+                            !snapshotSessionIds.has(row.sessionId) && !snapshotPlanIds.has(row.planId)
+                        );
+                        if (orphanedRows.length > 0) {
+                            for (const row of orphanedRows) {
+                                try {
+                                    await db.updateStatus(row.sessionId, 'completed');
+                                    await db.updateColumn(row.sessionId, 'COMPLETED');
+                                    console.log(`[KanbanProvider] Reconciled orphaned DB entry: ${row.sessionId} -> completed`);
+                                } catch (e) {
+                                    console.warn(`[KanbanProvider] Failed to reconcile orphaned DB entry ${row.sessionId}:`, e);
+                                }
+                            }
+                            dbRows = dbRows.filter(row =>
+                                snapshotSessionIds.has(row.sessionId) || snapshotPlanIds.has(row.planId)
+                            );
+                        }
+                    }
+
                     const dbRowsBySession = new Map(dbRows.map(row => [row.sessionId, row]));
                     const dbRowsByPlanId = new Map(dbRows.map(row => [row.planId, row]));
                     cards = snapshotRows.map(row => {
@@ -340,17 +382,19 @@ class KanbanProvider {
                             planFile: dbRow?.planFile || row.planFile || '',
                             column: this._normalizeLegacyKanbanColumn(dbRow?.kanbanColumn || row.kanbanColumn) || 'CREATED',
                             lastActivity: dbRow?.updatedAt || row.updatedAt || row.createdAt || '',
-                            complexity: dbRow?.complexity || row.complexity,
+                            complexity: dbRow?.complexity || row.complexity || 'Unknown',
                             workspaceRoot: resolvedWorkspaceRoot
                         };
                     });
                 }
                 else {
                     console.warn('[KanbanProvider] Kanban DB sync failed, using file-derived fallback for this refresh.');
+                    dbUnavailable = true;
                 }
             }
             else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable, using file-derived fallback: ${db.lastInitError || 'unknown error'}`);
+                dbUnavailable = true;
             }
             // Fetch completed plans and append as COMPLETED column cards
             if (workspaceId && await db.ensureReady()) {
@@ -402,7 +446,7 @@ class KanbanProvider {
                 workspaces: this._getWorkspaceItems()
             });
             this._lastCards = cards;
-            this._panel.webview.postMessage({ type: 'updateBoard', cards });
+            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable });
             this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
@@ -618,10 +662,13 @@ class KanbanProvider {
             return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
         };
         const getBaseBrainPath = (planPath) => planPath.replace(/\.resolved(\.\d+)?$/i, '');
+        const completedSessionIds = new Set();
         const activeSheets = [];
         for (const sheet of sheets) {
-            if (sheet.completed)
+            if (sheet.completed) {
+                if (sheet.sessionId) completedSessionIds.add(sheet.sessionId);
                 continue;
+            }
             let planId = sheet.sessionId;
             if (sheet.brainSourcePath) {
                 const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
@@ -644,7 +691,7 @@ class KanbanProvider {
                 _kanbanSourceType: sheet.brainSourcePath ? 'brain' : 'local'
             });
         }
-        return activeSheets;
+        return { activeSheets, completedSessionIds };
     }
     async _getCustomAgents(workspaceRoot) {
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');

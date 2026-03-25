@@ -41,6 +41,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _isRefreshing: boolean = false;
     private _refreshPending: boolean = false;
+    private _pendingRefreshData: { activeRows: import('./KanbanDatabase').KanbanPlanRecord[]; completedRows: import('./KanbanDatabase').KanbanPlanRecord[]; workspaceRoot: string } | null = null;
     private _cliTriggersEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
     private _autobanState?: AutobanConfigState;
@@ -108,7 +109,8 @@ export class KanbanProvider implements vscode.Disposable {
     public async open() {
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
-            await this._refreshBoard();
+            // Don't call _refreshBoard here — the webview's 'ready' message
+            // triggers fullSync which feeds data through the unified path.
             return;
         }
 
@@ -144,8 +146,8 @@ export class KanbanProvider implements vscode.Disposable {
             void this._getKanbanDb(workspaceRoot).ensureReady();
         }
 
-        // Initial data push after a short delay for webview mount
-        setTimeout(() => { void this._refreshBoard().catch(() => {}); }, 150);
+        // No initial data push needed here — the webview sends 'ready' when mounted,
+        // which triggers a full sync to populate the board from DB.
 
         this._setupSessionWatcher();
     }
@@ -155,53 +157,18 @@ export class KanbanProvider implements vscode.Disposable {
      * so the Kanban board updates automatically.
      */
     private _setupSessionWatcher() {
+        // DB-first: KanbanProvider has NO file watchers.
+        // All file→DB sync is driven by TaskViewerProvider, which calls
+        // kanbanProvider.refresh() after syncing. Users can also click
+        // "Sync Board" for an immediate full sync.
         this._sessionWatcher?.dispose();
         this._stateWatcher?.dispose();
         try { this._fsSessionWatcher?.close(); } catch { }
         try { this._fsStateWatcher?.close(); } catch { }
-
-        const debouncedRefresh = () => {
-            if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
-            this._refreshDebounceTimer = setTimeout(() => { void this._refreshBoard().catch(() => {}); }, 300);
-        };
-
-        // VS Code file system watchers
-        this._sessionWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/sessions/*.json');
-        this._sessionWatcher.onDidCreate(debouncedRefresh);
-        this._sessionWatcher.onDidChange(debouncedRefresh);
-        this._sessionWatcher.onDidDelete(debouncedRefresh);
-
-        this._stateWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/state.json');
-        this._stateWatcher.onDidCreate(debouncedRefresh);
-        this._stateWatcher.onDidChange(debouncedRefresh);
-        this._stateWatcher.onDidDelete(debouncedRefresh);
-
-        // Native fs.watch fallback — VS Code's createFileSystemWatcher can miss
-        // gitignored directories (.switchboard is gitignored).
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (workspaceRoot) {
-            const sessionsDir = path.join(workspaceRoot, '.switchboard', 'sessions');
-            const stateFile = path.join(workspaceRoot, '.switchboard', 'state.json');
-            try {
-                if (!fs.existsSync(sessionsDir)) {
-                    fs.mkdirSync(sessionsDir, { recursive: true });
-                }
-                this._fsSessionWatcher = fs.watch(sessionsDir, (_eventType, filename) => {
-                    if (filename && filename.toString().endsWith('.json')) {
-                        debouncedRefresh();
-                    }
-                });
-
-                const sbDir = path.join(workspaceRoot, '.switchboard');
-                this._fsStateWatcher = fs.watch(sbDir, (_eventType, filename) => {
-                    if (filename && filename.toString() === 'state.json') {
-                        debouncedRefresh();
-                    }
-                });
-            } catch (e) {
-                console.error('[KanbanProvider] fs.watch fallback failed:', e);
-            }
-        }
+        this._sessionWatcher = undefined;
+        this._stateWatcher = undefined;
+        this._fsSessionWatcher = undefined;
+        this._fsStateWatcher = undefined;
     }
 
     /**
@@ -210,6 +177,30 @@ export class KanbanProvider implements vscode.Disposable {
     public async refresh() {
         if (this._panel) {
             await this._refreshBoard();
+        }
+    }
+
+    /**
+     * Refresh the board using pre-fetched DB rows (shared with sidebar).
+     * This ensures sidebar and kanban render from the exact same DB snapshot.
+     */
+    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string) {
+        if (!this._panel) return;
+        if (this._isRefreshing) {
+            // Already refreshing — this data is newer, so queue it as the pending data
+            this._pendingRefreshData = { activeRows, completedRows, workspaceRoot };
+            return;
+        }
+        this._isRefreshing = true;
+        try {
+            await this._refreshBoardWithData(activeRows, completedRows, workspaceRoot);
+        } finally {
+            this._isRefreshing = false;
+            if (this._pendingRefreshData) {
+                const pending = this._pendingRefreshData;
+                this._pendingRefreshData = null;
+                void this.refreshWithData(pending.activeRows, pending.completedRows, pending.workspaceRoot);
+            }
         }
     }
 
@@ -251,16 +242,40 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _readWorkspaceId(workspaceRoot: string): Promise<string | null> {
-        const identityPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
         try {
-            if (!fs.existsSync(identityPath)) return null;
-            const parsed = JSON.parse(await fs.promises.readFile(identityPath, 'utf8'));
-            const workspaceId = typeof parsed?.workspaceId === 'string' ? parsed.workspaceId.trim() : '';
-            return workspaceId || null;
+            const db = this._getKanbanDb(workspaceRoot);
+            const ready = await db.ensureReady();
+            if (ready) {
+                // Try config table first
+                const stored = await db.getWorkspaceId();
+                if (stored) return stored;
+                // Config table empty/missing — derive from plans table directly
+                const derived = await db.getDominantWorkspaceId();
+                if (derived) {
+                    await db.setWorkspaceId(derived);
+                    return derived;
+                }
+            }
         } catch (e) {
-            console.error('[KanbanProvider] Failed to read workspace identity:', e);
-            return null;
+            console.error('[KanbanProvider] _readWorkspaceId failed:', e);
         }
+
+        // Legacy file fallback (one-time migration)
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
+        try {
+            if (fs.existsSync(legacyPath)) {
+                const parsed = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
+                const workspaceId = typeof parsed?.workspaceId === 'string' ? parsed.workspaceId.trim() : '';
+                if (workspaceId) {
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (await db.ensureReady()) {
+                        await db.setWorkspaceId(workspaceId);
+                    }
+                    return workspaceId;
+                }
+            }
+        } catch { /* ignore legacy file errors */ }
+        return null;
     }
 
     private async _refreshBoard(workspaceRoot?: string) {
@@ -292,7 +307,6 @@ export class KanbanProvider implements vscode.Disposable {
         ));
 
         try {
-            const { activeSheets, completedSessionIds } = await this._getActiveSheets(resolvedWorkspaceRoot);
             const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
             const columns = buildKanbanColumns(customAgents);
             const workspaceId = await this._readWorkspaceId(resolvedWorkspaceRoot);
@@ -301,135 +315,26 @@ export class KanbanProvider implements vscode.Disposable {
             let dbUnavailable = false;
 
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
-            if (workspaceId && await db.ensureReady()) {
-                // --- DB-FIRST FLOW ---
-                // 1. Get existing DB session IDs in one query (avoids N hasPlan calls)
-                const existingSessionIds = await db.getSessionIdSet();
+            const dbReady = await db.ensureReady();
+            console.log(`[KanbanProvider] _refreshBoardImpl: workspaceId=${workspaceId}, dbReady=${dbReady}`);
 
-                // 2. Build snapshot rows — only parse complexity + derive column for NEW plans
-                const snapshotRows = await Promise.all(
-                    activeSheets.map(async (sheet: any) => {
-                        const sessionId = String(sheet.sessionId || '');
-                        const isNew = !existingSessionIds.has(sessionId);
-                        const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-                        const planFile = typeof sheet.planFile === 'string' ? sheet.planFile : '';
-                        return {
-                            planId: String(sheet._kanbanPlanId || sessionId || ''),
-                            sessionId,
-                            topic: String(sheet.topic || sheet.planFile || 'Untitled'),
-                            planFile,
-                            // Only do expensive I/O for new plans; existing plans use cached DB values
-                            kanbanColumn: isNew ? deriveKanbanColumn(events, customAgents) : '',
-                            complexity: isNew
-                                ? await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile)
-                                : ('Unknown' as 'Unknown' | 'Low' | 'High'),
-                            workspaceId: workspaceId || '',
-                            createdAt: String(sheet.createdAt || ''),
-                            updatedAt: String(events[events.length - 1]?.timestamp || sheet.createdAt || ''),
-                            lastAction: this._deriveLastAction(events),
-                            sourceType: (sheet._kanbanSourceType === 'brain' ? 'brain' : 'local') as 'local' | 'brain'
-                        };
-                    })
-                );
+            if (workspaceId && dbReady) {
+                const dbRows = await db.getBoard(workspaceId);
+                console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
-                const validRows = snapshotRows.filter(row => row.planId && row.sessionId && row.workspaceId);
-
-                // 3. Sync to DB using batch operations (2 persists max)
-                const bootstrapped = await KanbanMigration.bootstrapIfNeeded(db, workspaceId, validRows);
-                const synced = bootstrapped
-                    ? await KanbanMigration.syncPlansMetadata(db, workspaceId, validRows)
-                    : false;
-
-                if (synced) {
-                    // 4. Read authoritative board from DB
-                    let dbRows = await db.getBoard(workspaceId);
-
-                    // 5. Reconcile completed sessions (batch: 1 persist)
-                    if (completedSessionIds.size > 0) {
-                        const toComplete = dbRows
-                            .filter(row => row.status !== 'completed' && completedSessionIds.has(row.sessionId))
-                            .map(row => row.sessionId);
-                        if (toComplete.length > 0) {
-                            await db.completeMultiple(toComplete);
-                            console.log(`[KanbanProvider] Batch-reconciled ${toComplete.length} stale DB entries -> completed`);
-                        }
-                        dbRows = dbRows.filter(row => !completedSessionIds.has(row.sessionId));
-                    }
-
-                    // 6. Orphan reconciliation with safety threshold
-                    if (validRows.length > 0) {
-                        const activeSessionIds = new Set(validRows.map(row => row.sessionId));
-                        const activePlanIds = new Set(validRows.map(row => row.planId));
-                        const orphanedRows = dbRows.filter(row =>
-                            !activeSessionIds.has(row.sessionId) && !activePlanIds.has(row.planId)
-                        );
-                        if (orphanedRows.length > 0) {
-                            // Safety: don't auto-complete more than half the remaining board
-                            const safeThreshold = Math.max(Math.ceil(dbRows.length * 0.5), 5);
-                            if (orphanedRows.length <= safeThreshold) {
-                                await db.completeMultiple(orphanedRows.map(row => row.sessionId));
-                                console.log(`[KanbanProvider] Batch-reconciled ${orphanedRows.length} orphaned DB entries -> completed`);
-                                dbRows = dbRows.filter(row =>
-                                    activeSessionIds.has(row.sessionId) || activePlanIds.has(row.planId)
-                                );
-                            } else {
-                                console.warn(`[KanbanProvider] Skipped orphan reconciliation: ${orphanedRows.length} orphans exceeds safety threshold of ${safeThreshold}. Possible transient read failure.`);
-                            }
-                        }
-                    }
-
-                    // 7. Build cards directly from DB — DB is the authority
-                    cards = dbRows.map(row => ({
-                        sessionId: row.sessionId,
-                        topic: row.topic || row.planFile || 'Untitled',
-                        planFile: row.planFile || '',
-                        column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                        lastActivity: row.updatedAt || row.createdAt || '',
-                        complexity: row.complexity || 'Unknown',
-                        workspaceRoot: resolvedWorkspaceRoot
-                    }));
-                } else {
-                    console.warn('[KanbanProvider] Kanban DB sync failed, using file-derived fallback for this refresh.');
-                    dbUnavailable = true;
-                }
-            } else if (workspaceId) {
-                console.warn(`[KanbanProvider] Kanban DB unavailable, using file-derived fallback: ${db.lastInitError || 'unknown error'}`);
-                dbUnavailable = true;
-            }
-
-            // File-derived fallback when DB is unavailable
-            if (dbUnavailable) {
-                const fallbackSnapshot = await Promise.all(
-                    activeSheets.map(async (sheet: any) => {
-                        const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-                        const planFile = typeof sheet.planFile === 'string' ? sheet.planFile : '';
-                        const complexity = await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile);
-                        return {
-                            sessionId: String(sheet.sessionId || ''),
-                            topic: String(sheet.topic || sheet.planFile || 'Untitled'),
-                            planFile,
-                            kanbanColumn: deriveKanbanColumn(events, customAgents),
-                            complexity,
-                            createdAt: String(sheet.createdAt || ''),
-                            updatedAt: String(events[events.length - 1]?.timestamp || sheet.createdAt || ''),
-                        };
-                    })
-                );
-                cards = fallbackSnapshot.map(row => ({
+                cards = dbRows.map(row => ({
                     sessionId: row.sessionId,
-                    topic: row.topic,
-                    planFile: row.planFile,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
                     column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                    lastActivity: row.updatedAt || row.createdAt,
-                    complexity: row.complexity,
+                    lastActivity: row.updatedAt || row.createdAt || '',
+                    complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot
                 }));
-            }
 
-            // Fetch completed plans and append as COMPLETED column cards
-            if (workspaceId && await db.ensureReady()) {
+                // Completed plans from DB
                 const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
-                const completedCards: KanbanCard[] = completedRecords.map(rec => ({
+                cards.push(...completedRecords.map(rec => ({
                     sessionId: rec.sessionId,
                     topic: rec.topic || rec.planFile || 'Untitled',
                     planFile: rec.planFile || '',
@@ -437,29 +342,11 @@ export class KanbanProvider implements vscode.Disposable {
                     lastActivity: rec.updatedAt || rec.createdAt || '',
                     complexity: rec.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot
-                }));
-                cards.push(...completedCards);
-            } else {
-                // File-based fallback: scan completed runsheets
-                try {
-                    const log = this._getSessionLog(resolvedWorkspaceRoot);
-                    const completedSheets = await log.getCompletedRunSheets();
-                    const cappedSheets = completedSheets
-                        .sort((a: any, b: any) => (b.completedAt || '').localeCompare(a.completedAt || ''))
-                        .slice(0, completedLimit);
-                    const fallbackCompletedCards: KanbanCard[] = cappedSheets.map((sheet: any) => ({
-                        sessionId: sheet.sessionId,
-                        topic: sheet.topic || sheet.planFile || 'Untitled',
-                        planFile: sheet.planFile || '',
-                        column: 'COMPLETED',
-                        lastActivity: sheet.completedAt || '',
-                        complexity: (sheet.complexity as any) || 'Unknown',
-                        workspaceRoot: resolvedWorkspaceRoot
-                    }));
-                    cards.push(...fallbackCompletedCards);
-                } catch (e) {
-                    console.warn('[KanbanProvider] Failed to fetch completed sheets for fallback:', e);
-                }
+                })));
+            } else if (workspaceId) {
+                console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
+                dbUnavailable = true;
+                // DB is unavailable — show empty board. JSON fallback files are eliminated.
             }
 
             const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
@@ -493,6 +380,76 @@ export class KanbanProvider implements vscode.Disposable {
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to refresh board:', e);
+        }
+    }
+
+    /**
+     * Refresh the board using pre-fetched DB rows (no DB read — uses caller's snapshot).
+     */
+    private async _refreshBoardWithData(
+        activeRows: import('./KanbanDatabase').KanbanPlanRecord[],
+        completedRows: import('./KanbanDatabase').KanbanPlanRecord[],
+        workspaceRoot: string
+    ) {
+        if (!this._panel) return;
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedWorkspaceRoot) return;
+
+        try {
+            const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
+            const columns = buildKanbanColumns(customAgents);
+
+            const cards: KanbanCard[] = activeRows.map(row => ({
+                sessionId: row.sessionId,
+                topic: row.topic || row.planFile || 'Untitled',
+                planFile: row.planFile || '',
+                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                lastActivity: row.updatedAt || row.createdAt || '',
+                complexity: row.complexity || 'Unknown',
+                workspaceRoot: resolvedWorkspaceRoot
+            }));
+
+            cards.push(...completedRows.map(rec => ({
+                sessionId: rec.sessionId,
+                topic: rec.topic || rec.planFile || 'Untitled',
+                planFile: rec.planFile || '',
+                column: 'COMPLETED',
+                lastActivity: rec.updatedAt || rec.createdAt || '',
+                complexity: rec.complexity || 'Unknown',
+                workspaceRoot: resolvedWorkspaceRoot
+            })));
+
+            const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
+            const visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
+
+            const nextColumnsSignature = this._columnsSignature(columns);
+            if (this._lastColumnsSignature !== nextColumnsSignature) {
+                this._panel.webview.postMessage({ type: 'updateColumns', columns });
+                this._lastColumnsSignature = nextColumnsSignature;
+            }
+            this._panel.webview.postMessage({
+                type: 'updateWorkspaceSelection',
+                workspaceRoot: resolvedWorkspaceRoot,
+                workspaces: this._getWorkspaceItems()
+            });
+            this._lastCards = cards;
+            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false });
+            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
+            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+
+            const effectiveModes: Record<string, 'cli' | 'prompt'> = {};
+            for (const col of columns) {
+                effectiveModes[col.id] = this._columnDragDropModes[col.id] || col.dragDropMode || 'cli';
+            }
+            this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+
+            if (this._autobanState) {
+                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this._panel.webview.postMessage({ type: 'updatePairProgramming', enabled: this._autobanState.pairProgrammingEnabled });
+            }
+        } catch (e) {
+            console.error('[KanbanProvider] Failed to refresh board with data:', e);
         }
     }
 
@@ -676,8 +633,11 @@ export class KanbanProvider implements vscode.Disposable {
             });
 
             if (didAdvance) {
-                // events array was mutated by the callback; derive the new column and persist to DB
-                const newColumn = deriveKanbanColumn(events, customAgents);
+                // updateRunSheet reads fresh from disk, so the local `events` array is stale.
+                // Re-read the updated sheet to get the authoritative post-advance events.
+                const updatedSheet = await log.getRunSheet(sessionId);
+                const updatedEvents: any[] = Array.isArray(updatedSheet?.events) ? updatedSheet.events : [];
+                const newColumn = deriveKanbanColumn(updatedEvents, customAgents);
                 const normalizedColumn = this._normalizeLegacyKanbanColumn(newColumn);
                 if (normalizedColumn) {
                     const db = this._getKanbanDb(resolvedWorkspaceRoot);
@@ -688,91 +648,6 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         return advanced;
-    }
-
-    private async _getActiveSheets(workspaceRoot: string): Promise<{ activeSheets: any[], completedSessionIds: Set<string> }> {
-        const log = this._getSessionLog(workspaceRoot);
-        const sheets = await log.getRunSheets();
-        const completedSessionIds = new Set<string>();
-
-        let workspaceId: string | null = null;
-        let registry: any = { entries: {} };
-        let tombstones = new Set<string>();
-        let blacklist = new Set<string>();
-
-        const switchboardDir = path.join(workspaceRoot, '.switchboard');
-        const identityPath = path.join(switchboardDir, 'workspace_identity.json');
-        const registryPath = path.join(switchboardDir, 'plan_registry.json');
-        const tombstonePath = path.join(switchboardDir, 'plan_tombstones.json');
-        const blacklistPath = path.join(switchboardDir, 'brain_plan_blacklist.json');
-
-        try {
-            if (fs.existsSync(identityPath)) {
-                workspaceId = JSON.parse(await fs.promises.readFile(identityPath, 'utf8')).workspaceId;
-            }
-        } catch (e) {
-            console.error('[KanbanProvider] Failed to read workspace identity:', e);
-        }
-        try {
-            if (fs.existsSync(registryPath)) {
-                registry = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
-            }
-        } catch (e) {
-            console.error('[KanbanProvider] Failed to read plan registry:', e);
-        }
-        try {
-            if (fs.existsSync(tombstonePath)) {
-                tombstones = new Set(JSON.parse(await fs.promises.readFile(tombstonePath, 'utf8')));
-            }
-        } catch (e) {
-            console.error('[KanbanProvider] Failed to read plan tombstones:', e);
-        }
-        try {
-            if (fs.existsSync(blacklistPath)) {
-                const parsed = JSON.parse(await fs.promises.readFile(blacklistPath, 'utf8'));
-                const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
-                blacklist = new Set(rawEntries);
-            }
-        } catch (e) {
-            console.error('[KanbanProvider] Failed to read brain plan blacklist:', e);
-        }
-
-        const getStablePath = (planPath: string) => {
-            const normalized = path.normalize(planPath);
-            const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-            const rootPath = path.parse(stable).root;
-            return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
-        };
-
-        const getBaseBrainPath = (planPath: string) => planPath.replace(/\.resolved(\.\d+)?$/i, '');
-
-        const activeSheets: any[] = [];
-        for (const sheet of sheets) {
-            if (sheet.completed) {
-                if (sheet.sessionId) completedSessionIds.add(sheet.sessionId);
-                continue;
-            }
-
-            let planId = sheet.sessionId;
-            if (sheet.brainSourcePath) {
-                const stablePath = getStablePath(getBaseBrainPath(path.resolve(sheet.brainSourcePath)));
-                if (blacklist.has(stablePath)) continue;
-                planId = crypto.createHash('sha256').update(stablePath).digest('hex');
-                if (tombstones.has(planId)) continue;
-            }
-
-            if (!planId) continue;
-            const entry = registry.entries[planId];
-            if (!entry) continue;
-            if (entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
-
-            activeSheets.push({
-                ...sheet,
-                _kanbanPlanId: planId,
-                _kanbanSourceType: sheet.brainSourcePath ? 'brain' : 'local'
-            });
-        }
-        return { activeSheets, completedSessionIds };
     }
 
     private async _getCustomAgents(workspaceRoot: string): Promise<CustomAgentConfig[]> {
@@ -939,15 +814,10 @@ export class KanbanProvider implements vscode.Disposable {
                 return 'Unknown';
             }
 
-            // Secondary priority: plan_registry.json
+            // Secondary priority: Kanban DB
             try {
-                const switchboardDir = path.join(workspaceRoot, '.switchboard');
-                const registryPath = path.join(switchboardDir, 'plan_registry.json');
-                if (fs.existsSync(registryPath)) {
-                    const registryContent = await fs.promises.readFile(registryPath, 'utf8');
-                    const registry = JSON.parse(registryContent);
-
-                    // Derive planId using the same hashing as _getActiveSheets
+                const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                if (await db.ensureReady()) {
                     const normalized = path.normalize(resolvedPlanPath);
                     const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
                     const rootPiece = path.parse(stable).root;
@@ -957,16 +827,13 @@ export class KanbanProvider implements vscode.Disposable {
                     const finalStablePath = getBaseBrainPath(stablePath);
                     const planId = crypto.createHash('sha256').update(finalStablePath).digest('hex');
 
-                    if (registry.entries && registry.entries[planId] && registry.entries[planId].complexity) {
-                        const regComp = registry.entries[planId].complexity;
-                        if (regComp === 'Low' || regComp === 'High') {
-                            return regComp;
-                        }
+                    const plan = await db.getPlanBySessionId(planId);
+                    if (plan && (plan.complexity === 'Low' || plan.complexity === 'High')) {
+                        return plan.complexity;
                     }
                 }
             } catch (err) {
-                console.error('[KanbanProvider] Failed to read complexity from registry:', err);
-                // Fallthrough to markdown parsing
+                console.error('[KanbanProvider] Failed to read complexity from DB:', err);
             }
 
             // Primary signal: Agent Recommendation section.
@@ -1228,8 +1095,13 @@ export class KanbanProvider implements vscode.Disposable {
     private async _handleMessage(msg: any) {
         switch (msg.type) {
             case 'ready':
+                // Initial load: trigger full file→DB sync to ensure DB is populated,
+                // then kanbanProvider.refresh() is called by fullSync after syncing.
+                await vscode.commands.executeCommand('switchboard.fullSync');
+                break;
             case 'refresh':
-                await this._refreshBoard(msg.workspaceRoot);
+                // "Sync Board" button: same full sync path.
+                await vscode.commands.executeCommand('switchboard.fullSync');
                 break;
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {

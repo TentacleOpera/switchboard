@@ -1,0 +1,29 @@
+{
+  "sessionId": "sess_1774404829304",
+  "planFile": ".switchboard/plans/feature_plan_20260325_131349_bug_ui_refreshes_every_second.md",
+  "topic": "BUG: UI Refreshes Every Second",
+  "createdAt": "2026-03-25T02:13:49.303Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-25T02:13:49.303Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-25T02:24:44.529Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-lead-coded",
+      "timestamp": "2026-03-25T02:50:30.337Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-25T04:10:58.289Z",
+      "action": "start"
+    }
+  ]
+}

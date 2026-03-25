@@ -1783,7 +1783,7 @@
                     break;
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
-                    updateAutobanIndicators();
+                    updateAutobanIndicators(true);
                     syncAutobanCountdownTimer();
                     updateAutobanButtonState();
                     break;
@@ -1849,17 +1849,19 @@
         }
 
         /** Update autoban timer badges inline in the controls strip. */
-        function updateAutobanIndicators() {
+        /** Update autoban timer badges inline in the controls strip. */
+        function updateAutobanIndicators(forceRebuild) {
             const container = document.getElementById('autoban-timers-inline');
             if (!container) { updateAutobanButtonState(); return; }
 
             if (!autobanConfig || !autobanConfig.enabled) {
-                container.innerHTML = '';
+                if (container.innerHTML !== '') { container.innerHTML = ''; }
                 updateAutobanButtonState();
                 return;
             }
 
-            const badges = autobanColumns.map(col => {
+            // Compute desired state for each badge
+            const badgeData = autobanColumns.map(col => {
                 const abbrev = COLUMN_ABBREV[col] || col.charAt(0);
                 const rule = autobanConfig.rules && autobanConfig.rules[col];
                 if (rule && rule.enabled) {
@@ -1868,12 +1870,35 @@
                     const nextTickAt = lastTickAt + intervalMs;
                     const remainingSec = Math.max(0, Math.ceil((nextTickAt - Date.now()) / 1000));
                     const text = remainingSec > 0 ? `${abbrev}: ${formatCountdown(remainingSec)}` : `${abbrev}: GO`;
-                    return `<span class="autoban-timer-badge is-active">${text}</span>`;
+                    return { text, active: true };
                 } else {
-                    return `<span class="autoban-timer-badge">${abbrev}: off</span>`;
+                    return { text: `${abbrev}: off`, active: false };
                 }
-            }).join('');
-            container.innerHTML = badges;
+            });
+
+            const existingBadges = container.children;
+
+            // Full rebuild when structure changes or forced (config update)
+            if (forceRebuild || existingBadges.length !== badgeData.length) {
+                container.innerHTML = badgeData.map(b =>
+                    `<span class="autoban-timer-badge${b.active ? ' is-active' : ''}">${b.text}</span>`
+                ).join('');
+                updateAutobanButtonState();
+                return;
+            }
+
+            // Targeted update: only touch badges whose content or state changed
+            for (let i = 0; i < badgeData.length; i++) {
+                const el = existingBadges[i];
+                const data = badgeData[i];
+                if (el.textContent !== data.text) {
+                    el.textContent = data.text;
+                }
+                const hasActive = el.classList.contains('is-active');
+                if (data.active !== hasActive) {
+                    el.classList.toggle('is-active', data.active);
+                }
+            }
             updateAutobanButtonState();
         }
 

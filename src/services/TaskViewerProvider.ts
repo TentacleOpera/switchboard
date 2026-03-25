@@ -113,6 +113,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _managedImportMirrorsForActiveFolder = new Set<string>();
     private _recentActionDispatches = new Map<string, NodeJS.Timeout>(); // short TTL dedupe for sidebar actions
     private _julesSyncInFlight = false; // re-entrancy guard for auto-sync-before-Jules
+    private _selfStateWriteUntil = 0; // timestamp until which state watcher events are suppressed (self-write guard)
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
     private _sessionWatcher?: vscode.FileSystemWatcher;
@@ -138,6 +139,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
+    private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     // Tracks session IDs currently dispatched, keyed by the source column that dispatched them.
     // Prevents duplicate dispatch within the same column while still allowing downstream column ticks.
     private _activeDispatchSessions = new Map<string, string>();
@@ -155,7 +157,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _workspaceId: string | null = null;
     private _planRegistry: PlanRegistry = { version: 1, entries: {} };
     private _ownershipInitPromise: Promise<void> | null = null;
-    private _planRegistryWriteTail: Promise<void> = Promise.resolve();
 
     // Session Tracking
     private _lastSessionId: string | null = null;
@@ -220,12 +221,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._ensureOwnershipRegistryInitialized().then(() => {
             this._setupBrainWatcher();
             void this._refreshConfiguredPlanWatcher();
-            void this._refreshRunSheets();
+            void this._syncFilesAndRefreshRunSheets();
         }).catch(e => {
             console.error('[TaskViewerProvider] Registry initialization failed, starting brain watcher anyway:', e);
             this._setupBrainWatcher();
             void this._refreshConfiguredPlanWatcher();
-            void this._refreshRunSheets();
+            void this._syncFilesAndRefreshRunSheets();
         });
         this._julesStatusPollTimer = setInterval(() => {
             this._refreshJulesStatus();
@@ -312,7 +313,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             throw new Error('No workspace folder found.');
         }
         this._activeWorkspaceRoot = resolved;
-        this._workspaceId = null;
+        // Do NOT reset _workspaceId to null — that creates a window where lightweight
+        // refresh falls back to the heavy sync path. _getOrCreateWorkspaceId will
+        // update the cached value if it has changed.
         await this._ensureTombstonesLoaded(resolved);
         await this._getOrCreateWorkspaceId(resolved);
         await this._loadPlanRegistry(resolved);
@@ -607,6 +610,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Write only if state actually changed (prevents recursive watcher loops)
                 const newContent = JSON.stringify(state, null, 2);
                 if (newContent !== content) {
+                    // Suppress state watcher for 500ms after self-write
+                    this._selfStateWriteUntil = Date.now() + 500;
                     await fs.promises.writeFile(statePath, newContent);
                 }
 
@@ -824,14 +829,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             sessionId: sheet.sessionId,
             topic: String(sheet.topic || sheet.planFile || 'Untitled'),
             planFile: rawPlanFile,
-            kanbanColumn: deriveKanbanColumn(events, customAgents),
+            kanbanColumn: 'CREATED',
             status: sheet.completed ? 'completed' : 'active',
             complexity,
             workspaceId,
             createdAt,
             updatedAt,
             lastAction: this._deriveLastActionFromEvents(events),
-            sourceType: sheet.brainSourcePath ? 'brain' : 'local'
+            sourceType: sheet.brainSourcePath ? 'brain' : 'local',
+            brainSourcePath: typeof sheet.brainSourcePath === 'string' ? sheet.brainSourcePath : '',
+            mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : ''
         };
     }
 
@@ -938,16 +945,37 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         this._refreshTimeout = setTimeout(async () => {
             if (this._view) {
-                this._view.webview.postMessage({ type: 'loading', value: true });
+                // No loading indicator for lightweight DB-only refreshes.
+                // Loading state is only shown for fullSync (heavy file→DB sync).
+                // NOTE: _refreshJulesStatus is intentionally excluded — it has its
+                // own 30s poll timer and writes to state.json, which would re-trigger
+                // this refresh via the state watcher (ping-pong loop).
                 await Promise.all([
                     this._refreshSessionStatus(),
                     this._refreshTerminalStatuses(),
                     this._refreshRunSheets(),
-                    this._refreshJulesStatus()
                 ]);
-                this._view.webview.postMessage({ type: 'loading', value: false });
             }
         }, 200); // 200ms debounce
+    }
+
+    /**
+     * Full sync: reads ALL session files from disk → syncs to DB → refreshes sidebar + kanban.
+     * Called by "Sync Board" button and startup only.
+     */
+    public async fullSync() {
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'loading', value: true });
+        }
+        await Promise.all([
+            this._refreshSessionStatus(),
+            this._refreshTerminalStatuses(),
+            this._syncFilesAndRefreshRunSheets(),
+            this._refreshJulesStatus()
+        ]);
+        if (this._view) {
+            this._view.webview.postMessage({ type: 'loading', value: false });
+        }
     }
 
     public sendLoadingState(loading: boolean) {
@@ -2245,7 +2273,32 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return buildAutobanBroadcastState(this._autobanState, this._autobanLastTickAt.entries());
     }
 
+    /**
+     * Debounced broadcast of autoban state to sidebar and kanban webviews.
+     * Collapses rapid successive calls (e.g., engine start, bulk ticks) into
+     * a single broadcast. Uses trailing-edge: the last state always wins.
+     */
     private _postAutobanState(): void {
+        if (this._postAutobanStateDebounceTimer) {
+            clearTimeout(this._postAutobanStateDebounceTimer);
+        }
+        this._postAutobanStateDebounceTimer = setTimeout(() => {
+            this._postAutobanStateDebounceTimer = null;
+            this._postAutobanStateImmediate();
+        }, 2000);
+    }
+
+    /** Flush any pending debounced autoban state broadcast and fire immediately. */
+    private _postAutobanStateNow(): void {
+        if (this._postAutobanStateDebounceTimer) {
+            clearTimeout(this._postAutobanStateDebounceTimer);
+            this._postAutobanStateDebounceTimer = null;
+        }
+        this._postAutobanStateImmediate();
+    }
+
+    /** Actual broadcast implementation — sends state to both webviews. */
+    private _postAutobanStateImmediate(): void {
         const state = this._getAutobanBroadcastState();
         this._view?.webview.postMessage({
             type: 'autobanStateSync',
@@ -2290,14 +2343,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         await this._persistAutobanState();
-        this._postAutobanState();
+        this._postAutobanStateNow();
     }
 
     /** Called by Kanban controls strip to toggle Pair Programming mode. */
     public async setPairProgrammingEnabled(enabled: boolean): Promise<void> {
         this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, pairProgrammingEnabled: enabled });
         await this._persistAutobanState();
-        this._postAutobanState();
+        this._postAutobanStateNow();
         vscode.window.showInformationMessage(`Pair Programming mode ${enabled ? 'enabled' : 'disabled'}.`);
     }
 
@@ -2707,7 +2760,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
 
-        await this._kanbanProvider.refresh();
+        this.refresh();
 
         const summary = availableLowSessions.length > sessionIds.length
             ? `Dispatched ${sessionIds.length} of ${availableLowSessions.length} eligible LOW-complexity plans to the coder (batch cap ${batchSize}).`
@@ -2741,7 +2794,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     await Promise.all([
                         this._refreshSessionStatus(),
                         this._refreshTerminalStatuses(),
-                        this._refreshRunSheets(),
+                        this._syncFilesAndRefreshRunSheets(),
                         this.housekeepStaleTerminals(),
                         this._refreshJulesStatus(),
                         this._postRecentActivity(50),
@@ -2774,7 +2827,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         await Promise.all([
                             this._refreshSessionStatus(),
                             this._refreshTerminalStatuses(),
-                            this._refreshRunSheets(),
+                            this._syncFilesAndRefreshRunSheets(),
                             this._refreshJulesStatus()
                         ]);
                         {
@@ -3106,7 +3159,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 this._startAutobanEngine();
                             }
                             await this._persistAutobanState();
-                            this._postAutobanState();
+                            this._postAutobanStateNow();
                         }
                         break;
                     }
@@ -3200,7 +3253,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._stateWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/state.json');
 
         // Debounced: coalesces rapid file-watcher events (e.g. during batch grid creation).
+        // Self-write guard: ignore watcher events caused by our own state.json writes.
         const refreshState = () => {
+            if (Date.now() < this._selfStateWriteUntil) return; // suppress self-triggered events
             void this._refreshConfiguredPlanWatcher();
             this.refresh();
         };
@@ -3365,8 +3420,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (this._sessionSyncTimer) clearTimeout(this._sessionSyncTimer);
             this._sessionSyncTimer = setTimeout(() => {
                 this._sessionSyncTimer = undefined;
-                this._refreshRunSheets();
-            }, 300);
+                this._syncFilesAndRefreshRunSheets();
+            }, 5000);
         };
 
         this._sessionWatcher = vscode.workspace.createFileSystemWatcher('**/.switchboard/sessions/*.json');
@@ -3598,14 +3653,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         let registryChanged = false;
+        const db = await this._getKanbanDb(workspaceRoot);
         for (const [planId, entry] of Object.entries(this._planRegistry.entries)) {
             if (entry.sourceType === 'local' && entry.localPlanPath === relativePlanPath) {
                 delete this._planRegistry.entries[planId];
+                if (db) { await db.deletePlan(planId); }
                 registryChanged = true;
             }
         }
         if (registryChanged) {
-            await this._savePlanRegistry(workspaceRoot);
+            // In-memory cache already updated; DB already updated per-entry above
         }
 
         if (fs.existsSync(mirrorPath)) {
@@ -3667,7 +3724,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         this._managedImportMirrorsForActiveFolder = desiredMirrors;
 
-        await this._refreshRunSheets(workspaceRoot);
+        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
     }
 
     private _disposeConfiguredPlanWatcher() {
@@ -3751,83 +3808,210 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     // ── Workspace Identity ──────────────────────────────────────────────
 
-    private _getWorkspaceIdentityPath(workspaceRoot: string): string {
-        return path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
-    }
-
     private async _getOrCreateWorkspaceId(workspaceRoot: string): Promise<string> {
         if (this._workspaceId) return this._workspaceId;
-        const identityPath = this._getWorkspaceIdentityPath(workspaceRoot);
+
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        if (await db.ensureReady()) {
+            // Try config table first
+            const stored = await db.getWorkspaceId();
+            if (stored) {
+                this._workspaceId = stored;
+                return stored;
+            }
+            // Config table empty/missing — derive from existing plans
+            const derived = await db.getDominantWorkspaceId();
+            if (derived) {
+                this._workspaceId = derived;
+                await db.setWorkspaceId(derived);
+                return derived;
+            }
+        }
+
+        // Migrate from legacy file if it exists
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
         try {
-            if (fs.existsSync(identityPath)) {
-                const data = JSON.parse(await fs.promises.readFile(identityPath, 'utf8'));
+            if (fs.existsSync(legacyPath)) {
+                const data = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
                 if (typeof data?.workspaceId === 'string' && data.workspaceId.length > 0) {
                     this._workspaceId = data.workspaceId;
+                    if (await db.ensureReady()) {
+                        await db.setWorkspaceId(data.workspaceId);
+                    }
                     return data.workspaceId as string;
                 }
             }
         } catch (e) {
-            console.error('[TaskViewerProvider] Failed to read workspace identity:', e);
+            console.error('[TaskViewerProvider] Failed to read legacy workspace identity:', e);
         }
-        // Create new identity
+
+        // Create new identity in DB
         const { v4: uuidv4 } = await import('uuid');
         const newId = uuidv4();
-        const dir = path.dirname(identityPath);
-        if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-        const tmpPath = identityPath + '.tmp';
-        await fs.promises.writeFile(tmpPath, JSON.stringify({ workspaceId: newId, createdAt: new Date().toISOString() }, null, 2));
-        await fs.promises.rename(tmpPath, identityPath);
         this._workspaceId = newId;
-        console.log(`[TaskViewerProvider] Created workspace identity: ${newId}`);
+        if (await db.ensureReady()) {
+            await db.setWorkspaceId(newId);
+        }
         return newId;
     }
 
-    // ── Plan Registry ───────────────────────────────────────────────────
+    // ── Plan Registry (DB-backed in-memory cache) ─────────────────────
 
     private _getPlanRegistryPath(workspaceRoot: string): string {
         return path.join(workspaceRoot, '.switchboard', 'plan_registry.json');
     }
 
+    /**
+     * Load plan registry from DB. Falls back to legacy JSON file for one-time migration.
+     */
     private async _loadPlanRegistry(workspaceRoot: string): Promise<PlanRegistry> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            const wsId = this._workspaceId || await db.getWorkspaceId() || '';
+            const allPlans = await db.getAllPlans(wsId);
+            if (allPlans.length > 0) {
+                const entries: Record<string, PlanRegistryEntry> = {};
+                for (const p of allPlans) {
+                    entries[p.sessionId] = {
+                        planId: p.sessionId,
+                        ownerWorkspaceId: p.workspaceId,
+                        sourceType: p.sourceType,
+                        localPlanPath: p.planFile,
+                        brainSourcePath: p.brainSourcePath || undefined,
+                        mirrorPath: p.mirrorPath || undefined,
+                        topic: p.topic,
+                        createdAt: p.createdAt,
+                        updatedAt: p.updatedAt,
+                        status: p.status === 'completed' ? 'archived' : p.status as PlanRegistryEntry['status'],
+                    };
+                }
+                this._planRegistry = { version: 1, entries };
+                // Migrate legacy file if it still exists
+                await this._migrateLegacyPlanRegistry(workspaceRoot, db);
+                return this._planRegistry;
+            }
+        }
+
+        // DB empty — try legacy JSON file for initial migration
         const registryPath = this._getPlanRegistryPath(workspaceRoot);
         try {
             if (fs.existsSync(registryPath)) {
                 const data = JSON.parse(await fs.promises.readFile(registryPath, 'utf8'));
                 if (data && typeof data.entries === 'object') {
                     this._planRegistry = { version: data.version || 1, entries: data.entries };
+                    // Migrate legacy entries into DB
+                    if (db) {
+                        await this._migrateLegacyPlanRegistryEntries(db, data.entries);
+                        // Delete the legacy file
+                        try { await fs.promises.unlink(registryPath); } catch {}
+                        console.log('[TaskViewerProvider] Migrated plan_registry.json into DB and deleted legacy file');
+                    }
                     return this._planRegistry;
                 }
             }
         } catch (e) {
-            console.error('[TaskViewerProvider] Failed to load plan registry:', e);
+            console.error('[TaskViewerProvider] Failed to load legacy plan registry:', e);
         }
+
         this._planRegistry = { version: 1, entries: {} };
         return this._planRegistry;
     }
 
-    private async _savePlanRegistry(workspaceRoot: string): Promise<void> {
-        const writeOperation = async () => {
-            const registryPath = this._getPlanRegistryPath(workspaceRoot);
-            const dir = path.dirname(registryPath);
-            if (!fs.existsSync(dir)) { fs.mkdirSync(dir, { recursive: true }); }
-            const tmpPath = registryPath + `.${Date.now()}.tmp`;
-            try {
-                await fs.promises.writeFile(tmpPath, JSON.stringify(this._planRegistry, null, 2));
-                await fs.promises.rename(tmpPath, registryPath);
-            } catch (e) {
-                try { await fs.promises.unlink(tmpPath); } catch { }
-                throw e;
-            }
-        };
+    /** Migrate legacy plan_registry.json entries into the DB. */
+    private async _migrateLegacyPlanRegistryEntries(
+        db: KanbanDatabase,
+        entries: Record<string, PlanRegistryEntry>
+    ): Promise<void> {
+        const records: KanbanPlanRecord[] = [];
+        for (const [planId, entry] of Object.entries(entries)) {
+            const status = entry.status === 'orphan' ? 'archived' : entry.status;
+            records.push({
+                planId,
+                sessionId: planId,
+                topic: entry.topic || '(untitled)',
+                planFile: entry.localPlanPath || '',
+                kanbanColumn: 'CREATED',
+                status: status as KanbanPlanRecord['status'],
+                complexity: 'Unknown',
+                workspaceId: entry.ownerWorkspaceId,
+                createdAt: entry.createdAt || new Date().toISOString(),
+                updatedAt: entry.updatedAt || new Date().toISOString(),
+                lastAction: '',
+                sourceType: entry.sourceType,
+                brainSourcePath: entry.brainSourcePath || '',
+                mirrorPath: entry.mirrorPath || '',
+            });
+        }
+        if (records.length > 0) {
+            await db.upsertPlans(records);
+        }
+    }
 
-        const nextWrite = this._planRegistryWriteTail.then(writeOperation);
-        this._planRegistryWriteTail = nextWrite.catch(() => { });
-        await nextWrite;
+    /** Delete legacy plan_registry.json if DB already has plans. */
+    private async _migrateLegacyPlanRegistry(workspaceRoot: string, _db: KanbanDatabase): Promise<void> {
+        const registryPath = this._getPlanRegistryPath(workspaceRoot);
+        try {
+            if (fs.existsSync(registryPath)) {
+                await fs.promises.unlink(registryPath);
+                console.log('[TaskViewerProvider] Deleted legacy plan_registry.json (DB has plans)');
+            }
+        } catch {}
+    }
+
+    /**
+     * Persist registry changes to DB. Replaces the old JSON file write.
+     */
+    private async _savePlanRegistry(workspaceRoot: string): Promise<void> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) return;
+        const records: KanbanPlanRecord[] = [];
+        for (const [planId, entry] of Object.entries(this._planRegistry.entries)) {
+            const existing = await db.getPlanBySessionId(planId);
+            records.push({
+                planId,
+                sessionId: planId,
+                topic: entry.topic || '(untitled)',
+                planFile: entry.localPlanPath || '',
+                kanbanColumn: existing?.kanbanColumn || 'CREATED',
+                status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
+                complexity: existing?.complexity || 'Unknown',
+                workspaceId: entry.ownerWorkspaceId,
+                createdAt: entry.createdAt || new Date().toISOString(),
+                updatedAt: entry.updatedAt || new Date().toISOString(),
+                lastAction: existing?.lastAction || '',
+                sourceType: entry.sourceType,
+                brainSourcePath: entry.brainSourcePath || '',
+                mirrorPath: entry.mirrorPath || '',
+            });
+        }
+        if (records.length > 0) {
+            await db.upsertPlans(records);
+        }
     }
 
     private async _registerPlan(workspaceRoot: string, entry: PlanRegistryEntry): Promise<void> {
         this._planRegistry.entries[entry.planId] = entry;
-        await this._savePlanRegistry(workspaceRoot);
+        // Write single entry to DB directly (faster than full save)
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            const existing = await db.getPlanBySessionId(entry.planId);
+            await db.upsertPlans([{
+                planId: entry.planId,
+                sessionId: entry.planId,
+                topic: entry.topic || '(untitled)',
+                planFile: entry.localPlanPath || '',
+                kanbanColumn: existing?.kanbanColumn || 'CREATED',
+                status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
+                complexity: existing?.complexity || 'Unknown',
+                workspaceId: entry.ownerWorkspaceId,
+                createdAt: entry.createdAt || new Date().toISOString(),
+                updatedAt: entry.updatedAt || new Date().toISOString(),
+                lastAction: existing?.lastAction || '',
+                sourceType: entry.sourceType,
+                brainSourcePath: entry.brainSourcePath || '',
+                mirrorPath: entry.mirrorPath || '',
+            }]);
+        }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
     }
 
@@ -3836,7 +4020,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!entry) return;
         entry.status = status;
         entry.updatedAt = new Date().toISOString();
-        await this._savePlanRegistry(workspaceRoot);
+        // Update DB directly
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            const dbStatus = status === 'orphan' ? 'archived' : status;
+            await db.updateStatus(planId, dbStatus as KanbanPlanRecord['status']);
+        }
     }
 
     // ── Plan Recovery ──────────────────────────────────────────────────────
@@ -4035,12 +4224,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
             if (this._tombstones.has(pathHash)) {
                 this._tombstones.delete(pathHash);
-                try {
-                    const tombstonePath = this._getTombstonePath(workspaceRoot);
-                    const arr = Array.from(this._tombstones);
-                    await fs.promises.writeFile(tombstonePath, JSON.stringify(arr, null, 2));
-                } catch (e) {
-                    console.error('[TaskViewerProvider] Failed to persist tombstone removal:', e);
+                // Remove tombstone from DB
+                const db = await this._getKanbanDb(workspaceRoot);
+                if (db) {
+                    const plan = await db.getPlanBySessionId(pathHash);
+                    if (plan) {
+                        await db.updateStatus(pathHash, 'active');
+                    }
                 }
             }
             // Remove from archivedBrainPaths so _mirrorBrainPlan can re-mirror this plan
@@ -4066,7 +4256,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             planId,
             topic: entry.topic
         });
-        await this._refreshRunSheets(workspaceRoot);
+        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
         if (resolvedSessionId) {
             this._view?.webview.postMessage({ type: 'selectSession', sessionId: resolvedSessionId });
         }
@@ -4166,19 +4356,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _migrateLegacyToRegistry(workspaceRoot: string): Promise<void> {
-        const registryPath = this._getPlanRegistryPath(workspaceRoot);
-        if (fs.existsSync(registryPath)) return; // already migrated
+        // DB-first: if DB already has plans for this workspace, skip migration
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            const wsId = this._workspaceId || await this._getOrCreateWorkspaceId(workspaceRoot);
+            const existing = await db.getAllPlans(wsId);
+            if (existing.length > 0) return; // DB already has plans — no migration needed
+        }
 
         const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
         const registry: PlanRegistry = { version: 1, entries: {} };
         const now = new Date().toISOString();
 
-        // Migrate local plans from runsheets
+        // Migrate local plans from runsheets (first-time only, when DB is empty)
         const log = this._getSessionLog(workspaceRoot);
         try {
             const sheets = await log.getRunSheets();
             for (const sheet of sheets) {
-                if (sheet.brainSourcePath) continue; // already handled above
+                if (sheet.brainSourcePath) continue;
                 if (!sheet.sessionId || !sheet.planFile) continue;
                 const planId = sheet.sessionId;
                 if (registry.entries[planId]) continue;
@@ -4190,7 +4385,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     topic: sheet.topic || '',
                     createdAt: sheet.createdAt || now,
                     updatedAt: sheet.completedAt || sheet.createdAt || now,
-                    status: 'active'
+                    status: sheet.completed === true ? 'archived' : 'active'
                 };
             }
         } catch (e) {
@@ -4216,6 +4411,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             const existingEntry = this._planRegistry.entries[sheet.sessionId];
             if (existingEntry) {
+                // Never resurrect non-active plans (completed, archived, deleted, orphan)
+                if (existingEntry.status !== 'active') {
+                    continue;
+                }
+
                 if (
                     existingEntry.sourceType === 'local' &&
                     existingEntry.status === 'active' &&
@@ -4234,7 +4434,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 existingEntry.topic = sheet.topic || existingEntry.topic || this._inferTopicFromPath(sheet.planFile);
                 existingEntry.createdAt = sheet.createdAt || existingEntry.createdAt || new Date().toISOString();
                 existingEntry.updatedAt = sheet.completedAt || sheet.createdAt || new Date().toISOString();
-                existingEntry.status = 'active';
                 changed = true;
                 continue;
             }
@@ -4287,7 +4486,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ensureTombstonesLoaded(workspaceRoot: string): Promise<void> {
         if (!this._tombstonesReady) {
             this._tombstonesReady = (async () => {
-                await this._seedTombstones(workspaceRoot);
                 await this._loadTombstones(workspaceRoot);
             })().catch((error) => {
                 this._tombstonesReady = null;
@@ -4298,6 +4496,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _loadTombstones(workspaceRoot: string): Promise<Set<string>> {
+        // DB-first: read tombstones from plans table where status='deleted'
+        const db = await this._getKanbanDb(workspaceRoot);
+        const wsId = this._workspaceId;
+        if (db && wsId) {
+            this._tombstones = await db.getTombstonedPlanIds(wsId);
+            // One-time migration: import legacy file into DB
+            await this._migrateLegacyTombstones(workspaceRoot, db, wsId);
+            return this._tombstones;
+        }
+
+        // Fallback: read from legacy file
         const filePath = this._getTombstonePath(workspaceRoot);
         try {
             if (fs.existsSync(filePath)) {
@@ -4316,41 +4525,91 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._tombstones;
     }
 
-    private async _addTombstone(workspaceRoot: string, hash: string): Promise<void> {
-        if (!this._isValidTombstoneHash(hash)) return;
-        if (this._tombstones.has(hash)) return;
+    /** One-time migration of legacy plan_tombstones.json into DB */
+    private async _migrateLegacyTombstones(workspaceRoot: string, db: KanbanDatabase, wsId: string): Promise<void> {
         const filePath = this._getTombstonePath(workspaceRoot);
-        const tmpPath = filePath + '.tmp';
         try {
-            const dir = path.dirname(filePath);
-            if (!fs.existsSync(dir)) {
-                await fs.promises.mkdir(dir, { recursive: true });
-            }
-            let existing: string[] = [];
-            if (fs.existsSync(filePath)) {
-                try {
-                    const data = await fs.promises.readFile(filePath, 'utf8');
-                    const parsed = JSON.parse(data);
-                    if (Array.isArray(parsed)) {
-                        existing = parsed.filter((entry) => this._isValidTombstoneHash(entry));
+            if (!fs.existsSync(filePath)) return;
+            const data = await fs.promises.readFile(filePath, 'utf8');
+            const arr = JSON.parse(data);
+            if (!Array.isArray(arr)) return;
+            const hashes = arr.filter((entry) => this._isValidTombstoneHash(entry));
+            for (const hash of hashes) {
+                if (!this._tombstones.has(hash)) {
+                    // Ensure a plan row exists for this tombstone so it persists
+                    const existing = await db.getPlanBySessionId(hash);
+                    if (!existing) {
+                        await db.upsertPlans([{
+                            planId: hash,
+                            sessionId: hash,
+                            topic: 'Tombstoned plan',
+                            planFile: '',
+                            kanbanColumn: 'CREATED',
+                            status: 'deleted',
+                            complexity: 'Unknown',
+                            workspaceId: wsId,
+                            createdAt: new Date().toISOString(),
+                            updatedAt: new Date().toISOString(),
+                            lastAction: '',
+                            sourceType: 'brain',
+                            brainSourcePath: '',
+                            mirrorPath: ''
+                        }]);
+                    } else {
+                        await db.tombstonePlan(hash);
                     }
-                } catch { }
+                    this._tombstones.add(hash);
+                }
             }
-            if (!existing.includes(hash)) {
-                existing.push(hash);
-            }
-            await fs.promises.writeFile(tmpPath, JSON.stringify(existing, null, 2), 'utf8');
-            await fs.promises.rename(tmpPath, filePath);
-            this._tombstones.add(hash);
+            // Remove legacy file after successful migration
+            try { await fs.promises.unlink(filePath); } catch { }
         } catch (e) {
-            console.error('[TaskViewerProvider] Failed to write tombstone:', e);
-            try { await fs.promises.unlink(tmpPath); } catch { }
+            console.error('[TaskViewerProvider] Failed to migrate legacy tombstones:', e);
         }
     }
 
+    private async _addTombstone(workspaceRoot: string, hash: string): Promise<void> {
+        if (!this._isValidTombstoneHash(hash)) return;
+        if (this._tombstones.has(hash)) return;
+
+        // DB-first: mark as tombstoned in DB
+        const db = await this._getKanbanDb(workspaceRoot);
+        const wsId = this._workspaceId;
+        if (db && wsId) {
+            const existing = await db.getPlanBySessionId(hash);
+            if (existing) {
+                await db.tombstonePlan(existing.planId);
+            } else {
+                // Create a placeholder tombstone row
+                await db.upsertPlans([{
+                    planId: hash,
+                    sessionId: hash,
+                    topic: 'Tombstoned plan',
+                    planFile: '',
+                    kanbanColumn: 'CREATED',
+                    status: 'deleted',
+                    complexity: 'Unknown',
+                    workspaceId: wsId,
+                    createdAt: new Date().toISOString(),
+                    updatedAt: new Date().toISOString(),
+                    lastAction: '',
+                    sourceType: 'brain',
+                    brainSourcePath: '',
+                    mirrorPath: ''
+                }]);
+            }
+            this._tombstones.add(hash);
+        }
+    }
+
+    /** Seed tombstones from completed runsheets (legacy one-time migration). */
     private async _seedTombstones(workspaceRoot: string): Promise<void> {
-        const filePath = this._getTombstonePath(workspaceRoot);
-        if (fs.existsSync(filePath)) return;
+        // Only seed if we have no tombstones at all (fresh DB)
+        if (this._tombstones.size > 0) return;
+
+        const db = await this._getKanbanDb(workspaceRoot);
+        const wsId = this._workspaceId;
+        if (!db || !wsId) return;
 
         const hashes: string[] = [];
 
@@ -4384,14 +4643,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             console.error('[TaskViewerProvider] Failed to seed tombstones from completed runsheets:', e);
         }
 
-        const dir = path.dirname(filePath);
-        if (!fs.existsSync(dir)) {
-            await fs.promises.mkdir(dir, { recursive: true });
+        for (const hash of hashes) {
+            await this._addTombstone(workspaceRoot, hash);
         }
-        const tmpPath = filePath + '.tmp';
-        await fs.promises.writeFile(tmpPath, JSON.stringify(hashes, null, 2), 'utf8');
-        await fs.promises.rename(tmpPath, filePath);
-        this._tombstones = new Set(hashes);
     }
 
     /** Return existing sidecars for a base .md plan path, e.g. .resolved and .resolved.0 variants. */
@@ -5035,7 +5289,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await fs.promises.writeFile(runSheetPath, JSON.stringify(runSheet, null, 2));
 
             console.log(`[TaskViewerProvider] Mirrored brain plan: ${topic}`);
-            await this._refreshRunSheets(resolvedWorkspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
             this._view?.webview.postMessage({ type: 'selectSession', sessionId: runSheetId });
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to mirror brain plan:', e);
@@ -5064,7 +5318,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 includeCompleted: true
             });
             if (existingForPlan) {
-                await this._refreshRunSheets(resolvedWorkspaceRoot);
+                await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                 return;
             }
 
@@ -5136,7 +5390,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 status: 'active'
             });
 
-            await this._refreshRunSheets(resolvedWorkspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
             // Auto-focus the new plan in the dropdown
             this._view?.webview.postMessage({ type: 'selectSession', sessionId });
         } catch (e) {
@@ -5557,7 +5811,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const planFileAbsolute = this._getPlanPathFromSheet(workspaceRoot, sheet);
         const refreshViews = async () => {
-            await this._kanbanProvider?.refresh();
             this.refresh();
         };
 
@@ -5894,7 +6147,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 topic: sheet.topic
             });
             await this._archiveCompletedSession(sessionId, log, resolvedWorkspaceRoot);
-            await this._refreshRunSheets();
+            await this._syncFilesAndRefreshRunSheets();
             return true;
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to mark plan complete: ${e}`);
@@ -6079,7 +6332,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
 
-            await this._refreshRunSheets();
+            await this._syncFilesAndRefreshRunSheets();
             this._view?.webview.postMessage({ type: 'selectSession', sessionId: mergedSessionId });
             await vscode.commands.executeCommand('switchboard.openPlan', vscode.Uri.file(mergedAbsolutePath));
             await this._logEvent('plan_management', {
@@ -6383,7 +6636,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 operation: 'delete_plan',
                 sessionId
             });
-            await this._refreshRunSheets(resolvedWorkspaceRoot);
+            await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
             return true;
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to delete plan: ${e}`);
@@ -6481,6 +6734,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /**
+     * LIGHTWEIGHT: Single DB read → feeds BOTH sidebar dropdown AND kanban board.
+     * This is the ONLY method that sends plan data to the UI.
+     * Called by refresh() and _syncFilesAndRefreshRunSheets().
+     */
     private async _refreshRunSheets(workspaceRoot?: string) {
         if (!this._view) return;
 
@@ -6490,39 +6748,80 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!resolvedWorkspaceRoot) return;
 
         try {
-            await this._activateWorkspaceContext(resolvedWorkspaceRoot);
-            const allSheets = await this._collectAndSyncKanbanSnapshot(resolvedWorkspaceRoot, true);
-            const ownedActiveEntries = Object.values(this._planRegistry.entries).filter((entry) =>
-                entry.ownerWorkspaceId === this._workspaceId && entry.status === 'active'
-            );
-
-            const bestSheetByPlanId = new Map<string, any>();
-            for (const sheet of allSheets) {
-                if (!this._isOwnedActiveRunSheet(sheet)) continue;
-                const planId = this._getPlanIdForRunSheet(sheet);
-                if (!planId) continue;
-                const existing = bestSheetByPlanId.get(planId);
-                if (!existing || this._getSheetActivityTimestamp(sheet) > this._getSheetActivityTimestamp(existing)) {
-                    bestSheetByPlanId.set(planId, sheet);
+            let workspaceId = this._workspaceId;
+            if (!workspaceId) {
+                const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+                if (db) {
+                    workspaceId = await db.getWorkspaceId();
+                    if (workspaceId) {
+                        this._workspaceId = workspaceId;
+                    }
                 }
             }
-
-            const visible: any[] = [];
-            for (const entry of ownedActiveEntries) {
-                if (entry.sourceType === 'brain' && entry.brainSourcePath) {
-                    const stablePath = this._getStablePath(this._getBaseBrainPath(path.resolve(entry.brainSourcePath)));
-                    const pathHash = this._getPlanIdFromStableBrainPath(stablePath);
-                    if (this._tombstones.has(pathHash)) continue;
-                    if (this._brainPlanBlacklist.has(stablePath)) continue;
-                }
-                const sheet = bestSheetByPlanId.get(entry.planId);
-                if (sheet) visible.push(sheet);
+            if (!workspaceId) {
+                console.log('[TaskViewerProvider] _refreshRunSheets: no workspaceId, falling back to heavy sync');
+                await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
+                return;
             }
 
-            this._view.webview.postMessage({ type: 'runSheets', sheets: this._sortSheets(visible) });
+            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+            if (!db) {
+                console.log('[TaskViewerProvider] _refreshRunSheets: no DB, falling back to heavy sync');
+                await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
+                return;
+            }
+
+            // ONE DB read — this snapshot feeds both sidebar and kanban
+            const activeRows = await db.getBoard(workspaceId);
+            const completedRows = await db.getCompletedPlans(workspaceId);
+            console.log(`[TaskViewerProvider] _refreshRunSheets: workspaceId=${workspaceId}, active=${activeRows.length}, completed=${completedRows.length}`);
+
+            // Feed sidebar dropdown
+            const sheets = activeRows.map(row => ({
+                sessionId: row.sessionId,
+                topic: row.topic || row.planFile || 'Untitled',
+                planFile: row.planFile || '',
+                createdAt: row.createdAt || '',
+            }));
+            this._view.webview.postMessage({ type: 'runSheets', sheets });
+
+            // Feed kanban board from the SAME snapshot (no second DB read)
+            await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot);
         } catch (e) {
-            console.error('[TaskViewerProvider] Failed to refresh Run Sheets:', e);
-            this._view.webview.postMessage({ type: 'runSheets', sheets: [] });
+            console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
+            this._view?.webview.postMessage({ type: 'runSheets', sheets: [] });
+        }
+    }
+
+    /**
+     * HEAVY: Reads ALL session files from disk and syncs to DB.
+     * Does NOT send any UI messages — that's _refreshRunSheets' job.
+     * Called by fullSync, session watcher, and startup.
+     */
+    private async _syncFilesToDb(workspaceRoot?: string): Promise<void> {
+        const resolvedWorkspaceRoot = workspaceRoot
+            ? this._resolveWorkspaceRoot(workspaceRoot)
+            : this._resolveWorkspaceRoot();
+        if (!resolvedWorkspaceRoot) return;
+
+        await this._activateWorkspaceContext(resolvedWorkspaceRoot);
+        await this._collectAndSyncKanbanSnapshot(resolvedWorkspaceRoot, true);
+    }
+
+    /**
+     * HEAVY: Reads ALL session files from disk, syncs to DB, then refreshes sidebar + kanban.
+     * Called ONLY by: session watcher (5s debounce), fullSync, and startup.
+     */
+    private async _syncFilesAndRefreshRunSheets(workspaceRoot?: string) {
+        if (!this._view) return;
+
+        try {
+            await this._syncFilesToDb(workspaceRoot);
+            // After DB sync, use the single UI refresh path (DB-only read)
+            await this._refreshRunSheets(workspaceRoot);
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to sync and refresh Run Sheets:', e);
+            this._view?.webview.postMessage({ type: 'runSheets', sheets: [] });
         }
     }
 
@@ -7744,7 +8043,7 @@ Create this file exactly as specified, then continue your work.`);
 
         try {
             const { sessionId } = await this._createInitiatedPlan(title, text, false);
-            await this._refreshRunSheets();
+            await this._syncFilesAndRefreshRunSheets();
             vscode.window.showInformationMessage(`Imported plan: ${title}`);
         } catch (err: any) {
             const msg = err?.message || String(err);
@@ -7814,7 +8113,7 @@ Create this file exactly as specified, then continue your work.`);
                 topic: title,
                 content
             });
-            await this._refreshRunSheets();
+            await this._syncFilesAndRefreshRunSheets();
             this._view?.webview.postMessage({ type: 'selectSession', sessionId });
 
             // Non-blocking auto-promotion: copy plan to Antigravity brain
@@ -9074,7 +9373,7 @@ Create this file exactly as specified, then continue your work.`);
                 sheet.events.push({ timestamp: new Date().toISOString(), workflow });
                 return sheet;
             });
-            await this._kanbanProvider?.refresh();
+            this.refresh();
         } catch (err: any) {
             console.error('[TaskViewerProvider] kanban_workflowEvent failed:', err?.message || err);
         }
@@ -9205,6 +9504,10 @@ Create this file exactly as specified, then continue your work.`);
 
     public dispose() {
         this._stopAutobanEngine();
+        if (this._postAutobanStateDebounceTimer) {
+            clearTimeout(this._postAutobanStateDebounceTimer);
+            this._postAutobanStateDebounceTimer = null;
+        }
         this._pipeline.dispose();
         this._stateWatcher?.dispose();
         this._planWatcher?.dispose();

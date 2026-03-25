@@ -1,0 +1,28 @@
+{
+  "sessionId": "sess_1774394627869",
+  "planFile": ".switchboard/plans/feature_plan_20260325_102347_bug_kanban_tooltips_go_underneath_other_ui_elements.md",
+  "topic": "BUG: Kanban Tooltips Go Underneath Other UI Elements",
+  "createdAt": "2026-03-24T23:23:47.868Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-24T23:23:47.868Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-25T02:24:44.520Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-25T04:08:05.725Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-25T04:10:58.275Z",
+      "action": "start"
+    }
+  ]
+}

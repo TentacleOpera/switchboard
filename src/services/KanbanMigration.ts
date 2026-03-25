@@ -34,7 +34,9 @@ export class KanbanMigration {
         return snapshotRows.map(row => ({
             ...row,
             kanbanColumn: KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction),
-            status: 'active'
+            status: 'active',
+            brainSourcePath: (row as any).brainSourcePath || '',
+            mirrorPath: (row as any).mirrorPath || ''
         }));
     }
 

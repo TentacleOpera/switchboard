@@ -2224,21 +2224,41 @@ function registerTools(server) {
         async ({ column } = {}) => {
             const workspaceRoot = getWorkspaceRoot();
             const sbDir = path.join(workspaceRoot, '.switchboard');
-            const registryPath = path.join(sbDir, 'plan_registry.json');
+            const dbPath = path.join(sbDir, 'kanban.db');
             const identityPath = path.join(sbDir, 'workspace_identity.json');
-            const sessionsDir = path.join(sbDir, 'sessions');
-            const tombstonePath = path.join(sbDir, 'plan_tombstones.json');
-            const blacklistPath = path.join(sbDir, 'brain_plan_blacklist.json');
 
-            if (!fs.existsSync(identityPath)) {
-                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace or missing identity." }] };
-            }
-
-            let identity;
+            // Read workspace ID: DB first, legacy JSON fallback
+            let workspaceId = null;
             try {
-                identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+                if (fs.existsSync(dbPath)) {
+                    const SQL = await getSqlJs(workspaceRoot);
+                    const dbBytes = fs.readFileSync(dbPath);
+                    const db = new SQL.Database(new Uint8Array(dbBytes));
+                    try {
+                        const stmt = db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
+                        if (stmt.step()) {
+                            workspaceId = stmt.getAsObject().value;
+                        }
+                        stmt.free();
+                    } finally {
+                        if (typeof db.close === 'function') db.close();
+                    }
+                }
             } catch (e) {
-                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse workspace identity: ${e.message}` }] };
+                // DB read failed, try legacy file
+            }
+            if (!workspaceId) {
+                try {
+                    if (fs.existsSync(identityPath)) {
+                        const identity = JSON.parse(fs.readFileSync(identityPath, 'utf8'));
+                        workspaceId = identity.workspaceId;
+                    }
+                } catch (e) {
+                    // Legacy file also failed
+                }
+            }
+            if (!workspaceId) {
+                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace — no workspace identity in DB or legacy file." }] };
             }
 
             const columnDefinitions = getKanbanColumnDefinitions(workspaceRoot);
@@ -2251,101 +2271,13 @@ function registerTools(server) {
                 return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), column, columnDefinitions);
             }
 
-            const workspaceId = identity.workspaceId;
             const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId, columnDefinitions);
             if (dbColumns) {
                 return buildKanbanStateResponse(dbColumns, requestedColumnId, columnDefinitions);
             }
-            console.warn('[get_kanban_state] DB unavailable, using file-derived fallback. Board state may be stale.');
 
-            if (!fs.existsSync(registryPath)) {
-                return { isError: true, content: [{ type: "text", text: "Error: Missing registry and SQLite fallback was unavailable." }] };
-            }
-
-            let registry;
-            try {
-                registry = JSON.parse(fs.readFileSync(registryPath, 'utf8'));
-            } catch (e) {
-                return { isError: true, content: [{ type: "text", text: `Error: Failed to parse registry: ${e.message}` }] };
-            }
-
-            let tombstones = new Set();
-            let blacklist = new Set();
-            try {
-                if (fs.existsSync(tombstonePath)) {
-                    tombstones = new Set(JSON.parse(fs.readFileSync(tombstonePath, 'utf8')));
-                }
-                if (fs.existsSync(blacklistPath)) {
-                    const parsed = JSON.parse(fs.readFileSync(blacklistPath, 'utf8'));
-                    const rawEntries = Array.isArray(parsed) ? parsed : (Array.isArray(parsed?.entries) ? parsed.entries : []);
-                    blacklist = new Set(rawEntries);
-                }
-            } catch (e) {
-                // Non-fatal: proceed without tombstone/blacklist filtering
-            }
-
-            function getStablePath(planPath) {
-                const normalized = path.normalize(planPath);
-                const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-                const rootPath = path.parse(stable).root;
-                return stable.length > rootPath.length ? stable.replace(/[\\\/]+$/, '') : stable;
-            }
-
-            function getBaseBrainPath(planPath) {
-                return planPath.replace(/\.resolved(\.\d+)?$/i, '');
-            }
-
-            const columns = createEmptyKanbanColumnBuckets(columnDefinitions);
-
-            let files;
-            try {
-                files = fs.readdirSync(sessionsDir);
-            } catch (e) {
-                return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
-            }
-
-            for (const file of files) {
-                if (!file.endsWith('.json') || file === 'activity.json') continue;
-                try {
-                    const sheet = JSON.parse(fs.readFileSync(path.join(sessionsDir, file), 'utf8'));
-                    if (sheet.completed) continue;
-
-                    let planId = sheet.sessionId;
-                    if (sheet.brainSourcePath) {
-                        const stablePath = getStablePath(getBaseBrainPath(path.resolve(workspaceRoot, sheet.brainSourcePath)));
-                        if (blacklist.has(stablePath)) continue;
-                        planId = crypto.createHash('sha256').update(stablePath).digest('hex');
-                        if (tombstones.has(planId)) continue;
-                    }
-
-                    const entry = registry.entries[planId];
-                    if (!entry || entry.ownerWorkspaceId !== workspaceId || entry.status !== 'active') continue;
-
-                    const col = normalizeKanbanColumnId(deriveKanbanColumn(sheet.events || []));
-                    if (requestedColumnId && col !== requestedColumnId) continue;
-
-                    let complexity = 'unknown';
-                    try {
-                        if (sheet.planFile) {
-                            const planPath = path.resolve(workspaceRoot, sheet.planFile);
-                            if (fs.existsSync(planPath)) {
-                                const planContent = fs.readFileSync(planPath, 'utf8');
-                                complexity = getComplexityFromContent(planContent);
-                            }
-                        }
-                    } catch (e) { /* non-fatal */ }
-
-                    if (!columns[col]) columns[col] = [];
-                    columns[col].push({
-                        topic: sheet.topic || sheet.planFile || 'Untitled',
-                        sessionId: sheet.sessionId,
-                        createdAt: sheet.createdAt,
-                        complexity
-                    });
-                } catch (e) {}
-            }
-
-            return buildKanbanStateResponse(columns, requestedColumnId, columnDefinitions);
+            // DB unavailable and no legacy files — return empty state
+            return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), requestedColumnId, columnDefinitions);
         }
     );
 

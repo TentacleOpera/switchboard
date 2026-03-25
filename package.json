@@ -57,6 +57,10 @@
         "title": "Switchboard: Connect MCP"
       },
       {
+        "command": "switchboard.copyMcpConfig",
+        "title": "Switchboard: Copy MCP Config to Clipboard"
+      },
+      {
         "command": "switchboard.recheckMcp",
         "title": "Switchboard: Recheck MCP Connection"
       },
@@ -203,6 +207,14 @@
           "type": "object",
           "default": {},
           "description": "Configuration for Model Context Protocol (MCP) servers",
+          "scope": "resource"
+        },
+        "switchboard.kanban.completedLimit": {
+          "type": "integer",
+          "default": 100,
+          "minimum": 1,
+          "maximum": 500,
+          "description": "Maximum number of cards shown in the Kanban Completed column (1–500). Higher values may slow rendering.",
           "scope": "resource"
         }
       }

@@ -2,7 +2,7 @@
 	"switchboard.silentScaffolding": false,
 	"mcpServers": {
 		"switchboard": {
-			"command": "/Applications/Windsurf.app/Contents/Frameworks/Windsurf Helper (Plugin).app/Contents/MacOS/Windsurf Helper (Plugin)",
+			"command": "node",
 			"args": [
 				"/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
 			],

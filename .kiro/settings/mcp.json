@@ -2,7 +2,12 @@
   "mcpServers": {
     "switchboard": {
       "command": "node",
-      "args": ["c:/Users/patvu/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"]
+      "args": [
+        "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
+      ],
+      "env": {
+        "SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
+      }
     }
   }
 }
