@@ -184,7 +184,7 @@ export class KanbanDatabase {
                     record.planId,
                     record.sessionId,
                     record.topic,
-                    record.planFile,
+                    this._normalizePath(record.planFile),
                     record.kanbanColumn,
                     record.status,
                     record.complexity,
@@ -193,8 +193,8 @@ export class KanbanDatabase {
                     record.updatedAt,
                     record.lastAction,
                     record.sourceType,
-                    record.brainSourcePath || '',
-                    record.mirrorPath || ''
+                    this._normalizePath(record.brainSourcePath),
+                    this._normalizePath(record.mirrorPath)
                 ]);
             }
             this._db.run('COMMIT');
@@ -234,10 +234,27 @@ export class KanbanDatabase {
             console.error(`[KanbanDatabase] Rejected invalid column name: ${newColumn}`);
             return false;
         }
-        return this._persistedUpdate(
+        console.log(`[KanbanDatabase] updateColumn: sessionId=${sessionId}, newColumn=${newColumn}`);
+        const result = await this._persistedUpdate(
             'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?',
             [newColumn, new Date().toISOString(), sessionId]
         );
+        // Verify the update took effect
+        if (this._db) {
+            try {
+                const stmt = this._db.prepare('SELECT kanban_column FROM plans WHERE session_id = ?', [sessionId]);
+                if (stmt.step()) {
+                    const row = stmt.getAsObject();
+                    console.log(`[KanbanDatabase] updateColumn VERIFY: sessionId=${sessionId}, column now=${row.kanban_column}`);
+                } else {
+                    console.warn(`[KanbanDatabase] updateColumn VERIFY: sessionId=${sessionId} NOT FOUND in DB`);
+                }
+                stmt.free();
+            } catch (e) {
+                console.error(`[KanbanDatabase] updateColumn VERIFY failed:`, e);
+            }
+        }
+        return result;
     }
 
     public async updateComplexity(sessionId: string, complexity: 'Unknown' | 'Low' | 'High'): Promise<boolean> {
@@ -272,7 +289,7 @@ export class KanbanDatabase {
     public async updatePlanFile(sessionId: string, planFile: string): Promise<boolean> {
         return this._persistedUpdate(
             'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
-            [planFile, new Date().toISOString(), sessionId]
+            [this._normalizePath(planFile), new Date().toISOString(), sessionId]
         );
     }
 
@@ -360,12 +377,12 @@ export class KanbanDatabase {
                 if (u.complexity === 'Low' || u.complexity === 'High') {
                     this._db.run(
                         'UPDATE plans SET topic = ?, plan_file = ?, complexity = ?, updated_at = ? WHERE session_id = ?',
-                        [u.topic, u.planFile, u.complexity, now, u.sessionId]
+                        [u.topic, this._normalizePath(u.planFile), u.complexity, now, u.sessionId]
                     );
                 } else {
                     this._db.run(
                         'UPDATE plans SET topic = ?, plan_file = ?, updated_at = ? WHERE session_id = ?',
-                        [u.topic, u.planFile, now, u.sessionId]
+                        [u.topic, this._normalizePath(u.planFile), now, u.sessionId]
                     );
                 }
             }
@@ -495,7 +512,7 @@ export class KanbanDatabase {
     public async updateBrainPaths(sessionId: string, brainSourcePath: string, mirrorPath: string): Promise<boolean> {
         return this._persistedUpdate(
             'UPDATE plans SET brain_source_path = ?, mirror_path = ?, updated_at = ? WHERE session_id = ?',
-            [brainSourcePath, mirrorPath, new Date().toISOString(), sessionId]
+            [this._normalizePath(brainSourcePath), this._normalizePath(mirrorPath), new Date().toISOString(), sessionId]
         );
     }
 
@@ -670,6 +687,12 @@ export class KanbanDatabase {
         return this._persist();
     }
 
+    /** Normalize paths to use forward slashes for cross-platform compatibility */
+    private _normalizePath(filePath: string): string {
+        if (!filePath) return '';
+        return filePath.replace(/\\/g, '/');
+    }
+
     private _readRows(stmt: ReturnType<SqlJsDatabase['prepare']>): KanbanPlanRecord[] {
         const rows: KanbanPlanRecord[] = [];
         try {
@@ -679,7 +702,7 @@ export class KanbanDatabase {
                     planId: String(row.plan_id || ""),
                     sessionId: String(row.session_id || ""),
                     topic: String(row.topic || ""),
-                    planFile: String(row.plan_file || ""),
+                    planFile: this._normalizePath(String(row.plan_file || "")),
                     kanbanColumn: String(row.kanban_column || "CREATED"),
                     status: String(row.status || "active") as KanbanPlanStatus,
                     complexity: String(row.complexity || "Unknown") as "Unknown" | "Low" | "High",
@@ -688,8 +711,8 @@ export class KanbanDatabase {
                     updatedAt: String(row.updated_at || ""),
                     lastAction: String(row.last_action || ""),
                     sourceType: (String(row.source_type || "local") === "brain" ? "brain" : "local"),
-                    brainSourcePath: String(row.brain_source_path || ""),
-                    mirrorPath: String(row.mirror_path || "")
+                    brainSourcePath: this._normalizePath(String(row.brain_source_path || "")),
+                    mirrorPath: this._normalizePath(String(row.mirror_path || ""))
                 });
             }
         } finally {

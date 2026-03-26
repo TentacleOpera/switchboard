@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774494496817",
+  "planFile": ".switchboard/plans/feature_plan_20260326_140816_add_visual_feedback_to_open_terminals.md",
+  "topic": "Add visual feedback to open terminals",
+  "createdAt": "2026-03-26T03:08:16.817Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T03:08:16.817Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T03:10:53.860Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T03:11:19.712Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.241Z",
+      "action": "start"
+    }
+  ]
+}

@@ -843,6 +843,7 @@
         let tooltipTarget = null;
 
         function showTooltip(el) {
+            if (!tooltipOverlay) return;
             const text = el.getAttribute('data-tooltip');
             if (!text) return;
 
@@ -877,6 +878,7 @@
         }
 
         function hideTooltip() {
+            if (!tooltipOverlay) return;
             tooltipOverlay.classList.remove('visible');
             tooltipOverlay.style.left = '-9999px';
             tooltipOverlay.style.top = '-9999px';
@@ -1721,6 +1723,7 @@
                     break;
                 case 'updateBoard':
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
+                    console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');
                     const nextBoardSignature = buildBoardSignature(nextCards);
                     const dbWarningBanner = document.getElementById('db-warning-banner');
                     if (dbWarningBanner) {
@@ -1728,6 +1731,7 @@
                     }
                     if (nextBoardSignature !== lastBoardSignature) {
                         lastBoardSignature = nextBoardSignature;
+                        console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
                         renderBoard(nextCards);
                     } else {
                         currentCards = nextCards;

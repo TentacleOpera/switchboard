@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774494170986",
+  "planFile": ".switchboard/plans/feature_plan_20260326_140250_tooltips_do_not_display.md",
+  "topic": "tooltips do not display",
+  "createdAt": "2026-03-26T03:02:50.985Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T03:02:50.985Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T03:10:53.843Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T03:11:23.293Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.217Z",
+      "action": "start"
+    }
+  ]
+}

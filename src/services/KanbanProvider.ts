@@ -41,7 +41,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _refreshDebounceTimer?: NodeJS.Timeout;
     private _isRefreshing: boolean = false;
     private _refreshPending: boolean = false;
-    private _pendingRefreshData: { activeRows: import('./KanbanDatabase').KanbanPlanRecord[]; completedRows: import('./KanbanDatabase').KanbanPlanRecord[]; workspaceRoot: string } | null = null;
     private _cliTriggersEnabled: boolean;
     private _lastColumnsSignature: string | null = null;
     private _autobanState?: AutobanConfigState;
@@ -109,8 +108,8 @@ export class KanbanProvider implements vscode.Disposable {
     public async open() {
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
-            // Don't call _refreshBoard here — the webview's 'ready' message
-            // triggers fullSync which feeds data through the unified path.
+            // Trigger unified refresh so the board gets fresh data
+            await vscode.commands.executeCommand('switchboard.fullSync');
             return;
         }
 
@@ -173,34 +172,100 @@ export class KanbanProvider implements vscode.Disposable {
 
     /**
      * Refresh the board externally (e.g. after runsheet changes).
+     * Routes through the unified path so sidebar and kanban stay in sync.
      */
     public async refresh() {
         if (this._panel) {
-            await this._refreshBoard();
+            await vscode.commands.executeCommand('switchboard.refreshUI');
         }
     }
 
     /**
      * Refresh the board using pre-fetched DB rows (shared with sidebar).
      * This ensures sidebar and kanban render from the exact same DB snapshot.
+     * Builds cards and posts DIRECTLY to webview — no intermediary that could silently fail.
      */
     public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string) {
-        if (!this._panel) return;
-        if (this._isRefreshing) {
-            // Already refreshing — this data is newer, so queue it as the pending data
-            this._pendingRefreshData = { activeRows, completedRows, workspaceRoot };
+        if (!this._panel) {
+            console.warn('[KanbanProvider] refreshWithData: no panel — skipping');
             return;
         }
-        this._isRefreshing = true;
+
         try {
-            await this._refreshBoardWithData(activeRows, completedRows, workspaceRoot);
-        } finally {
-            this._isRefreshing = false;
-            if (this._pendingRefreshData) {
-                const pending = this._pendingRefreshData;
-                this._pendingRefreshData = null;
-                void this.refreshWithData(pending.activeRows, pending.completedRows, pending.workspaceRoot);
+            const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+
+            // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
+            const cards: KanbanCard[] = activeRows.map(row => ({
+                sessionId: row.sessionId,
+                topic: row.topic || row.planFile || 'Untitled',
+                planFile: row.planFile || '',
+                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                lastActivity: row.updatedAt || row.createdAt || '',
+                complexity: row.complexity || 'Unknown',
+                workspaceRoot: resolvedWorkspaceRoot
+            }));
+
+            cards.push(...completedRows.map(rec => ({
+                sessionId: rec.sessionId,
+                topic: rec.topic || rec.planFile || 'Untitled',
+                planFile: rec.planFile || '',
+                column: 'COMPLETED',
+                lastActivity: rec.updatedAt || rec.createdAt || '',
+                complexity: rec.complexity || 'Unknown',
+                workspaceRoot: resolvedWorkspaceRoot
+            })));
+
+            this._lastCards = cards;
+
+            // Build columns (with fallback to defaults)
+            let columns;
+            try {
+                const customAgents = await this._getCustomAgents(resolvedWorkspaceRoot);
+                columns = buildKanbanColumns(customAgents);
+            } catch {
+                columns = buildKanbanColumns([]);
             }
+
+            const nextColumnsSignature = this._columnsSignature(columns);
+            if (this._lastColumnsSignature !== nextColumnsSignature) {
+                this._panel.webview.postMessage({ type: 'updateColumns', columns });
+                this._lastColumnsSignature = nextColumnsSignature;
+            }
+
+            this._panel.webview.postMessage({
+                type: 'updateWorkspaceSelection',
+                workspaceRoot: resolvedWorkspaceRoot,
+                workspaces: this._getWorkspaceItems()
+            });
+
+            // THE critical message — sends cards to webview
+            this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false });
+
+            this._panel.webview.postMessage({ type: 'cliTriggersState', enabled: this._cliTriggersEnabled });
+
+            let agentNames: Record<string, string> = {};
+            let visibleAgents: Record<string, boolean> = {};
+            try {
+                agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
+                visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
+            } catch { /* non-critical */ }
+            this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
+            this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+
+            const effectiveModes: Record<string, 'cli' | 'prompt'> = {};
+            for (const col of columns) {
+                effectiveModes[col.id] = this._columnDragDropModes[col.id] || col.dragDropMode || 'cli';
+            }
+            this._panel.webview.postMessage({ type: 'updateColumnDragDropModes', modes: effectiveModes });
+
+            if (this._autobanState) {
+                this._panel.webview.postMessage({ type: 'updateAutobanConfig', state: this._autobanState });
+                this._panel.webview.postMessage({ type: 'updatePairProgramming', enabled: this._autobanState.pairProgrammingEnabled });
+            }
+
+            console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRows.length} active + ${completedRows.length} completed) to kanban webview`);
+        } catch (e) {
+            console.error('[KanbanProvider] refreshWithData FAILED:', e);
         }
     }
 
@@ -278,7 +343,7 @@ export class KanbanProvider implements vscode.Disposable {
         return null;
     }
 
-    private async _refreshBoard(workspaceRoot?: string) {
+    private async _refreshBoard(_workspaceRoot?: string) {
         if (!this._panel) return;
         if (this._isRefreshing) {
             this._refreshPending = true;
@@ -286,12 +351,16 @@ export class KanbanProvider implements vscode.Disposable {
         }
         this._isRefreshing = true;
         try {
-            await this._refreshBoardImpl(workspaceRoot);
+            // ALL kanban refreshes go through the unified path:
+            // TaskViewerProvider reads DB ONCE → feeds BOTH sidebar and kanban.
+            // This eliminates the dual-path bug where _refreshBoardImpl could
+            // show different data than what the sidebar shows.
+            await vscode.commands.executeCommand('switchboard.refreshUI');
         } finally {
             this._isRefreshing = false;
             if (this._refreshPending) {
                 this._refreshPending = false;
-                void this._refreshBoard(workspaceRoot);
+                void this._refreshBoard(_workspaceRoot);
             }
         }
     }
@@ -1175,7 +1244,14 @@ export class KanbanProvider implements vscode.Disposable {
             case 'moveCardBackwards': {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+                if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                    // DB-first: update column immediately so it persists across refreshes
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (await db.ensureReady()) {
+                        for (const sid of sessionIds) {
+                            await db.updateColumn(sid, targetColumn);
+                        }
+                    }
                     await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
@@ -1183,7 +1259,14 @@ export class KanbanProvider implements vscode.Disposable {
             case 'moveCardForward': {
                 const { sessionIds, targetColumn } = msg;
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (Array.isArray(sessionIds) && sessionIds.length > 0) {
+                if (Array.isArray(sessionIds) && sessionIds.length > 0 && workspaceRoot) {
+                    // DB-first: update column immediately so it persists across refreshes
+                    const db = this._getKanbanDb(workspaceRoot);
+                    if (await db.ensureReady()) {
+                        for (const sid of sessionIds) {
+                            await db.updateColumn(sid, targetColumn);
+                        }
+                    }
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
@@ -1372,6 +1455,11 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        // DB-first: update column immediately
+                        const dbMs = this._getKanbanDb(workspaceRoot);
+                        if (await dbMs.ensureReady()) {
+                            for (const sid of sids) { await dbMs.updateColumn(sid, targetCol); }
+                        }
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
@@ -1389,6 +1477,11 @@ export class KanbanProvider implements vscode.Disposable {
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
+                    // DB-first: update column immediately
+                    const dbMs2 = this._getKanbanDb(workspaceRoot);
+                    if (await dbMs2.ensureReady()) {
+                        for (const sid of msg.sessionIds) { await dbMs2.updateColumn(sid, nextCol); }
+                    }
                     if (this._cliTriggersEnabled) {
                         const role = this._columnToRole(nextCol);
                         if (role) {
@@ -1429,6 +1522,11 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        // DB-first: update column immediately
+                        const dbMa = this._getKanbanDb(workspaceRoot);
+                        if (await dbMa.ensureReady()) {
+                            for (const sid of sids) { await dbMa.updateColumn(sid, targetCol); }
+                        }
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
@@ -1445,6 +1543,11 @@ export class KanbanProvider implements vscode.Disposable {
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
+                    // DB-first: update column immediately
+                    const dbMa2 = this._getKanbanDb(workspaceRoot);
+                    if (await dbMa2.ensureReady()) {
+                        for (const sid of sessionIds) { await dbMa2.updateColumn(sid, nextCol); }
+                    }
                     if (this._cliTriggersEnabled) {
                         const role = this._columnToRole(nextCol);
                         if (role) {
@@ -1488,9 +1591,19 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        // DB-first
+                        const dbPs = this._getKanbanDb(workspaceRoot);
+                        if (await dbPs.ensureReady()) {
+                            for (const sid of sids) { await dbPs.updateColumn(sid, targetCol); }
+                        }
                         await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                     }
                 } else {
+                    // DB-first
+                    const dbPs2 = this._getKanbanDb(workspaceRoot);
+                    if (await dbPs2.ensureReady()) {
+                        for (const sid of msg.sessionIds) { await dbPs2.updateColumn(sid, nextCol); }
+                    }
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                 }
 
@@ -1528,12 +1641,22 @@ export class KanbanProvider implements vscode.Disposable {
                     for (const [role, sids] of groups) {
                         if (sids.length === 0) { continue; }
                         const targetCol = this._targetColumnForDispatchRole(role);
+                        // DB-first
+                        const dbPa = this._getKanbanDb(workspaceRoot);
+                        if (await dbPa.ensureReady()) {
+                            for (const sid of sids) { await dbPa.updateColumn(sid, targetCol); }
+                        }
                         await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
                     await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced: ${movedParts.join(', ')}.`);
                 } else {
+                    // DB-first
+                    const dbPa2 = this._getKanbanDb(workspaceRoot);
+                    if (await dbPa2.ensureReady()) {
+                        for (const sid of sessionIds) { await dbPa2.updateColumn(sid, nextCol); }
+                    }
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                     await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
@@ -1562,12 +1685,30 @@ export class KanbanProvider implements vscode.Disposable {
             }
             case 'completePlan':
                 if (msg.sessionId) {
+                    // DB-first: mark as completed immediately
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                    if (workspaceRoot) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        if (await db.ensureReady()) {
+                            await db.updateColumn(msg.sessionId, 'COMPLETED');
+                            await db.updateStatus(msg.sessionId, 'completed');
+                        }
+                    }
                     await vscode.commands.executeCommand('switchboard.completePlanFromKanban', msg.sessionId, msg.workspaceRoot);
+                    await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;
             case 'completeSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
+                // DB-first: mark all as completed immediately
+                const db = this._getKanbanDb(workspaceRoot);
+                if (await db.ensureReady()) {
+                    for (const sessionId of msg.sessionIds) {
+                        await db.updateColumn(sessionId, 'COMPLETED');
+                        await db.updateStatus(sessionId, 'completed');
+                    }
+                }
                 let successCount = 0;
                 for (const sessionId of msg.sessionIds) {
                     const ok = await vscode.commands.executeCommand<boolean>('switchboard.completePlanFromKanban', sessionId, workspaceRoot);
@@ -1585,6 +1726,14 @@ export class KanbanProvider implements vscode.Disposable {
                 if (reviewedCards.length === 0) {
                     vscode.window.showInformationMessage('No plans in Reviewed to complete.');
                     break;
+                }
+                // DB-first: mark all as completed immediately
+                const dbAll = this._getKanbanDb(workspaceRoot);
+                if (await dbAll.ensureReady()) {
+                    for (const card of reviewedCards) {
+                        await dbAll.updateColumn(card.sessionId, 'COMPLETED');
+                        await dbAll.updateStatus(card.sessionId, 'completed');
+                    }
                 }
                 let successCount = 0;
                 for (const card of reviewedCards) {

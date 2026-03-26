@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774493829673",
+  "planFile": ".switchboard/plans/feature_plan_20260326_135709_kanban_card_links_do_not_work.md",
+  "topic": "kanban card links do not work",
+  "createdAt": "2026-03-26T02:57:09.672Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T02:57:09.672Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T03:10:53.829Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T03:11:28.891Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.188Z",
+      "action": "start"
+    }
+  ]
+}

@@ -944,18 +944,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         this._refreshTimeout = setTimeout(async () => {
-            if (this._view) {
-                // No loading indicator for lightweight DB-only refreshes.
-                // Loading state is only shown for fullSync (heavy file→DB sync).
-                // NOTE: _refreshJulesStatus is intentionally excluded — it has its
-                // own 30s poll timer and writes to state.json, which would re-trigger
-                // this refresh via the state watcher (ping-pong loop).
-                await Promise.all([
-                    this._refreshSessionStatus(),
-                    this._refreshTerminalStatuses(),
-                    this._refreshRunSheets(),
-                ]);
-            }
+            // Always refresh — kanban needs data even when sidebar isn't visible.
+            // Sidebar-specific messages are guarded inside _refreshRunSheets.
+            await Promise.all([
+                this._refreshSessionStatus(),
+                this._refreshTerminalStatuses(),
+                this._refreshRunSheets(),
+            ]);
         }, 200); // 200ms debounce
     }
 
@@ -976,6 +971,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (this._view) {
             this._view.webview.postMessage({ type: 'loading', value: false });
         }
+    }
+
+    /**
+     * Lightweight UI refresh: ONE DB read → feeds BOTH sidebar and kanban.
+     * No file I/O. Used by kanban for post-action refreshes.
+     */
+    public async refreshUI() {
+        await this._refreshRunSheets();
     }
 
     public sendLoadingState(loading: boolean) {
@@ -6740,8 +6743,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Called by refresh() and _syncFilesAndRefreshRunSheets().
      */
     private async _refreshRunSheets(workspaceRoot?: string) {
-        if (!this._view) return;
-
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : this._resolveWorkspaceRoot();
@@ -6753,20 +6754,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const db = await this._getKanbanDb(resolvedWorkspaceRoot);
                 if (db) {
                     workspaceId = await db.getWorkspaceId();
+                    if (!workspaceId) {
+                        workspaceId = await db.getDominantWorkspaceId() ?? null;
+                        if (workspaceId) { await db.setWorkspaceId(workspaceId); }
+                    }
                     if (workspaceId) {
                         this._workspaceId = workspaceId;
                     }
                 }
             }
             if (!workspaceId) {
-                console.log('[TaskViewerProvider] _refreshRunSheets: no workspaceId, falling back to heavy sync');
                 await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                 return;
             }
 
             const db = await this._getKanbanDb(resolvedWorkspaceRoot);
             if (!db) {
-                console.log('[TaskViewerProvider] _refreshRunSheets: no DB, falling back to heavy sync');
                 await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                 return;
             }
@@ -6774,18 +6777,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // ONE DB read — this snapshot feeds both sidebar and kanban
             const activeRows = await db.getBoard(workspaceId);
             const completedRows = await db.getCompletedPlans(workspaceId);
-            console.log(`[TaskViewerProvider] _refreshRunSheets: workspaceId=${workspaceId}, active=${activeRows.length}, completed=${completedRows.length}`);
+            // Log column distribution for debugging
+            const colDist: Record<string, number> = {};
+            for (const row of activeRows) {
+                colDist[row.kanbanColumn] = (colDist[row.kanbanColumn] || 0) + 1;
+            }
+            console.log(`[refreshRunSheets] DB returned ${activeRows.length} active, ${completedRows.length} completed for workspace ${workspaceId}. Column distribution:`, JSON.stringify(colDist));
 
-            // Feed sidebar dropdown
-            const sheets = activeRows.map(row => ({
-                sessionId: row.sessionId,
-                topic: row.topic || row.planFile || 'Untitled',
-                planFile: row.planFile || '',
-                createdAt: row.createdAt || '',
-            }));
-            this._view.webview.postMessage({ type: 'runSheets', sheets });
+            // Feed sidebar dropdown (only if sidebar view exists)
+            if (this._view) {
+                const sheets = activeRows.map(row => ({
+                    sessionId: row.sessionId,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
+                    createdAt: row.createdAt || '',
+                }));
+                this._view.webview.postMessage({ type: 'runSheets', sheets });
+            }
 
-            // Feed kanban board from the SAME snapshot (no second DB read)
+            // Feed kanban board from the SAME snapshot (always, even without sidebar)
+            console.log(`[refreshRunSheets] kanbanProvider=${!!this._kanbanProvider}, calling refreshWithData`);
             await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
@@ -6813,11 +6824,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Called ONLY by: session watcher (5s debounce), fullSync, and startup.
      */
     private async _syncFilesAndRefreshRunSheets(workspaceRoot?: string) {
-        if (!this._view) return;
-
         try {
             await this._syncFilesToDb(workspaceRoot);
-            // After DB sync, use the single UI refresh path (DB-only read)
             await this._refreshRunSheets(workspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to sync and refresh Run Sheets:', e);

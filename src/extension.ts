@@ -990,6 +990,11 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(fullSyncDisposable);
 
+    const refreshUIDisposable = vscode.commands.registerCommand('switchboard.refreshUI', async () => {
+        await taskViewerProvider.refreshUI();
+    });
+    context.subscriptions.push(refreshUIDisposable);
+
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string) => {
         return await taskViewerProvider.handleKanbanTrigger(role, sessionId, instruction, workspaceRoot);

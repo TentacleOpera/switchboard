@@ -1,0 +1,18 @@
+{
+  "sessionId": "sess_1774494704668",
+  "planFile": ".switchboard/plans/feature_plan_20260326_141144_multi_select_drag_and_drop_does_not_work.md",
+  "topic": "Multi select drag and drop does not work",
+  "createdAt": "2026-03-26T03:11:44.667Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T03:11:44.667Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.253Z",
+      "action": "start"
+    }
+  ]
+}

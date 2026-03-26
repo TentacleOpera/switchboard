@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774494012203",
+  "planFile": ".switchboard/plans/feature_plan_20260326_140012_stop_session_files_being_created_from_db.md",
+  "topic": "stop session files being created from db",
+  "createdAt": "2026-03-26T03:00:12.202Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T03:00:12.202Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T03:10:53.836Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T03:11:27.575Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.206Z",
+      "action": "start"
+    }
+  ]
+}

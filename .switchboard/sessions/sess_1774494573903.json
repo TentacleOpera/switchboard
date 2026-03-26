@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774494573903",
+  "planFile": ".switchboard/plans/feature_plan_20260326_140933_mcp_setup_is_still_screwed.md",
+  "topic": "MCP setup is still screwed",
+  "createdAt": "2026-03-26T03:09:33.902Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T03:09:33.902Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T03:10:53.865Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T03:11:26.223Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T03:13:17.248Z",
+      "action": "start"
+    }
+  ]
+}
