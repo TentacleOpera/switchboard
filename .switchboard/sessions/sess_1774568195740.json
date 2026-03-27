@@ -1,29 +1,29 @@
 {
-  "sessionId": "sess_1774559659415",
-  "planFile": ".switchboard/plans/feature_plan_20260327_081419_replace_completed_column_icons.md",
-  "topic": "Replace completed column icons",
-  "createdAt": "2026-03-26T21:14:19.414Z",
+  "sessionId": "sess_1774568195740",
+  "planFile": ".switchboard/plans/feature_plan_20260327_103635_archive_database.md",
+  "topic": "DuckDB Archive Database for Historical Plan Research",
+  "createdAt": "2026-03-26T23:36:35.739Z",
   "events": [
     {
       "workflow": "initiate-plan",
-      "timestamp": "2026-03-26T21:14:19.414Z",
+      "timestamp": "2026-03-26T23:36:35.739Z",
       "action": "start"
     },
     {
       "workflow": "move-to-plan-reviewed",
-      "timestamp": "2026-03-26T23:50:01.756Z",
+      "timestamp": "2026-03-26T23:50:01.794Z",
       "action": "stop",
       "outcome": "User manually moved plan forwards"
     },
     {
       "workflow": "reset-to-created",
-      "timestamp": "2026-03-26T23:50:15.420Z",
+      "timestamp": "2026-03-26T23:50:24.624Z",
       "action": "stop",
       "outcome": "User manually moved plan backwards"
     },
     {
       "workflow": "sidebar-review",
-      "timestamp": "2026-03-26T23:50:35.735Z",
+      "timestamp": "2026-03-26T23:50:35.780Z",
       "action": "start"
     }
   ]

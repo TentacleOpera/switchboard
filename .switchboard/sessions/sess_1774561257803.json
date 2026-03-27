@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774561257803",
+  "planFile": ".switchboard/plans/feature_plan_20260327_084057_consolidate_session_files_into_db.md",
+  "topic": "Consolidate Session Files into Database with Event Sourcing for Cross-Machine Sync",
+  "createdAt": "2026-03-26T21:40:57.802Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T21:40:57.802Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T23:50:01.764Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T23:50:20.969Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T23:50:35.747Z",
+      "action": "start"
+    }
+  ]
+}

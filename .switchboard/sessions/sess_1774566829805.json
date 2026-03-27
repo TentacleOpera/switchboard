@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774566829805",
+  "planFile": ".switchboard/plans/feature_plan_20260327_101349_mcp_setup_still_broken.md",
+  "topic": "Fix MCP Config Writes for All IDEs (Global vs Workspace Paths)",
+  "createdAt": "2026-03-26T23:13:49.804Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T23:13:49.804Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T23:50:01.784Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T23:50:20.986Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T23:50:35.764Z",
+      "action": "start"
+    }
+  ]
+}

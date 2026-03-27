@@ -1,0 +1,35 @@
+{
+  "sessionId": "sess_1774573064991",
+  "planFile": ".switchboard/plans/feature_plan_20260327_115744_re_plan_button.md",
+  "topic": "Re-plan button",
+  "createdAt": "2026-03-27T00:57:44.989Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-27T00:57:44.989Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-27T03:03:28.202Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-27T03:13:05.148Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-27T03:35:55.229Z",
+      "action": "start"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-27T04:09:36.139Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    }
+  ]
+}

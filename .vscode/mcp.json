@@ -18,7 +18,10 @@
       "command": "node",
       "args": [
         "${workspaceFolder}/.switchboard/MCP/mcp-server.js"
-      ]
+      ],
+      "env": {
+        "SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
+      }
     }
   }
 }

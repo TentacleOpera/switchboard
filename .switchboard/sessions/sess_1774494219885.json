@@ -1,7 +1,7 @@
 {
   "sessionId": "sess_1774494219885",
   "planFile": ".switchboard/plans/feature_plan_20260326_140339_change_kanban_display_name.md",
-  "topic": "Rename CLI-BAN to CLI-BAN Multi-Agent Pipeline",
+  "topic": "Rename CLI-BAN to AUTOBAN",
   "createdAt": "2026-03-26T03:03:39.884Z",
   "events": [
     {
@@ -43,6 +43,23 @@
       "timestamp": "2026-03-26T09:54:17.669Z",
       "action": "stop",
       "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T23:50:01.747Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T23:50:15.410Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T23:50:35.716Z",
+      "action": "start"
     }
   ]
 }

@@ -1,0 +1,30 @@
+{
+  "sessionId": "sess_1774561321850",
+  "planFile": ".switchboard/plans/feature_plan_20260327_084201_ticket_view_title_should_not_have_to_be_deleted.md",
+  "topic": "Ticket View Title Should Use Placeholder Instead of Real Text",
+  "createdAt": "2026-03-26T21:42:01.849Z",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-26T21:42:01.849Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-26T23:50:01.775Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-26T23:50:20.979Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-26T23:50:35.755Z",
+      "action": "start"
+    }
+  ]
+}

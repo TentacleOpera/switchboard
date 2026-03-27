@@ -990,13 +990,20 @@ export class KanbanProvider implements vscode.Disposable {
                 console.error('[KanbanProvider] Failed to read complexity from DB:', err);
             }
 
-            // Primary signal: Agent Recommendation section.
-            // The improve-plan workflow always adds an explicit recommendation
-            // like "Send it to the Lead Coder" or "Send it to the Coder agent".
-            // This is the authoritative routing signal — it accounts for plans
-            // with moderate Complex (Band B) items that should still route to the Coder.
-            const leadCoderRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
-            const coderAgentRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
+            // Check ## Metadata section for explicit **Complexity:** field.
+            // This is the primary text-derived signal — the improve-plan workflow
+            // writes it directly into the plan's Metadata block.
+            const metadataComplexity = content.match(/\*\*Complexity:\*\*\s*(Low|High)/i);
+            if (metadataComplexity) {
+                const val = metadataComplexity[1].toLowerCase();
+                if (val === 'low') return 'Low';
+                if (val === 'high') return 'High';
+            }
+
+            // Agent Recommendation section.
+            // The improve-plan workflow adds "Send to Lead Coder" or "Send to Coder".
+            const leadCoderRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
+            const coderAgentRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
             if (leadCoderRec.test(content)) return 'High';
             if (coderAgentRec.test(content)) return 'Low';
 
