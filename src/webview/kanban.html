@@ -708,6 +708,22 @@
             font-size: 13px;
             margin-bottom: 12px;
         }
+        .modal-plan-list {
+            list-style: none;
+            padding: 0;
+            margin: 0 0 12px 0;
+            max-height: 120px;
+            overflow-y: auto;
+        }
+        .modal-plan-list li {
+            font-size: 12px;
+            color: var(--text-primary);
+            padding: 4px 8px;
+            border-left: 2px solid var(--accent-red);
+            margin-bottom: 4px;
+            background: color-mix(in srgb, var(--accent-red) 5%, transparent);
+            border-radius: 0 3px 3px 0;
+        }
         .modal-textarea {
             width: 100%;
             background: var(--bg-color);
@@ -1169,6 +1185,7 @@
             </div>
             <div class="modal-body">
                 <p class="modal-plan-count" id="testing-fail-plan-count"></p>
+                <ul class="modal-plan-list" id="testing-fail-plan-list"></ul>
                 <label for="testing-fail-feedback">Describe the testing issues:</label>
                 <textarea id="testing-fail-feedback" class="modal-textarea" placeholder="e.g. Tests failing due to null pointer in UserService.getUser()..." rows="6"></textarea>
             </div>
@@ -1361,10 +1378,16 @@
             testingFailSourceColumn = column;
             const modal = document.getElementById('testing-fail-modal');
             const countEl = document.getElementById('testing-fail-plan-count');
+            const listEl = document.getElementById('testing-fail-plan-list');
             const textarea = document.getElementById('testing-fail-feedback');
             const def = columnDefinitions.find(d => d.id === column);
             const label = def ? def.label : column;
             countEl.textContent = sessionIds.length + ' plan(s) selected from "' + label + '" column';
+            listEl.innerHTML = sessionIds.map(id => {
+                const card = currentCards.find(c => c.sessionId === id);
+                const topic = card ? escapeHtml(card.topic || card.sessionId) : escapeHtml(id);
+                return '<li>' + topic + '</li>';
+            }).join('');
             textarea.value = '';
             textarea.style.borderColor = '';
             modal.classList.remove('hidden');

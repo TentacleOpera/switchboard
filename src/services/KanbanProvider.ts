@@ -2226,13 +2226,10 @@ ${planDetails}
 
 FOCUS DIRECTIVE: Each plan file path above is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
 
-                if (msg.action === 'copyPrompt') {
-                    await vscode.env.clipboard.writeText(prompt);
-                    vscode.window.showInformationMessage(`Testing failure prompt for ${sourceCards.length} plan(s) copied to clipboard.`);
-                } else if (msg.action === 'sendToLead') {
+                if (msg.action === 'copyPrompt' || msg.action === 'sendToLead') {
                     await vscode.env.clipboard.writeText(prompt);
 
-                    // Move cards to LEAD CODED column
+                    // Move cards back to LEAD CODED column
                     const db = this._getKanbanDb(workspaceRoot);
                     if (await db.ensureReady()) {
                         for (const sid of msg.sessionIds) {
@@ -2241,8 +2238,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     }
 
                     await this._refreshBoard(workspaceRoot);
+                    const verb = msg.action === 'sendToLead' ? 'Paste the prompt in your lead coder chat.' : '';
                     vscode.window.showInformationMessage(
-                        `Testing failure prompt copied and ${sourceCards.length} plan(s) moved to Lead Coder. Paste the prompt in your lead coder chat.`
+                        `Testing failure prompt copied and ${sourceCards.length} plan(s) moved to Lead Coder. ${verb}`.trim()
                     );
                 }
                 break;
