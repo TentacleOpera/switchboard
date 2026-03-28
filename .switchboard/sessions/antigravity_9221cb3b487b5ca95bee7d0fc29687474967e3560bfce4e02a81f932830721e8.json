@@ -1,0 +1,32 @@
+{
+  "sessionId": "antigravity_9221cb3b487b5ca95bee7d0fc29687474967e3560bfce4e02a81f932830721e8",
+  "planFile": ".switchboard/plans/brain_9221cb3b487b5ca95bee7d0fc29687474967e3560bfce4e02a81f932830721e8_refine_chat_workflow_for_pure_ideation.md",
+  "brainSourcePath": "/Users/patrickvuleta/.gemini/antigravity/brain/d286715d-47aa-4705-837d-40a8a9aeb00d/implementation_plan.md",
+  "topic": "Refine Chat Workflow for Pure Ideation",
+  "createdAt": "2026-03-27T12:38:22.526Z",
+  "source": "antigravity",
+  "events": [
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-27T12:38:22.526Z",
+      "action": "start"
+    },
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-27T12:52:49.454Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-coder-coded",
+      "timestamp": "2026-03-27T12:54:47.549Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-27T13:06:46.892Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ]
+}

@@ -1,0 +1,32 @@
+{
+  "sessionId": "sess_1774672965249",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T04:42:45.249Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-28T07:46:58.403Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff",
+      "timestamp": "2026-03-28T08:59:58.280Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T10:32:58.851Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_154245_add_chat_mode_copy_button.md",
+  "topic": "add chat mode copy button",
+  "planName": "add chat mode copy button",
+  "completed": false,
+  "createdAt": "2026-03-28T04:42:45.249Z",
+  "brainSourcePath": ""
+}

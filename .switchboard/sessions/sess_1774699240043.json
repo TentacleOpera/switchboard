@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess_1774699240043",
+  "planFile": ".switchboard/plans/feature_plan_20260328_230006_fix_agentsmd_deprecated_handoff_references.md",
+  "topic": "Fix AGENTS.md references to deprecated handoff workflows",
+  "createdAt": "2026-03-28T12:00:39.926Z",
+  "events": [
+    {
+      "workflow": "unknown",
+      "timestamp": "2026-03-28T12:00:40.044Z",
+      "action": "start"
+    }
+  ]
+}

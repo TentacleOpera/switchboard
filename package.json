@@ -171,6 +171,11 @@
           "default": false,
           "description": "When enabled, Lead Coder execution prompts include an inline challenge step before implementation."
         },
+        "switchboard.reviewer.advancedMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, reviewer prompts include deep regression analysis instructions (caller tracing, race condition checks, orphaned reference detection). Token-intensive — off by default."
+        },
         "switchboard.pairProgramming.aggressive": {
           "type": "boolean",
           "default": false,

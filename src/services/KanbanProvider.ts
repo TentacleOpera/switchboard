@@ -967,30 +967,26 @@ export class KanbanProvider implements vscode.Disposable {
 
             // Highest priority: explicit manual complexity override (user-set via dropdown).
             // This supersedes all text-derived heuristics.
+            // When the value is 'Unknown', fall through — it means no override is set.
             const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(Low|High|Unknown)/i);
             if (overrideMatch) {
                 const val = overrideMatch[1].toLowerCase();
                 if (val === 'low') return 'Low';
                 if (val === 'high') return 'High';
-                return 'Unknown';
+                // 'Unknown' — no override, fall through to auto-detection
             }
 
-            // Secondary priority: Kanban DB
+            // Secondary priority: Kanban DB (lookup by plan_file column)
             try {
                 const db = KanbanDatabase.forWorkspace(workspaceRoot);
                 if (await db.ensureReady()) {
                     const normalized = path.normalize(resolvedPlanPath);
-                    const stable = process.platform === 'win32' ? normalized.toLowerCase() : normalized;
-                    const rootPiece = path.parse(stable).root;
-                    const stablePath = stable.length > rootPiece.length ? stable.replace(/[\\\/]+$/, '') : stable;
-                    const getBaseBrainPath = (p: string) => p.replace(/\.resolved(\.\d+)?$/i, '');
-
-                    const finalStablePath = getBaseBrainPath(stablePath);
-                    const planId = crypto.createHash('sha256').update(finalStablePath).digest('hex');
-
-                    const plan = await db.getPlanBySessionId(planId);
-                    if (plan && (plan.complexity === 'Low' || plan.complexity === 'High')) {
-                        return plan.complexity;
+                    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                    if (workspaceId) {
+                        const plan = await db.getPlanByPlanFile(normalized, workspaceId);
+                        if (plan && (plan.complexity === 'Low' || plan.complexity === 'High')) {
+                            return plan.complexity;
+                        }
                     }
                 }
             } catch (err) {
@@ -1449,6 +1445,12 @@ export class KanbanProvider implements vscode.Disposable {
                     vscode.window.showInformationMessage(msg.message);
                 }
                 break;
+            case 'showWarning': {
+                if (typeof msg.message === 'string' && msg.message.length > 0) {
+                    vscode.window.showWarningMessage(msg.message);
+                }
+                break;
+            }
             case 'promptOnDrop': {
                 // Complex: Drag-and-drop in "prompt" mode — copy prompt to clipboard and advance visually (no CLI dispatch).
                 // Mirrors the logic of 'promptSelected' but triggered by the drop handler when column mode is 'prompt'.
@@ -1683,6 +1685,35 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
                 }
+                break;
+            }
+            case 'chatCopyPrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+
+                const chatWorkflowPath = '.agent/workflows/chat.md';
+                let planSection = '';
+
+                if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
+                    await this._refreshBoard(workspaceRoot);
+                    const selectedCards = this._lastCards.filter(card =>
+                        card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                    );
+                    if (selectedCards.length > 0) {
+                        const planLines = selectedCards.map(card => {
+                            const absPath = this._resolvePlanFilePath(workspaceRoot, card.planFile);
+                            return `- [${card.topic}] Plan File: ${absPath}`;
+                        }).join('\n');
+                        planSection = `\n\n## Plans to Discuss\n${planLines}\n\nPlease read each plan file above before starting the discussion.`;
+                    }
+                }
+
+                const prompt = `/chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
+
+                await vscode.env.clipboard.writeText(prompt);
+                const count = Array.isArray(msg.sessionIds) ? msg.sessionIds.length : 0;
+                const planWord = count > 0 ? ` for ${count} plan(s)` : '';
+                vscode.window.showInformationMessage(`Chat prompt copied to clipboard${planWord}.`);
                 break;
             }
             case 'promptSelected': {
@@ -1983,7 +2014,11 @@ export class KanbanProvider implements vscode.Disposable {
             }
             case 'rePlanSelected': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
+                if (!workspaceRoot) { break; }
+                if (!Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
+                    vscode.window.showWarningMessage('Please select at least one plan to re-plan.');
+                    break;
+                }
                 const visibleAgents = await this._getVisibleAgents(workspaceRoot);
                 if (visibleAgents.planner === false) {
                     vscode.window.showWarningMessage('Planner agent is currently disabled in setup.');
@@ -1997,6 +2032,40 @@ export class KanbanProvider implements vscode.Disposable {
                     workspaceRoot
                 );
                 vscode.window.showInformationMessage(`Sent ${msg.sessionIds.length} plan(s) to planner for re-plan (improve-plan).`);
+                break;
+            }
+            case 'codeMapConfirm': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
+                const confirm = await vscode.window.showWarningMessage(
+                    `Run code map on all ${msg.sessionIds.length} plans in this column?`,
+                    'Run All', 'Cancel'
+                );
+                if (confirm !== 'Run All') { break; }
+                msg.type = 'codeMapSelected';
+            }
+            // falls through
+            case 'codeMapSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) { break; }
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (visibleAgents.analyst === false) {
+                    vscode.window.showWarningMessage('Analyst agent is not available.');
+                    break;
+                }
+                let succeeded = 0;
+                let failed = 0;
+                for (const sessionId of msg.sessionIds) {
+                    try {
+                        await vscode.commands.executeCommand('switchboard.analystMapFromKanban', sessionId, workspaceRoot);
+                        succeeded++;
+                    } catch (err) {
+                        failed++;
+                        console.error(`[KanbanProvider] Code map failed for session ${sessionId}:`, err);
+                    }
+                }
+                const failMsg = failed > 0 ? ` ${failed} failed.` : '';
+                vscode.window.showInformationMessage(`Code map dispatched for ${succeeded}/${msg.sessionIds.length} plan(s).${failMsg}`);
                 break;
             }
             case 'getDbPath': {
@@ -2138,6 +2207,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_CLI}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-53.png')).toString(),
             '{{ICON_PROMPT}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-22.png')).toString(),
             '{{ICON_55}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-55.png')).toString(),
+            '{{ICON_85}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-85.png')).toString(),
+            '{{ICON_CHAT}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-65.png')).toString(),
+            '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);

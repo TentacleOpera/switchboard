@@ -1,0 +1,33 @@
+{
+  "sessionId": "sess_1774684395760",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T07:53:15.760Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-28T07:53:39.685Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "handoff",
+      "timestamp": "2026-03-28T08:59:58.307Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T10:32:58.873Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_185315_improving_ticket_view_layout_and_interactivity.md",
+  "topic": "Improving Ticket View Layout and Interactivity",
+  "planName": "Improving Ticket View Layout and Interactivity",
+  "completed": false,
+  "createdAt": "2026-03-28T07:53:15.760Z",
+  "brainSourcePath": ""
+}

@@ -630,18 +630,12 @@
 
         /* Testing Fail icon button */
         .testing-fail-icon {
-            color: var(--accent-red);
-            font-size: 16px;
-            font-weight: bold;
-            line-height: 22px;
             width: 22px;
             height: 22px;
-            display: flex;
-            align-items: center;
-            justify-content: center;
+            display: block;
         }
         .testing-fail-btn:hover .testing-fail-icon {
-            text-shadow: 0 0 8px var(--accent-red);
+            filter: drop-shadow(0 0 8px var(--accent-red));
         }
 
         /* Modal overlay */
@@ -1110,6 +1104,9 @@
         const ICON_CLI = '{{ICON_CLI}}';
         const ICON_PROMPT = '{{ICON_PROMPT}}';
         const ICON_RECOVER_SELECTED = '{{ICON_55}}';
+        const ICON_TESTING_FAIL = '{{ICON_85}}';
+        const ICON_CHAT = '{{ICON_CHAT}}';
+        const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
@@ -1298,7 +1295,7 @@
                             <img src="${ICON_MOVE_ALL}" alt="Complete All">
                         </button>
                         <button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">
-                            <span class="testing-fail-icon">✗</span>
+                            <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
                         </button>
                     </div>`;
                 } else {
@@ -1312,9 +1309,19 @@
                                <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
                            </button>`
                         : '';
+                    const codeMapBtn = (isCreated && lastVisibleAgents.analyst !== false)
+                        ? `<button class="column-icon-btn" data-action="codeMapSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Run code map on selected plans (or all if none selected)">
+                               <img src="${ICON_CODE_MAP}" alt="Code Map">
+                           </button>`
+                        : '';
                     const testingFailBtn = (def.id === 'LEAD CODED' || def.id === 'CODER CODED')
                         ? `<button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">
-                               <span class="testing-fail-icon">✗</span>
+                               <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
+                           </button>`
+                        : '';
+                    const chatBtn = isCreated
+                        ? `<button class="column-icon-btn" data-action="chatCopyPrompt" data-column="${escapeAttr(def.id)}" data-tooltip="Copy chat prompt for selected plans to clipboard">
+                               <img src="${ICON_CHAT}" alt="Chat">
                            </button>`
                         : '';
                     buttonArea = `<div class="column-button-area">
@@ -1332,7 +1339,9 @@
                         </button>
                         ${julesBtn}
                         ${rePlanBtn}
+                        ${codeMapBtn}
                         ${testingFailBtn}
+                        ${chatBtn}
                     </div>`;
                 }
 
@@ -1421,8 +1430,30 @@
                         }
                         case 'rePlanSelected': {
                             const ids = getSelectedInColumn(column);
-                            if (ids.length === 0) return;
+                            if (ids.length === 0) {
+                                postKanbanMessage({ type: 'showWarning', message: 'Please select at least one plan to re-plan.' });
+                                return;
+                            }
                             postKanbanMessage({ type: 'rePlanSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                            break;
+                        }
+                        case 'codeMapSelected': {
+                            let ids = getSelectedInColumn(column);
+                            const usedAll = ids.length === 0;
+                            if (usedAll) {
+                                ids = getAllInColumn(column);
+                            }
+                            if (ids.length === 0) return;
+                            if (usedAll && ids.length > 5) {
+                                postKanbanMessage({ type: 'codeMapConfirm', sessionIds: ids, count: ids.length, workspaceRoot: getActiveWorkspaceRoot() });
+                            } else {
+                                postKanbanMessage({ type: 'codeMapSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                            }
+                            break;
+                        }
+                        case 'chatCopyPrompt': {
+                            const ids = getSelectedInColumn(column);
+                            postKanbanMessage({ type: 'chatCopyPrompt', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
                             break;
                         }
                         case 'testingFailed': {

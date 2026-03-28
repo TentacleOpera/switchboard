@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess_1774695041864",
+  "planFile": ".switchboard/plans/feature_plan_20260328_title_map_db_migration.md",
+  "topic": "Migrate _readSessionTitleMap to Database-First",
+  "createdAt": "2026-03-28T10:50:41.764Z",
+  "events": [
+    {
+      "workflow": "unknown",
+      "timestamp": "2026-03-28T10:50:41.865Z",
+      "action": "start"
+    }
+  ]
+}

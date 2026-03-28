@@ -889,7 +889,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         sheets: any[],
         customAgents: CustomAgentConfig[],
-        _archiveMissing: boolean = true
+        archiveMissing: boolean = true
     ): Promise<string | null> {
         const db = await this._getKanbanDb(workspaceRoot);
         if (!db) return null;
@@ -921,6 +921,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             (planFile) => this._kanbanProvider ? this._kanbanProvider.getTagsFromPlan(workspaceRoot, planFile) : Promise.resolve('')
         );
         if (!synced) return null;
+
+        // Purge orphaned plans whose files no longer exist on disk
+        if (archiveMissing) {
+            const purged = await db.purgeOrphanedPlans(workspaceId, (planFile: string) => {
+                return path.resolve(workspaceRoot, planFile);
+            });
+            if (purged > 0) {
+                console.log(`[TaskViewerProvider] Purged ${purged} orphaned plan(s) during sync`);
+            }
+        }
+
         return workspaceId;
     }
 

@@ -640,6 +640,53 @@ export class KanbanDatabase {
         );
     }
 
+    /**
+     * Find active plans whose plan_file no longer exists on disk and tombstone them.
+     * Only checks local-source plans (skips brain-source).
+     * Returns the number of plans tombstoned.
+     */
+    public async purgeOrphanedPlans(
+        workspaceId: string,
+        resolvePath: (planFile: string) => string
+    ): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+
+        const stmt = this._db.prepare(
+            `SELECT session_id, plan_file, source_type FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND plan_file IS NOT NULL AND plan_file != ''`,
+            [workspaceId]
+        );
+        const rows: Array<{ session_id: string; plan_file: string; source_type: string }> = [];
+        while (stmt.step()) {
+            rows.push(stmt.getAsObject() as any);
+        }
+        stmt.free();
+
+        let purged = 0;
+        const now = new Date().toISOString();
+        for (const row of rows) {
+            if (row.source_type === 'brain') continue;
+            const absPath = resolvePath(row.plan_file);
+            try {
+                if (!fs.existsSync(absPath)) {
+                    this._db.run(
+                        "UPDATE plans SET status = 'deleted', updated_at = ? WHERE session_id = ? AND workspace_id = ?",
+                        [now, row.session_id, workspaceId]
+                    );
+                    purged++;
+                    console.log(`[KanbanDatabase] Tombstoned orphaned plan: ${row.session_id} (missing file: ${row.plan_file})`);
+                }
+            } catch {
+                // If we can't check the file, skip it — don't tombstone on error
+            }
+        }
+
+        if (purged > 0) {
+            await this._persist();
+        }
+        return purged;
+    }
+
     /** Check if a plan ID is tombstoned. */
     public async isTombstoned(planId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;

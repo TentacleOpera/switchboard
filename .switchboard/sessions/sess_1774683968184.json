@@ -1,0 +1,32 @@
+{
+  "sessionId": "sess_1774683968184",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T07:46:08.183Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-28T07:46:58.462Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-28T08:59:56.175Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T09:20:10.698Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_184608_stale_kanban_card_persistence.md",
+  "topic": "Stale Kanban Card Persistence",
+  "planName": "Stale Kanban Card Persistence",
+  "completed": false,
+  "createdAt": "2026-03-28T07:46:08.183Z",
+  "brainSourcePath": ""
+}

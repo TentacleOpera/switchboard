@@ -22,6 +22,8 @@ export interface PromptBuilderOptions {
     pairProgrammingEnabled?: boolean;
     /** When true, planner classifies more tasks as Routine, assuming a competent Coder. */
     aggressivePairProgramming?: boolean;
+    /** Whether advanced regression analysis block is appended (reviewer role). */
+    advancedReviewerEnabled?: boolean;
 }
 
 function buildReviewerExecutionIntro(planCount: number): string {
@@ -64,6 +66,7 @@ export function buildKanbanBatchPrompt(
     const accurateCodingEnabled = options?.accurateCodingEnabled ?? false;
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
+    const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
 
     const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
     const parallelInstruction = plans.length > 1
@@ -125,11 +128,21 @@ ${planList}`;
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         const reviewerExecutionIntro = buildReviewerExecutionIntro(plans.length);
         const reviewerExecutionMode = buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
+        const advancedReviewerBlock = advancedReviewerEnabled ? `
+
+ADVANCED REGRESSION ANALYSIS (enabled):
+1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
+2. Check for double-trigger bugs: if you add a UI refresh, verify no caller already triggers one.
+3. Check for race conditions: if the change involves async state (DB writes, file watchers, mtime checks), verify it doesn't conflict with concurrent systems (autoban polling, cross-IDE sync, write serialization chains).
+4. Check for orphaned references: if dead code was removed, grep for any remaining references to the removed identifiers.
+5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
+This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.` : '';
+
         return `${reviewerExecutionIntro}
 
 ${batchExecutionRules}
 
-${reviewerExecutionMode}
+${reviewerExecutionMode}${advancedReviewerBlock}
 
 For each plan:
 1. Use the plan file as the source of truth for the review criteria.

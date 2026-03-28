@@ -961,6 +961,13 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
+    const selectSessionDisposable = vscode.commands.registerCommand('switchboard.selectSession', (sessionId: string) => {
+        if (typeof sessionId === 'string' && sessionId.trim()) {
+            taskViewerProvider.selectSession(sessionId);
+        }
+    });
+    context.subscriptions.push(selectSessionDisposable);
+
     const createAgentGridDisposable = vscode.commands.registerCommand('switchboard.createAgentGrid', async () => {
         await createAgentGrid();
     });

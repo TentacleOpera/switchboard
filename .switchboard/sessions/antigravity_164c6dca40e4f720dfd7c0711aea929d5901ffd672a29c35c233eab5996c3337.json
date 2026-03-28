@@ -1,0 +1,27 @@
+{
+  "sessionId": "antigravity_164c6dca40e4f720dfd7c0711aea929d5901ffd672a29c35c233eab5996c3337",
+  "planFile": ".switchboard/plans/brain_164c6dca40e4f720dfd7c0711aea929d5901ffd672a29c35c233eab5996c3337_fix_copy_prompt_button_on_kanban_cards_does_not_advance_fix_copy_prompt_button_on_kanban_cards_does_not_advance.md",
+  "brainSourcePath": "/Users/patrickvuleta/.gemini/antigravity/brain/6dc5c603-4605-440d-ae50-207adbc015aa/implementation_plan.md",
+  "topic": "Fix: Copy Prompt Button on Kanban Cards Does Not Advance",
+  "createdAt": "2026-03-27T13:00:57.809Z",
+  "source": "antigravity",
+  "events": [
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-27T13:00:57.809Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-coder-coded",
+      "timestamp": "2026-03-27T13:04:44.997Z",
+      "action": "stop",
+      "outcome": "User manually changed plan column from ticket view"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-27T13:06:46.900Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ]
+}

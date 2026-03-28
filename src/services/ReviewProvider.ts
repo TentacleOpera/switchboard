@@ -144,6 +144,14 @@ export class ReviewProvider implements vscode.Disposable {
             case 'ready':
                 await this._renderCurrentPlan();
                 break;
+            case 'planShown': {
+                // Sync the sidebar selection with the plan currently being viewed
+                const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';
+                if (sessionId) {
+                    vscode.commands.executeCommand('switchboard.selectSession', sessionId);
+                }
+                break;
+            }
             case 'selectionChanged': {
                 if (typeof msg?.selectedText === 'string' && msg.selectedText.trim().length > 0) {
                     this._lastSelection = {
@@ -234,6 +242,7 @@ export class ReviewProvider implements vscode.Disposable {
                 }
                 break;
             }
+            // NOTE: UI button removed from review.html; handler retained for API compatibility
             case 'sendToAgent': {
                 try {
                     if (!this._currentPlan?.sessionId) {

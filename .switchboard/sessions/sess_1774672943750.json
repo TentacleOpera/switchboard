@@ -1,0 +1,32 @@
+{
+  "sessionId": "sess_1774672943750",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T04:42:23.749Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-28T07:46:58.362Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff",
+      "timestamp": "2026-03-28T08:59:58.261Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T10:32:58.832Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_154223_change_test_fail_icons.md",
+  "topic": "Change Test Fail Icons",
+  "planName": "Change Test Fail Icons",
+  "completed": false,
+  "createdAt": "2026-03-28T04:42:23.749Z",
+  "brainSourcePath": ""
+}

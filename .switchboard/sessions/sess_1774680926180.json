@@ -1,0 +1,32 @@
+{
+  "sessionId": "sess_1774680926180",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T06:55:26.179Z",
+      "action": "start"
+    },
+    {
+      "workflow": "sidebar-review",
+      "timestamp": "2026-03-28T07:46:58.426Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-28T08:59:56.155Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T09:20:10.682Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_175526_atabase_sync_panel_is_unresponsive.md",
+  "topic": "Database & Sync Panel Is Unresponsive",
+  "planName": "∂atabase & sync panel is unresponsive",
+  "completed": false,
+  "createdAt": "2026-03-28T06:55:26.179Z",
+  "brainSourcePath": ""
+}

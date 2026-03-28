@@ -1,0 +1,28 @@
+{
+  "sessionId": "antigravity_8777d3779c2a19decdb95f6168269b63ccd9ae7b6d6555f6bb1d91164c38adf0",
+  "events": [
+    {
+      "workflow": "Implementation",
+      "timestamp": "2026-03-28T04:13:06.348Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-coder-coded",
+      "timestamp": "2026-03-28T04:36:30.866Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T10:32:58.802Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/brain_8777d3779c2a19decdb95f6168269b63ccd9ae7b6d6555f6bb1d91164c38adf0.md",
+  "topic": "Fix Database & Sync Panel",
+  "planName": "Fix Database & Sync Panel",
+  "completed": false,
+  "createdAt": "2026-03-28T04:13:06.348Z",
+  "brainSourcePath": "/Users/patrickvuleta/.gemini/antigravity/brain/ed7a7857-4138-4850-a03c-e56d662ec9ff/implementation_plan.md"
+}

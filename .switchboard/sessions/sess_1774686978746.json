@@ -1,0 +1,33 @@
+{
+  "sessionId": "sess_1774686978746",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T08:36:18.745Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-28T08:37:01.860Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "handoff",
+      "timestamp": "2026-03-28T08:59:58.329Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T10:32:58.889Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_193618_complexity_display_desync.md",
+  "topic": "Complexity Display Desync",
+  "planName": "Complexity Display Desync",
+  "completed": false,
+  "createdAt": "2026-03-28T08:36:18.745Z",
+  "brainSourcePath": ""
+}

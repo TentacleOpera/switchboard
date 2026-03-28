@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess_1774695057817",
+  "planFile": ".switchboard/plans/feature_plan_20260328_tombstone_cleanup_job.md",
+  "topic": "Add Tombstone Cleanup Job for Deleted Plans",
+  "createdAt": "2026-03-28T10:50:57.720Z",
+  "events": [
+    {
+      "workflow": "unknown",
+      "timestamp": "2026-03-28T10:50:57.817Z",
+      "action": "start"
+    }
+  ]
+}

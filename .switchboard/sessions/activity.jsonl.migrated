@@ -2760,3 +2760,44 @@
 {"timestamp":"2026-03-27T05:47:24.573Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774590444568","planFile":".switchboard/plans/feature_plan_20260327_164724_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
 {"timestamp":"2026-03-27T05:47:24.667Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
 {"timestamp":"2026-03-27T05:47:24.836Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T21:22:23.180Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"antigravity_1380891e1a0dee14fc2fade9bfcb0cf50bbcd2009c11ec56e3410ff3829cbc96","planFile":".switchboard/plans/brain_1380891e1a0dee14fc2fade9bfcb0cf50bbcd2009c11ec56e3410ff3829cbc96.md","topic":"Advanced Reviewer Toggle"}}
+{"timestamp":"2026-03-27T21:26:01.986Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774646761981","planFile":".switchboard/plans/feature_plan_20260328_082601_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-27T21:26:02.072Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T21:26:02.252Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T21:36:21.526Z","type":"dispatch","payload":{"timestamp":"2026-03-27T21:36:21.526Z","dispatchId":"msg_1774647381526_c6vf86pua","event":"received","sender":"sidebar","recipient":"Coder","action":"execute"}}
+{"timestamp":"2026-03-27T21:37:27.178Z","type":"ui_action","payload":{"action":"triggerAgentAction","role":"lead","sessionId":"sess_1774646761981","instruction":""},"correlationId":"req_1774647447178_fz6zchu1u"}
+{"timestamp":"2026-03-27T21:37:27.183Z","type":"dispatch","payload":{"timestamp":"2026-03-27T21:37:27.183Z","dispatchId":"msg_1774647447182_h8jxgfvnd","event":"received","sender":"sidebar","recipient":"Lead Coder","action":"execute"}}
+{"timestamp":"2026-03-27T21:37:29.241Z","type":"dispatch","payload":{"event":"dispatch_sent","role":"lead","sessionId":"sess_1774646761981","targetAgent":"Lead Coder"},"correlationId":"req_1774647447178_fz6zchu1u"}
+{"timestamp":"2026-03-27T21:58:21.996Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774648701990","planFile":".switchboard/plans/feature_plan_20260328_085821_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-27T21:58:22.090Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T21:58:22.264Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T21:58:37.135Z","type":"plan_management","payload":{"operation":"delete_plan","sessionId":"sess_1774648701990"}}
+{"timestamp":"2026-03-27T22:07:51.053Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774581191421","planFile":".switchboard/plans/feature_plan_20260327_141311_link_card_select_to_sidebar_dropdown.md","topic":"Link card select to sidebar dropdown"}}
+{"timestamp":"2026-03-27T22:08:27.049Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774649307047","planFile":".switchboard/plans/feature_plan_20260328_090827_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-27T22:08:27.139Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-27T22:08:27.365Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T02:11:28.694Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774663888689","planFile":".switchboard/plans/feature_plan_20260328_131128_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-28T02:11:28.784Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T02:11:28.960Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T02:26:04.289Z","type":"plan_management","payload":{"operation":"delete_plan","sessionId":"sess_1774649307047"}}
+{"timestamp":"2026-03-28T02:53:21.058Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774572788661","planFile":".switchboard/plans/feature_plan_20260327_115308_tooltips_are_still_broken.md","topic":"Tooltips are still broken"}}
+{"timestamp":"2026-03-28T02:54:49.059Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774559659415","planFile":".switchboard/plans/feature_plan_20260327_081419_replace_completed_column_icons.md","topic":"Replace completed column icons"}}
+{"timestamp":"2026-03-28T02:56:10.538Z","type":"dispatch","payload":{"timestamp":"2026-03-28T02:56:10.538Z","dispatchId":"msg_1774666570538_qtel2g1py","event":"received","sender":"sidebar","recipient":"Lead Coder","action":"execute"}}
+{"timestamp":"2026-03-28T02:57:02.051Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774646761981","planFile":".switchboard/plans/feature_plan_20260328_082601_add_testing_fail_icon_and_modal.md","topic":"Add testing fail icon and modal"}}
+{"timestamp":"2026-03-28T03:58:42.544Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774568622969","planFile":".switchboard/plans/feature_plan_20260327_104342_add_database_operaitons_panel.md","topic":"Add Database Operations Panel to Sidebar"}}
+{"timestamp":"2026-03-28T03:58:44.293Z","type":"plan_management","payload":{"operation":"mark_complete","sessionId":"sess_1774561321850","planFile":".switchboard/plans/feature_plan_20260327_084201_ticket_view_title_should_not_have_to_be_deleted.md","topic":"Ticket View Title Should Use Placeholder Instead of Real Text"}}
+{"timestamp":"2026-03-28T04:38:08.446Z","type":"ui_action","payload":{"action":"triggerAgentAction","role":"planner","sessionId":"sess_1774663888689","instruction":"improve-plan"},"correlationId":"req_1774672688445_ibq5hsirz"}
+{"timestamp":"2026-03-28T04:38:08.451Z","type":"dispatch","payload":{"timestamp":"2026-03-28T04:38:08.451Z","dispatchId":"msg_1774672688451_bad1ey4g8","event":"received","sender":"sidebar","recipient":"Planner","action":"execute"}}
+{"timestamp":"2026-03-28T04:38:10.502Z","type":"dispatch","payload":{"event":"dispatch_sent","role":"planner","sessionId":"sess_1774663888689","targetAgent":"Planner"},"correlationId":"req_1774672688445_ibq5hsirz"}
+{"timestamp":"2026-03-28T04:42:23.753Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774672943750","planFile":".switchboard/plans/feature_plan_20260328_154223_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-28T04:42:23.851Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:42:24.018Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:42:35.417Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774672955416","planFile":".switchboard/plans/feature_plan_20260328_154235_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-28T04:42:35.509Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:42:35.678Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:42:45.255Z","type":"plan_management","payload":{"operation":"create_plan","sessionId":"sess_1774672965249","planFile":".switchboard/plans/feature_plan_20260328_154245_untitled_plan.md","topic":"Untitled Plan","contentLineCount":14}}
+{"timestamp":"2026-03-28T04:42:45.344Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:42:45.516Z","type":"plan_management","payload":{"operation":"watcher_suppressed"}}
+{"timestamp":"2026-03-28T04:51:59.235Z","type":"ui_action","payload":{"action":"triggerAgentAction","role":"lead","sessionId":"sess_1774663888689","instruction":""},"correlationId":"req_1774673519235_ychnzuucd"}
+{"timestamp":"2026-03-28T04:51:59.240Z","type":"dispatch","payload":{"timestamp":"2026-03-28T04:51:59.240Z","dispatchId":"msg_1774673519240_mo984llfk","event":"received","sender":"sidebar","recipient":"Lead Coder","action":"execute"}}
+{"timestamp":"2026-03-28T04:52:01.295Z","type":"dispatch","payload":{"event":"dispatch_sent","role":"lead","sessionId":"sess_1774663888689","targetAgent":"Lead Coder"},"correlationId":"req_1774673519235_ychnzuucd"}

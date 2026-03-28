@@ -529,3 +529,121 @@ Total: ~9 days with testing
 4. **Add feature flag**: Implement `switchboard.useDbEvents` setting to allow instant rollback to file-based persistence if issues arise during dual-write transition.
 5. **Audit all 74+ consumer callsites**: Before starting Phase 3, generate a complete callsite inventory and update plan with specific per-file migration notes.
 6. **Sequence with other plans**: This plan must land before DuckDB Archive and DB Operations Panel plans execute, as both depend on stable schema.
+
+---
+
+## Review Results
+
+**Date**: 2026-03-27
+**Reviewer**: Adversarial Code Review (Grumpy Principal Engineer → Balanced Synthesis)
+
+---
+
+### Stage 1: Grumpy Principal Engineer Review
+
+#### Implementation Status vs Plan
+
+The implementation is **~30% complete**. Phase 1 (schema) is done. Everything else is scaffolding with zero integration.
+
+| Plan Phase | Status | Detail |
+|:-----------|:-------|:-------|
+| Phase 1: V5 Schema | ✅ Done | `plan_events` + `activity_log` tables, indexes |
+| Phase 2: Session Migration | ⚠️ Partial | `migrateSessionEvents()` exists but is NEVER CALLED |
+| Phase 3: Dual-Write | ❌ Not Started | `SessionActionLog` unchanged — file-only writes |
+| Phase 4: Activity Log | ❌ Not Started | `logEvent()` still writes to `activity.jsonl` |
+| Phase 5: Cross-Machine Sync | ❌ Not Started (correctly deferred per recommendation) | No `mergeRemoteEvents()` |
+| Phase 6: Cleanup | ❌ Not Started | `kanban_column` still in `plans` table (correct per recommendation) |
+
+#### Findings
+
+**[CRITICAL-1] `migrateSessionEvents()` does not await `_persist()` — silent data loss**
+`KanbanDatabase.ts:1080` — `this._persist()` returns a `Promise<boolean>` but the call was fire-and-forget. The method returns a migrated count to the caller while the disk write is still in-flight. If VS Code exits or crashes, all migrated events evaporate from the in-memory sql.js database. This directly contradicts the plan's durability guarantee.
+```typescript
+// WAS (line 1080):
+this._persist();
+// SHOULD BE:
+await this._persist();
+```
+**Status: FIXED in this review.**
+
+**[MAJOR-1] Inline `require('os')` on every event append — module resolution on hot path**
+`KanbanDatabase.ts:925,1059` — `require('os').hostname()` is called inside `appendPlanEvent()` and `migrateSessionEvents()`. While Node caches modules, calling `require()` on every single event append is sloppy — it hits the module resolution cache on a hot path that could be invoked hundreds of times during migration. This should be a top-level import.
+**Status: FIXED in this review.**
+
+**[MAJOR-2] Dead code — all new DB methods are orphaned**
+`appendPlanEvent()`, `appendActivityEvent()`, `getPlanEvents()`, `getRecentActivity()`, `getRunSheet()` (DB version), `migrateSessionEvents()` — six public methods across 166 lines of code with **zero callsites** in the entire codebase. Grep confirms no file outside `KanbanDatabase.ts` references any of them. This is dead code that will bitrot silently. When someone eventually tries to wire these up, the API surface may no longer match actual consumer needs.
+
+**[MAJOR-3] `KanbanMigration.SCHEMA_VERSION` still at 2 — schema version divergence**
+`KanbanMigration.ts:19` has `SCHEMA_VERSION = 2`. But `KanbanDatabase._runMigrations()` unconditionally executes `MIGRATION_V5_SQL` (using `IF NOT EXISTS` guards). The external migration utility (`KanbanMigration`) is unaware of the V5 tables. Any code that checks `SCHEMA_VERSION` to decide whether to run migrations will believe the DB is at V2 when it's actually at V5. This is a time bomb for the DuckDB Archive plan which reads schema version.
+
+**[MAJOR-4] No feature flag — no rollback path**
+The plan's Recommendation §4 explicitly calls for `switchboard.useDbEvents` setting. Not implemented. When dual-write eventually lands, there will be no kill switch. Every user gets the new behavior or none.
+
+**[MAJOR-5] `migrateSessionEvents()` uses raw `_db.run()` without per-row persistence**
+`KanbanDatabase.ts:1061-1073` — Individual event inserts use `this._db.run()` (in-memory only), and persistence happens once at the end via a single `_persist()`. For a session with 200 events, a crash at event #150 means all 150 prior events are lost with no partial-write recovery. The plan called for "immediate flush after event append" via `_persistedUpdate`. Compare with `appendPlanEvent()` which correctly uses `_persistedUpdate`.
+
+**[MAJOR-6] Consumer callsite audit not performed — 30+ sites still read from files**
+Grep finds 15+ `log.getRunSheet()` calls in `KanbanProvider.ts` and `TaskViewerProvider.ts`, 7+ `log.getRunSheets()` calls, 9+ `log.updateRunSheet()` calls, and 2 `log.findRunSheetByPlanFile()` calls — all hitting `SessionActionLog`'s file-based methods. Zero have been updated to check the DB. This means even if events were migrated to the DB, no consumer would read them.
+
+**[NIT-1] `getPlanEvents()` returns `any[]` — no type safety**
+All new DB methods use `any` for event types. The plan defines clear event structures (`PlanEvent` interface in Phase 5 code) but the implementation uses `any` throughout.
+
+**[NIT-2] `getRunSheet()` JSON.parse fallback swallows errors silently**
+`KanbanDatabase.ts:1029-1030` — The `catch` block falls back to `{ workflow, action, timestamp }` when payload parsing fails, but doesn't log the error. Malformed payloads will silently produce degraded run sheets.
+
+**[NIT-3] Missing `NOT NULL` on `device_id` in schema vs plan spec**
+Schema has `device_id TEXT DEFAULT ''` (line 93) but plan spec says `device_id TEXT NOT NULL DEFAULT ''`. Minor — the `DEFAULT ''` means inserts without device_id get empty string either way, but `NOT NULL` constraint is missing if someone explicitly passes `NULL`.
+
+---
+
+### Stage 2: Balanced Synthesis
+
+#### Valid findings that need fixing NOW
+
+| ID | Severity | Finding | Action |
+|:---|:---------|:--------|:-------|
+| CRITICAL-1 | CRITICAL | Un-awaited `_persist()` in `migrateSessionEvents()` | **FIXED** — added `await` |
+| MAJOR-1 | MAJOR | Inline `require('os')` | **FIXED** — moved to top-level `import * as os` |
+
+#### Valid findings to address before Phase 3 begins
+
+| ID | Severity | Finding | Action Needed |
+|:---|:---------|:--------|:--------------|
+| MAJOR-2 | MAJOR | Dead code (6 orphaned methods) | Wire up when Phase 3 starts; do NOT delete — schema+methods are the foundation |
+| MAJOR-3 | MAJOR | `KanbanMigration.SCHEMA_VERSION` divergence | Update to 5 when V5 is officially "shipped" (after dual-write lands) |
+| MAJOR-4 | MAJOR | No feature flag | Add `switchboard.useDbEvents` to `package.json` contributes before Phase 3 |
+| MAJOR-5 | MAJOR | Batch-only persist in migration | Refactor to use `_persistedUpdate` per event, or batch with explicit `await this._persist()` after each N events |
+| MAJOR-6 | MAJOR | 30+ consumer callsites un-migrated | Generate callsite inventory and plan per-file migration before Phase 3 |
+
+#### Correctly handled / Deferred per plan recommendations
+
+| Item | Status | Notes |
+|:-----|:-------|:------|
+| Vector clock as no-op | ✅ Correct | `vector_clock TEXT DEFAULT ''` in schema, no implementation — matches recommendation |
+| `kanban_column` kept as materialized cache | ✅ Correct | Column remains in `plans` table — matches recommendation §3 |
+| `mergeRemoteEvents()` deferred | ✅ Correct | Not implemented — matches recommendation to split into separate sync plan |
+| sql.js durability addressed | ✅ Correct | `appendPlanEvent()` and `appendActivityEvent()` both use `_persistedUpdate()` which does immediate `_persist()` after every write |
+| `_migrateSessionFiles()` idempotency | ✅ Correct | `migrateSessionEvents()` checks `SELECT COUNT(*) ... WHERE session_id = ?` and skips if events exist |
+
+---
+
+### Code Fixes Applied
+
+| File | Change | Description |
+|:-----|:-------|:------------|
+| `src/services/KanbanDatabase.ts:1-5` | Added `import * as os from 'os'` | Top-level import replaces inline `require('os')` |
+| `src/services/KanbanDatabase.ts:925` | `os.hostname()` | Replaced `require('os').hostname()` in `appendPlanEvent()` |
+| `src/services/KanbanDatabase.ts:1059` | `os.hostname()` | Replaced `require('os').hostname()` in `migrateSessionEvents()` |
+| `src/services/KanbanDatabase.ts:1080` | `await this._persist()` | Fixed fire-and-forget persist — critical data loss bug |
+
+### Verification Results
+
+- `npx tsc --noEmit`: ✅ **PASS** (exit code 0, no errors)
+
+### Remaining Risks
+
+1. **Dead code bitrot**: The 6 new methods have no callers and no tests. They will drift from actual consumer needs as the codebase evolves. Recommend adding at minimum a smoke test that calls each method.
+2. **Migration durability**: `migrateSessionEvents()` still does batch-only persist (one `_persist()` at the end). A crash mid-migration loses all progress. Consider persisting every N events.
+3. **Schema version gap**: `KanbanMigration.SCHEMA_VERSION` at 2 while DB is effectively at V5 creates confusion for any tooling that reads schema version.
+4. **No integration tests**: Zero test coverage for any of the new event sourcing methods.
+5. **Plan sequencing**: DuckDB Archive and DB Operations Panel plans must not land until this plan's Phase 3 is complete and schema is stable.

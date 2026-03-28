@@ -1,0 +1,68 @@
+{
+  "sessionId": "sess_1774663888689",
+  "events": [
+    {
+      "workflow": "initiate-plan",
+      "timestamp": "2026-03-28T02:11:28.688Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-28T04:36:51.143Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-28T04:36:59.027Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-28T04:37:02.211Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-28T04:37:21.360Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-plan-reviewed",
+      "timestamp": "2026-03-28T04:37:51.349Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    },
+    {
+      "workflow": "reset-to-created",
+      "timestamp": "2026-03-28T04:38:06.111Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "Improved plan",
+      "timestamp": "2026-03-28T04:38:10.486Z",
+      "action": "start"
+    },
+    {
+      "workflow": "handoff-lead",
+      "timestamp": "2026-03-28T04:52:01.270Z",
+      "action": "start"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-28T09:20:10.647Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
+    }
+  ],
+  "planFile": ".switchboard/plans/feature_plan_20260328_131128_finish_sqlite_migration.md",
+  "topic": "Finish SQLite Migration & Address Kanban Completed Ticket Bug",
+  "planName": "Finish SQLite Migration & Address Kanban Completed Ticket Bug",
+  "completed": false,
+  "createdAt": "2026-03-28T02:11:28.688Z",
+  "brainSourcePath": ""
+}

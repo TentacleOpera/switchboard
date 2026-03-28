@@ -1,0 +1,13 @@
+{
+  "sessionId": "sess_1774695026564",
+  "planFile": ".switchboard/plans/feature_plan_20260328_mcp_recheck_csp_fix.md",
+  "topic": "Fix MCP Recheck Button CSP Blocking",
+  "createdAt": "2026-03-28T10:50:26.466Z",
+  "events": [
+    {
+      "workflow": "unknown",
+      "timestamp": "2026-03-28T10:50:26.564Z",
+      "action": "start"
+    }
+  ]
+}

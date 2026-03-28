@@ -23,6 +23,30 @@
       "workflow": "reviewer-pass",
       "timestamp": "2026-03-25T04:10:58.275Z",
       "action": "start"
+    },
+    {
+      "workflow": "reset-to-coder-coded",
+      "timestamp": "2026-03-27T21:22:38.461Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-27T21:22:47.855Z",
+      "action": "stop",
+      "outcome": "Auto-advanced after copying reviewer prompt"
+    },
+    {
+      "workflow": "reset-to-coder-coded",
+      "timestamp": "2026-03-27T21:22:53.338Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "reviewer-pass",
+      "timestamp": "2026-03-27T21:23:14.653Z",
+      "action": "stop",
+      "outcome": "Auto-advanced after copying reviewer prompt"
     }
   ]
 }

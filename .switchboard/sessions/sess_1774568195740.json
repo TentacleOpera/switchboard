@@ -25,6 +25,18 @@
       "workflow": "sidebar-review",
       "timestamp": "2026-03-26T23:50:35.780Z",
       "action": "start"
+    },
+    {
+      "workflow": "reset-to-coder-coded",
+      "timestamp": "2026-03-27T21:23:25.911Z",
+      "action": "stop",
+      "outcome": "User manually moved plan backwards"
+    },
+    {
+      "workflow": "move-to-code-reviewed",
+      "timestamp": "2026-03-27T21:56:57.622Z",
+      "action": "stop",
+      "outcome": "User manually moved plan forwards"
     }
   ]
 }
