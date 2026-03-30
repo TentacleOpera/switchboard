@@ -167,7 +167,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _kanbanDbs = new Map<string, KanbanDatabase>();
     private _lastKanbanDbWarnings = new Map<string, string | null>();
     private _notifiedSessions = new Set<string>(); // Track sessions that have been notified of completion
-    private _duckdbTerminal?: vscode.Terminal;
 
     // Batched State Updates
     private _updateQueue: ((state: any) => void)[] = [];
@@ -245,14 +244,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return roots.length > 0 ? roots[0] : null;
     }
 
-    private async _checkCliTools(): Promise<void> {
-        try {
-            const execFileAsync = promisify(cp.execFile);
-            const { stdout } = await execFileAsync('duckdb', ['--version']);
-            this._view?.webview.postMessage({ type: 'cliStatus', tool: 'duckdb', installed: true, version: stdout.trim() });
-        } catch {
-            this._view?.webview.postMessage({ type: 'cliStatus', tool: 'duckdb', installed: false });
+    /**
+     * Resolve a kanban.dbPath setting value to an absolute path.
+     * Falls back to the default local DB path if the setting is empty.
+     */
+    private _resolveDbPathSetting(settingValue: string | undefined, wsRoot: string): string {
+        const trimmed = (settingValue || '').trim();
+        if (!trimmed) {
+            return KanbanDatabase.defaultDbPath(wsRoot);
         }
+        const expanded = trimmed.startsWith('~') ? path.join(os.homedir(), trimmed.slice(1)) : trimmed;
+        return path.isAbsolute(expanded) ? expanded : path.join(wsRoot, expanded);
     }
 
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
@@ -948,6 +950,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             try {
                 await this._activateWorkspaceContext(workspaceRoot);
                 await this._collectAndSyncKanbanSnapshot(workspaceRoot, true);
+
+                // Orphan detection: check if configured DB is empty but default location has plans
+                try {
+                    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                    const defaultPath = KanbanDatabase.defaultDbPath(workspaceRoot);
+                    if (db.dbPath !== defaultPath && fs.existsSync(defaultPath)) {
+                        const wsId = (() => {
+                            try { return String(vscode.workspace.getConfiguration('switchboard').get('workspaceId') || ''); }
+                            catch { return ''; }
+                        })();
+                        await db.ensureReady();
+                        const configuredPlans = await db.getBoard(wsId);
+                        if (configuredPlans.length === 0) {
+                            const hasOrphans = await KanbanDatabase.dbFileHasPlans(defaultPath);
+                            if (hasOrphans) {
+                                const action = await vscode.window.showWarningMessage(
+                                    'Current database is empty but plans were found in the local database. Migrate data?',
+                                    'Migrate Data', 'Ignore'
+                                );
+                                if (action === 'Migrate Data') {
+                                    const result = await KanbanDatabase.migrateIfNeeded(defaultPath, db.dbPath);
+                                    if (result.migrated) {
+                                        await KanbanDatabase.invalidateWorkspace(workspaceRoot);
+                                        vscode.window.showInformationMessage('✅ Plans migrated successfully.');
+                                    } else {
+                                        vscode.window.showErrorMessage(`Migration failed: ${result.skipped}`);
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } catch (orphanErr) {
+                    console.error(`[TaskViewerProvider] Orphan detection failed for ${workspaceRoot}:`, orphanErr);
+                }
             } catch (e) {
                 console.error(`[TaskViewerProvider] Failed to initialize Kanban DB on startup for ${workspaceRoot}:`, e);
             }
@@ -2919,7 +2955,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({ type: 'customAgents', customAgents });
                         }
                         this._view?.webview.postMessage({ type: 'loading', value: false });
-                        this._checkCliTools();
                         break;
                     case 'runSetup':
                         vscode.commands.executeCommand('switchboard.setup');
@@ -3329,6 +3364,44 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._handleKanbanWorkflowEvent(data.workflow, data.sessionId);
                         }
                         break;
+                    case 'getDbPath': {
+                        const gdbConfig = vscode.workspace.getConfiguration('switchboard');
+                        const gdbPath = gdbConfig.get<string>('kanban.dbPath', '');
+                        this._view?.webview.postMessage({ type: 'dbPathUpdated', path: gdbPath || '.switchboard/kanban.db' });
+                        break;
+                    }
+                    case 'setLocalDb': {
+                        const wsRoot = this._getWorkspaceRoot();
+                        if (!wsRoot) break;
+                        const localDbConfig = vscode.workspace.getConfiguration('switchboard');
+                        const currentCustomPath = localDbConfig.get<string>('kanban.dbPath', '');
+                        if (!currentCustomPath || !currentCustomPath.trim()) {
+                            vscode.window.showInformationMessage('Already using local database.');
+                            break;
+                        }
+                        const oldResolvedLocal = this._resolveDbPathSetting(currentCustomPath, wsRoot);
+                        const localPath = KanbanDatabase.defaultDbPath(wsRoot);
+
+                        const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedLocal, localPath);
+                        if (migResult.skipped === 'target_has_data') {
+                            const choice = await vscode.window.showWarningMessage(
+                                'Both local and cloud databases contain plans.',
+                                'Open Reconciliation', 'Switch Anyway'
+                            );
+                            if (choice === 'Open Reconciliation') {
+                                vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                                break;
+                            }
+                        } else if (migResult.migrated) {
+                            vscode.window.showInformationMessage('✅ Migrated plans back to local database.');
+                        }
+
+                        await localDbConfig.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
+                        await KanbanDatabase.invalidateWorkspace(wsRoot);
+                        this._view?.webview.postMessage({ type: 'dbPathUpdated', path: '.switchboard/kanban.db' });
+                        void this._refreshSessionStatus();
+                        break;
+                    }
                     case 'editDbPath': {
                         const dbConfig = vscode.workspace.getConfiguration('switchboard');
                         const currentDbPath = dbConfig.get<string>('kanban.dbPath', '');
@@ -3344,10 +3417,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 vscode.window.showErrorMessage(`❌ Invalid path: ${validation.error}`);
                                 return;
                             }
-                            await dbConfig.update('kanban.dbPath', trimmedPath || undefined, vscode.ConfigurationTarget.Workspace);
-                            // Invalidate so next request uses new path
                             const wsRoot = this._getWorkspaceRoot();
-                            if (wsRoot) { await KanbanDatabase.invalidateWorkspace(wsRoot); }
+                            if (wsRoot) {
+                                const oldResolvedPath = this._resolveDbPathSetting(currentDbPath, wsRoot);
+                                const newResolvedPath = this._resolveDbPathSetting(trimmedPath, wsRoot);
+
+                                const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, newResolvedPath);
+                                if (migResult.skipped === 'target_has_data') {
+                                    const choice = await vscode.window.showWarningMessage(
+                                        'Both the current and target databases contain plans. Automatic migration skipped.',
+                                        'Open Reconciliation', 'Continue Anyway'
+                                    );
+                                    if (choice === 'Open Reconciliation') {
+                                        vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                                        return;
+                                    }
+                                } else if (migResult.migrated) {
+                                    vscode.window.showInformationMessage('✅ Migrated plans to new database location.');
+                                }
+
+                                await KanbanDatabase.invalidateWorkspace(wsRoot);
+                            }
+                            await dbConfig.update('kanban.dbPath', trimmedPath || undefined, vscode.ConfigurationTarget.Workspace);
                             this._view?.webview.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
                             void this._refreshSessionStatus();
                             vscode.window.showInformationMessage('✅ Database path updated successfully.');
@@ -3436,8 +3527,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
 
                             const presetConfig = vscode.workspace.getConfiguration('switchboard');
-                            await presetConfig.update('kanban.dbPath', presetPath, vscode.ConfigurationTarget.Workspace);
                             const wsRoot = this._getWorkspaceRoot();
+
+                            // Attempt migration before switching
+                            if (wsRoot) {
+                                const oldDbPath = presetConfig.get<string>('kanban.dbPath', '');
+                                const oldResolvedPath = this._resolveDbPathSetting(oldDbPath, wsRoot);
+                                const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, presetPath);
+                                if (migResult.skipped === 'target_has_data') {
+                                    const migChoice = await vscode.window.showWarningMessage(
+                                        'Both the current and target databases contain plans. Automatic migration skipped.',
+                                        'Open Reconciliation', 'Continue Anyway'
+                                    );
+                                    if (migChoice === 'Open Reconciliation') {
+                                        vscode.commands.executeCommand('switchboard.reconcileKanbanDbs');
+                                        break;
+                                    }
+                                } else if (migResult.migrated) {
+                                    vscode.window.showInformationMessage(`✅ Migrated plans to ${data.preset} database.`);
+                                }
+                            }
+
+                            await presetConfig.update('kanban.dbPath', presetPath, vscode.ConfigurationTarget.Workspace);
                             if (wsRoot) { await KanbanDatabase.invalidateWorkspace(wsRoot); }
                             this._view?.webview.postMessage({ type: 'dbPathUpdated', path: presetPath });
                             vscode.window.showInformationMessage(`✅ Database location set to ${data.preset}.`);
@@ -3462,96 +3573,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                         break;
                     }
-                    case 'editArchivePath': {
+                    case 'queryArchives': {
                         const archConfig = vscode.workspace.getConfiguration('switchboard');
-                        const currentArchPath = archConfig.get<string>('archive.dbPath', '');
-                        const archResult = await vscode.window.showInputBox({
-                            prompt: 'Enter path for DuckDB archive (supports ~ and {workspace})',
-                            value: currentArchPath || '',
-                            placeHolder: '~/GoogleDrive/SwitchboardArchives/{workspace}.duckdb',
-                        });
-                        if (archResult !== undefined) {
-                            const trimmedArch = archResult.trim();
-                            const validation = KanbanDatabase.validatePath(trimmedArch.replace('{workspace}', 'test'));
-                            if (!validation.valid && trimmedArch !== '') {
-                                vscode.window.showErrorMessage(`❌ Invalid archive path: ${validation.error}`);
-                                return;
-                            }
-                            await archConfig.update('archive.dbPath', trimmedArch || undefined, vscode.ConfigurationTarget.Workspace);
-                            this._view?.webview.postMessage({ type: 'archivePathUpdated', path: trimmedArch });
-                            vscode.window.showInformationMessage('✅ Archive path updated successfully.');
-                        }
-                        break;
-                    }
-                    case 'installCliTool': {
-                        if (data.tool === 'duckdb') {
-                            const platform = process.platform;
-                            let cmd = '';
-                            switch (platform) {
-                                case 'darwin': cmd = 'brew install duckdb'; break;
-                                case 'win32': cmd = 'winget install DuckDB.cli'; break;
-                                default:
-                                    vscode.env.openExternal(vscode.Uri.parse('https://duckdb.org/docs/installation/'));
-                                    vscode.window.showInformationMessage('Opening DuckDB installation docs...');
-                                    break;
-                            }
+                        const archivePath = archConfig.get<string>('archive.dbPath', '');
+                        const archiveConfigured = !!archivePath;
 
-                            if (cmd) {
-                                let terminal = vscode.window.terminals.find(t => t.name === 'archives');
-                                if (!terminal) {
-                                    terminal = vscode.window.createTerminal({ name: 'archives' });
-                                }
-                                terminal.show();
-                                terminal.sendText(cmd);
-                                vscode.window.showInformationMessage(`Running install command in 'archives' terminal.`);
-                            }
+                        let duckdbInstalled = false;
+                        try {
+                            const execFileAsync = promisify(cp.execFile);
+                            await execFileAsync('duckdb', ['--version']);
+                            duckdbInstalled = true;
+                        } catch {
+                            // DuckDB not available
                         }
-                        break;
-                    }
-                    case 'openCliTerminal': {
-                        if (data.tool === 'duckdb') {
-                            const cliConfig = vscode.workspace.getConfiguration('switchboard');
-                            const archivePath = cliConfig.get<string>('archive.dbPath', '');
-                            if (!archivePath) {
-                                vscode.window.showWarningMessage('Archive path not configured. Set it first in the Database & Sync panel.');
-                                break;
-                            }
-                            const expandedPath = archivePath.replace(/^~/, os.homedir());
-                            if (this._duckdbTerminal && this._duckdbTerminal.exitStatus === undefined) {
-                                this._duckdbTerminal.show();
-                            } else {
-                                const terminal = vscode.window.createTerminal('DuckDB Archive');
-                                this._duckdbTerminal = terminal;
-                                const safePath = expandedPath.replace(/'/g, "'\\''");
-                                terminal.sendText(`duckdb '${safePath}'`);
-                                terminal.show();
-                            }
-                        }
-                        break;
-                    }
-                    case 'exportToArchive': {
-                        vscode.commands.executeCommand('switchboard.exportAllToArchive');
-                        break;
-                    }
-                    case 'viewDbStats': {
-                        const statsRoot = this._getWorkspaceRoot();
-                        if (statsRoot) {
-                            try {
-                                const statsDb = KanbanDatabase.forWorkspace(statsRoot);
-                                await statsDb.ensureReady();
-                                const allPlans = await statsDb.getAllPlans(statsRoot);
-                                const stats = {
-                                    totalPlans: allPlans.length,
-                                    active: allPlans.filter((p: any) => p.status === 'active').length,
-                                    completed: allPlans.filter((p: any) => p.status === 'completed').length,
-                                };
-                                vscode.window.showInformationMessage(
-                                    `📊 Database Stats: ${stats.totalPlans} plans (${stats.active} active, ${stats.completed} completed)`
-                                );
-                            } catch (statsErr: any) {
-                                vscode.window.showErrorMessage(`Failed to get stats: ${statsErr.message}`);
-                            }
-                        }
+
+                        const instruction = `Help me query the DuckDB archive. Available MCP tools:
+- query_plan_archive: Run SELECT queries on archived plans
+- search_archive: Keyword search across conversations
+
+Current status: ${archiveConfigured ? 'Archive configured at ' + archivePath : 'Archive not yet configured — help me set it up'}
+${duckdbInstalled ? 'DuckDB CLI is installed and ready' : 'DuckDB CLI needs to be installed first'}
+
+What would you like to find?`;
+
+                        await this._handleSendAnalystMessage(instruction);
                         break;
                     }
                     case 'resetDatabase': {
@@ -6913,20 +6958,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!resolvedWorkspaceRoot) return;
 
         try {
-            let workspaceId = this._workspaceId;
-            if (!workspaceId) {
-                const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-                if (db) {
-                    workspaceId = await db.getWorkspaceId();
-                    if (!workspaceId) {
-                        workspaceId = await db.getDominantWorkspaceId() ?? null;
-                        if (workspaceId) { await db.setWorkspaceId(workspaceId); }
-                    }
-                    if (workspaceId) {
-                        this._workspaceId = workspaceId;
-                    }
-                }
-            }
+            let workspaceId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
             if (!workspaceId) {
                 await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                 return;

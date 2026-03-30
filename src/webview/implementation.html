@@ -1189,22 +1189,6 @@
             margin-bottom: 6px;
         }
 
-        /* Database & Sync Panel */
-        #db-sync-section {
-            margin-top: 12px;
-        }
-
-        .db-sync-toggle {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .db-sync-toggle .section-label {
-            color: var(--accent-green);
-        }
 
         .db-sync-fields {
             display: none;
@@ -1704,10 +1688,10 @@
             </div>
         </div>
 
-        <!-- DATABASE & SYNC -->
-        <div id="db-sync-section">
-            <div class="db-sync-toggle" id="db-sync-toggle-btn">
-                <div class="section-label">DATABASE & SYNC</div>
+        <!-- DATABASE OPERATIONS -->
+        <div class="system-section">
+            <div class="panel-toggle" id="db-sync-toggle-btn">
+                <div class="section-label" style="margin:0">Database operations</div>
                 <span class="chevron" id="db-sync-chevron">▶</span>
             </div>
             <div class="db-sync-fields" id="db-sync-fields">
@@ -1722,58 +1706,29 @@
                             Path</button>
                         <button id="db-test-connection-btn"
                             class="db-secondary-btn">Test</button>
+                        <button id="db-use-local-btn" class="db-secondary-btn">Use Local DB</button>
                     </div>
                     <div class="db-cloud-presets">
                         <button id="db-preset-google-btn"
-                            class="db-preset-btn">📁 Google Drive</button>
+                            class="db-preset-btn">Google Drive App</button>
                         <button id="db-preset-dropbox-btn"
-                            class="db-preset-btn">📦 Dropbox</button>
+                            class="db-preset-btn">Dropbox</button>
                         <button id="db-preset-icloud-btn"
-                            class="db-preset-btn">🍎 iCloud</button>
+                            class="db-preset-btn">iCloud</button>
                     </div>
                 </div>
+
                 <div class="db-subsection">
                     <div class="subsection-header">
-                        <span>📚</span><span>Archive Storage</span>
-                        <span class="db-status-badge" id="archive-status">not configured</span>
+                        <span>🔄</span><span>Rebuild Database</span>
                     </div>
-                    <div class="db-path-display" id="current-archive-path">Not configured</div>
-                    <div class="db-path-actions">
-                        <button id="db-edit-archive-btn" class="db-secondary-btn">Set
-                            Archive Path</button>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        If the database is corrupted, this will restore it from plan files. All plan metadata will be rebuilt from your .switchboard/sessions/ directory.
                     </div>
-                </div>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>🛠️</span><span>CLI Tools</span>
-                    </div>
-                    <div class="db-cli-tool-row">
-                        <span style="font-weight:500; font-size:11px;">DuckDB</span>
-                        <span class="db-tool-status" id="duckdb-status"><span class="db-status-dot red"></span> Not
-                            installed</span>
-                        <button class="db-secondary-btn" id="duckdb-install-btn">Install</button>
-                    </div>
-                    <button class="db-primary-btn"
-                        id="open-duckdb-btn" disabled>Open DuckDB Terminal</button>
-                </div>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>⚡</span><span>Quick Actions</span>
-                    </div>
-                    <div class="db-quick-actions">
-                        <button id="db-export-btn" class="db-action-btn"
-                            title="Export completed plans to archive">
-                            <span class="db-action-icon">📤</span>EXPORT
-                        </button>
-                        <button id="db-stats-btn" class="db-action-btn"
-                            title="View database statistics">
-                            <span class="db-action-icon">📊</span>STATS
-                        </button>
-                        <button id="db-reset-btn" class="db-action-btn danger"
-                            title="WARNING: Permanently delete database">
-                            <span class="db-action-icon">🗑️</span>RESET
-                        </button>
-                    </div>
+                    <button id="db-reset-btn" class="db-action-btn danger w-full"
+                        title="WARNING: Permanently delete and rebuild database">
+                        <span class="db-action-icon">🗑️</span>REBUILD DATABASE
+                    </button>
                 </div>
             </div>
         </div>
@@ -1787,9 +1742,8 @@
             <div class="status-indicator" id="mcp-status-footer">
                 <div class="tiny-dot" id="mcp-dot"></div>
                 <span id="mcp-text">MCP: CHECKING</span>
-                <span id="mcp-recheck" title="Recheck MCP connection"
-                    style="cursor:pointer; margin-left:4px; opacity:0.6; font-size:11px;"
-                    onclick="vscode.postMessage({ type: 'recheckMcpConnection' })">&#x21bb;</span>
+                <span id="mcp-recheck-btn" title="Recheck MCP connection"
+                    style="cursor:pointer; margin-left:4px; opacity:0.6; font-size:11px;">&#x21bb;</span>
             </div>
         </div>
     </div>
@@ -2117,6 +2071,9 @@
         document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
         document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
         document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
+        document.getElementById('mcp-recheck-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'recheckMcpConnection' });
+        });
         recoverPlansModal.addEventListener('click', (event) => {
             if (event.target === recoverPlansModal) closeRecoverPlansModal();
         });
@@ -2793,19 +2750,6 @@
                         dbPathEl2.style.borderLeft = message.success ? '3px solid #28a745' : '3px solid #dc3545';
                         if (!message.success) dbPathEl2.title = message.error || 'Connection failed';
                         setTimeout(() => { dbPathEl2.style.borderLeft = ''; }, 2000);
-                    }
-                    break;
-                }
-                case 'cliStatus':
-                    updateCliToolStatus(message.tool, message.installed, message.version);
-                    break;
-                case 'archivePathUpdated': {
-                    const archPathEl = document.getElementById('current-archive-path');
-                    const archStatusEl = document.getElementById('archive-status');
-                    if (archPathEl) archPathEl.textContent = message.path || 'Not configured';
-                    if (archStatusEl) {
-                        archStatusEl.textContent = message.path ? 'configured' : 'not configured';
-                        archStatusEl.className = 'db-status-badge' + (message.path ? ' synced' : '');
                     }
                     break;
                 }
@@ -3829,12 +3773,25 @@
             container.appendChild(input);
             container.appendChild(btn);
 
+            const archiveBtn = document.createElement('button');
+            archiveBtn.id = 'btn-query-archives';
+            archiveBtn.className = 'action-btn';
+            archiveBtn.style.marginTop = '4px';
+            archiveBtn.style.width = '100%';
+            archiveBtn.style.opacity = '0.85';
+            archiveBtn.innerText = '📦 QUERY ARCHIVES';
+            archiveBtn.title = 'Ask Analyst to query archived plans';
+            archiveBtn.onclick = () => {
+                vscode.postMessage({ type: 'queryArchives' });
+            };
+            container.appendChild(archiveBtn);
+
 
             return container;
         }
 
         function updateMcpStatus(msg) {
-            const recheckBtn = document.getElementById('mcp-recheck');
+            const recheckBtn = document.getElementById('mcp-recheck-btn');
             if (msg.diagnostic === 'MCP: Checking...') {
                 mcpDot.className = 'tiny-dot orange';
                 mcpText.innerText = 'MCP: CHECKING';
@@ -3939,23 +3896,6 @@
             }
         }
 
-        function updateCliToolStatus(tool, installed, version) {
-            if (tool === 'duckdb') {
-                const statusEl = document.getElementById('duckdb-status');
-                const installBtn = document.getElementById('duckdb-install-btn');
-                const openBtn = document.getElementById('open-duckdb-btn');
-                if (statusEl && installed) {
-                    statusEl.innerHTML = '<span class="db-status-dot green"></span> v' + (version || 'installed');
-                    if (installBtn) installBtn.style.display = 'none';
-                    if (openBtn) openBtn.disabled = false;
-                } else if (statusEl) {
-                    statusEl.innerHTML = '<span class="db-status-dot red"></span> Not installed';
-                    if (installBtn) installBtn.style.display = '';
-                    if (openBtn) openBtn.disabled = true;
-                }
-            }
-        }
-
         document.getElementById('db-sync-toggle-btn')?.addEventListener('click', () => {
             const fields = document.getElementById('db-sync-fields');
             const chevron = document.getElementById('db-sync-chevron');
@@ -3972,6 +3912,9 @@
         document.getElementById('db-test-connection-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'testDbConnection' });
         });
+        document.getElementById('db-use-local-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'setLocalDb' });
+        });
         document.getElementById('db-preset-google-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'setPresetDbPath', preset: 'google-drive' });
         });
@@ -3981,21 +3924,6 @@
         document.getElementById('db-preset-icloud-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'setPresetDbPath', preset: 'icloud' });
         });
-        document.getElementById('db-edit-archive-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'editArchivePath' });
-        });
-        document.getElementById('duckdb-install-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'installCliTool', tool: 'duckdb' });
-        });
-        document.getElementById('open-duckdb-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'openCliTerminal', tool: 'duckdb' });
-        });
-        document.getElementById('db-export-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'exportToArchive' });
-        });
-        document.getElementById('db-stats-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'viewDbStats' });
-        });
         document.getElementById('db-reset-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'resetDatabase' });
         });
@@ -4004,6 +3932,7 @@
         updatePlanActionStates();
         setActiveTab(activeTab, false);
         vscode.postMessage({ type: 'getRecentActivity', limit: 50 });
+        vscode.postMessage({ type: 'getDbPath' });
         vscode.postMessage({ type: 'ready' });
 
     </script>
