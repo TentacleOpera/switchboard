@@ -619,6 +619,16 @@ export class KanbanProvider implements vscode.Disposable {
         })));
     }
 
+    private _scheduleBoardRefresh(workspaceRoot?: string): void {
+        // Reuse the pre-existing _refreshDebounceTimer field.
+        // 100ms debounce collapses rapid batch drops into a single refresh call.
+        if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
+        this._refreshDebounceTimer = setTimeout(() => {
+            this._refreshDebounceTimer = undefined;
+            void this._refreshBoard(workspaceRoot);
+        }, 100);
+    }
+
     private _isLowComplexity(card: KanbanCard): boolean {
         return String(card.complexity || '').toLowerCase() === 'low';
     }
@@ -1358,25 +1368,27 @@ export class KanbanProvider implements vscode.Disposable {
 
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const canDispatch = workspaceRoot ? await this._canAssignRole(workspaceRoot, role) : false;
-                if (!canDispatch) {
-                    break;
-                }
+                if (canDispatch) {
+                    const instruction = role === 'planner' ? 'improve-plan' : undefined;
+                    const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
+                    if (dispatched && workspaceRoot) {
+                        await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
 
-                const instruction = role === 'planner' ? 'improve-plan' : undefined;
-                const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
-                if (dispatched && workspaceRoot) {
-                    await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
-
-                    // Pair programming: when a high-complexity card is dispatched to Lead,
-                    // also dispatch the Coder terminal with the Routine prompt.
-                    // Only fires for high-complexity cards landing on LEAD CODED.
-                    if (role === 'lead' && targetColumn === 'LEAD CODED') {
-                        const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
-                        if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
-                            await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                        // Pair programming: when a high-complexity card is dispatched to Lead,
+                        // also dispatch the Coder terminal with the Routine prompt.
+                        // Only fires for high-complexity cards landing on LEAD CODED.
+                        if (role === 'lead' && targetColumn === 'LEAD CODED') {
+                            const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                            if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
+                                await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
+                            }
                         }
                     }
                 }
+                // Push authoritative DB state back to the board (~100ms).
+                // Fires even when canDispatch is false (agent unavailable) or dispatched is false:
+                // corrects optimistic UI that already moved the card visually.
+                this._scheduleBoardRefresh(workspaceRoot ?? undefined);
                 break;
             }
             case 'triggerBatchAction': {
@@ -1389,6 +1401,7 @@ export class KanbanProvider implements vscode.Disposable {
                 if (role && Array.isArray(sessionIds) && sessionIds.length > 0) {
                     await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', role, sessionIds, undefined, workspaceRoot);
                 }
+                this._scheduleBoardRefresh(workspaceRoot ?? undefined);
                 break;
             }
             case 'moveCardBackwards': {
@@ -1402,6 +1415,10 @@ export class KanbanProvider implements vscode.Disposable {
                             await db.updateColumn(sid, targetColumn);
                         }
                     }
+                    // Fast-path: push DB-accurate state to board before slow runsheet I/O.
+                    // kanbanBackwardMove will fire a second refreshUI after runsheet writes,
+                    // which is harmless — _isRefreshing/_refreshPending guards coalesce it.
+                    this._scheduleBoardRefresh(workspaceRoot);
                     await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
@@ -1417,6 +1434,10 @@ export class KanbanProvider implements vscode.Disposable {
                             await db.updateColumn(sid, targetColumn);
                         }
                     }
+                    // Fast-path: push DB-accurate state to board before slow runsheet I/O.
+                    // kanbanForwardMove will fire a second refreshUI after runsheet writes,
+                    // which is harmless — _isRefreshing/_refreshPending guards coalesce it.
+                    this._scheduleBoardRefresh(workspaceRoot);
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, targetColumn, workspaceRoot);
                 }
                 break;
@@ -1469,7 +1490,7 @@ export class KanbanProvider implements vscode.Disposable {
                 if (!workspaceRoot) break;
                 
                 // Import ArchiveManager and archive the selected plans
-                const { ArchiveManager } = await import('./ArchiveManager');
+                const { ArchiveManager } = await import('./ArchiveManager.js');
                 const archiveMgr = new ArchiveManager(workspaceRoot);
                 
                 // Check if archive is configured
