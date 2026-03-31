@@ -185,6 +185,16 @@
           "default": false,
           "description": "When enabled, automatically runs git add/commit/push before sending plans to Jules. Defaults to OFF."
         },
+        "switchboard.planner.designDocEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, appends a Design Doc / PRD link to all planner prompts for consistent context delivery."
+        },
+        "switchboard.planner.designDocLink": {
+          "type": "string",
+          "default": "",
+          "description": "URL or path to the Design Doc / PRD to append to planner prompts. Only used when designDocEnabled is true."
+        },
         "switchboard.team.strictPrompts": {
           "type": "boolean",
           "default": false,

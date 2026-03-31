@@ -24,6 +24,8 @@ export interface PromptBuilderOptions {
     aggressivePairProgramming?: boolean;
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
+    /** When present, appends a Design Doc / PRD link to planner prompts. */
+    designDocLink?: string;
 }
 
 function buildReviewerExecutionIntro(planCount: number): string {
@@ -96,7 +98,8 @@ export function buildKanbanBatchPrompt(
             ? `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`
             : '';
         const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, devops, infrastructure, bugfix";
-        return `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}
+        const designDocLink = options?.designDocLink?.trim();
+        let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}
 MANDATORY: You MUST read and strictly adhere to \`.agent/rules/how_to_plan.md\` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the guide.
 Do not add net-new product requirements or scope.
 You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
@@ -122,6 +125,12 @@ ${focusDirective}
 
 PLANS TO PROCESS:
 ${planList}`;
+
+        if (designDocLink) {
+            plannerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}`;
+        }
+
+        return plannerPrompt;
     }
 
     if (role === 'reviewer') {

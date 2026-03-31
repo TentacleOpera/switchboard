@@ -412,11 +412,27 @@ export class KanbanProvider implements vscode.Disposable {
                 // Self-heal stale 'Unknown' complexity by re-parsing plan files.
                 // Only runs for plans still at 'Unknown' in the DB — one-time cost per plan.
                 const complexityOverrides = new Map<string, 'Low' | 'High'>();
-                const unknownRows = dbRows.filter(r => (r.complexity || 'Unknown') === 'Unknown' && r.planFile);
+                const unknownRows = dbRows.filter(r => (r.complexity || 'Unknown') === 'Unknown');
                 if (unknownRows.length > 0) {
                     const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: 'Low' | 'High' }> = [];
                     for (const row of unknownRows) {
-                        const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, row.planFile);
+                        // Primary: use the stored planFile path.
+                        let pathToTry = row.planFile || '';
+
+                        // Fallback: if planFile is missing or file doesn't exist, try constructing from mirrorPath.
+                        // mirrorPath stores just the filename (e.g. brain_<hash>.md).
+                        if ((!pathToTry || !fs.existsSync(
+                            path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
+                        )) && row.mirrorPath) {
+                            pathToTry = path.join('.switchboard', 'plans', row.mirrorPath);
+                        }
+
+                        if (!pathToTry) {
+                            console.warn(`[KanbanProvider] Self-heal: no planFile or mirrorPath for ${row.sessionId}, skipping`);
+                            continue;
+                        }
+
+                        const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
                         if (parsed === 'Low' || parsed === 'High') {
                             complexityOverrides.set(row.sessionId, parsed);
                             batchUpdates.push({
@@ -553,12 +569,29 @@ export class KanbanProvider implements vscode.Disposable {
 
             // Self-heal stale 'Unknown' complexity (snapshot-based refresh path).
             const complexityOverrides = new Map<string, 'Low' | 'High'>();
-            const unknownCards = cards.filter(c => c.complexity === 'Unknown' && c.planFile);
+            const unknownCards = cards.filter(c => c.complexity === 'Unknown');
             if (unknownCards.length > 0) {
                 const db = this._getKanbanDb(resolvedWorkspaceRoot);
                 const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: 'Low' | 'High' }> = [];
                 for (const card of unknownCards) {
-                    const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, card.planFile);
+                    // Primary: use the stored planFile path.
+                    let pathToTry = card.planFile || '';
+
+                    // Fallback: if planFile is missing or file doesn't exist, get mirrorPath from DB.
+                    if (!pathToTry || !fs.existsSync(
+                        path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
+                    )) {
+                        try {
+                            const dbRecord = await db.getPlanBySessionId(card.sessionId);
+                            if (dbRecord?.mirrorPath) {
+                                pathToTry = path.join('.switchboard', 'plans', dbRecord.mirrorPath);
+                            }
+                        } catch { /* non-critical */ }
+                    }
+
+                    if (!pathToTry) continue;
+
+                    const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
                     if (parsed === 'Low' || parsed === 'High') {
                         card.complexity = parsed;
                         complexityOverrides.set(card.sessionId, parsed);
@@ -657,8 +690,12 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _generateBatchPlannerPrompt(cards: KanbanCard[], workspaceRoot: string): string {
         const aggressivePairProgramming = this._autobanState?.aggressivePairProgramming ?? false;
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
+        const designDocLink = designDocEnabled ? (config.get<string>('planner.designDocLink', '') || '').trim() : undefined;
         return buildKanbanBatchPrompt('planner', this._cardsToPromptPlans(cards, workspaceRoot), {
-            aggressivePairProgramming
+            aggressivePairProgramming,
+            designDocLink: designDocLink || undefined
         });
     }
 

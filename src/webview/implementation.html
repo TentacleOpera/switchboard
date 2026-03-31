@@ -1685,6 +1685,13 @@
                     style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     PROMPT CONTROLS</div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                    <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
+                    <span>Append Design Doc to planner prompts</span>
+                </label>
+                <label class="startup-row" style="display:block; margin-top:4px;">
+                    <input id="design-doc-link-input" type="text" placeholder="https://example.com/prd or /path/to/design.md" style="width:100%;">
+                </label>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
                     <span>Accurate coding mode for Coder prompts</span>
                 </label>
@@ -2156,10 +2163,12 @@
                 const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
                 const julesAutoSyncEnabled = !!document.getElementById('jules-auto-sync-toggle')?.checked;
                 const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
+                const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
+                const designDocLink = document.getElementById('design-doc-link-input')?.value.trim() || '';
                 const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
                 // Save config first, then launch on acknowledgement
                 btnGrid._pendingLaunch = true;
-                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, planIngestionFolder, customAgents: lastCustomAgents });
+                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, designDocEnabled, designDocLink, planIngestionFolder, customAgents: lastCustomAgents });
                 // Safety fallback: launch anyway if save ack doesn't arrive
                 btnGrid._saveTimeout = setTimeout(() => {
                     if (btnGrid._pendingLaunch) {
@@ -2221,6 +2230,9 @@
                         vscode.postMessage({ type: 'getVisibleAgents' });
                         vscode.postMessage({ type: 'getCustomAgents' });
                         vscode.postMessage({ type: 'getJulesAutoSyncSetting' });
+                    } else {
+                        // User explicitly collapsed: remember for the rest of this session
+                        hasManuallyCollapsedThisSession = true;
                     }
                 }
             });
@@ -2271,8 +2283,10 @@
                 const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
                 const julesAutoSyncEnabled = !!document.getElementById('jules-auto-sync-toggle')?.checked;
                 const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
+                const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
+                const designDocLink = document.getElementById('design-doc-link-input')?.value.trim() || '';
                 const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
-                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, planIngestionFolder, customAgents: lastCustomAgents });
+                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, designDocEnabled, designDocLink, planIngestionFolder, customAgents: lastCustomAgents });
                 lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
                 lastPlanIngestionFolder = planIngestionFolder;
                 renderCustomAgentConfigList();
@@ -2355,6 +2369,13 @@
         let recentActivityCursor = undefined;
         let recentActivityHasMore = false;
         const pendingDispatches = new Set();
+
+        // --- Onboarding Guard State ---
+        let noAgentsDetectionTime = null;        // timestamp of first 0-green detection
+        let hasManuallyCollapsedThisSession = false; // true if user collapsed Terminal Ops this session
+        const RECOVERY_THRESHOLD_MS = 5000;      // ms before onboarding activates
+        let _onboardingRetryTimer = null;         // handle for the single pending follow-up render
+        let _setupComplete = false;               // true once needsSetup === false
 
         function getDispatchKey(role) {
             const sessionId = runSheetSelect.value || '';
@@ -2711,6 +2732,13 @@
                     if (toggle) {
                         toggle.checked = message.enabled === true;
                     }
+                    break;
+                }
+                case 'designDocSetting': {
+                    const ddToggle = document.getElementById('design-doc-toggle');
+                    const ddLink = document.getElementById('design-doc-link-input');
+                    if (ddToggle) ddToggle.checked = !!message.enabled;
+                    if (ddLink) ddLink.value = message.link || '';
                     break;
                 }
                 case 'recentActivity': {
@@ -3116,9 +3144,105 @@
             return container;
         }
 
+        /**
+         * Returns true if roleId has an active Green-state agent.
+         * Green = dispatchState 'ready', OR terminal heartbeat alive.
+         * Does NOT count 'recoverable' (orange) or 'not_ready' (red).
+         * Jules is always green. Analyst is always available.
+         */
+        function isAgentGreen(roleId) {
+            if (roleId === 'jules') return true;
+            if (roleId === 'analyst') return true;
+            const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
+            const dispatchState = dispatchInfo?.state ?? null;
+            if (dispatchState === 'ready') return true;
+            if (dispatchState === 'recoverable' || dispatchState === 'not_ready') return false;
+            // Fallback: check terminal heartbeat for agents with no dispatch info
+            const HEARTBEAT_THRESHOLD_MS = 60_000;
+            const matchedTermName = Object.keys(lastTerminals).find(key => lastTerminals[key]?.role === roleId);
+            if (!matchedTermName) return false;
+            const termData = lastTerminals[matchedTermName];
+            if (!termData) return false;
+            const lastSeenMs = Date.parse(termData.lastSeen || '');
+            const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
+            return termData.alive !== undefined ? !!termData.alive : (!!termData._isLocal || heartbeatAlive);
+        }
+
         function renderAgentList() {
             // Skip re-render when user is interacting with autoban dropdowns
             if (isAutobanPanelInteracting && currentAgentTab === 'autoban') return;
+
+            // --- Onboarding Guard: show "Agents not connected" if no green agents for >5s ---
+            if (_setupComplete) {
+                const va = lastVisibleAgents;
+                const allRoles = [
+                    ...(va.lead !== false ? ['lead'] : []),
+                    ...(va.coder !== false ? ['coder'] : []),
+                    ...(va.planner !== false ? ['planner'] : []),
+                    ...(va.reviewer !== false ? ['reviewer'] : []),
+                    ...(va.analyst !== false ? ['analyst'] : []),
+                    ...(va.jules !== false ? ['jules'] : []),
+                    ...lastCustomAgents.filter(a => va[a.role] !== false).map(a => a.role)
+                ];
+
+                if (allRoles.length > 0) {
+                    const greenCount = allRoles.filter(roleId => isAgentGreen(roleId)).length;
+
+                    if (greenCount > 0) {
+                        // Agents connected — reset detection state
+                        noAgentsDetectionTime = null;
+                        clearTimeout(_onboardingRetryTimer);
+                        _onboardingRetryTimer = null;
+                        // Fall through to normal render below
+                    } else {
+                        // No green agents
+                        if (noAgentsDetectionTime === null) {
+                            noAgentsDetectionTime = Date.now();
+                        }
+                        const elapsed = Date.now() - noAgentsDetectionTime;
+                        if (elapsed < RECOVERY_THRESHOLD_MS) {
+                            // Still within grace period — schedule follow-up and bail out early
+                            clearTimeout(_onboardingRetryTimer);
+                            _onboardingRetryTimer = setTimeout(() => renderAgentList(), RECOVERY_THRESHOLD_MS - elapsed + 100);
+                            return; // keep current display unchanged during grace period
+                        }
+                        // Grace period expired — render onboarding state
+                        agentListStandard.innerHTML = '';
+                        agentListAutoban.innerHTML = '';
+                        if (currentAgentTab !== 'webai') {
+                            agentListWebai.innerHTML = '';
+                        }
+
+                        // Onboarding message
+                        const onboardMsg = document.createElement('div');
+                        onboardMsg.style.cssText = 'text-align:center; padding:20px 12px; color:var(--text-secondary); font-family:var(--font-mono); font-size:11px; line-height:1.6;';
+                        onboardMsg.textContent = 'Agents not connected. Assign and open terminals in Terminal Operations below.';
+                        agentListStandard.appendChild(onboardMsg);
+
+                        // Auto-expand Terminal Operations only if user has not manually collapsed it this session
+                        if (!hasManuallyCollapsedThisSession) {
+                            const toFields = document.getElementById('terminal-operations-fields');
+                            const toChevron = document.getElementById('terminal-operations-chevron');
+                            if (toFields && toChevron && !toFields.classList.contains('open')) {
+                                toFields.classList.add('open');
+                                toChevron.classList.add('open');
+                                // Fire same messages as the toggle click handler would
+                                vscode.postMessage({ type: 'getStartupCommands' });
+                                vscode.postMessage({ type: 'getVisibleAgents' });
+                            }
+                        }
+
+                        // Restore autoban and webai panels so other tabs still work
+                        agentListAutoban.appendChild(createAutobanPanel());
+                        if (currentAgentTab !== 'webai') {
+                            agentListWebai.appendChild(createWebAiAirlockPanel());
+                        }
+                        switchAgentTab(currentAgentTab);
+                        return; // skip the rest of normal renderAgentList
+                    }
+                }
+            }
+            // --- End Onboarding Guard ---
 
             // Preserve stateful analyst input across re-renders
             const existingInput = document.getElementById('analyst-input');
@@ -3953,9 +4077,11 @@
 
         function toggleOnboarding(needsSetup) {
             if (needsSetup) {
+                _setupComplete = false;
                 onboardingContainer.classList.remove('hidden');
                 mainContainer.classList.add('hidden');
             } else {
+                _setupComplete = true;
                 onboardingContainer.classList.add('hidden');
                 mainContainer.classList.remove('hidden');
             }

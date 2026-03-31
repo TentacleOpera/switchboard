@@ -2632,13 +2632,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const pairProgrammingEnabled = this._autobanState.pairProgrammingEnabled;
         const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
         const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
+        const designDocLink = this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined;
         return buildKanbanBatchPrompt(role, plans, {
             instruction,
             includeInlineChallenge,
             accurateCodingEnabled,
             pairProgrammingEnabled,
             aggressivePairProgramming,
-            advancedReviewerEnabled
+            advancedReviewerEnabled,
+            designDocLink
         });
     }
 
@@ -2993,6 +2995,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         this._view?.webview.postMessage({ type: 'leadChallengeSetting', enabled: this._isLeadInlineChallengeEnabled() });
                         this._view?.webview.postMessage({ type: 'julesAutoSyncSetting', enabled: this._isJulesAutoSyncEnabled() });
                         this._view?.webview.postMessage({ type: 'aggressivePairSetting', enabled: this._isAggressivePairProgrammingEnabled() });
+                        this._view?.webview.postMessage({
+                            type: 'designDocSetting',
+                            enabled: this._isDesignDocEnabled(),
+                            link: this._getDesignDocLink()
+                        });
                         this._view?.webview.postMessage({ type: 'loading', value: false });
                         break;
                     case 'runSetup':
@@ -3227,6 +3234,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             });
                             await this._persistAutobanState();
                             this._postAutobanState();
+                        }
+                        if (typeof data.designDocEnabled === 'boolean') {
+                            await vscode.workspace.getConfiguration('switchboard').update(
+                                'planner.designDocEnabled',
+                                data.designDocEnabled,
+                                vscode.ConfigurationTarget.Workspace
+                            );
+                        }
+                        if (typeof data.designDocLink === 'string') {
+                            await vscode.workspace.getConfiguration('switchboard').update(
+                                'planner.designDocLink',
+                                data.designDocLink || undefined,
+                                vscode.ConfigurationTarget.Workspace
+                            );
                         }
                         if (typeof data.planIngestionFolder === 'string') {
                             const normalizedPlanIngestionFolder = this._normalizeConfiguredPlanFolder(data.planIngestionFolder);
@@ -3567,7 +3588,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                             const entries = fs.readdirSync(cloudStorage);
                                             const gdEntry = entries.find((e: string) => e.startsWith('GoogleDrive-'));
                                             if (gdEntry) {
-                                                presetPath = path.join(cloudStorage, gdEntry, 'Switchboard', 'kanban.db');
+                                                presetPath = path.join(cloudStorage, gdEntry, 'My Drive', 'Switchboard', 'kanban.db');
                                             }
                                         } catch { /* ignore */ }
                                     }
@@ -3597,19 +3618,66 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         if (presetPath) {
                             const parentDir = path.dirname(presetPath);
                             if (!fs.existsSync(parentDir)) {
-                                const choice = await vscode.window.showWarningMessage(
-                                    `Cloud storage directory not found at ${parentDir}. Create it?`,
-                                    'Create Directory', 'Cancel'
-                                );
-                                if (choice === 'Create Directory') {
-                                    try {
-                                        fs.mkdirSync(parentDir, { recursive: true });
-                                    } catch (error) {
-                                        vscode.window.showErrorMessage(`Failed to create directory: ${error instanceof Error ? error.message : String(error)}`);
+                                if (this._isCloudStoragePath(parentDir)) {
+                                    // macOS cloud storage daemons block direct mkdir — guide the user to create manually
+                                    const folderName = path.basename(parentDir);
+                                    const isMac = process.platform === 'darwin';
+                                    const actions: string[] = isMac ? ['Open in Finder', 'Cancel'] : ['Cancel'];
+                                    const msgSuffix = isMac
+                                        ? `Please create a folder named "${folderName}" in the location opened by Finder, then click Continue.`
+                                        : `Please create the folder manually at:\n${parentDir}`;
+                                    const choice = await vscode.window.showWarningMessage(
+                                        `The "${folderName}" folder does not exist in your cloud storage. ` +
+                                        `This extension cannot create it automatically due to OS restrictions. ` +
+                                        msgSuffix,
+                                        ...actions
+                                    );
+                                    if (choice === 'Open in Finder') {
+                                        // For Google Drive on macOS, user needs to create folder in "My Drive", not the root
+                                        const grandparentDir = path.dirname(parentDir);
+                                        let openDir = grandparentDir;
+                                        if (parentDir.toLowerCase().includes('googledrive')) {
+                                            const myDrivePath = path.join(grandparentDir, 'My Drive');
+                                            if (fs.existsSync(myDrivePath)) {
+                                                openDir = myDrivePath;
+                                            }
+                                        }
+                                        if (fs.existsSync(openDir)) {
+                                            await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(openDir));
+                                        }
+                                        const retryChoice = await vscode.window.showInformationMessage(
+                                            `Create the "${folderName}" folder in Finder, then click Continue.`,
+                                            'Continue', 'Cancel'
+                                        );
+                                        if (retryChoice !== 'Continue') {
+                                            break;
+                                        }
+                                        if (!fs.existsSync(parentDir)) {
+                                            vscode.window.showErrorMessage(
+                                                `Folder "${folderName}" still not found. Please create it and try again.`
+                                            );
+                                            break;
+                                        }
+                                    } else {
+                                        // User cancelled or non-macOS with no Open in Finder option
                                         break;
                                     }
                                 } else {
-                                    break;
+                                    // Non-cloud path — attempt normal directory creation
+                                    const choice = await vscode.window.showWarningMessage(
+                                        `Directory not found at ${parentDir}. Create it?`,
+                                        'Create Directory', 'Cancel'
+                                    );
+                                    if (choice === 'Create Directory') {
+                                        try {
+                                            fs.mkdirSync(parentDir, { recursive: true });
+                                        } catch (error) {
+                                            vscode.window.showErrorMessage(`Failed to create directory: ${error instanceof Error ? error.message : String(error)}`);
+                                            break;
+                                        }
+                                    } else {
+                                        break;
+                                    }
                                 }
                             }
 
@@ -4255,6 +4323,30 @@ What would you like to find?`;
         return normalizedFile === normalizedParent || normalizedFile.startsWith(normalizedParent + path.sep);
     }
 
+    /**
+     * Returns true for paths that live inside cloud-synced directories where
+     * auto-creating folders via fs.mkdir may fail or is undesirable (macOS Google
+     * Drive CloudStorage daemon blocks mkdir; iCloud and Dropbox are treated
+     * conservatively to avoid unexpected EACCES on restricted plans).
+     * Used to skip auto-creation and prompt the user to create the folder manually.
+     */
+    private _isCloudStoragePath(dbPath: string): boolean {
+        const normalized = dbPath.toLowerCase();
+        // macOS Google Drive: ~/Library/CloudStorage/GoogleDrive-*/
+        if (normalized.includes('cloudstorage') && normalized.includes('googledrive')) {
+            return true;
+        }
+        // macOS iCloud Drive: ~/Library/Mobile Documents/com~apple~CloudDocs/
+        if (normalized.includes('mobile documents')) {
+            return true;
+        }
+        // Dropbox — conservative: treat as restricted to avoid EACCES surprises
+        if (normalized.includes('dropbox')) {
+            return true;
+        }
+        return false;
+    }
+
     // ── Workspace Identity ──────────────────────────────────────────────
 
     private async _getOrCreateWorkspaceId(workspaceRoot: string): Promise<string> {
@@ -4454,19 +4546,33 @@ What would you like to find?`;
             if (existing && existing.planId !== entry.planId) {
                 await db.deletePlan(sessionId);
             }
+            // For brain plans use the mirror path so the file is always accessible within
+            // the workspace. mirrorPath is just the filename (e.g. brain_<hash>.md); prepend
+            // the staging directory to form a workspace-relative path.
+            const insertPlanFile: string = entry.mirrorPath
+                ? path.join('.switchboard', 'plans', entry.mirrorPath).replace(/\\/g, '/')
+                : (entry.localPlanPath || '');
+
+            let insertComplexity: 'Unknown' | 'Low' | 'High' = existing?.complexity || 'Unknown';
+            if (insertComplexity === 'Unknown' && insertPlanFile && this._kanbanProvider) {
+                try {
+                    const parsed = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, insertPlanFile);
+                    if (parsed === 'Low' || parsed === 'High') {
+                        insertComplexity = parsed;
+                    }
+                } catch {
+                    // Non-critical: leave as 'Unknown' and let self-heal fix it on next refresh
+                }
+            }
+
             await db.upsertPlans([{
                 planId: entry.planId,
                 sessionId: sessionId,
                 topic: entry.topic || '(untitled)',
-                // For brain plans use the mirror path so the file is always accessible within
-                // the workspace. mirrorPath is just the filename (e.g. brain_<hash>.md); prepend
-                // the staging directory to form a workspace-relative path.
-                planFile: entry.mirrorPath
-                    ? path.join('.switchboard', 'plans', entry.mirrorPath).replace(/\\/g, '/')
-                    : (entry.localPlanPath || ''),
+                planFile: insertPlanFile,
                 kanbanColumn: existing?.kanbanColumn || 'CREATED',
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
-                complexity: existing?.complexity || 'Unknown',
+                complexity: insertComplexity,
                 tags: existing?.tags || '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
@@ -6500,7 +6606,8 @@ What would you like to find?`;
                 accurateCodingEnabled: false, // Always false for clipboard prompts
                 pairProgrammingEnabled,
                 aggressivePairProgramming,
-                advancedReviewerEnabled
+                advancedReviewerEnabled,
+                designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined
             });
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
             if (customAgent?.promptInstructions) {
@@ -7637,6 +7744,14 @@ What would you like to find?`;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('jules.autoSync', false);
     }
 
+    private _isDesignDocEnabled(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designDocEnabled', false);
+    }
+
+    private _getDesignDocLink(): string {
+        return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designDocLink', '') || '';
+    }
+
     private _withCoderAccuracyInstruction(basePayload: string): string {
         if (!this._isAccurateCodingEnabled()) {
             return basePayload;
@@ -8036,7 +8151,7 @@ What would you like to find?`;
 
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
-            messagePayload = buildKanbanBatchPrompt('planner', [dispatchPlan], { instruction: plannerInstruction, aggressivePairProgramming: this._isAggressivePairProgrammingEnabled() });
+            messagePayload = buildKanbanBatchPrompt('planner', [dispatchPlan], { instruction: plannerInstruction, aggressivePairProgramming: this._isAggressivePairProgrammingEnabled(), designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined });
 
             // Append dispatch-specific strict/light mode delivery extensions
             const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
