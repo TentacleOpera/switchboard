@@ -1139,12 +1139,12 @@
         const ICON_IMPORT_CLIPBOARD = '{{ICON_IMPORT_CLIPBOARD}}';
         const ICON_CLI = '{{ICON_CLI}}';
         const ICON_PROMPT = '{{ICON_PROMPT}}';
-        const ICON_DYNAMIC_ROUTING = '{{ICON_77}}';
+        const ICON_DYNAMIC_ROUTING = '{{ICON_59}}';
         const ICON_RECOVER_SELECTED = '{{ICON_55}}';
         const ICON_TESTING_FAIL = '{{ICON_85}}';
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
-        const ICON_ARCHIVE_SELECTED = '{{ICON_54}}';
+        const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
 
         function getActiveWorkspaceRoot() {
             return currentWorkspaceRoot || (workspaceItems[0] && workspaceItems[0].workspaceRoot) || '';
@@ -1321,8 +1321,8 @@
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`
                     : `<div style="display: flex; align-items: center; gap: 4px;">
-                            ${modeToggle}
                             ${complexityRoutingToggle}
+                            ${modeToggle}
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`;
                 const subline = hasAgent
@@ -1333,20 +1333,20 @@
                 let buttonArea = '';
                 if (isCompleted) {
                     buttonArea = `<div class="column-button-area">
-                        <button class="column-icon-btn archive-selected-btn" data-column="${escapeAttr(def.id)}" data-tooltip="Archive selected plans to DuckDB">
-                            <img src="${ICON_ARCHIVE_SELECTED}" alt="Archive Selected">
-                        </button>
                         <button class="column-icon-btn recover-selected-btn" data-column="${escapeAttr(def.id)}" data-tooltip="Recover selected plans back to active board">
                             <img src="${ICON_RECOVER_SELECTED}" alt="Recover Selected">
+                        </button>
+                        <button class="column-icon-btn archive-selected-btn" data-column="${escapeAttr(def.id)}" data-tooltip="Archive selected plans to DuckDB">
+                            <img src="${ICON_ARCHIVE_SELECTED}" alt="Archive Selected">
                         </button>
                     </div>`;
                 } else if (isLastWorkingColumn) {
                     // Reviewed column: Complete Selected / Complete All buttons only (no prompt/CLI dispatch)
                     buttonArea = `<div class="column-button-area">
-                        <button class="column-icon-btn" data-action="completeSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Complete selected plans (archive)">
+                        <button class="column-icon-btn" data-action="completeSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Complete selected plans">
                             <img src="${ICON_MOVE_SELECTED}" alt="Complete Selected">
                         </button>
-                        <button class="column-icon-btn" data-action="completeAll" data-column="${escapeAttr(def.id)}" data-tooltip="Complete all plans in this column (archive)">
+                        <button class="column-icon-btn" data-action="completeAll" data-column="${escapeAttr(def.id)}" data-tooltip="Complete all plans in this column">
                             <img src="${ICON_MOVE_ALL}" alt="Complete All">
                         </button>
                         <button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">

@@ -3646,7 +3646,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                             await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(openDir));
                                         }
                                         const retryChoice = await vscode.window.showInformationMessage(
-                                            `Create the "${folderName}" folder in Finder, then click Continue.`,
+                                            `Create the "${folderName}" folder in the My Drive folder then click Continue.`,
                                             'Continue', 'Cancel'
                                         );
                                         if (retryChoice !== 'Continue') {
@@ -3764,8 +3764,17 @@ What would you like to find?`;
                             // README not found in extension install — fall back to knowledge-based tutorial
                         }
 
+                        const practicesUri = vscode.Uri.joinPath(this._context.extensionUri, 'docs', 'how_to_use_switchboard.md');
+                        let practicesExists = false;
+                        try {
+                            await vscode.workspace.fs.stat(practicesUri);
+                            practicesExists = true;
+                        } catch {
+                            // practices guide not bundled — silently omit from instruction
+                        }
+
                         const instruction = readmeExists
-                            ? `Please read the Switchboard plugin README at ${readmeUri.fsPath} and offer to guide me through an interactive tutorial of its features. Start by presenting a numbered menu of the major features (for example: AUTOBAN, Pair Programming, Airlock, Kanban Workflow, Archive) and ask me which one I'd like to learn about first. Adapt your explanations to my current workspace context where possible.`
+                            ? `Please read the Switchboard plugin README at ${readmeUri.fsPath}${practicesExists ? ` and reference the best practices for using the plugin at ${practicesUri.fsPath}` : ''} and offer to guide me through an interactive tutorial of its features. Start by presenting a numbered menu of the major features (for example: AUTOBAN, Pair Programming, Airlock, Kanban Workflow, Archive) and ask me which one I'd like to learn about first. Adapt your explanations to my current workspace context where possible.`
                             : `I'd like a guided tutorial of the Switchboard plugin features. Please give me an overview of the main capabilities — such as AUTOBAN, Pair Programming, Airlock, Kanban Workflow, and Archive — and offer to walk me through any of them step by step. Ask me which feature I'd like to start with.`;
 
                         await this._handleSendAnalystMessage(instruction);

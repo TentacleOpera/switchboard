@@ -36,3 +36,15 @@ To set it up:
 3. Use the Copy Coding Prompt buttons — either on individual cards or in the column header — to copy a prompt to your clipboard
 
 Switchboard automatically sends all low-complexity work to your cheap Coder CLI agent. The copied prompt references only the complex work, which you paste into your IDE agent. Your expensive IDE quota only touches the tasks that actually need it.
+
+## 5. Spread work across IDE agents using unlimited models
+
+Most premium IDE subscriptions include access to capable models on generous or unlimited quotas alongside their expensive flagship. These models are worth using deliberately rather than defaulting to the premium model for everything.
+
+### Using unlimited models for investigation
+
+Windsurf includes unlimited access to Kimi K2.5. When you hit a hard bug, rather than burning Opus credits on diagnosis, ask Kimi to walk through the relevant code step by step and append its findings directly to the plan. Opus then receives a pre-diagnosed problem with the groundwork already done — better input, lower cost, faster resolution. This effectively uses Windsurf to extend your Opus quota across other subscriptions.
+
+### Running a mixed-model cycle within a single subscription
+
+In Antigravity, rather than sending everything to Opus, run a plan-code-review cycle across models: Gemini plans, Sonnet improves the plan and later reviews the output, Gemini implements. This cycle produces comparable quality to a single Opus pass at significantly lower quota cost — Opus in Antigravity is expensive, and the one-shot approach burns through it fast. Switchboard's pair programming mode and complexity routing make this cycle easy to set up without manual prompt switching.

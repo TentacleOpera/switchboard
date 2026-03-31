@@ -224,6 +224,38 @@ export class KanbanProvider implements vscode.Disposable {
 
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+            const db = this._getKanbanDb(resolvedWorkspaceRoot);
+
+            // Self-heal stale 'Unknown' complexity by re-parsing plan files.
+            const unknownRows = activeRows.filter(r => (r.complexity || 'Unknown') === 'Unknown');
+            if (unknownRows.length > 0) {
+                const batchUpdates: Array<{ sessionId: string; topic: string; planFile: string; complexity: 'Low' | 'High' }> = [];
+                for (const row of unknownRows) {
+                    let pathToTry = row.planFile || '';
+                    if ((!pathToTry || !fs.existsSync(
+                        path.isAbsolute(pathToTry) ? pathToTry : path.join(resolvedWorkspaceRoot, pathToTry)
+                    )) && row.mirrorPath) {
+                        pathToTry = path.join('.switchboard', 'plans', row.mirrorPath);
+                    }
+
+                    if (!pathToTry) continue;
+
+                    const parsed = await this.getComplexityFromPlan(resolvedWorkspaceRoot, pathToTry);
+                    if (parsed === 'Low' || parsed === 'High') {
+                        batchUpdates.push({
+                            sessionId: row.sessionId,
+                            topic: row.topic || '',
+                            planFile: row.planFile || '',
+                            complexity: parsed
+                        });
+                        // Update the row in-memory so the UI reflects the change immediately
+                        row.complexity = parsed;
+                    }
+                }
+                if (batchUpdates.length > 0) {
+                    await db.updateMetadataBatch(batchUpdates);
+                }
+            }
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRows.map(row => ({
@@ -1527,6 +1559,7 @@ export class KanbanProvider implements vscode.Disposable {
                 if (!workspaceRoot) break;
                 
                 // Import ArchiveManager and archive the selected plans
+                // AI NOTICE: DO NOT append .js to this import. tsc complains about Node16 module resolution, but Webpack requires it to be extensionless here to bundle correctly.
                 const { ArchiveManager } = await import('./ArchiveManager');
                 const archiveMgr = new ArchiveManager(workspaceRoot);
                 
@@ -2362,6 +2395,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_85}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-85.png')).toString(),
             '{{ICON_CHAT}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-65.png')).toString(),
             '{{ICON_77}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-77.png')).toString(),
+            '{{ICON_59}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-59.png')).toString(),
+            '{{ICON_41}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-41.png')).toString(),
             '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {

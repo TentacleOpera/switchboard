@@ -1595,7 +1595,7 @@
             <div class="section-label" style="margin:0; font-size: 9px; letter-spacing: 1.5px;">LIVE FEED</div>
             <span class="chevron" id="live-feed-chevron">▶</span>
         </div>
-        <div id="panel-activity" class="tab-panel panel-fields" aria-hidden="true">
+        <div id="panel-activity" class="tab-panel panel-fields" aria-hidden="true" data-accordion="true">
             <div id="activity-list" class="activity-list">
                 <div
                     style="text-align: center; padding: 20px; color: var(--text-secondary); font-family: var(--font-mono);">
@@ -1612,7 +1612,7 @@
                 <div class="section-label" style="margin:0">TERMINAL OPERATIONS</div>
                 <span class="chevron open" id="terminal-operations-chevron">▶</span>
             </div>
-            <div class="panel-fields open" id="terminal-operations-fields">
+            <div class="panel-fields open" id="terminal-operations-fields" data-accordion="true">
                 <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
                 <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
                 <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main
@@ -1674,7 +1674,7 @@
                 <div class="section-label" style="margin:0">SETUP</div>
                 <span class="chevron" id="startup-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="startup-fields">
+            <div class="startup-fields" id="startup-fields" data-accordion="true">
                 <div class="flex gap-2">
                     <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
                     <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
@@ -1721,7 +1721,7 @@
                 <div class="section-label" style="margin:0">Database operations</div>
                 <span class="chevron" id="db-sync-chevron">▶</span>
             </div>
-            <div class="db-sync-fields" id="db-sync-fields">
+            <div class="db-sync-fields" id="db-sync-fields" data-accordion="true">
                 <div
                     style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     PLAN INGESTION</div>
@@ -2147,6 +2147,18 @@
                 btnGrid.classList.add('dispatching');
                 btnGrid.classList.remove('is-teal');
                 btnGrid.disabled = true;
+
+                // Auto-collapse Terminal Operations accordion so the user can see the agent list
+                const _toFieldsOnLaunch = document.getElementById('terminal-operations-fields');
+                const _toChevronOnLaunch = document.getElementById('terminal-operations-chevron');
+                if (_toFieldsOnLaunch && _toFieldsOnLaunch.classList.contains('open')) {
+                    _toFieldsOnLaunch.classList.remove('open');
+                    if (_toChevronOnLaunch) _toChevronOnLaunch.classList.remove('open');
+                    // hasManuallyCollapsedThisSession is intentionally NOT set here —
+                    // this is programmatic closure, not user intent. The onboarding guard
+                    // may re-open if agents fail to register, which is correct behaviour.
+                }
+
                 // Collect current CLI commands and custom agent state
                 const commands = { ...lastStartupCommands };
                 document.querySelectorAll('input[type="text"][data-role]').forEach(input => {
@@ -2217,12 +2229,45 @@
             });
         }
 
+        /**
+         * Collapses all accordion panels that carry data-accordion="true",
+         * except the one whose id matches `exceptFieldsId`.
+         * Also removes 'open' from the sibling chevron element.
+         *
+         * The chevron element is located by walking to the parent toggle div
+         * (previousElementSibling of the fields div) and finding its .chevron child.
+         *
+         * @param {string|null} exceptFieldsId - ID of the fields div to leave untouched.
+         */
+        function collapseAllAccordions(exceptFieldsId) {
+            document.querySelectorAll('[data-accordion="true"]').forEach(fieldsEl => {
+                if (fieldsEl.id === exceptFieldsId) return; // skip the target panel
+                if (!fieldsEl.classList.contains('open')) return; // already closed
+                fieldsEl.classList.remove('open');
+                // Find the chevron in the sibling toggle div (always the immediately preceding sibling)
+                const toggleEl = fieldsEl.previousElementSibling;
+                if (toggleEl) {
+                    const chevron = toggleEl.querySelector('.chevron');
+                    if (chevron) chevron.classList.remove('open');
+                }
+                // For panel-fields that expose aria-hidden, update it
+                if (fieldsEl.hasAttribute('aria-hidden')) {
+                    fieldsEl.setAttribute('aria-hidden', 'true');
+                }
+            });
+        }
+
         const termOpsToggle = document.getElementById('terminal-operations-toggle');
         if (termOpsToggle) {
             termOpsToggle.addEventListener('click', () => {
                 const fields = document.getElementById('terminal-operations-fields');
                 const chevron = document.getElementById('terminal-operations-chevron');
                 if (fields && chevron) {
+                    const willOpen = !fields.classList.contains('open');
+                    if (willOpen) {
+                        // Collapse all other accordions before opening this one
+                        collapseAllAccordions('terminal-operations-fields');
+                    }
                     const isOpen = fields.classList.toggle('open');
                     chevron.classList.toggle('open', isOpen);
                     if (isOpen) {
@@ -2240,6 +2285,11 @@
 
         if (liveFeedToggle && liveFeedFields && liveFeedChevron) {
             liveFeedToggle.addEventListener('click', () => {
+                const willOpen = !liveFeedFields.classList.contains('open');
+                if (willOpen) {
+                    // Collapse all other accordions before opening Live Feed
+                    collapseAllAccordions('panel-activity');
+                }
                 const isOpen = liveFeedFields.classList.toggle('open');
                 liveFeedChevron.classList.toggle('open', isOpen);
                 liveFeedFields.setAttribute('aria-hidden', isOpen ? 'false' : 'true');
@@ -2253,6 +2303,11 @@
                 const fields = document.getElementById('startup-fields');
                 const chevron = document.getElementById('startup-chevron');
                 if (fields && chevron) {
+                    const willOpen = !fields.classList.contains('open');
+                    if (willOpen) {
+                        // Collapse all other accordions before opening this one
+                        collapseAllAccordions('startup-fields');
+                    }
                     const isOpen = fields.classList.toggle('open');
                     chevron.classList.toggle('open', isOpen);
                     if (isOpen) {
@@ -3148,11 +3203,11 @@
          * Returns true if roleId has an active Green-state agent.
          * Green = dispatchState 'ready', OR terminal heartbeat alive.
          * Does NOT count 'recoverable' (orange) or 'not_ready' (red).
-         * Jules is always green. Analyst is always available.
+         * Jules is always green. Analyst uses the same terminal heartbeat check as other roles.
          */
         function isAgentGreen(roleId) {
-            if (roleId === 'jules') return true;
-            if (roleId === 'analyst') return true;
+            // jules is a built-in cloud feature, always considered available
+            if (roleId === 'jules') return false;
             const dispatchInfo = lastDispatchReadiness && roleId ? lastDispatchReadiness[roleId] : null;
             const dispatchState = dispatchInfo?.state ?? null;
             if (dispatchState === 'ready') return true;
@@ -3175,13 +3230,14 @@
             // --- Onboarding Guard: show "Agents not connected" if no green agents for >5s ---
             if (_setupComplete) {
                 const va = lastVisibleAgents;
+                // Count all visible terminal-based roles. Jules is excluded (cloud service, always available).
+                // Analyst is included — if the user has assigned a terminal to the analyst role, it counts.
                 const allRoles = [
                     ...(va.lead !== false ? ['lead'] : []),
                     ...(va.coder !== false ? ['coder'] : []),
                     ...(va.planner !== false ? ['planner'] : []),
                     ...(va.reviewer !== false ? ['reviewer'] : []),
                     ...(va.analyst !== false ? ['analyst'] : []),
-                    ...(va.jules !== false ? ['jules'] : []),
                     ...lastCustomAgents.filter(a => va[a.role] !== false).map(a => a.role)
                 ];
 
@@ -3224,11 +3280,15 @@
                             const toFields = document.getElementById('terminal-operations-fields');
                             const toChevron = document.getElementById('terminal-operations-chevron');
                             if (toFields && toChevron && !toFields.classList.contains('open')) {
+                                // Collapse SETUP and Database Operations before auto-opening Terminal Ops
+                                collapseAllAccordions('terminal-operations-fields');
                                 toFields.classList.add('open');
                                 toChevron.classList.add('open');
                                 // Fire same messages as the toggle click handler would
                                 vscode.postMessage({ type: 'getStartupCommands' });
                                 vscode.postMessage({ type: 'getVisibleAgents' });
+                                vscode.postMessage({ type: 'getCustomAgents' });
+                                vscode.postMessage({ type: 'getJulesAutoSyncSetting' });
                             }
                         }
 
@@ -4145,6 +4205,11 @@
             const fields = document.getElementById('db-sync-fields');
             const chevron = document.getElementById('db-sync-chevron');
             if (fields && chevron) {
+                const willOpen = !fields.classList.contains('open');
+                if (willOpen) {
+                    // Collapse all other accordions before opening this one
+                    collapseAllAccordions('db-sync-fields');
+                }
                 const isOpen = fields.classList.toggle('open');
                 chevron.classList.toggle('open', isOpen);
                 if (isOpen) {
