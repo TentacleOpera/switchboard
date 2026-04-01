@@ -1872,6 +1872,105 @@ async function pushMessageToTerminal(name, message, paced = true) {
 }
 
 // ============================================================
+/**
+ * Ensures this workspace has a valid identity row in kanban.db.
+ * If the DB file or config table don't exist, creates them with a minimal
+ * schema (config table only — the VS Code extension applies the full schema
+ * when it runs). Safe to call multiple times; all writes are idempotent.
+ *
+ * Priority for workspace_id:
+ *   1. Existing value in config table (no write needed)
+ *   2. Value from legacy .switchboard/workspace_identity.json
+ *   3. Newly generated UUID
+ *
+ * @param {string} workspaceRoot - Absolute path to the workspace root.
+ * @returns {Promise<string>} The resolved workspace_id.
+ */
+async function ensureWorkspaceIdentityInMcp(workspaceRoot) {
+    const sbDir = path.join(workspaceRoot, '.switchboard');
+    const dbPath = path.join(sbDir, 'kanban.db');
+    const tmpPath = dbPath + '.mcp_init.tmp';
+
+    // Clean up any orphaned temp file from a prior crashed write
+    try { fs.unlinkSync(tmpPath); } catch (_) { /* expected if absent */ }
+
+    await fs.promises.mkdir(sbDir, { recursive: true });
+
+    const SQL = await getSqlJs(workspaceRoot);
+    let db = null;
+    try {
+        if (fs.existsSync(dbPath)) {
+            const existing = fs.readFileSync(dbPath);
+            db = new SQL.Database(new Uint8Array(existing));
+        } else {
+            db = new SQL.Database();
+        }
+
+        // Minimal schema — only the config table is needed for workspace identity.
+        // The extension's KanbanDatabase._initialize() applies the full schema
+        // (plans, migration_meta, indices) the first time VS Code opens this workspace.
+        db.exec(`CREATE TABLE IF NOT EXISTS config (
+            key   TEXT PRIMARY KEY,
+            value TEXT NOT NULL
+        )`);
+
+        // Step 1: check if workspace_id already exists (fast path — no write)
+        let workspaceId = null;
+        const readStmt = db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
+        try {
+            if (readStmt.step()) {
+                const val = readStmt.getAsObject().value;
+                if (typeof val === 'string' && val.length > 0) {
+                    workspaceId = val;
+                }
+            }
+        } finally {
+            readStmt.free();
+        }
+
+        if (workspaceId) {
+            return workspaceId; // Already initialized — skip all writes
+        }
+
+        // Step 2: migrate from legacy workspace_identity.json if present
+        const legacyPath = path.join(sbDir, 'workspace_identity.json');
+        try {
+            if (fs.existsSync(legacyPath)) {
+                const raw = fs.readFileSync(legacyPath, 'utf-8');
+                const parsed = JSON.parse(raw);
+                if (typeof parsed?.workspaceId === 'string' && parsed.workspaceId.length > 0) {
+                    workspaceId = parsed.workspaceId;
+                }
+            }
+        } catch (_) { /* ignore parse errors — we'll generate a new ID below */ }
+
+        // Step 3: generate a new UUID
+        if (!workspaceId) {
+            if (typeof crypto.randomUUID === 'function') {
+                workspaceId = crypto.randomUUID();
+            } else {
+                // Fallback for Node < 14.17
+                workspaceId = crypto.randomBytes(16).toString('hex');
+            }
+        }
+
+        // Persist to config table using parameterized statement (no injection risk)
+        db.run("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", [
+            'workspace_id',
+            workspaceId,
+        ]);
+
+        // Atomic write: export → .tmp → rename over final path
+        const exported = db.export();
+        fs.writeFileSync(tmpPath, Buffer.from(exported));
+        fs.renameSync(tmpPath, dbPath);
+
+        return workspaceId;
+    } finally {
+        if (db && typeof db.close === 'function') db.close();
+    }
+}
+
 // registerTools(server)
 // Main factory Ã¢â‚¬â€ registers ALL Switchboard tools on the given McpServer instance.
 // ============================================================
@@ -2335,7 +2434,21 @@ function registerTools(server) {
                 // DB read failed
             }
             if (!workspaceId) {
-                return { isError: true, content: [{ type: "text", text: "Error: Not a switchboard workspace — no workspace identity in DB." }] };
+                // Workspace not yet initialized — auto-bootstrap it so this tool
+                // succeeds instead of failing. The returned state will be empty
+                // (no plans) which is correct for a brand-new workspace.
+                try {
+                    workspaceId = await ensureWorkspaceIdentityInMcp(workspaceRoot);
+                } catch (initErr) {
+                    // Init failed (disk permissions, etc.) — surface a clear error
+                    return {
+                        isError: true,
+                        content: [{
+                            type: "text",
+                            text: `Error: Switchboard workspace could not be initialized. ${initErr?.message || String(initErr)}\n\nTry calling the init_workspace tool, then retry.`,
+                        }],
+                    };
+                }
             }
 
             const columnDefinitions = getKanbanColumnDefinitions(workspaceRoot);
@@ -2355,6 +2468,49 @@ function registerTools(server) {
 
             // DB unavailable and no legacy files — return empty state
             return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), requestedColumnId, columnDefinitions);
+        }
+    );
+
+    // Tool: init_workspace
+    server.tool(
+        "init_workspace",
+        "One-time bootstrap for repos that have never been opened with the Switchboard VS Code extension. Creates .switchboard/kanban.db with a workspace identity so that other Switchboard tools work. Safe to call if already initialised (returns existing ID). Do NOT call on every session — only when get_kanban_state has never succeeded in this repo.",
+        {
+            // No parameters required — workspace root is resolved from process env
+        },
+        async () => {
+            // This tool is only needed when the workspace has never been opened
+            // by the Switchboard VS Code extension (i.e., no kanban.db exists or
+            // the config table has no workspace_id). Do NOT call it on every
+            // session — it is a one-time bootstrap operation.
+            const workspaceRoot = getWorkspaceRoot();
+            try {
+                const workspaceId = await ensureWorkspaceIdentityInMcp(workspaceRoot);
+                const sbDir = path.join(workspaceRoot, '.switchboard');
+                const dbPath = path.join(sbDir, 'kanban.db');
+                return {
+                    content: [{
+                        type: "text",
+                        text: [
+                            `✅ Switchboard workspace initialised.`,
+                            ``,
+                            `Workspace ID : ${workspaceId}`,
+                            `Database     : ${dbPath}`,
+                            ``,
+                            `You can now use get_kanban_state, move_kanban_card, and other Switchboard tools normally.`,
+                            `If you have existing plan files in .switchboard/plans/, open this workspace in VS Code to sync them into the board.`,
+                        ].join('\n'),
+                    }],
+                };
+            } catch (err) {
+                return {
+                    isError: true,
+                    content: [{
+                        type: "text",
+                        text: `❌ Failed to initialise Switchboard workspace: ${err?.message || String(err)}`,
+                    }],
+                };
+            }
         }
     );
 
