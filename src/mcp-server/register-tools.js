@@ -1874,14 +1874,16 @@ async function pushMessageToTerminal(name, message, paced = true) {
 // ============================================================
 /**
  * Ensures this workspace has a valid identity row in kanban.db.
- * If the DB file or config table don't exist, creates them with a minimal
- * schema (config table only — the VS Code extension applies the full schema
- * when it runs). Safe to call multiple times; all writes are idempotent.
+ * If the DB file or tables don't exist, creates them with the full schema
+ * (plans, config, migration_meta, indices). Also repairs workspace_id
+ * mismatches between config and plans rows (V3/V6 migration logic).
+ * Safe to call multiple times; all writes are idempotent.
  *
  * Priority for workspace_id:
- *   1. Existing value in config table (no write needed)
- *   2. Value from legacy .switchboard/workspace_identity.json
- *   3. Newly generated UUID
+ *   1. Existing value in config table (verified against plans rows — V6 fix)
+ *   2. Dominant workspace_id from existing plans rows (V3 recovery)
+ *   3. Value from legacy .switchboard/workspace_identity.json
+ *   4. Newly generated UUID
  *
  * @param {string} workspaceRoot - Absolute path to the workspace root.
  * @returns {Promise<string>} The resolved workspace_id.
@@ -1906,16 +1908,43 @@ async function ensureWorkspaceIdentityInMcp(workspaceRoot) {
             db = new SQL.Database();
         }
 
-        // Minimal schema — only the config table is needed for workspace identity.
-        // The extension's KanbanDatabase._initialize() applies the full schema
-        // (plans, migration_meta, indices) the first time VS Code opens this workspace.
-        db.exec(`CREATE TABLE IF NOT EXISTS config (
-            key   TEXT PRIMARY KEY,
-            value TEXT NOT NULL
-        )`);
+        // Apply full schema so that queries against plans/config/migration_meta
+        // don't fail on partially-initialized DBs. All statements are IF NOT EXISTS
+        // so this is safe to run on an already-initialized DB.
+        db.exec(`
+            CREATE TABLE IF NOT EXISTS plans (
+                plan_id       TEXT PRIMARY KEY,
+                session_id    TEXT UNIQUE NOT NULL,
+                topic         TEXT NOT NULL,
+                plan_file     TEXT,
+                kanban_column TEXT NOT NULL DEFAULT 'CREATED',
+                status        TEXT NOT NULL DEFAULT 'active',
+                complexity    TEXT DEFAULT 'Unknown',
+                tags          TEXT DEFAULT '',
+                workspace_id  TEXT NOT NULL,
+                created_at    TEXT NOT NULL,
+                updated_at    TEXT NOT NULL,
+                last_action   TEXT,
+                source_type   TEXT DEFAULT 'local',
+                brain_source_path TEXT DEFAULT '',
+                mirror_path       TEXT DEFAULT ''
+            );
+            CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
+            CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
+            CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+            CREATE TABLE IF NOT EXISTS config (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS migration_meta (
+                key   TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
+        `);
 
-        // Step 1: check if workspace_id already exists (fast path — no write)
+        // Step 1: check if workspace_id already exists in config
         let workspaceId = null;
+        let needsWrite = false;
         const readStmt = db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
         try {
             if (readStmt.step()) {
@@ -1928,28 +1957,76 @@ async function ensureWorkspaceIdentityInMcp(workspaceRoot) {
             readStmt.free();
         }
 
+        // Step 2: if config has a workspace_id, verify it matches plans rows (V6 fix).
+        // If plans exist under a different workspace_id, the config is stale — adopt
+        // the dominant plans workspace_id so the board isn't silently empty.
         if (workspaceId) {
-            return workspaceId; // Already initialized — skip all writes
+            try {
+                const domStmt = db.prepare(
+                    "SELECT workspace_id, COUNT(*) as cnt FROM plans WHERE status = 'active' GROUP BY workspace_id ORDER BY cnt DESC LIMIT 1"
+                );
+                if (domStmt.step()) {
+                    const dominantWsId = String(domStmt.getAsObject().workspace_id);
+                    if (dominantWsId && dominantWsId !== workspaceId) {
+                        // Config workspace_id doesn't match plans — fix it
+                        workspaceId = dominantWsId;
+                        db.run("INSERT OR REPLACE INTO config (key, value) VALUES (?, ?)", [
+                            'workspace_id', workspaceId,
+                        ]);
+                        db.run("UPDATE plans SET workspace_id = ? WHERE workspace_id != ?", [
+                            workspaceId, workspaceId,
+                        ]);
+                        needsWrite = true;
+                    }
+                }
+                domStmt.free();
+            } catch (_) { /* plans table query failed — proceed with config value */ }
+
+            if (needsWrite) {
+                const exported = db.export();
+                fs.writeFileSync(tmpPath, Buffer.from(exported));
+                fs.renameSync(tmpPath, dbPath);
+            }
+            return workspaceId;
         }
 
-        // Step 2: migrate from legacy workspace_identity.json if present
-        const legacyPath = path.join(sbDir, 'workspace_identity.json');
+        // Step 3: no workspace_id in config — recover from plans rows (V3 migration)
         try {
-            if (fs.existsSync(legacyPath)) {
-                const raw = fs.readFileSync(legacyPath, 'utf-8');
-                const parsed = JSON.parse(raw);
-                if (typeof parsed?.workspaceId === 'string' && parsed.workspaceId.length > 0) {
-                    workspaceId = parsed.workspaceId;
+            const domStmt = db.prepare(
+                "SELECT workspace_id, COUNT(*) as cnt FROM plans GROUP BY workspace_id ORDER BY cnt DESC LIMIT 1"
+            );
+            if (domStmt.step()) {
+                const dominantWsId = String(domStmt.getAsObject().workspace_id);
+                if (dominantWsId && dominantWsId.length > 0) {
+                    workspaceId = dominantWsId;
+                    // Unify all plans under the dominant workspace_id
+                    db.run("UPDATE plans SET workspace_id = ? WHERE workspace_id != ?", [
+                        workspaceId, workspaceId,
+                    ]);
                 }
             }
-        } catch (_) { /* ignore parse errors — we'll generate a new ID below */ }
+            domStmt.free();
+        } catch (_) { /* plans table may not have rows */ }
 
-        // Step 3: generate a new UUID
+        // Step 4: migrate from legacy workspace_identity.json if present
+        if (!workspaceId) {
+            const legacyPath = path.join(sbDir, 'workspace_identity.json');
+            try {
+                if (fs.existsSync(legacyPath)) {
+                    const raw = fs.readFileSync(legacyPath, 'utf-8');
+                    const parsed = JSON.parse(raw);
+                    if (typeof parsed?.workspaceId === 'string' && parsed.workspaceId.length > 0) {
+                        workspaceId = parsed.workspaceId;
+                    }
+                }
+            } catch (_) { /* ignore parse errors — we'll generate a new ID below */ }
+        }
+
+        // Step 5: generate a new UUID as last resort
         if (!workspaceId) {
             if (typeof crypto.randomUUID === 'function') {
                 workspaceId = crypto.randomUUID();
             } else {
-                // Fallback for Node < 14.17
                 workspaceId = crypto.randomBytes(16).toString('hex');
             }
         }

@@ -2,11 +2,11 @@
 
 **Drag and drop AI orchestration for VS Code — run your entire agent team without typing a single prompt**
 
-Most AI orchestration frameworks either burn API credits running a meta-agent, or require complex infrastructure before you can delegate a single task. Switchboard does neither. No API keys. No orchestrator agent. A visual pipeline builder that unifies the CLI and chat agents you already pay for — and actively dispatches to them.
+Switchboard is a different approach to AI orchestration. A visual kanban auto-triggers agents via drag and drop, no prompts required. This allows you to run entire agent teams while drinking a beer, since you only need one hand to code with Switchboard.
 
-Drag a card, press a button, and the right prompt goes to the right agent. You design the pipeline. The board runs it.
+It does this programmatically using the VS Code API, so unlike other orchestration frameworks, you don't need an actual orchestration agent. Nor do you need API keys, complex setup, or anything else. You just start your CLI subscriptions in terminals and start dragging cards around to trigger them, automatically sending them prompts you defined beforehand.
 
-![Switchboard Savings](docs/savings.PNG)
+Switchboard also works with chat-based agents like Windsurf, Antigravity and Cursor. You can switch the board between trigger mode, which auto-sends prompts to terminals, and paste mode, which auto-copies prompts to your clipboard. That way you can combine the strengths of different subscriptions. For example, create 10 plans and tell the free Kimi 2.5 in Windsurf to gather context. Then shove them all into Claude Code to plan. Then punt them into GitHub Copilot as a single prompt to take advantage of its native subagents, before asking Windsurf Opus to review the work.
 
 ---
 

@@ -353,3 +353,26 @@ No other plans in the Kanban board touch `register-tools.js` or `KanbanDatabase.
 - No automated tests for the MCP server bootstrap path (pre-existing gap, not introduced by this change)
 
 ### Verdict: **Ready**
+
+---
+
+## Follow-up: Existing broken DB recovery (2026-04-01)
+
+### Problem
+The original implementation generated a fresh UUID when no `workspace_id` was found in config.
+For existing DBs with plans rows, this orphaned all existing plans (new UUID doesn't match plans'
+`workspace_id`), causing a silently empty board.
+
+### Changes Applied
+In `ensureWorkspaceIdentityInMcp` (`src/mcp-server/register-tools.js`):
+
+1. **Full schema creation** — now applies `CREATE TABLE/INDEX IF NOT EXISTS` for `plans`, `config`, `migration_meta`, and all three indices (matching `SCHEMA_SQL` in `KanbanDatabase.ts`). Prevents `readKanbanStateFromDb` from failing on missing tables.
+
+2. **V6 mismatch fix** — when config has a `workspace_id`, verifies it against the dominant `workspace_id` in active plans rows. If they differ, adopts the plans' ID and unifies all rows (same logic as `KanbanDatabase._runMigrations()` V6).
+
+3. **V3 recovery** — when config has no `workspace_id` but plans rows exist, recovers the dominant `workspace_id` from plans before falling back to legacy JSON or UUID generation.
+
+4. **Updated priority order**: config (verified) → plans rows → legacy JSON → new UUID
+
+### Validation
+- `node -c src/mcp-server/register-tools.js` — **PASS**
