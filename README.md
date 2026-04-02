@@ -4,11 +4,17 @@
 
 Switchboard is a different approach to AI orchestration. A visual kanban auto-triggers agents via drag and drop, no prompts required. This allows you to run entire agent teams while drinking a beer, since you only need one hand to code with Switchboard.
 
-It does this programmatically using the VS Code API, so unlike other orchestration frameworks, you don't need an actual orchestration agent. Nor do you need API keys, complex setup, or anything else. You just start your CLI subscriptions in terminals and start dragging cards around to trigger them, automatically sending them prompts you defined beforehand.
+There's nothing to install beyond the extension itself. If you already have your agents open, you're ready. No gateway, no runtime, no API keys, no config files. Just drag a card.
+
+It does this programmatically using the VS Code API, so unlike other orchestration frameworks, you don't need an orchestration agent. You just start your CLI subscriptions in terminals and start dragging cards around to trigger them. Whenever you move a card into a column, Switchboard sends a pre-configured prompt referencing that task to the agent registered in that column. 
 
 Switchboard also works with chat-based agents like Windsurf, Antigravity and Cursor. You can switch the board between trigger mode, which auto-sends prompts to terminals, and paste mode, which auto-copies prompts to your clipboard. That way you can combine the strengths of different subscriptions. For example, create 10 plans and tell the free Kimi 2.5 in Windsurf to gather context. Then shove them all into Claude Code to plan. Then punt them into GitHub Copilot as a single prompt to take advantage of its native subagents, before asking Windsurf Opus to review the work.
 
+Doing it this way means you don't blow Claude Code quota on context gathering, you get 10 plans implemented for the price of 1 by taking advantage of Copilot's per-prompt pricing, and by switching to a different provider for code review, you'll catch issues that a single agent may have missed. 
+
 ![Switchboard Savings](docs/savings2.png)
+
+What this shows: Using the pair programming mode, Windsurf Opus reported token savings of 35% by offloading routine parts of the plans to Gemini CLI. Meanwhile, Gemini CLI deployed subagents to code 5 plans in parallel. This was all done by batch moving plan cards.
 
 ---
 
@@ -20,8 +26,6 @@ Switchboard also works with chat-based agents like Windsurf, Antigravity and Cur
 - **Assign by complexity** — put an Opus subscription in the Planner slot and it will organise which tasks can be sent to cheap agents based on a complexity threshold you set
 - **Amplify other tools** — put Claude Code, OpenCode, Copilot Squads, or anything else into the kanban to route between them
 - **No repo pollution** — kanban state, routing rules and archived plans live in a multi-repo database on Google Drive, so you can share across machines without random files appearing in every commit
-
-With Switchboard, you can have Windsurf plan, route dynamically to Copilot Opus or Gemini CLI Flash based on the complexity your planner agent decides, then tell Opus in Cursor to review everyone's work. All while drinking a beer, since you only need one hand to operate Switchboard.
 
 ---
 
@@ -206,4 +210,4 @@ Coordination uses the official VS Code `terminal.sendText` API to automate agent
 
 No telemetry. No external servers. All coordination data is workspace-local. Open source — MIT License.
 
-[GitHub](https://github.com/TentacleOpera/switchboard/) · [VS Code Marketplace](https://marketplace.visualstudio.com/items?itemName=TentacleOpera.switchboard)
+[GitHub](https://github.com/TentacleOpera/switchboard/) 

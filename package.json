@@ -1,7 +1,7 @@
 {
   "name": "switchboard",
   "displayName": "Switchboard",
-  "description": "Drag and drop agent orchestration. Coordinate AI teams without typing prompts.",
+  "description": "Drag and drop to trigger AI agent teams. No prompts, no API keys, one hand free.",
   "icon": "icon.png",
   "keywords": [
     "switchboard",
@@ -10,7 +10,7 @@
     "mcp",
     "multi-agent"
   ],
-  "version": "1.5.1",
+  "version": "1.5.3",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {

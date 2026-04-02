@@ -1,7 +1,8 @@
 {
   "permissions": {
     "allow": [
-      "Bash(duckdb *)"
+      "Bash(duckdb *)",
+      "Read(//Users/patrickvuleta/.windsurf/extensions/turnzero.switchboard-1.5.0/**)"
     ]
   },
   "$version": 3
