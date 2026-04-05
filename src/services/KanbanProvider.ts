@@ -121,6 +121,37 @@ export class KanbanProvider implements vscode.Disposable {
         return this._currentWorkspaceRoot;
     }
 
+    /**
+     * Resolve a complexity score to a routing role, respecting the custom
+     * routing map (if configured) and the pair-programming intern→coder bypass.
+     * This is the single source of truth for score→role resolution.
+     */
+    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' {
+        let role: 'lead' | 'coder' | 'intern';
+
+        // Apply custom routing map if configured
+        if (this._routingMapConfig) {
+            if (this._routingMapConfig.intern.includes(score)) {
+                role = 'intern';
+            } else if (this._routingMapConfig.coder.includes(score)) {
+                role = 'coder';
+            } else {
+                role = 'lead';
+            }
+        } else {
+            role = scoreToRoutingRole(score);
+        }
+
+        // Pair programming bypass: never route to intern when pair mode is active.
+        const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+        if (isPairMode && role === 'intern') {
+            console.log(`[KanbanProvider] Pair programming bypass: score=${score} intern → coder`);
+            role = 'coder';
+        }
+
+        return role;
+    }
+
     private _getWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
         return (vscode.workspace.workspaceFolders || []).map(folder => ({
             label: folder.name,
@@ -1405,22 +1436,8 @@ export class KanbanProvider implements vscode.Disposable {
         }
         const complexity = await this.getComplexityFromPlan(workspaceRoot, planFile);
         const score = parseComplexityScore(complexity);
+        const role = this.resolveRoutedRole(score);
 
-        // Use custom routing config if set, otherwise fall back to default scoreToRoutingRole
-        if (this._routingMapConfig) {
-            if (this._routingMapConfig.intern.includes(score)) {
-                console.log(`[KanbanProvider] Custom routing: session=${sessionId} complexity=${complexity} → intern`);
-                return 'intern';
-            }
-            if (this._routingMapConfig.coder.includes(score)) {
-                console.log(`[KanbanProvider] Custom routing: session=${sessionId} complexity=${complexity} → coder`);
-                return 'coder';
-            }
-            console.log(`[KanbanProvider] Custom routing: session=${sessionId} complexity=${complexity} → lead`);
-            return 'lead';
-        }
-
-        const role = scoreToRoutingRole(score);
         console.log(`[KanbanProvider] Complexity routing: session=${sessionId} complexity=${complexity} → role=${role}`);
         return role;
     }
@@ -2688,6 +2705,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'PLAN REVIEWED': return 'planner';
             case 'LEAD CODED': return 'lead';
             case 'CODER CODED': return 'coder';
+            case 'INTERN CODED': return 'intern';
             case 'CODED': return 'lead';
             case 'CODE REVIEWED': return 'reviewer';
             case 'COMPLETED': return null;

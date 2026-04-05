@@ -471,9 +471,19 @@ export class InboxWatcher {
             .trim();
     }
 
+    private stripIdeSuffix(name: string): string {
+        const suffix = `-${vscode.env.appName}`;
+        return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+    }
+
+    private suffixedName(baseName: string): string {
+        const suffix = `-${vscode.env.appName}`;
+        return baseName.endsWith(suffix) ? baseName : `${baseName}${suffix}`;
+    }
+
     private inferRoleFromTarget(targetName: string, message?: InboxMessage): string | null {
-        const direct = this.normalizeAgentKey(targetName);
-        const recipient = this.normalizeAgentKey(message?.recipient);
+        const direct = this.normalizeAgentKey(this.stripIdeSuffix(targetName));
+        const recipient = this.normalizeAgentKey(this.stripIdeSuffix(message?.recipient || ''));
         const enforcePersona = this.normalizeAgentKey(
             (message?.metadata as any)?.phase_gate?.enforce_persona
         );
@@ -513,7 +523,7 @@ export class InboxWatcher {
 
     private terminalMatchesToken(terminal: vscode.Terminal, token: string): boolean {
         if (!token) return false;
-        const normalized = this.normalizeAgentKey(token);
+        const normalized = this.normalizeAgentKey(this.stripIdeSuffix(token));
         if (!normalized) return false;
         const name = this.normalizeAgentKey(terminal.name);
         const creationName = this.normalizeAgentKey(this.getTerminalCreationName(terminal));
@@ -526,9 +536,18 @@ export class InboxWatcher {
             return { name: targetName, terminal: exact, source: 'registry-exact' };
         }
 
-        const normalizedTarget = this.normalizeAgentKey(targetName);
+        // Suffix-aware fallback: try suffixed key
+        const suffixed = this.suffixedName(targetName);
+        if (suffixed !== targetName) {
+            const bySuffix = this.registeredTerminals.get(suffixed);
+            if (bySuffix) {
+                return { name: suffixed, terminal: bySuffix, source: 'registry-suffixed' };
+            }
+        }
+
+        const normalizedTarget = this.normalizeAgentKey(this.stripIdeSuffix(targetName));
         for (const [name, terminal] of this.registeredTerminals.entries()) {
-            if (this.normalizeAgentKey(name) === normalizedTarget) {
+            if (this.normalizeAgentKey(this.stripIdeSuffix(name)) === normalizedTarget) {
                 this.registeredTerminals.set(targetName, terminal);
                 return { name, terminal, source: 'registry-case-insensitive' };
             }

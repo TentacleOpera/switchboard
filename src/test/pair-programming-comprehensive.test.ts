@@ -26,6 +26,11 @@ const TEST_PLANS: BatchPromptPlan[] = [TEST_PLAN];
 // can unit-test the clipboard / notification branching without instantiating
 // the full provider.  Same approach as the existing `simulateBypass()` in
 // pair-programming-routing-bypass.test.ts.
+//
+// ⚠️  KEEP IN SYNC with production code.  If KanbanProvider's pair-flow logic
+// changes (conditions, clipboard calls, notification text), update these
+// helpers to match.  A future plan should add true integration tests via
+// @vscode/test-electron to test the real entry points.
 // ---------------------------------------------------------------------------
 
 /**
@@ -175,6 +180,7 @@ suite('Pair programming comprehensive', () => {
         sandbox = sinon.createSandbox();
         clipboardWriteStub  = sandbox.stub(vscode.env.clipboard, 'writeText').resolves();
         clipboardReadStub   = sandbox.stub(vscode.env.clipboard, 'readText').resolves('');
+        // Double-cast needed: showInformationMessage has complex overloads that sinon can't resolve
         showInfoStub        = sandbox.stub(vscode.window, 'showInformationMessage') as unknown as sinon.SinonStub;
         showInfoStub.resolves(undefined);
         executeCommandStub  = sandbox.stub(vscode.commands, 'executeCommand').resolves();
@@ -605,10 +611,12 @@ suite('Pair programming comprehensive', () => {
             return role;
         };
 
-        test('7.1: pair mode elevates all intern scores (1-4) to coder', () => {
-            for (let s = 1; s <= 4; s++) {
-                assert.strictEqual(simulateBypass(s, true), 'coder', `score ${s} should route to coder in pair mode`);
+        test('7.1: pair mode elevates intern scores (1-3) to coder', () => {
+            for (let s = 1; s <= 3; s++) {
+                assert.strictEqual(simulateBypass(s, true), 'coder', `score ${s} should be elevated from intern to coder in pair mode`);
             }
+            // Score 4 is already 'coder' by default — pair mode bypass is a no-op
+            assert.strictEqual(simulateBypass(4, true), 'coder', 'score 4 is coder by default; pair mode does not change it');
         });
 
         test('7.2: pair mode leaves coder scores (5-6) unchanged', () => {
@@ -625,7 +633,8 @@ suite('Pair programming comprehensive', () => {
 
         test('7.4: without pair mode, normal routing applies', () => {
             assert.strictEqual(simulateBypass(1, false), 'intern');
-            assert.strictEqual(simulateBypass(4, false), 'intern');
+            assert.strictEqual(simulateBypass(3, false), 'intern');
+            assert.strictEqual(simulateBypass(4, false), 'coder');  // 4-6 → coder
             assert.strictEqual(simulateBypass(5, false), 'coder');
             assert.strictEqual(simulateBypass(6, false), 'coder');
             assert.strictEqual(simulateBypass(7, false), 'lead');

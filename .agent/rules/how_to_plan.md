@@ -12,7 +12,11 @@ Identify the core problem or feature. Clarify what success looks like. If the us
 Before writing any implementation steps, audit the system:
 *   **Complexity:** Rate the routine vs. complex/risky parts of the request.
 *   **Edge Cases:** Identify race conditions, security flaws, backward compatibility issues, and side effects.
-*   **Dependencies & Conflicts:** Identify if this plan relies on other pending plans in the Kanban board, or if it will conflict with concurrent work.
+*   **Dependencies & Conflicts:** 
+    - Query the Kanban database via the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans.
+    - Consider plans in **New** and **Planned** columns for dependencies and conflicts. Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns — these are already implemented.
+    - Identify if this plan relies on other active plans or conflicts with concurrent work.
+    - If database query fails, document the uncertainty rather than scanning unfiltered.
 
 ## Step 3: Improve Plan (`/improve-plan`)
 Audit the strategy and stress-test the assumptions:

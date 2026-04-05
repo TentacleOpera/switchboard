@@ -56,11 +56,11 @@ export function legacyToScore(value: string): number {
 
 /**
  * Determine the routing role for a given score.
- * 1-3 → 'intern', 4-6 → 'coder', 7-10 → 'lead'
+ * 1-4 → 'intern', 5-6 → 'coder', 7-10 → 'lead'
  */
 export function scoreToRoutingRole(score: number): 'lead' | 'coder' | 'intern' {
-    if (score >= 1 && score <= 3) return 'intern';
-    if (score >= 4 && score <= 6) return 'coder';
+    if (score >= 1 && score <= 4) return 'intern';
+    if (score >= 5 && score <= 6) return 'coder';
     return 'lead'; // 7-10 or Unknown defaults to lead
 }
 

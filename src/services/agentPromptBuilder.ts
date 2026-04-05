@@ -248,6 +248,7 @@ export function columnToPromptRole(column: string): string | null {
         case 'PLAN REVIEWED': return 'lead';
         case 'LEAD CODED':
         case 'CODER CODED':
+        case 'INTERN CODED':
             return 'reviewer';
         default:
             return column.startsWith('custom_agent_') ? column : null;

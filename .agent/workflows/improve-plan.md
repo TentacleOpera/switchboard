@@ -16,7 +16,12 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 1. **Load the plan and verify dependencies**
    - Read the target plan file and treat it as the single source of truth.
    - Read the actual code for any services, utilities, or modules referenced by the plan.
-   - Scan related plans or Kanban state for conflicts, ordering dependencies, or overlap.
+   - **Query active Kanban plans for dependencies (DO NOT scan the plans folder directly):**
+     - Call the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans grouped by Kanban column.
+     - Inspect plans in **New** and **Planned** columns for potential dependencies and conflicts.
+     - **Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns** — these are already implemented (or in final review) and irrelevant for dependency/conflict analysis.
+     - Document any cross-plan conflicts with the active plan set only.
+     - **If the database query fails:** Do not fall back to unfiltered file scanning. Instead, note the uncertainty in the `## Edge-Case & Dependency Audit` section under `Dependencies & Conflicts`.
 
 2. **Improve the plan**
    - Fill in underspecified sections.

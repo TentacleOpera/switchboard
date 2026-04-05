@@ -396,6 +396,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .trim();
     }
 
+    private _suffixedName(baseName: string): string {
+        const suffix = `-${vscode.env.appName}`;
+        return baseName.endsWith(suffix) ? baseName : `${baseName}${suffix}`;
+    }
+
+    private _stripIdeSuffix(name: string): string {
+        const suffix = `-${vscode.env.appName}`;
+        return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+    }
+
     // F-04 SECURITY: Validate agent names to prevent path traversal
     private static readonly SAFE_AGENT_NAME_RE = /^[a-zA-Z0-9 _-]+$/;
     private _isValidAgentName(name: string): boolean {
@@ -792,7 +802,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, sheet.planFile);
         const score = parseComplexityScore(complexity);
-        return scoreToRoutingRole(score);
+        return this._kanbanProvider.resolveRoutedRole(score);
     }
 
     private async _getNextKanbanColumnForSession(
@@ -2317,17 +2327,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const terminalState = await this._readTerminalRegistryState(workspaceRoot);
         const usedNames = new Set<string>([
             ...Object.keys(terminalState),
+            // Include stripped names from state so collision detection works across suffixed keys
+            ...Object.keys(terminalState).map(k => this._stripIdeSuffix(k)),
             ...vscode.window.terminals.map(terminal => terminal.name),
             ...Array.from(this._registeredTerminals?.keys() || [])
         ]);
         const uniqueName = getNextAutobanTerminalName(roleLabel, usedNames, resolvedRequestedName || undefined);
+        const suffixedUniqueName = this._suffixedName(uniqueName);
 
         const terminal = vscode.window.createTerminal({
             name: uniqueName,
             location: vscode.TerminalLocation.Panel,
             cwd: workspaceRoot
         });
-        this._registeredTerminals?.set(uniqueName, terminal);
+        this._registeredTerminals?.set(suffixedUniqueName, terminal);
         terminal.show();
 
         let pid: number | undefined;
@@ -2344,16 +2357,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     const retryPid = await this._waitWithTimeout(terminal.processId, 5000, undefined);
                     if (retryPid) {
                         await this.updateState(async (state) => {
-                            if (state.terminals?.[uniqueName]) {
-                                state.terminals[uniqueName].pid = retryPid;
-                                state.terminals[uniqueName].childPid = retryPid;
-                                console.log(`[TaskViewerProvider] Retry: Updated PID for terminal '${uniqueName}' to ${retryPid}`);
+                            if (state.terminals?.[suffixedUniqueName]) {
+                                state.terminals[suffixedUniqueName].pid = retryPid;
+                                state.terminals[suffixedUniqueName].childPid = retryPid;
+                                console.log(`[TaskViewerProvider] Retry: Updated PID for terminal '${suffixedUniqueName}' to ${retryPid}`);
                             }
                         });
                         this._refreshTerminalStatuses();
                     }
                 } catch (e) {
-                    console.error(`[TaskViewerProvider] PID retry failed for terminal '${uniqueName}':`, e);
+                    console.error(`[TaskViewerProvider] PID retry failed for terminal '${suffixedUniqueName}':`, e);
                 }
             }, 2000);
         }
@@ -2362,7 +2375,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (!state.terminals) {
                 state.terminals = {};
             }
-            state.terminals[uniqueName] = {
+            state.terminals[suffixedUniqueName] = {
                 purpose: 'autoban-backup',
                 role: normalizedRole,
                 pid: pid,
@@ -2382,11 +2395,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             : await this._getAliveAutobanTerminalNames(normalizedRole, workspaceRoot, false);
         const nextTerminalPools = {
             ...this._autobanState.terminalPools,
-            [normalizedRole]: this._limitAutobanPool([...seededPool, uniqueName])
+            [normalizedRole]: this._limitAutobanPool([...seededPool, suffixedUniqueName])
         };
         const nextManagedPools = {
             ...this._autobanState.managedTerminalPools,
-            [normalizedRole]: this._limitAutobanPool([...this._getManagedAutobanPool(normalizedRole), uniqueName])
+            [normalizedRole]: this._limitAutobanPool([...this._getManagedAutobanPool(normalizedRole), suffixedUniqueName])
         };
         this._autobanState = normalizeAutobanConfigState({
             ...this._autobanState,
@@ -2610,7 +2623,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (routingMode === 'all_lead') {
             return 'lead';
         }
-        return scoreToRoutingRole(parseComplexityScore(complexity));
+        const score = parseComplexityScore(complexity);
+        if (this._kanbanProvider) {
+            return this._kanbanProvider.resolveRoutedRole(score);
+        }
+        // Fallback: no KanbanProvider available — use default routing with pair bypass
+        let role = scoreToRoutingRole(score);
+        const isPairMode = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+        if (isPairMode && role === 'intern') {
+            role = 'coder';
+        }
+        return role;
     }
 
     /** Column-to-instruction mapping for Autoban dispatches. */
@@ -2680,7 +2703,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _buildKanbanBatchPrompt(
         role: string,
-        plans: Array<{ topic: string; absolutePath: string }>,
+        plans: Array<{ topic: string; absolutePath: string; dependencies?: string }>,
         instruction?: string
     ): string {
         const { includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
@@ -6751,7 +6774,7 @@ What would you like to find?`;
             let role: string;
             if (effectiveColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
                 const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, planFileAbsolute);
-                role = scoreToRoutingRole(parseComplexityScore(complexity));
+                role = this._kanbanProvider.resolveRoutedRole(parseComplexityScore(complexity));
             } else {
                 role = columnToPromptRole(effectiveColumn) || 'coder';
             }
@@ -7607,10 +7630,14 @@ What would you like to find?`;
         const persona = await this._resolvePersona(terminalName);
         const enrichedCommand = persona ? this._formatPersonaMessage(persona, command) : command;
 
-        const terminal = this._registeredTerminals.get(terminalName);
+        let terminal = this._registeredTerminals.get(terminalName);
+        if (!terminal) {
+            // Suffix-aware fallback: try suffixed key
+            terminal = this._registeredTerminals.get(this._suffixedName(terminalName));
+        }
         if (!terminal) {
             // Fallback: try matching by name in VS Code terminals
-            const found = vscode.window.terminals.find(t => t.name === terminalName);
+            const found = vscode.window.terminals.find(t => t.name === terminalName || t.name === this._stripIdeSuffix(terminalName));
             if (!found) {
                 // Terminal not in VS Code — likely external. Route through executeRemote
                 // so the terminal-bridge.js script can pick it up from the inbox.
@@ -7742,8 +7769,9 @@ What would you like to find?`;
                     else if (lowerName.includes('analyst')) autoRole = 'analyst';
                 }
 
-                // Register new
-                state.terminals[uniqueName] = {
+                // Register new — use suffixed key for IDE isolation
+                const suffixedKey = this._suffixedName(uniqueName);
+                state.terminals[suffixedKey] = {
                     purpose: 'user-registered',
                     role: autoRole,
                     pid,
@@ -7758,10 +7786,11 @@ What would you like to find?`;
                 };
 
                 usedNames.add(uniqueName);
+                usedNames.add(suffixedKey);
                 registeredCount++;
 
                 if (this._registeredTerminals) {
-                    this._registeredTerminals.set(uniqueName, terminal);
+                    this._registeredTerminals.set(suffixedKey, terminal);
                 }
             }
         });
@@ -8025,7 +8054,7 @@ What would you like to find?`;
     }
 
     private async _focusTerminalByName(terminalName: string): Promise<boolean> {
-        const normalizedTarget = this._normalizeAgentKey(terminalName);
+        const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
         if (!normalizedTarget) return false;
 
         const openTerminals = vscode.window.terminals || [];
@@ -8037,9 +8066,16 @@ What would you like to find?`;
                 return true;
             }
 
+            // Suffix-aware fallback
+            const bySuffix = this._registeredTerminals.get(this._suffixedName(terminalName));
+            if (bySuffix && bySuffix.exitStatus === undefined) {
+                bySuffix.show();
+                return true;
+            }
+
             for (const [name, terminal] of this._registeredTerminals.entries()) {
                 if (terminal.exitStatus !== undefined) continue;
-                if (this._normalizeAgentKey(name) !== normalizedTarget) continue;
+                if (this._normalizeAgentKey(this._stripIdeSuffix(name)) !== normalizedTarget) continue;
                 terminal.show();
                 return true;
             }
@@ -8073,10 +8109,14 @@ What would you like to find?`;
         if (this._registeredTerminals) {
             terminal = this._registeredTerminals.get(terminalName);
             if (!terminal) {
-                // Case-insensitive match
-                const normalized = terminalName.toLowerCase().replace(/[_-]+/g, ' ').trim();
+                // Suffix-aware fallback
+                terminal = this._registeredTerminals.get(this._suffixedName(terminalName));
+            }
+            if (!terminal) {
+                // Case-insensitive match (strip suffix before normalizing)
+                const normalized = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
                 for (const [name, t] of this._registeredTerminals.entries()) {
-                    if (name.toLowerCase().replace(/[_-]+/g, ' ').trim() === normalized) {
+                    if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalized) {
                         terminal = t;
                         break;
                     }
@@ -8086,10 +8126,10 @@ What would you like to find?`;
 
         if (!terminal) {
             const openTerminals = vscode.window.terminals || [];
+            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(terminalName));
             terminal = openTerminals.find(t => {
-                const tName = t.name.toLowerCase().replace(/[_-]+/g, ' ').trim();
-                const target = terminalName.toLowerCase().replace(/[_-]+/g, ' ').trim();
-                return tName === target;
+                const tName = this._normalizeAgentKey(t.name);
+                return tName === strippedTarget;
             });
         }
 
@@ -8114,7 +8154,7 @@ What would you like to find?`;
 
     /**
      * Pre-dispatch dependency gate: checks if all declared dependencies are in a
-     * completed column (DONE, REVIEWED, *CODED). Returns true if dispatch can proceed.
+     * terminal column (COMPLETED or CODE REVIEWED). Returns true if dispatch can proceed.
      */
     private async _checkDependenciesBeforeDispatch(
         sessionId: string,
@@ -8594,15 +8634,23 @@ Create this file exactly as specified, then continue your work.`);
             }
 
             // Resolve live terminal object
-            const normalizedTarget = this._normalizeAgentKey(targetAgent);
+            const normalizedTarget = this._normalizeAgentKey(this._stripIdeSuffix(targetAgent));
             let terminal: vscode.Terminal | undefined;
 
             if (this._registeredTerminals) {
-                for (const [name, t] of this._registeredTerminals.entries()) {
-                    if (t.exitStatus !== undefined) { continue; }
-                    if (this._normalizeAgentKey(name) === normalizedTarget) {
-                        terminal = t;
-                        break;
+                // Try exact match first, then suffixed
+                terminal = this._registeredTerminals.get(targetAgent);
+                if (!terminal || terminal.exitStatus !== undefined) {
+                    terminal = this._registeredTerminals.get(this._suffixedName(targetAgent));
+                }
+                if (!terminal || terminal.exitStatus !== undefined) {
+                    terminal = undefined;
+                    for (const [name, t] of this._registeredTerminals.entries()) {
+                        if (t.exitStatus !== undefined) { continue; }
+                        if (this._normalizeAgentKey(this._stripIdeSuffix(name)) === normalizedTarget) {
+                            terminal = t;
+                            break;
+                        }
                     }
                 }
             }
@@ -10060,7 +10108,7 @@ Create this file exactly as specified, then continue your work.`);
                     const pidMatch = activePids.has(termInfo.pid) || activePids.has(termInfo.childPid);
 
                     const termIdeName = (termInfo.ideName || '').toLowerCase();
-                    const currentIdeNameLower = currentIdeName.toLowerCase();
+                    const currentIdeNameLower = currentIdeName;
 
                     // Robust IDE matching: If PID matches, it's definitely local. 
                     // Otherwise, only match by name if the IDE name also matches (or is missing).

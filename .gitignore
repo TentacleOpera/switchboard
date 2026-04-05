@@ -37,7 +37,6 @@ list_output.txt
 !.switchboard/reviews/
 !.switchboard/plans/
 !.switchboard/sessions/
-!.switchboard/kanban.db
 !.switchboard/CLIENT_CONFIG.md
 !.switchboard/README.md
 !.switchboard/SWITCHBOARD_PROTOCOL.md

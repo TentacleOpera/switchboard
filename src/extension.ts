@@ -302,6 +302,16 @@ function normalizeAgentKey(value: string | undefined | null): string {
         .trim();
 }
 
+function suffixedName(baseName: string): string {
+    const suffix = `-${vscode.env.appName}`;
+    return baseName.endsWith(suffix) ? baseName : `${baseName}${suffix}`;
+}
+
+function stripIdeSuffix(name: string): string {
+    const suffix = `-${vscode.env.appName}`;
+    return name.endsWith(suffix) ? name.slice(0, -suffix.length) : name;
+}
+
 function isPathWithin(parentDir: string, filePath: string): boolean {
     const normalizedParent = path.resolve(parentDir);
     const normalizedFile = path.resolve(filePath);
@@ -407,19 +417,32 @@ function resolvePreferredReviewRole(state: any): string {
 }
 
 function resolveTerminalByName(terminalName: string): vscode.Terminal | undefined {
+    // 1. Exact match (suffixed or bare)
     const exact = registeredTerminals.get(terminalName);
     if (exact && exact.exitStatus === undefined) {
         return exact;
     }
 
-    const normalizedTarget = normalizeAgentKey(terminalName);
+    // 2. Try suffixed name (bare name → suffixed key)
+    const suffixed = suffixedName(terminalName);
+    if (suffixed !== terminalName) {
+        const bySuffix = registeredTerminals.get(suffixed);
+        if (bySuffix && bySuffix.exitStatus === undefined) {
+            return bySuffix;
+        }
+    }
+
+    // 3. Normalized fuzzy match (strip suffix before normalizing to avoid
+    //    hyphen-separated IDE name polluting the normalized form)
+    const normalizedTarget = normalizeAgentKey(stripIdeSuffix(terminalName));
     for (const [name, terminal] of registeredTerminals.entries()) {
         if (terminal.exitStatus !== undefined) continue;
-        if (normalizeAgentKey(name) === normalizedTarget) {
+        if (normalizeAgentKey(stripIdeSuffix(name)) === normalizedTarget) {
             return terminal;
         }
     }
 
+    // 4. Live VS Code terminal fallback (terminal.name is always unsuffixed)
     return (vscode.window.terminals || []).find((terminal) => {
         if (terminal.exitStatus !== undefined) return false;
         const liveName = normalizeAgentKey(terminal.name);
@@ -494,9 +517,10 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string) {
                         }
                     }
 
-                    const terminalName = name || 'Switchboard';
+                    const baseName = name || 'Switchboard';
+                    const internalName = suffixedName(baseName);
                     const termOpts: vscode.TerminalOptions = {
-                        name: terminalName,
+                        name: baseName,
                         cwd: terminalCwd
                     };
 
@@ -504,8 +528,8 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string) {
 
                     const pid = await waitWithTimeout(terminal.processId, 2000, undefined);
 
-                    // Store terminal in registry for input forwarding
-                    registeredTerminals.set(name, terminal);
+                    // Store terminal in registry under suffixed key for IDE isolation
+                    registeredTerminals.set(internalName, terminal);
 
                     if (!inboxWatcher) {
                         inboxWatcher = new InboxWatcher(workspaceRoot, registeredTerminals, mcpOutputChannel!);
@@ -524,7 +548,7 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string) {
                         pid
                     });
 
-                    mcpOutputChannel?.appendLine(`[MCP] Created UI Terminal: ${name} (PID: ${pid}), added to registry`);
+                    mcpOutputChannel?.appendLine(`[MCP] Created UI Terminal: ${internalName} (PID: ${pid}), added to registry`);
                     break;
                 }
 
@@ -587,13 +611,13 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string) {
                     }
                     recentBridgeInputBySource.set(sourceKey, { target: name, at: now });
 
-                    let terminal = registeredTerminals.get(name);
+                    let terminal = resolveTerminalByName(name);
                     if (!terminal) {
                         // Fallback for stale/incomplete registry: resolve by live VS Code terminal name.
-                        const byName = vscode.window.terminals.find(t => t.name === name);
+                        const byName = vscode.window.terminals.find(t => t.name === name || t.name === stripIdeSuffix(name));
                         if (byName) {
                             terminal = byName;
-                            registeredTerminals.set(name, byName);
+                            registeredTerminals.set(suffixedName(name), byName);
                             mcpOutputChannel?.appendLine(`[MCP] sendToTerminal recovered terminal '${name}' from live VS Code list`);
                         }
                     }
@@ -2043,7 +2067,8 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Drop stale in-memory references for grid agents.
             for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
-                if (agentNames.has(name) && terminal.exitStatus !== undefined) {
+                const bareName = stripIdeSuffix(name);
+                if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
                     registeredTerminals.delete(name);
                 }
             }
@@ -2058,6 +2083,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     terminal.dispose();
                 }
                 registeredTerminals.delete('Jules Monitor');
+                registeredTerminals.delete(suffixedName('Jules Monitor'));
             }
 
             // Remove dead/duplicate terminals that would confuse name-based matching.
@@ -2089,16 +2115,15 @@ export async function activate(context: vscode.ExtensionContext) {
             // Clear stale state entries for grid agents before re-registering.
             await taskViewerProvider.updateState(async (state: any) => {
                 if (!state.terminals) state.terminals = {};
-                const currentIde = (vscode.env.appName || '').toLowerCase();
+                const currentIde = vscode.env.appName || '';
                 for (const name of agentNames) {
-                    const entry = state.terminals[name];
-                    if (!entry) continue;
-                    const entryIde = (entry.ideName || '').toLowerCase();
-                    // Only clear entries belonging to this IDE (or legacy entries with no ideName)
-                    if (!entryIde || entryIde === currentIde ||
-                        (entryIde === 'antigravity' && currentIde.includes('visual studio code')) ||
-                        (entryIde.includes('visual studio code') && currentIde === 'antigravity')) {
-                        delete state.terminals[name];
+                    // Delete both bare and suffixed keys for clean migration
+                    for (const key of [name, suffixedName(name)]) {
+                        const entry = state.terminals[key];
+                        if (!entry) continue;
+                        if (isCompatibleIdeName(entry.ideName, currentIde)) {
+                            delete state.terminals[key];
+                        }
                     }
                 }
             });
@@ -2136,7 +2161,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
                 // Always register — skipParentResolution handles null/unresolved PIDs gracefully
                 batchRegistrations.push({
-                    name: agent.name,
+                    name: suffixedName(agent.name),
                     purpose: 'agent-grid',
                     role: agent.role,
                     pid: pid ?? null,
@@ -2146,7 +2171,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 mcpOutputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: ${pid ?? 'unresolved'}) for batch registration`);
 
-                registeredTerminals.set(agent.name, terminal);
+                registeredTerminals.set(suffixedName(agent.name), terminal);
                 createdTerminals.push(terminal);
                 terminal.show();
                 if (!alreadyExisted) {
@@ -2202,7 +2227,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         cmd = 'jules';
                     }
                     if (cmd && cmd.trim()) {
-                        const terminal = registeredTerminals.get(agent.name);
+                        const terminal = registeredTerminals.get(suffixedName(agent.name));
                         if (terminal) {
                             // Delay to ensure shell process is ready
                             await new Promise(r => setTimeout(r, 1000));

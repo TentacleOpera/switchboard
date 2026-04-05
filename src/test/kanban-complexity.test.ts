@@ -113,4 +113,23 @@ suite('Kanban complexity parsing', () => {
             await fs.promises.rm(tempDir, { recursive: true, force: true });
         }
     });
+
+    test('_columnToRole maps INTERN CODED to intern', async () => {
+        const tempDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-kanban-'));
+        const provider = new KanbanProvider(
+            vscode.Uri.file(tempDir),
+            {
+                workspaceState: {
+                    get: (_key: string, defaultValue?: any) => defaultValue
+                }
+            } as unknown as vscode.ExtensionContext
+        );
+
+        try {
+            assert.strictEqual(provider['_columnToRole']('INTERN CODED'), 'intern');
+        } finally {
+            provider.dispose();
+            await fs.promises.rm(tempDir, { recursive: true, force: true });
+        }
+    });
 });
