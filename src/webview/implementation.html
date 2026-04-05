@@ -1487,6 +1487,12 @@
                     skip.
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" id="onboard-cli-planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="lead" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Lead Coder</label><input type="text" id="onboard-cli-lead"
@@ -1499,15 +1505,15 @@
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="intern" checked
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Intern</label><input type="text" id="onboard-cli-intern"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="reviewer" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Reviewer</label><input type="text" id="onboard-cli-reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Planner</label><input type="text" id="onboard-cli-planner"
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
@@ -1621,6 +1627,12 @@
                     style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     AGENT VISIBILITY &amp; CLI COMMANDS</div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
+                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
@@ -1633,15 +1645,15 @@
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="agent-visible-toggle" data-role="intern" checked
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Intern</label><input type="text" data-role="intern"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
@@ -1689,10 +1701,12 @@
                     <span>Append Design Doc to planner prompts</span>
                 </label>
                 <label class="startup-row" style="display:block; margin-top:4px;">
-                    <input id="design-doc-link-input" type="text" placeholder="https://example.com/prd or /path/to/design.md" style="width:100%;">
+                    <input id="design-doc-link-input" type="text"
+                        placeholder="https://example.com/prd or /path/to/design.md" style="width:100%;">
                 </label>
                 <div style="font-size:10px; color:var(--accent-orange); margin-top:4px; font-family:var(--font-mono);">
-                    ⚠️ Security: File contents are embedded in AI prompts. Do not link files containing API keys, passwords, or sensitive data.
+                    ⚠️ Security: File contents are embedded in AI prompts. Do not link files containing API keys,
+                    passwords, or sensitive data.
                 </div>
                 <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
                     <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
@@ -1738,7 +1752,9 @@
                         <span>Database Location</span>
                     </div>
                     <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Using a cloud location (Google Drive, Dropbox, iCloud) allows plan metadata to sync across machines without git merge conflicts. The database file stays in sync automatically via your cloud provider.
+                        Using a cloud location (Google Drive, Dropbox, iCloud) allows plan metadata to sync across
+                        machines without git merge conflicts. The database file stays in sync automatically via your
+                        cloud provider.
                     </div>
                     <div class="db-path-display" id="current-db-path">.switchboard/kanban.db</div>
                     <div class="db-location-options">
@@ -1762,9 +1778,11 @@
                             <input type="radio" name="db-location" value="custom">
                             <span>Custom Path</span>
                         </label>
-                        <input type="text" id="db-custom-path-input" class="db-custom-path-input hidden" placeholder="Enter custom database path...">
+                        <input type="text" id="db-custom-path-input" class="db-custom-path-input hidden"
+                            placeholder="Enter custom database path...">
                     </div>
-                    <button id="db-update-location-btn" class="db-action-btn w-full" style="margin-top: 8px;">Update Location</button>
+                    <button id="db-update-location-btn" class="db-action-btn w-full" style="margin-top: 8px;">Update
+                        Location</button>
                 </div>
 
                 <div class="db-subsection">
@@ -1772,7 +1790,8 @@
                         <span>Rebuild Database</span>
                     </div>
                     <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        If the database is corrupted, this will delete and recreate it from your plan files in .switchboard/plans/. Plan metadata will be restored from the markdown files.
+                        If the database is corrupted, this will delete and recreate it from your plan files in
+                        .switchboard/plans/. Plan metadata will be restored from the markdown files.
                     </div>
                     <button id="db-reset-btn" class="db-action-btn danger w-full"
                         title="WARNING: Permanently delete and rebuild database">
@@ -2318,6 +2337,7 @@
                         vscode.postMessage({ type: 'getAdvancedReviewerSetting' });
                         vscode.postMessage({ type: 'getLeadChallengeSetting' });
                         vscode.postMessage({ type: 'getAggressivePairSetting' });
+                        vscode.postMessage({ type: 'getClipboardSeparatorPattern' });
                     }
                 }
             });
@@ -2397,7 +2417,7 @@
         let lastJulesSessions = [];
         let lastStartupCommands = {};
         let lastPlanIngestionFolder = '';
-        let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, analyst: true, jules: true };
         let lastCustomAgents = [];
         let currentDbPath = '';
         let workspaceRoot = '';
@@ -2916,12 +2936,12 @@
                         workspaceRoot = message.workspaceRoot;
                     }
                     currentDbPath = message.path || '.switchboard/kanban.db';
-                    
+
                     // Restore correct radio button selection based on current path
                     const path = message.path || '';
                     const homedir = path.includes('~') ? path : '';
                     let selectedValue = 'local';
-                    
+
                     if (path.includes('GoogleDrive') || path.includes('Google Drive')) {
                         selectedValue = 'google-drive';
                     } else if (path.includes('Dropbox')) {
@@ -2936,7 +2956,7 @@
                             customInput.classList.remove('hidden');
                         }
                     }
-                    
+
                     const radioToSelect = document.querySelector(`input[name="db-location"][value="${selectedValue}"]`);
                     if (radioToSelect) {
                         radioToSelect.checked = true;
@@ -2949,6 +2969,56 @@
                         dbPathEl2.style.borderLeft = message.success ? '3px solid #28a745' : '3px solid #dc3545';
                         if (!message.success) dbPathEl2.title = message.error || 'Connection failed';
                         setTimeout(() => { dbPathEl2.style.borderLeft = ''; }, 2000);
+                    }
+                    break;
+                }
+                case 'clipboardSeparatorPattern': {
+                    const dd = document.getElementById('airlock-separator-preset');
+                    const ci = document.getElementById('airlock-separator-input');
+                    const cr = document.getElementById('airlock-separator-custom-row');
+                    const ce = document.getElementById('airlock-separator-error');
+                    if (dd && message.presets) {
+                        dd.innerHTML = '';
+                        message.presets.forEach(p => {
+                            const opt = document.createElement('option');
+                            opt.value = p.key;
+                            opt.textContent = p.label + ': ' + p.literalPattern;
+                            opt.dataset.pattern = p.literalPattern;
+                            dd.appendChild(opt);
+                        });
+                        // Add Custom option
+                        const customOpt = document.createElement('option');
+                        customOpt.value = 'custom';
+                        customOpt.textContent = 'Custom...';
+                        dd.appendChild(customOpt);
+                        // Add Legacy option if applicable
+                        if (message.isLegacy) {
+                            const legacyOpt = document.createElement('option');
+                            legacyOpt.value = 'legacy';
+                            legacyOpt.textContent = 'Legacy regex: ' + message.pattern;
+                            legacyOpt.dataset.pattern = '';
+                            dd.appendChild(legacyOpt);
+                        }
+                        dd.value = message.isLegacy ? 'legacy' : (message.preset || 'classic');
+                    }
+                    if (ci) ci.value = (message.preset === 'custom' ? message.pattern : '') || '';
+                    if (cr) cr.style.display = (message.preset === 'custom' || message.isLegacy) ? 'block' : 'none';
+                    // Update preview
+                    const preview = document.getElementById('airlock-separator-preview');
+                    if (preview && message.pattern) {
+                        const p = message.pattern;
+                        const ex1 = p.replace(/\[N\]/g, '1');
+                        const ex2 = p.replace(/\[N\]/g, '2');
+                        preview.textContent = 'Preview matches:\n' + ex1 + '\n' + ex2;
+                    }
+                    break;
+                }
+                case 'clipboardSeparatorPatternResult': {
+                    const ci = document.getElementById('airlock-separator-input');
+                    const ce = document.getElementById('airlock-separator-error');
+                    if (ci) ci.value = message.pattern || '';
+                    if (ce) {
+                        ce.textContent = message.success ? '' : (message.error || 'Invalid pattern');
                     }
                     break;
                 }
@@ -3061,7 +3131,7 @@
                 isReady = false;
             } else if (termData) {
                 // Check liveliness
-                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const HEARTBEAT_THRESHOLD_MS = 120_000;
                 const lastSeenMs = Date.parse(termData.lastSeen || '');
                 const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
                 const isAlive = termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
@@ -3216,7 +3286,7 @@
             if (dispatchState === 'ready') return true;
             if (dispatchState === 'recoverable' || dispatchState === 'not_ready') return false;
             // Fallback: check terminal heartbeat for agents with no dispatch info
-            const HEARTBEAT_THRESHOLD_MS = 60_000;
+            const HEARTBEAT_THRESHOLD_MS = 120_000;
             const matchedTermName = Object.keys(lastTerminals).find(key => lastTerminals[key]?.role === roleId);
             if (!matchedTermName) return false;
             const termData = lastTerminals[matchedTermName];
@@ -3236,9 +3306,10 @@
                 // Count all visible terminal-based roles. Jules is excluded (cloud service, always available).
                 // Analyst is included — if the user has assigned a terminal to the analyst role, it counts.
                 const allRoles = [
+                    ...(va.planner !== false ? ['planner'] : []),
                     ...(va.lead !== false ? ['lead'] : []),
                     ...(va.coder !== false ? ['coder'] : []),
-                    ...(va.planner !== false ? ['planner'] : []),
+                    ...(va.intern !== false ? ['intern'] : []),
                     ...(va.reviewer !== false ? ['reviewer'] : []),
                     ...(va.analyst !== false ? ['analyst'] : []),
                     ...lastCustomAgents.filter(a => va[a.role] !== false).map(a => a.role)
@@ -3324,27 +3395,11 @@
                 agentListWebai.innerHTML = '';
             }
 
-            // === AGENTS TAB: Lead Coder, Coder, Planner, Reviewer, Analyst ===
+            // === AGENTS TAB: Planner, Lead Coder, Coder, Intern, Reviewer, Analyst ===
             // Filter agents based on visibility preferences
             const va = lastVisibleAgents;
 
-            // 1. Lead Coder
-            if (va.lead !== false) {
-                agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
-                    'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
-                ));
-            }
-
-            // 2. Coder
-            if (va.coder !== false) {
-                agentListStandard.appendChild(createAgentRow('CODER', 'coder',
-                    'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
-                ));
-            }
-
-            // 3. Planner
+            // 1. Planner
             if (va.planner !== false) {
                 agentListStandard.appendChild(createAgentRow('PLANNER', 'planner',
                     'IMPROVE PLAN',
@@ -3352,7 +3407,31 @@
                 ));
             }
 
-            // 4. Reviewer
+            // 2. Lead Coder
+            if (va.lead !== false) {
+                agentListStandard.appendChild(createAgentRow('LEAD CODER', 'lead',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'lead')
+                ));
+            }
+
+            // 3. Coder
+            if (va.coder !== false) {
+                agentListStandard.appendChild(createAgentRow('CODER', 'coder',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'coder')
+                ));
+            }
+
+            // 3b. Intern
+            if (va.intern !== false) {
+                agentListStandard.appendChild(createAgentRow('INTERN', 'intern',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'intern')
+                ));
+            }
+
+            // 4. Reviewer (unchanged position)
             if (va.reviewer !== false) {
                 agentListStandard.appendChild(createAgentRow('REVIEWER', 'reviewer',
                     'REVIEW CODE',
@@ -3360,7 +3439,7 @@
                 ));
             }
 
-            // 5. Analyst
+            // 5. Analyst (unchanged position)
             if (va.analyst !== false) {
                 agentListStandard.appendChild(createAnalystRow());
                 // Restore analyst input state after re-render
@@ -3387,7 +3466,7 @@
                 ));
             }
 
-            // 6. Jules
+            // 6. Jules (unchanged position)
             if (va.jules !== false) {
                 agentListStandard.appendChild(createAgentRow('JULES PARALLEL CODER', 'jules',
                     'START CLOUD CODING',
@@ -3446,6 +3525,120 @@
             statusLine.id = 'webai-status';
             statusLine.style.cssText = 'padding:2px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
             container.appendChild(statusLine);
+
+            // --- Clipboard Plan Import Section ---
+            const clipHeader = document.createElement('div');
+            clipHeader.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--accent-green); font-family:var(--font-mono); letter-spacing:1px; font-weight:bold;';
+            clipHeader.innerText = 'CLIPBOARD PLAN IMPORT';
+            container.appendChild(clipHeader);
+
+            const clipDesc = document.createElement('div');
+            clipDesc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            clipDesc.innerText = 'Import multiple plans by pasting a single markdown block. The separator pattern below splits content into individual plan files.';
+            container.appendChild(clipDesc);
+
+            // Preset dropdown
+            const clipDropdownRow = document.createElement('div');
+            clipDropdownRow.style.cssText = 'display:flex; gap:4px; align-items:center; padding:0 8px 4px;';
+
+            const clipDropdownLabel = document.createElement('span');
+            clipDropdownLabel.style.cssText = 'font-size:10px; color:var(--text-secondary); white-space:nowrap;';
+            clipDropdownLabel.innerText = 'Separator:';
+            clipDropdownRow.appendChild(clipDropdownLabel);
+
+            const clipDropdown = document.createElement('select');
+            clipDropdown.id = 'airlock-separator-preset';
+            clipDropdown.style.cssText = 'flex:1; font-family:var(--font-mono); font-size:10px; background:var(--bg-dim); color:var(--text-primary); border:1px solid var(--border-dim); border-radius:3px; padding:3px 4px;';
+            // Options populated on message receipt
+            clipDropdownRow.appendChild(clipDropdown);
+            container.appendChild(clipDropdownRow);
+
+            // Custom pattern input (hidden by default)
+            const clipCustomRow = document.createElement('div');
+            clipCustomRow.id = 'airlock-separator-custom-row';
+            clipCustomRow.style.cssText = 'display:none; padding:0 8px 4px;';
+
+            const clipCustomInput = document.createElement('input');
+            clipCustomInput.id = 'airlock-separator-input';
+            clipCustomInput.type = 'text';
+            clipCustomInput.placeholder = '### PLAN [N] START';
+            clipCustomInput.style.cssText = 'width:100%; font-family:var(--font-mono); font-size:10px; box-sizing:border-box;';
+            clipCustomRow.appendChild(clipCustomInput);
+            container.appendChild(clipCustomRow);
+
+            // N placeholder hint
+            const clipHint = document.createElement('div');
+            clipHint.style.cssText = 'padding:0 8px 4px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono);';
+            clipHint.innerText = '[N] = auto-numbered placeholder (1, 2, 3...)';
+            container.appendChild(clipHint);
+
+            // Live preview
+            const clipPreview = document.createElement('div');
+            clipPreview.id = 'airlock-separator-preview';
+            clipPreview.style.cssText = 'margin:0 8px 8px; font-size:10px; color:var(--text-secondary); padding:6px 8px; background:var(--bg-dim); border:1px solid var(--border-dim); border-radius:4px; font-family:var(--font-mono); white-space:pre-line; line-height:1.4;';
+            container.appendChild(clipPreview);
+
+            // Error display
+            const clipError = document.createElement('div');
+            clipError.id = 'airlock-separator-error';
+            clipError.style.cssText = 'min-height:0; padding:0 8px; color:var(--accent-red); font-size:10px; font-family:var(--font-mono);';
+            container.appendChild(clipError);
+
+            // Separator divider before NotebookLM workflow
+            const clipDivider = document.createElement('div');
+            clipDivider.style.cssText = 'border-top:1px solid var(--border-dim); margin:8px 8px 0;';
+            container.appendChild(clipDivider);
+
+            // --- Helper: update preview from pattern ---
+            function updateSeparatorPreview(pattern) {
+                if (!pattern) { clipPreview.textContent = ''; return; }
+                const ex1 = pattern.replace(/\[N\]/g, '1');
+                const ex2 = pattern.replace(/\[N\]/g, '2');
+                clipPreview.textContent = 'Preview matches:\n' + ex1 + '\n' + ex2;
+            }
+
+            // --- Event: dropdown change ---
+            clipDropdown.addEventListener('change', () => {
+                const key = clipDropdown.value;
+                clipCustomRow.style.display = key === 'custom' ? 'block' : 'none';
+                clipError.textContent = '';
+                vscode.postMessage({ type: 'setClipboardSeparatorPreset', preset: key });
+                // Update preview from dropdown option text
+                const opt = clipDropdown.options[clipDropdown.selectedIndex];
+                if (key !== 'custom' && opt.dataset.pattern) {
+                    updateSeparatorPreview(opt.dataset.pattern);
+                }
+            });
+
+            // --- Event: custom input change ---
+            clipCustomInput.addEventListener('change', () => {
+                clipError.textContent = '';
+                vscode.postMessage({ type: 'setClipboardSeparatorPattern', pattern: clipCustomInput.value });
+                updateSeparatorPreview(clipCustomInput.value);
+            });
+
+            // --- Copy Agent Prompt button ---
+            const copyPromptBtn = document.createElement('button');
+            copyPromptBtn.className = 'secondary-btn';
+            copyPromptBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
+            copyPromptBtn.innerText = '\u{1F4CB} COPY AGENT PROMPT';
+            copyPromptBtn.onclick = () => {
+                // Read current separator at click time
+                const currentPattern = clipDropdown.value === 'custom'
+                    ? clipCustomInput.value || '### PLAN [N] START'
+                    : (clipDropdown.options[clipDropdown.selectedIndex]?.dataset?.pattern || '### PLAN [N] START');
+                const ex1 = currentPattern.replace(/\[N\]/g, '1');
+                const ex2 = currentPattern.replace(/\[N\]/g, '2');
+                const prompt = `Please output all features/plans as a single markdown block with each plan separated by this exact format:\n\n${ex1}\n[plan 1 content here]\n\n${ex2}\n[plan 2 content here]\n\n[etc...]\n\nEach plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
+                navigator.clipboard.writeText(prompt).then(() => {
+                    copyPromptBtn.innerText = '\u2713 COPIED';
+                    setTimeout(() => { copyPromptBtn.innerText = '\u{1F4CB} COPY AGENT PROMPT'; }, 2000);
+                });
+            };
+            container.appendChild(copyPromptBtn);
+
+            // --- Request initial separator state ---
+            vscode.postMessage({ type: 'getClipboardSeparatorPattern' });
 
             // Step 1: Bundle Code
             const s1Header = document.createElement('div');
@@ -3523,7 +3716,21 @@
             copySprintBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
             copySprintBtn.innerText = 'COPY SPRINT PROMPT';
             copySprintBtn.onclick = () => {
-                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:\n\n1. Read the "how_to_plan.md" guide to understand the planning framework\n2. Generate a highly detailed implementation plan following the guide's structure\n3. Include:\n   - Specific file paths and line numbers\n   - Step-by-step implementation instructions\n   - Dependencies and potential conflicts\n   - Complexity audit (Routine / Complex classification)\n   - Verification steps\n\nFormat each plan as a separate markdown block with clear headers so I can copy each plan individually.\n\nStart with the first plan and work through all plans in the list.`;
+                // Read current separator from the Airlock dropdown
+                const dd = document.getElementById('airlock-separator-preset');
+                const ci = document.getElementById('airlock-separator-input');
+                let sepPattern = '### PLAN N START'; // fallback
+                if (dd) {
+                    if (dd.value === 'custom' && ci) {
+                        sepPattern = ci.value || sepPattern;
+                    } else {
+                        const opt = dd.options[dd.selectedIndex];
+                        if (opt && opt.dataset.pattern) sepPattern = opt.dataset.pattern;
+                    }
+                }
+                const ex1 = sepPattern.replace(/\[N\]/g, '1');
+                const ex2 = sepPattern.replace(/\[N\]/g, '2');
+                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:\n\n1. Read the "how_to_plan.md" guide to understand the planning framework\n2. Generate a highly detailed implementation plan following the guide's structure\n3. Include:\n   - Specific file paths and line numbers\n   - Step-by-step implementation instructions\n   - Dependencies and potential conflicts\n   - Complexity audit (Routine / Complex classification)\n   - Verification steps\n\n**IMPORTANT - Multi-Plan Format:**\nWhen generating multiple plans in a single response, you MUST use plan markers to delimit each plan. This enables automatic import into Switchboard:\n\n- Before each plan, add a marker line: ${ex1} (where N is the plan number)\n- The plan's H1 title should immediately follow the marker\n- Example:\n  ${ex1}\n  \n  # First Plan Title\n  [plan content...]\n  \n  ${ex2}\n  \n  # Second Plan Title\n  [plan content...]\n\nWork through all plans in the list, using the marker format above.`;
                 navigator.clipboard.writeText(prompt).then(() => {
                     copySprintBtn.innerText = '\u2713 COPIED';
                     setTimeout(() => { copySprintBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
@@ -3539,7 +3746,7 @@
 
             const s4Desc = document.createElement('div');
             s4Desc.style.cssText = 'padding:0 8px 6px; font-size:10px; color:var(--text-secondary);';
-            s4Desc.innerText = 'After NotebookLM generates the detailed plans, copy each plan individually. In the Kanban view, click the [\u22EF] "Import plan from clipboard" button in the NEW column header to import each plan. The imported plans will be added to the NEW column and can be sent to the Planner agent for review if needed.';
+            s4Desc.innerText = 'After NotebookLM generates the detailed plans, copy the entire response. In the Kanban view, click the [\u22EF] "Import plan from clipboard" button in the NEW column header. If multiple plans with markers are detected, they will be automatically split into separate plan files.';
             container.appendChild(s4Desc);
 
             return container;
@@ -3590,6 +3797,7 @@
             };
             const autobanRoles = [
                 { role: 'planner', label: 'Planner' },
+                { role: 'intern', label: 'Intern' },
                 { role: 'coder', label: 'Coder' },
                 { role: 'lead', label: 'Lead Coder' },
                 { role: 'reviewer', label: 'Reviewer' },
@@ -3601,7 +3809,8 @@
             const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
             const columnTransitions = [
                 { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
-                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> LEAD/CODER', defaultMin: 20, floorPerPlan: 5 },
+                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> INTERN/CODER/LEAD', defaultMin: 20, floorPerPlan: 5 },
+                { column: 'INTERN CODED', label: 'INTERN CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
                 { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
                 { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
             ];
@@ -3647,6 +3856,11 @@
                 });
             };
 
+            const automationRulesHeader = document.createElement('div');
+            automationRulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px; margin-bottom:8px;';
+            automationRulesHeader.textContent = 'AUTOMATION RULES';
+            container.appendChild(automationRulesHeader);
+
             const batchRow = document.createElement('div');
             batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
 
@@ -3684,8 +3898,10 @@
             guardInteraction(complexitySelect);
             [
                 { value: 'all', label: 'All' },
-                { value: 'low_only', label: 'Low Only' },
-                { value: 'high_only', label: 'High Only' }
+                { value: 'low_and_below', label: 'Low and below (1-4)' },
+                { value: 'medium_and_below', label: 'Medium and below (1-6)' },
+                { value: 'medium_and_above', label: 'Medium and above (5-10)' },
+                { value: 'high_and_above', label: 'High and above (7-10)' }
             ].forEach(({ value, label }) => {
                 const opt = document.createElement('option');
                 opt.value = value;
@@ -3693,7 +3909,7 @@
                 if (value === autobanState.complexityFilter) opt.selected = true;
                 complexitySelect.appendChild(opt);
             });
-            complexitySelect.title = 'Unknown complexity is treated as High. Low Only skips unknown plans.';
+            complexitySelect.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
             complexitySelect.addEventListener('change', () => {
                 autobanState.complexityFilter = complexitySelect.value || 'all';
                 emitAutobanState();
@@ -3856,14 +4072,14 @@
                 roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
 
                 const roleTitleWrap = document.createElement('div');
-                roleTitleWrap.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0;';
+                roleTitleWrap.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
 
                 const roleTitle = document.createElement('span');
-                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
                 roleTitle.textContent = label;
 
                 const roleCapacity = document.createElement('span');
-                roleCapacity.style.cssText = chipStyle;
+                roleCapacity.style.cssText = chipStyle + ' flex-shrink:0;';
                 roleCapacity.textContent = 'POOL ' + poolEntries.length + '/5';
 
                 roleTitleWrap.appendChild(roleTitle);
@@ -3871,7 +4087,7 @@
 
                 const addButton = document.createElement('button');
                 addButton.className = 'action-btn';
-                addButton.style.cssText = 'padding:3px 8px; font-size:9px;';
+                addButton.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
                 addButton.textContent = 'ADD TERMINAL';
                 addButton.disabled = poolEntries.length >= 5;
                 addButton.addEventListener('click', () => {
@@ -3993,7 +4209,7 @@
 
             let isReady = false;
             if (termData) {
-                const HEARTBEAT_THRESHOLD_MS = 60_000;
+                const HEARTBEAT_THRESHOLD_MS = 120_000;
                 const lastSeenMs = Date.parse(termData.lastSeen || '');
                 const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
                 const isAlive = termData.alive !== undefined ? termData.alive : (termData._isLocal || heartbeatAlive);
@@ -4189,11 +4405,12 @@
             const agents = {
                 lead: document.getElementById('onboard-cli-lead').value,
                 coder: document.getElementById('onboard-cli-coder').value,
+                intern: document.getElementById('onboard-cli-intern').value,
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
                 planner: document.getElementById('onboard-cli-planner').value,
                 analyst: document.getElementById('onboard-cli-analyst').value
             };
-            const visibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: true };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;
@@ -4228,7 +4445,7 @@
         const dbLocationRadios = document.querySelectorAll('input[name="db-location"]');
         const dbCustomPathInput = document.getElementById('db-custom-path-input');
         const dbPathDisplay = document.getElementById('current-db-path');
-        
+
         // Compute proposed path based on selected location
         function getProposedPath(location) {
             if (!workspaceRoot) return '...';
@@ -4248,7 +4465,7 @@
                     return currentDbPath;
             }
         }
-        
+
         // Show/hide custom path input and preview proposed path
         dbLocationRadios.forEach(radio => {
             radio.addEventListener('change', () => {
@@ -4260,7 +4477,7 @@
                         dbPathDisplay.style.opacity = '0.7';
                         dbPathDisplay.style.fontStyle = 'italic';
                     }
-                    
+
                     if (radio.value === 'custom') {
                         dbCustomPathInput.classList.remove('hidden');
                         dbCustomPathInput.focus();
@@ -4270,7 +4487,7 @@
                 }
             });
         });
-        
+
         // Update preview when custom path input changes
         dbCustomPathInput?.addEventListener('input', () => {
             const customRadio = document.querySelector('input[name="db-location"][value="custom"]');
@@ -4283,7 +4500,7 @@
         document.getElementById('db-update-location-btn')?.addEventListener('click', () => {
             const selectedRadio = document.querySelector('input[name="db-location"]:checked');
             if (!selectedRadio) return;
-            
+
             const location = selectedRadio.value;
             if (location === 'custom') {
                 const customPath = dbCustomPathInput.value.trim();
@@ -4298,7 +4515,7 @@
                 vscode.postMessage({ type: 'setPresetDbPath', preset: location });
             }
         });
-        
+
         document.getElementById('db-reset-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'resetDatabase' });
         });
@@ -4313,4 +4530,5 @@
     </script>
 </body>
 
+</html>
 </html>

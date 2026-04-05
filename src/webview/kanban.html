@@ -197,6 +197,30 @@
             filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(1.2);
         }
 
+        .backlog-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            text-transform: uppercase;
+        }
+        .backlog-toggle-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+        .backlog-toggle-btn.is-active {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
+        }
+
         .btn-batch {
             background: color-mix(in srgb, var(--accent-teal) 12%, transparent);
             border: 1px solid color-mix(in srgb, var(--accent-teal) 28%, transparent);
@@ -416,8 +440,11 @@
             font-weight: 600;
             letter-spacing: 0.3px;
         }
-        .complexity-indicator.high { color: #e06c75; }
+        .complexity-indicator.very-high { color: #ff00ff; }
+        .complexity-indicator.high { color: var(--accent-red); }
+        .complexity-indicator.medium { color: var(--accent-orange); }
         .complexity-indicator.low { color: #98c379; }
+        .complexity-indicator.very-low { color: var(--accent-teal); }
         .complexity-indicator.unknown { color: #7f848e; }
 
         .card-actions {
@@ -867,6 +894,31 @@
             color: var(--accent-orange);
         }
 
+        /* Pair Programming mode dropdown */
+        .kanban-mode-dropdown {
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: var(--panel-bg);
+            color: var(--accent-teal);
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            padding: 3px 6px;
+            cursor: pointer;
+            outline: none;
+            transition: border-color 0.15s, box-shadow 0.15s;
+        }
+        .kanban-mode-dropdown:hover,
+        .kanban-mode-dropdown:focus {
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-mode-dropdown option {
+            background: var(--bg-color);
+            color: var(--text-primary);
+        }
+
         /* Per-column mode toggle */
         .mode-toggle {
             display: flex;
@@ -960,7 +1012,9 @@
             font-family: var(--font-mono);
             padding: 3px 8px;
             border-radius: 3px;
-            white-space: nowrap;
+            white-space: pre-line;
+            text-align: left;
+            max-width: 320px;
             border: 1px solid var(--border-color, #2a2a4a);
             opacity: 0;
             visibility: hidden;
@@ -974,6 +1028,102 @@
 
         @keyframes tooltipFadeIn {
             to { opacity: 1; }
+        }
+
+        /* Routing Map Modal */
+        .routing-map-content {
+            width: 900px;
+            max-width: 95vw;
+        }
+
+        .routing-map-columns {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 20px;
+            padding: 20px;
+            min-height: 400px;
+        }
+
+        .routing-column {
+            background: var(--vscode-panel-background, #1e1e1e);
+            border: 1px solid var(--vscode-panel-border, #444);
+            border-radius: 8px;
+            display: flex;
+            flex-direction: column;
+        }
+
+        .routing-column-header {
+            padding: 12px;
+            border-bottom: 1px solid var(--vscode-panel-border, #444);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+        }
+
+        .role-badge {
+            font-weight: 600;
+            padding: 4px 12px;
+            border-radius: 4px;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+        }
+
+        .role-badge.lead { background: #ff6b6b; color: white; }
+        .role-badge.coder { background: #4ecdc4; color: white; }
+        .role-badge.intern { background: #45b7d1; color: white; }
+
+        .routing-drop-zone {
+            flex: 1;
+            padding: 12px;
+            min-height: 300px;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .routing-drop-zone.drag-over {
+            background: var(--vscode-list-dropBackground, rgba(255,255,255,0.05));
+            border: 2px dashed var(--vscode-focusBorder, #007fd4);
+            border-radius: 6px;
+        }
+
+        .complexity-card {
+            background: var(--vscode-button-background, #0e639c);
+            color: var(--vscode-button-foreground, #fff);
+            padding: 12px 16px;
+            border-radius: 6px;
+            cursor: grab;
+            text-align: center;
+            font-weight: 600;
+            font-size: 14px;
+            transition: transform 0.15s, box-shadow 0.15s;
+            user-select: none;
+            border: none;
+        }
+
+        .complexity-card:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+
+        .complexity-card.dragging {
+            opacity: 0.4;
+            cursor: grabbing;
+        }
+
+        .complexity-card.complexity-high { background: #c0392b; }
+        .complexity-card.complexity-medium { background: #16a085; }
+        .complexity-card.complexity-low { background: #2980b9; }
+
+        .routing-map-active-dot {
+            display: inline-block;
+            width: 6px;
+            height: 6px;
+            border-radius: 50%;
+            background: var(--accent-orange, #f0a500);
+            margin-left: 4px;
+            vertical-align: middle;
         }
 
     </style>
@@ -998,14 +1148,23 @@
             </label>
             <span class="toggle-label">CLI Triggers</span>
         </label>
-        <label class="cli-toggle-inline pair-programming-toggle" id="pair-programming-toggle" data-tooltip="Pair Programming: Lead does high complexity work, Coder auto-starts low complexity work simultaneously">
+        <label class="cli-toggle-inline" id="unknown-complexity-label" data-tooltip="When OFF, batch moves skip plans with unknown complexity">
             <label class="toggle-switch">
-                <input type="checkbox" id="pairProgrammingCheckbox">
+                <input type="checkbox" id="unknown-complexity-toggle">
                 <span class="toggle-slider"></span>
             </label>
-            <span class="toggle-label">Pair Programming</span>
+            <span class="toggle-label">Unknown → Auto</span>
         </label>
+        <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
+            <option value="off">Pair Programming: Off</option>
+            <option value="cli-cli">CLI Lead + CLI Coder</option>
+            <option value="cli-ide">CLI Lead + IDE Coder</option>
+            <option value="ide-cli">IDE Lead + CLI Coder</option>
+            <option value="ide-ide">IDE Lead + IDE Coder</option>
+        </select>
         <button class="strip-btn" id="btn-refresh-strip" data-tooltip="Sync board with latest backend state">↻ SYNC BOARD</button>
+        <button class="strip-btn" id="btn-routing-map" data-tooltip="Configure complexity-based routing rules">⇢ ROUTING MAP</button>
+        <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
     </div>
     <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
         ⚠️ Database unavailable — card positions may not reflect manual moves
@@ -1028,6 +1187,43 @@
             <div class="modal-footer">
                 <button class="modal-btn modal-btn-secondary" id="testing-fail-copy">Copy Prompt</button>
                 <button class="modal-btn modal-btn-primary" id="testing-fail-send">Send to Lead Coder</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Routing Map Modal -->
+    <div id="routing-map-modal" class="modal-overlay hidden">
+        <div class="modal-content routing-map-content">
+            <div class="modal-header">
+                <h3 class="modal-title">Routing Map</h3>
+                <button class="modal-close-btn" data-action="closeRoutingMap">&times;</button>
+            </div>
+            <div class="modal-body" style="padding: 0;">
+                <p style="margin: 12px 20px 0; color: var(--vscode-descriptionForeground); font-size: 12px;">Drag complexity cards to assign which agent tier handles each level.</p>
+                <div class="routing-map-columns">
+                    <div class="routing-column">
+                        <div class="routing-column-header">
+                            <span class="role-badge lead">Lead Coder</span>
+                        </div>
+                        <div class="routing-drop-zone" data-role="lead"></div>
+                    </div>
+                    <div class="routing-column">
+                        <div class="routing-column-header">
+                            <span class="role-badge coder">Coder</span>
+                        </div>
+                        <div class="routing-drop-zone" data-role="coder"></div>
+                    </div>
+                    <div class="routing-column">
+                        <div class="routing-column-header">
+                            <span class="role-badge intern">Intern</span>
+                        </div>
+                        <div class="routing-drop-zone" data-role="intern"></div>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-secondary" data-action="closeRoutingMap">Cancel</button>
+                <button class="modal-btn modal-btn-primary" data-action="saveRoutingMap">Save Changes</button>
             </div>
         </div>
     </div>
@@ -1112,9 +1308,18 @@
         let columns = columnDefinitions.map(col => col.id);
         let currentCards = [];
         let lastAgentNames = {};
-        let lastVisibleAgents = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: true };
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
+        let allowUnknownComplexityAutoMove = false;
+        let collapseCodersEnabled = false;
+        // Restore collapse toggle from webview state if available
+        try {
+            const savedState = vscode.getState();
+            if (savedState && typeof savedState.collapseCodersEnabled === 'boolean') {
+                collapseCodersEnabled = savedState.collapseCodersEnabled;
+            }
+        } catch (_) {}
         let autobanConfig = null; // Received from backend: { enabled, batchSize, rules }
         let autobanCountdownTimer = null;
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
@@ -1125,9 +1330,12 @@
         const selectedCards = new Set();
         let testingFailSessionIds = [];
         let testingFailSourceColumn = '';
+        // Routing map state
+        let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
+        let routingMapDraggedCard = null;
 
         // Column abbreviations for inline timers
-        const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'COMPLETED': 'D' };
+        const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
 
         // Icon URIs injected by extension
         const ICON_MOVE_SELECTED = '{{ICON_53}}';
@@ -1189,6 +1397,13 @@
             }
         }
 
+        function updateUnknownComplexityToggleUi() {
+            const toggle = document.getElementById('unknown-complexity-toggle');
+            if (toggle) {
+                toggle.checked = !!allowUnknownComplexityAutoMove;
+            }
+        }
+
         /** Get the next column in the pipeline (returns null for last column). */
         function getNextColumn(col) {
             const idx = columns.indexOf(col);
@@ -1217,6 +1432,10 @@
 
         /** Get all session IDs within a specific column. */
         function getAllInColumn(col) {
+            if (col === 'CODED_AUTO') {
+                const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.sessionId);
+            }
             return currentCards.filter(c => c.column === col).map(c => c.sessionId);
         }
 
@@ -1270,6 +1489,11 @@
                 const container = document.getElementById('col-' + col);
                 if (container) columnScrollTop[col] = container.scrollTop;
             });
+            // Capture synthetic CODED_AUTO scroll when collapsed
+            if (collapseCodersEnabled) {
+                const autoContainer = document.getElementById('col-CODED_AUTO');
+                if (autoContainer) columnScrollTop['CODED_AUTO'] = autoContainer.scrollTop;
+            }
             return {
                 boardScrollLeft: kanbanBoard.scrollLeft,
                 pageScrollY: window.scrollY,
@@ -1284,18 +1508,43 @@
                 const container = document.getElementById('col-' + col);
                 if (container) container.scrollTop = viewState.columnScrollTop[col] || 0;
             });
+            // Restore synthetic CODED_AUTO scroll when collapsed
+            if (collapseCodersEnabled && viewState.columnScrollTop['CODED_AUTO'] != null) {
+                const autoContainer = document.getElementById('col-CODED_AUTO');
+                if (autoContainer) autoContainer.scrollTop = viewState.columnScrollTop['CODED_AUTO'];
+            }
             window.scrollTo(0, viewState.pageScrollY || 0);
         }
 
         function renderColumns() {
+            // When collapsed, replace the three coder columns with a single synthetic entry
+            let renderDefs = columnDefinitions;
+            if (collapseCodersEnabled) {
+                const coderDefs = columnDefinitions.filter(d => d.kind === 'coded');
+                if (coderDefs.length > 0) {
+                    const syntheticCol = {
+                        id: 'CODED_AUTO',
+                        label: 'Coded (auto-routed)',
+                        role: null,
+                        order: coderDefs[0].order || 180,
+                        kind: 'coded',
+                        autobanEnabled: true,
+                        dragDropMode: 'cli'
+                    };
+                    renderDefs = columnDefinitions
+                        .filter(d => d.kind !== 'coded')
+                        .concat([syntheticCol])
+                        .sort((a, b) => (a.order || 0) - (b.order || 0));
+                }
+            }
 
-            kanbanBoard.innerHTML = columnDefinitions.map(def => {
+            kanbanBoard.innerHTML = renderDefs.map(def => {
                 const isCreated = def.id === 'CREATED';
                 const isPlanReviewed = def.id === 'PLAN REVIEWED';
                 const isCompleted = def.kind === 'completed';
                 // Last working column = the column immediately before the completed column
-                const completedIndex = columnDefinitions.findIndex(d => d.kind === 'completed');
-                const defIndex = columnDefinitions.indexOf(def);
+                const completedIndex = renderDefs.findIndex(d => d.kind === 'completed');
+                const defIndex = renderDefs.indexOf(def);
                 const isLastWorkingColumn = !isCompleted && completedIndex > 0 && defIndex === completedIndex - 1;
                 const hasAgent = !isCreated && !isCompleted;
                 
@@ -1314,10 +1563,14 @@
                        </div>`
                     : '';
 
+                const backlogToggleBtn = isCreated
+                    ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'VIEW NEW' : 'VIEW BACKLOG'}</button>`
+                    : '';
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
+                            ${backlogToggleBtn}
                             <button class="btn-add-plan" id="btn-add-plan" data-tooltip="Add Plan">+</button>
-                            <button class="btn-add-plan" id="btn-import-clipboard" data-tooltip="Import plan from clipboard"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import" style="width: 16px; height: 16px;"></button>
+                            <button class="btn-add-plan" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import" style="width: 16px; height: 16px;"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`
                     : `<div style="display: flex; align-items: center; gap: 4px;">
@@ -1369,7 +1622,7 @@
                                <img src="${ICON_CODE_MAP}" alt="Code Map">
                            </button>`
                         : '';
-                    const testingFailBtn = (def.id === 'LEAD CODED' || def.id === 'CODER CODED')
+                    const testingFailBtn = (def.kind === 'coded')
                         ? `<button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">
                                <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
                            </button>`
@@ -1400,10 +1653,11 @@
                     </div>`;
                 }
 
+                const columnDisplayLabel = (isCreated && showingBacklog) ? 'BACKLOG' : def.label;
                 return `<div class="kanban-column" data-column="${escapeAttr(def.id)}">
                     <div class="column-header">
                         <div style="display:flex; flex-direction:column;">
-                            <span class="column-name">${escapeHtml(def.label)}</span>
+                            <span class="column-name">${escapeHtml(columnDisplayLabel)}</span>
                             ${subline}
                         </div>
                         ${rightSide}
@@ -1412,6 +1666,10 @@
                     <div class="column-body" id="col-${escapeAttr(def.id)}"></div>
                 </div>`;
             }).join('');
+
+            document.getElementById('btn-toggle-backlog')?.addEventListener('click', () => {
+                postKanbanMessage({ type: 'toggleBacklogView' });
+            });
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'createPlan' });
@@ -1445,35 +1703,48 @@
                     flashIconBtn(btn);
                     const action = btn.dataset.action;
                     const column = btn.dataset.column;
-                    const nextCol = getNextColumn(column);
+                    // CODED_AUTO is synthetic — resolve to a real coder column for getNextColumn and backend messages.
+                    // All coded columns share the same next column (CODE REVIEWED), so using the first real one works.
+                    const backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
+                    const nextCol = getNextColumn(backendColumn);
                     if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed') return;
 
                     switch (action) {
                         case 'moveSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
-                            postKanbanMessage({ type: 'moveSelected', column, sessionIds: ids });
+                            postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
                         case 'moveAll': {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
-                            postKanbanMessage({ type: 'moveAll', column });
+                            // CODED_AUTO: backend moveAll filters by single column, so send explicit IDs instead
+                            if (column === 'CODED_AUTO') {
+                                postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
+                            } else {
+                                postKanbanMessage({ type: 'moveAll', column: backendColumn });
+                            }
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
                         case 'promptSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
-                            postKanbanMessage({ type: 'promptSelected', column, sessionIds: ids });
+                            postKanbanMessage({ type: 'promptSelected', column: backendColumn, sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
                         case 'promptAll': {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
-                            postKanbanMessage({ type: 'promptAll', column });
+                            // CODED_AUTO: backend promptAll filters by single column, so send explicit IDs instead
+                            if (column === 'CODED_AUTO') {
+                                postKanbanMessage({ type: 'promptSelected', column: backendColumn, sessionIds: ids });
+                            } else {
+                                postKanbanMessage({ type: 'promptAll', column: backendColumn });
+                            }
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
@@ -1515,7 +1786,7 @@
                         case 'testingFailed': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
-                            openTestingFailModal(ids, column);
+                            openTestingFailModal(ids, backendColumn);
                             break;
                         }
                         case 'completeSelected': {
@@ -1589,6 +1860,14 @@
                     }
                 }
             });
+
+            // Update synthetic CODED_AUTO agent subline when collapsed
+            const autoRouteEl = document.getElementById('agent-CODED_AUTO');
+            if (autoRouteEl) {
+                autoRouteEl.textContent = 'Dynamic routing';
+                autoRouteEl.style.color = '';
+                autoRouteEl.style.fontStyle = 'italic';
+            }
         }
 
         function updateJulesButtonVisibility() {
@@ -1626,12 +1905,44 @@
             const buckets = {};
             columns.forEach(c => buckets[c] = []);
 
-            cards.forEach(card => {
-                const col = columns.includes(card.column) ? card.column : 'CREATED';
+            // Filter/remap cards based on backlog view state
+            let displayCards = cards;
+            if (!showingBacklog) {
+                displayCards = cards.filter(card => card.column !== 'BACKLOG');
+            } else {
+                displayCards = cards
+                    .filter(card => card.column !== 'CREATED')
+                    .map(card => card.column === 'BACKLOG' ? { ...card, _effectiveColumn: 'CREATED' } : card);
+            }
+
+            displayCards.forEach(card => {
+                const effectiveCol = card._effectiveColumn || card.column;
+                const col = columns.includes(effectiveCol) ? effectiveCol : 'CREATED';
                 buckets[col].push(card);
             });
 
+            const CODED_COLUMN_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+
+            if (collapseCodersEnabled) {
+                // Render all coder-column cards into the synthetic CODED_AUTO container
+                const coderItems = [];
+                CODED_COLUMN_IDS.forEach(colId => {
+                    coderItems.push(...(buckets[colId] || []));
+                });
+                coderItems.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
+                const autoContainer = document.getElementById('col-CODED_AUTO');
+                const autoCountEl = document.getElementById('count-CODED_AUTO');
+                if (autoContainer && autoCountEl) {
+                    autoCountEl.textContent = String(coderItems.length);
+                    autoContainer.innerHTML = coderItems.length === 0
+                        ? '<div class="empty-state">No plans</div>'
+                        : coderItems.map(card => createCardHtml(card)).join('');
+                }
+            }
+
             columns.forEach(col => {
+                // In collapsed mode, skip the individual coder columns (rendered above as CODED_AUTO)
+                if (collapseCodersEnabled && CODED_COLUMN_IDS.includes(col)) return;
                 const container = document.getElementById('col-' + col);
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
@@ -1719,14 +2030,43 @@
                 });
             });
 
+            document.querySelectorAll('.send-to-backlog-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                });
+            });
+
+            document.querySelectorAll('.send-to-new-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                });
+            });
+
             requestAnimationFrame(() => restoreBoardViewState(viewState));
+        }
+        function scoreToCategory(scoreStr) {
+            if (scoreStr === 'High') return 'High';
+            if (scoreStr === 'Low') return 'Low';
+            const score = parseInt(scoreStr, 10);
+            if (isNaN(score) || score <= 0) return 'Unknown';
+            if (score <= 2) return 'Very Low';
+            if (score <= 4) return 'Low';
+            if (score <= 6) return 'Medium';
+            if (score <= 8) return 'High';
+            if (score <= 10) return 'Very High';
+            return 'Unknown';
+        }
+
+        function categoryToCssClass(category) {
+            return category.toLowerCase().replace(' ', '-');
         }
 
         function createCardHtml(card) {
             const timeAgo = formatTimeAgo(card.lastActivity);
             const shortTopic = card.topic.length > 50 ? card.topic.substring(0, 47) + '...' : card.topic;
-            const complexity = card.complexity || 'Unknown';
-            const complexityClass = complexity.toLowerCase();
+            const complexityValue = card.complexity || 'Unknown';
+            const category = scoreToCategory(complexityValue);
+            const complexityClass = categoryToCssClass(category);
             const isCompleted = card.column === 'COMPLETED';
             const completedClass = isCompleted ? ' completed' : '';
 
@@ -1740,15 +2080,22 @@
                     copyLabel = 'Copy planning prompt';
                 } else if (card.column === 'PLAN REVIEWED') {
                     copyLabel = 'Copy coder prompt';
-                } else if (card.column === 'LEAD CODED' || card.column === 'CODER CODED') {
+                } else if (card.column === 'LEAD CODED' || card.column === 'CODER CODED' || card.column === 'INTERN CODED') {
                     copyLabel = 'Copy review prompt';
                 }
                 primaryActionBtn = `<button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
             }
 
-            const pairProgramBtn = (card.column === 'PLAN REVIEWED' && complexity === 'High')
+            const numericScore = parseInt(complexityValue, 10);
+            const isHighComplexity = complexityValue === 'High' || (!isNaN(numericScore) && numericScore >= 7);
+            const pairProgramBtn = (card.column === 'PLAN REVIEWED' && isHighComplexity)
                 ? `<button class="card-btn pair-program-btn" data-session="${card.sessionId}" data-tooltip="Pair programming (Lead + Coder)">Pair</button>`
                 : '';
+            const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
+                ? `<button class="card-btn send-to-backlog-btn" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">→ Backlog</button>`
+                : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
+                    ? `<button class="card-btn send-to-new-btn" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
+                    : '';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -1757,11 +2104,12 @@
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
                     <div class="card-topic">${escapeHtml(shortTopic)}</div>
-                    <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${complexity}</span> · ${timeAgo}</div>
+                    <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
                             ${pairProgramBtn}
                             ${primaryActionBtn}
+                            ${backlogActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
@@ -1824,6 +2172,9 @@
             postKanbanMessage({ type: 'recoverAll', sessionIds: allCompleted, count: allCompleted.length });
         });
 
+        // Backlog toggle state
+        let showingBacklog = false;
+
         // Drag & Drop handlers
         let draggedSessionId = null;
 
@@ -1883,11 +2234,33 @@
             }
         }
 
+        /**
+         * Resolve which real coder column a card should route to when dropped onto CODED_AUTO.
+         * Uses complexity score vs. routingMapConfig. Falls back to CODER CODED if unknown.
+         */
+        function resolveCodedAutoTarget(card) {
+            if (!dynamicComplexityRoutingEnabled) return 'LEAD CODED';
+            const score = parseInt(card?.complexity, 10);
+            if (isNaN(score)) return 'CODER CODED';
+            const roleMap = { lead: 'LEAD CODED', coder: 'CODER CODED', intern: 'INTERN CODED' };
+            for (const [role, scores] of Object.entries(routingMapConfig)) {
+                if (Array.isArray(scores) && scores.includes(score)) {
+                    // Only route to INTERN CODED if the column is actually present
+                    const resolved = roleMap[role] || 'CODER CODED';
+                    if (resolved === 'INTERN CODED' && !columnDefinitions.some(d => d.id === 'INTERN CODED')) {
+                        return 'CODER CODED';
+                    }
+                    return resolved;
+                }
+            }
+            return 'CODER CODED';
+        }
+
         function handleDrop(e, targetColumn) {
             e.preventDefault();
             e.currentTarget.classList.remove('drag-over');
             const workspaceRoot = e.dataTransfer.getData('application/switchboard-workspace-root') || getActiveWorkspaceRoot();
-            
+
             let sessionIds = [];
             try {
                 sessionIds = JSON.parse(e.dataTransfer.getData('application/json'));
@@ -1895,19 +2268,83 @@
                 const plain = e.dataTransfer.getData('text/plain');
                 if (plain) sessionIds = [plain];
             }
-            
+
             if (!sessionIds || sessionIds.length === 0) return;
+
+            // Handle drops onto the synthetic CODED_AUTO column — route each card to its real column
+            if (targetColumn === 'CODED_AUTO') {
+                const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+                document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
+                selectedCards.clear();
+                const targetBody = document.getElementById('col-CODED_AUTO');
+
+                sessionIds.forEach(id => {
+                    const card = currentCards.find(c => c.sessionId === id);
+                    if (!card) return;
+                    const resolvedTarget = resolveCodedAutoTarget(card);
+                    if (card.column === resolvedTarget) return;
+
+                    // DOM optimistic update
+                    const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                    if (cardEl && targetBody) {
+                        // Source DOM column: cards in coder cols are already in CODED_AUTO dom container when collapsed
+                        const sourceDomCol = CODED_IDS.includes(card.column) ? 'CODED_AUTO' :
+                                             (card.column === 'BACKLOG' && showingBacklog ? 'CREATED' : card.column);
+                        const emptyState = targetBody.querySelector('.empty-state');
+                        if (emptyState) emptyState.remove();
+                        if (sourceDomCol !== 'CODED_AUTO') {
+                            targetBody.appendChild(cardEl);
+                            const sourceBody = document.getElementById('col-' + sourceDomCol);
+                            if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
+                                sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
+                            }
+                            const srcCount = document.getElementById('count-' + sourceDomCol);
+                            if (srcCount) srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent) - 1));
+                            const tgtCount = document.getElementById('count-CODED_AUTO');
+                            if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
+                        }
+                        cardEl.classList.remove('card-dropped');
+                        void cardEl.offsetWidth;
+                        cardEl.classList.add('card-dropped');
+                        cardEl.addEventListener('animationend', () => cardEl.classList.remove('card-dropped'), { once: true });
+                    }
+
+                    const prevCol = card.column;
+                    card.column = resolvedTarget;
+
+                    setTimeout(() => {
+                        const srcIdx = prevCol === 'BACKLOG' ? 0 : columns.indexOf(prevCol);
+                        const tgtIdx = columns.indexOf(resolvedTarget);
+                        if (tgtIdx > srcIdx) {
+                            // Forward move
+                            if (cliTriggersEnabled && isColumnAgentAvailable(resolvedTarget)) {
+                                postKanbanMessage({ type: 'triggerAction', sessionId: id, targetColumn: resolvedTarget, workspaceRoot });
+                            } else if (!cliTriggersEnabled) {
+                                postKanbanMessage({ type: 'moveCardForward', sessionIds: [id], targetColumn: resolvedTarget, workspaceRoot });
+                            }
+                        } else if (tgtIdx < srcIdx) {
+                            // Backward move
+                            postKanbanMessage({ type: 'moveCardBackwards', sessionIds: [id], targetColumn: resolvedTarget, workspaceRoot });
+                        }
+                    }, 350);
+                });
+                return;
+            }
 
             const forwardIds = [];
             const backwardIds = [];
 
+            // When backlog view is active, dropping to the CREATED slot means BACKLOG
+            const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG' : targetColumn;
+
             sessionIds.forEach(id => {
                 const card = currentCards.find(c => c.sessionId === id);
-                if (!card || card.column === targetColumn) return;
-                
-                const sourceIndex = columns.indexOf(card.column);
-                const targetIndex = columns.indexOf(targetColumn);
-                
+                if (!card || card.column === effectiveTargetColumn) return;
+
+                // BACKLOG cards are treated as index 0 (same as CREATED) for forward/backward calculation
+                const sourceIndex = card.column === 'BACKLOG' ? 0 : columns.indexOf(card.column);
+                const targetIndex = columns.indexOf(effectiveTargetColumn);
+
                 if (targetIndex < sourceIndex) {
                     backwardIds.push(id);
                 } else {
@@ -1916,7 +2353,7 @@
             });
 
             // Special handling: forward drops INTO COMPLETED trigger archive, not dispatch
-            if (targetColumn === 'COMPLETED' && forwardIds.length > 0) {
+            if (effectiveTargetColumn === 'COMPLETED' && forwardIds.length > 0) {
                 const completingIds = forwardIds.slice();
                 // Optimistic DOM move: relocate cards to COMPLETED column with animation
                 const targetBody = document.getElementById('col-' + targetColumn);
@@ -1930,13 +2367,15 @@
                         targetBody.appendChild(cardEl);
                         // Update source column empty state
                         if (card) {
-                            const sourceBody = document.getElementById('col-' + card.column);
+                            // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
+                            const srcDomCol = (card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : card.column;
+                            const sourceBody = document.getElementById('col-' + srcDomCol);
                             if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
                                 sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
                             }
-                            const srcCount = document.getElementById('count-' + card.column);
+                            const srcCount = document.getElementById('count-' + srcDomCol);
                             if (srcCount) srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent) - 1));
-                            card.column = targetColumn;
+                            card.column = effectiveTargetColumn;
                         }
                         const tgtCount = document.getElementById('count-' + targetColumn);
                         if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
@@ -1952,7 +2391,7 @@
                 return card && card.column === 'COMPLETED';
             });
             if (uncompleteIds.length > 0) {
-                postKanbanMessage({ type: 'uncompleteCard', sessionIds: uncompleteIds, targetColumn, workspaceRoot });
+                postKanbanMessage({ type: 'uncompleteCard', sessionIds: uncompleteIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                 uncompleteIds.forEach(id => {
                     const idx = backwardIds.indexOf(id);
                     if (idx >= 0) backwardIds.splice(idx, 1);
@@ -1960,14 +2399,14 @@
             }
 
             // Determine the effective drop mode for this column
-            const dropMode = columnDragDropModes[targetColumn] || 'cli';
+            const dropMode = columnDragDropModes[effectiveTargetColumn] || 'cli';
 
             if (forwardIds.length > 0) {
                 // Agent availability check only applies in CLI mode — prompt mode doesn't need a CLI agent
-                if (dropMode === 'cli' && cliTriggersEnabled && !isColumnAgentAvailable(targetColumn)) {
+                if (dropMode === 'cli' && cliTriggersEnabled && !isColumnAgentAvailable(effectiveTargetColumn)) {
                     // Strip forward moves if agent isn't ready/assigned, but allow backward moves to proceed
-                    forwardIds.length = 0; 
-                    const agentEl = document.getElementById('agent-' + targetColumn);
+                    forwardIds.length = 0;
+                    const agentEl = document.getElementById('agent-' + effectiveTargetColumn);
                     if (agentEl) {
                         agentEl.style.transition = 'color 0.15s';
                         agentEl.style.color = 'var(--vscode-errorForeground, #f44747)';
@@ -1983,14 +2422,17 @@
 
             // Capture source columns BEFORE the optimistic update loop mutates card.column
             const sourceColumnForPrompt = forwardIds.length > 0
-                ? (currentCards.find(c => c.sessionId === forwardIds[0])?.column || targetColumn)
-                : targetColumn;
+                ? (currentCards.find(c => c.sessionId === forwardIds[0])?.column || effectiveTargetColumn)
+                : effectiveTargetColumn;
 
+            // DOM target is the displayed column slot (targetColumn); logical target may differ (effectiveTargetColumn)
             const targetBody = document.getElementById('col-' + targetColumn);
 
             validIds.forEach(id => {
                 const card = currentCards.find(c => c.sessionId === id);
                 const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
+                const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : (card?.column || targetColumn);
                 if (cardEl && targetBody) {
                     // Remove empty-state placeholder if present
                     const emptyState = targetBody.querySelector('.empty-state');
@@ -1998,19 +2440,19 @@
                     targetBody.appendChild(cardEl);
 
                     // Update source column: show empty-state if now empty
-                    const sourceBody = document.getElementById('col-' + card.column);
+                    const sourceBody = document.getElementById('col-' + sourceDomColumn);
                     if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
                         sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
                     }
 
                     // Update counts
-                    const srcCount = document.getElementById('count-' + card.column);
+                    const srcCount = document.getElementById('count-' + sourceDomColumn);
                     const tgtCount = document.getElementById('count-' + targetColumn);
                     if (srcCount) srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent) - 1));
                     if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
 
-                    // Update in-memory state
-                    card.column = targetColumn;
+                    // Update in-memory state (use effective column so backend is consistent)
+                    card.column = effectiveTargetColumn;
 
                     // Trigger drop animation
                     cardEl.classList.remove('card-dropped'); 
@@ -2030,21 +2472,21 @@
                         if (dropMode === 'prompt') {
                             // Prompt mode: copy prompt to clipboard + visual advance (no CLI dispatch)
                             // sourceColumnForPrompt was captured before the optimistic card.column update
-                            postKanbanMessage({ type: 'promptOnDrop', sessionIds: forwardIds, sourceColumn: sourceColumnForPrompt, targetColumn, workspaceRoot });
+                            postKanbanMessage({ type: 'promptOnDrop', sessionIds: forwardIds, sourceColumn: sourceColumnForPrompt, targetColumn: effectiveTargetColumn, workspaceRoot });
                         } else {
                             // CLI mode: dispatch to CLI agent (existing behaviour)
                             if (forwardIds.length === 1) {
-                                postKanbanMessage({ type: 'triggerAction', sessionId: forwardIds[0], targetColumn, workspaceRoot });
+                                postKanbanMessage({ type: 'triggerAction', sessionId: forwardIds[0], targetColumn: effectiveTargetColumn, workspaceRoot });
                             } else {
-                                postKanbanMessage({ type: 'triggerBatchAction', sessionIds: forwardIds, targetColumn, workspaceRoot });
+                                postKanbanMessage({ type: 'triggerBatchAction', sessionIds: forwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                             }
                         }
                     } else if (forwardIds.length > 0) {
-                        postKanbanMessage({ type: 'moveCardForward', sessionIds: forwardIds, targetColumn, workspaceRoot });
+                        postKanbanMessage({ type: 'moveCardForward', sessionIds: forwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                     }
-                    
+
                     if (backwardIds.length > 0) {
-                        postKanbanMessage({ type: 'moveCardBackwards', sessionIds: backwardIds, targetColumn, workspaceRoot });
+                        postKanbanMessage({ type: 'moveCardBackwards', sessionIds: backwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                     }
                 }, 350);
             }
@@ -2067,6 +2509,13 @@
                     if (dbWarningBanner) {
                         dbWarningBanner.style.display = msg.dbUnavailable ? '' : 'none';
                     }
+                    if (typeof msg.showingBacklog !== 'undefined') {
+                        showingBacklog = msg.showingBacklog;
+                    }
+                    if (msg.routingConfig) {
+                        routingMapConfig = msg.routingConfig;
+                        updateRoutingMapButtonIndicator();
+                    }
                     if (nextBoardSignature !== lastBoardSignature) {
                         lastBoardSignature = nextBoardSignature;
                         console.log('[Kanban WV] signature changed, calling renderBoard with', nextCards.length, 'cards');
@@ -2074,6 +2523,11 @@
                     } else {
                         currentCards = nextCards;
                     }
+                    break;
+                case 'backlogViewState':
+                    showingBacklog = event.data.showing;
+                    renderColumns();
+                    renderBoard(currentCards);
                     break;
                 case 'updateColumns':
                     if (Array.isArray(msg.columns) && msg.columns.length > 0) {
@@ -2098,6 +2552,10 @@
                 case 'dynamicComplexityRoutingState':
                     dynamicComplexityRoutingEnabled = msg.enabled !== false;
                     updateComplexityRoutingToggleUi();
+                    break;
+                case 'allowUnknownComplexityAutoMoveState':
+                    allowUnknownComplexityAutoMove = msg.enabled !== false;
+                    updateUnknownComplexityToggleUi();
                     break;
                 case 'visibleAgents':
                     if (msg.agents) {
@@ -2133,12 +2591,9 @@
                     syncAutobanCountdownTimer();
                     updateAutobanButtonState();
                     break;
-                case 'updatePairProgramming': {
-                    const ppCheckbox = document.getElementById('pairProgrammingCheckbox');
-                    if (ppCheckbox) {
-                        ppCheckbox.checked = msg.enabled;
-                        ppCheckbox.closest('.pair-programming-toggle')?.classList.toggle('is-off', !msg.enabled);
-                    }
+                case 'updatePairProgrammingMode': {
+                    const ppSelect = document.getElementById('pairProgrammingModeSelect');
+                    if (ppSelect) { ppSelect.value = msg.mode || 'off'; }
                     break;
                 }
                 case 'updateColumnDragDropModes':
@@ -2266,8 +2721,14 @@
             updateCliToggleUi();
             postKanbanMessage({ type: 'toggleCliTriggers', enabled: checked });
         });
-        document.getElementById('pairProgrammingCheckbox')?.addEventListener('change', (e) => {
-            postKanbanMessage({ type: 'togglePairProgramming', enabled: e.target.checked });
+        document.getElementById('unknown-complexity-toggle')?.addEventListener('change', (event) => {
+            const checked = !!event.target?.checked;
+            allowUnknownComplexityAutoMove = checked;
+            updateUnknownComplexityToggleUi();
+            postKanbanMessage({ type: 'toggleAllowUnknownComplexityAutoMove', enabled: checked });
+        });
+        document.getElementById('pairProgrammingModeSelect')?.addEventListener('change', (e) => {
+            postKanbanMessage({ type: 'setPairProgrammingMode', mode: e.target.value });
         });
 
         updateCliToggleUi();
@@ -2323,6 +2784,157 @@
             updateComplexityRoutingToggleUi();
             postKanbanMessage({ type: 'toggleDynamicComplexityRouting', enabled: dynamicComplexityRoutingEnabled });
         });
+
+        // ─── Routing Map ──────────────────────────────────────────────────────────
+
+        function updateRoutingMapButtonIndicator() {
+            const btn = document.getElementById('btn-routing-map');
+            if (!btn) return;
+            // Show orange dot when custom routing config differs from defaults
+            const isDefault = (
+                JSON.stringify(routingMapConfig.lead.slice().sort((a,b)=>a-b)) === JSON.stringify([7,8,9,10]) &&
+                JSON.stringify(routingMapConfig.coder.slice().sort((a,b)=>a-b)) === JSON.stringify([4,5,6]) &&
+                JSON.stringify(routingMapConfig.intern.slice().sort((a,b)=>a-b)) === JSON.stringify([1,2,3])
+            );
+            let dot = btn.querySelector('.routing-map-active-dot');
+            if (!isDefault) {
+                if (!dot) {
+                    dot = document.createElement('span');
+                    dot.className = 'routing-map-active-dot';
+                    btn.appendChild(dot);
+                }
+            } else if (dot) {
+                dot.remove();
+            }
+        }
+
+        function createComplexityCard(level) {
+            const card = document.createElement('div');
+            const cls = level >= 7 ? 'complexity-high' : level >= 4 ? 'complexity-medium' : 'complexity-low';
+            card.className = `complexity-card ${cls}`;
+            card.draggable = true;
+            card.dataset.complexity = level;
+            card.textContent = `Complexity ${level}`;
+
+            card.addEventListener('dragstart', (e) => {
+                routingMapDraggedCard = card;
+                card.classList.add('dragging');
+                e.dataTransfer.setData('text/plain', String(level));
+                e.dataTransfer.effectAllowed = 'move';
+                // Prevent kanban board drag handlers from seeing this event
+                e.stopPropagation();
+            });
+
+            card.addEventListener('dragend', () => {
+                card.classList.remove('dragging');
+                routingMapDraggedCard = null;
+            });
+
+            return card;
+        }
+
+        function renderRoutingCards() {
+            document.querySelectorAll('.routing-drop-zone').forEach(zone => { zone.innerHTML = ''; });
+            Object.entries(routingMapConfig).forEach(([role, complexities]) => {
+                const zone = document.querySelector(`.routing-drop-zone[data-role="${role}"]`);
+                if (!zone) return;
+                const sorted = [...complexities].sort((a, b) => b - a); // high→low within each column
+                sorted.forEach(level => zone.appendChild(createComplexityCard(level)));
+            });
+        }
+
+        // Bind drop zone listeners once (zones are static HTML, persist across renderRoutingCards calls)
+        document.querySelectorAll('.routing-drop-zone').forEach(zone => {
+            zone.addEventListener('dragover', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.add('drag-over');
+            });
+            zone.addEventListener('dragleave', (e) => {
+                if (!zone.contains(e.relatedTarget)) {
+                    zone.classList.remove('drag-over');
+                }
+            });
+            zone.addEventListener('drop', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                zone.classList.remove('drag-over');
+                if (routingMapDraggedCard) {
+                    zone.appendChild(routingMapDraggedCard);
+                    updateRoutingConfigFromDOM();
+                }
+            });
+        });
+
+        function updateRoutingConfigFromDOM() {
+            routingMapConfig = { lead: [], coder: [], intern: [] };
+            document.querySelectorAll('.routing-drop-zone').forEach(zone => {
+                const role = zone.dataset.role;
+                if (!role || !(role in routingMapConfig)) return;
+                zone.querySelectorAll('.complexity-card').forEach(card => {
+                    routingMapConfig[role].push(parseInt(card.dataset.complexity, 10));
+                });
+                routingMapConfig[role].sort((a, b) => a - b);
+            });
+        }
+
+        function openRoutingMap() {
+            const modal = document.getElementById('routing-map-modal');
+            if (!modal) return;
+            renderRoutingCards();
+            modal.classList.remove('hidden');
+        }
+
+        function closeRoutingMap() {
+            const modal = document.getElementById('routing-map-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+        }
+
+        function saveRoutingMap() {
+            updateRoutingConfigFromDOM();
+            // Validate all 10 complexities assigned exactly once
+            const all = [...routingMapConfig.lead, ...routingMapConfig.coder, ...routingMapConfig.intern];
+            if (new Set(all).size !== 10 || all.length !== 10) {
+                // Should not happen with well-behaved drag-drop, but guard anyway
+                return;
+            }
+            postKanbanMessage({ type: 'updateRoutingConfig', config: routingMapConfig });
+            updateRoutingMapButtonIndicator();
+            closeRoutingMap();
+        }
+
+        // Routing map button
+        document.getElementById('btn-routing-map').addEventListener('click', openRoutingMap);
+
+        // Collapse coders toggle button
+        document.getElementById('btn-collapse-coders')?.addEventListener('click', () => {
+            collapseCodersEnabled = !collapseCodersEnabled;
+            const btn = document.getElementById('btn-collapse-coders');
+            if (btn) btn.classList.toggle('is-active', collapseCodersEnabled);
+            try {
+                const state = vscode.getState() || {};
+                state.collapseCodersEnabled = collapseCodersEnabled;
+                vscode.setState(state);
+            } catch (_) {}
+            renderColumns();
+            renderBoard(currentCards);
+            updateAllColumnAgents();
+        });
+        // Restore visual active state from saved toggle state
+        if (collapseCodersEnabled) {
+            document.getElementById('btn-collapse-coders')?.classList.add('is-active');
+        }
+
+        // Close buttons (both × header and Cancel footer)
+        document.querySelectorAll('[data-action="closeRoutingMap"]').forEach(btn => {
+            btn.addEventListener('click', closeRoutingMap);
+        });
+
+        // Save button
+        document.querySelector('[data-action="saveRoutingMap"]').addEventListener('click', saveRoutingMap);
+
+        // ─── End Routing Map ──────────────────────────────────────────────────────
 
         // Signal to extension that webview is ready to receive data
         postKanbanMessage({ type: 'ready' });

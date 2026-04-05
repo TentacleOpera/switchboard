@@ -321,6 +321,7 @@ let sqlJsInitPromise = null;
 const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
     { id: 'CREATED', label: 'New', order: 0 },
     { id: 'PLAN REVIEWED', label: 'Planned', order: 100 },
+    { id: 'INTERN CODED', label: 'Intern', order: 180 },
     { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
     { id: 'CODER CODED', label: 'Coder', order: 200 },
     { id: 'CODE REVIEWED', label: 'Reviewed', order: 300 },
@@ -333,8 +334,11 @@ const KANBAN_COLUMN_ALIASES = {
     'CREATED': 'CREATED',
     'NEW': 'CREATED',
     'PLAN CREATED': 'CREATED',
+    'BACKLOG': 'BACKLOG',
     'PLAN REVIEWED': 'PLAN REVIEWED',
     'PLANNED': 'PLAN REVIEWED',
+    'INTERN CODED': 'INTERN CODED',
+    'INTERN': 'INTERN CODED',
     'LEAD CODED': 'LEAD CODED',
     'LEAD CODER': 'LEAD CODED',
     'CODER CODED': 'CODER CODED',
@@ -560,8 +564,24 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumn
             }
         }
         if (complexityFilter) {
-            whereClauses.push('LOWER(complexity) = ?');
-            params.push(complexityFilter.toLowerCase());
+            const filter = complexityFilter.toLowerCase().trim();
+            // Range-based filters exclude Unknown plans and use GLOB for numeric safety
+            if (filter === 'low_and_below' || filter === 'low') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 1 AND 4");
+            } else if (filter === 'medium_and_below') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 1 AND 6");
+            } else if (filter === 'medium_and_above') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 5 AND 10");
+            } else if (filter === 'high_and_above' || filter === 'high') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 7 AND 10");
+            } else if (filter === 'very low') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 1 AND 2");
+            } else if (filter === 'very high') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 9 AND 10");
+            } else if (filter === 'medium') {
+                whereClauses.push("complexity != 'Unknown' AND complexity GLOB '[0-9]*' AND CAST(complexity AS INTEGER) BETWEEN 5 AND 6");
+            }
+            // else 'all' or unrecognized — no filter
         }
         if (tagFilter) {
             whereClauses.push('tags LIKE ?');
@@ -578,11 +598,13 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumn
             const row = stmt.getAsObject();
             const col = normalizeKanbanColumnId(String(row.kanban_column || 'CREATED'));
             if (!columns[col]) columns[col] = [];
+            const rawComplexity = row.complexity || 'Unknown';
             columns[col].push({
                 topic: row.topic || 'Untitled',
                 sessionId: row.session_id || '',
                 createdAt: row.created_at || '',
-                complexity: row.complexity || 'Unknown',
+                complexity: rawComplexity,
+                complexityCategory: mcpScoreToCategory(rawComplexity),
                 tags: row.tags || ''
             });
         }
@@ -924,28 +946,47 @@ function isEmptyBandBLine(line) {
     return /^(none|n\/?a|unknown)\.?$/.test(line);
 }
 
+// Keep aligned with KanbanProvider.ts getComplexityFromPlan()
 function getComplexityFromContent(content) {
-    if (!content) return 'unknown';
+    if (!content) return 'Unknown';
 
     // Highest priority: explicit manual complexity override (user-set via dropdown).
-    const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(Low|High|Unknown)/i);
+    // Supports both numeric and legacy formats.
+    const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
     if (overrideMatch) {
-        return overrideMatch[1].toLowerCase();
+        const val = overrideMatch[1];
+        if (val.toLowerCase() === 'unknown') { /* fall through */ }
+        else {
+            const num = parseInt(val, 10);
+            if (!isNaN(num) && num >= 1 && num <= 10) return String(num);
+            if (val.toLowerCase() === 'low') return '3';
+            if (val.toLowerCase() === 'high') return '8';
+        }
+    }
+
+    // Metadata: numeric or legacy format
+    const metadataMatch = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
+    if (metadataMatch) {
+        const val = metadataMatch[1];
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num >= 1 && num <= 10) return String(num);
+        if (val.toLowerCase() === 'low') return '3';
+        if (val.toLowerCase() === 'high') return '8';
     }
 
     // Agent Recommendation: check before Complex / Band B parsing (matches KanbanProvider.ts priority).
-    const leadCoderRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
-    const coderAgentRec = /send\s+it\s+to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
-    if (leadCoderRec.test(content)) return 'high';
-    if (coderAgentRec.test(content)) return 'low';
+    const leadCoderRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}lead\s+coder\*{0,2}/i;
+    const coderAgentRec = /send\s+(it\s+)?to\s+(the\s+)?\*{0,2}coder(\s+agent)?\*{0,2}/i;
+    if (leadCoderRec.test(content)) return '8';
+    if (coderAgentRec.test(content)) return '3';
 
     const auditMatch = content.match(/^#{1,4}\s+Complexity\s+Audit\b/im);
     if (!auditMatch) {
-        return 'unknown';
+        return 'Unknown';
     }
     const afterAudit = content.slice(auditMatch.index + auditMatch[0].length);
-    const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Band\s+B|Complex)\b/im);
-    if (!bandBMatch) return 'low';
+    const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex)\b/im);
+    if (!bandBMatch) return '3';
     const bandBStart = bandBMatch.index + bandBMatch[0].length;
     const afterBandB = afterAudit.slice(bandBStart);
     const nextSection = afterBandB.match(/^\s*(?:#{1,4}\s+|Band\s+[C-Z]\b|\*\*Recommendation\*\*\s*:|Recommendation\s*:|---+\s*$)/im);
@@ -959,7 +1000,18 @@ function getComplexityFromContent(content) {
         .map(normalizeBandBLine)
         .filter(line => line.length > 0)
         .filter(line => !isEmptyBandBLine(line) && !isBandBLabel(line) && !/^recommendation\b/.test(line));
-    return meaningful.length === 0 ? 'low' : 'high';
+    return meaningful.length === 0 ? '3' : '8';
+}
+
+function mcpScoreToCategory(score) {
+    const num = parseInt(score, 10);
+    if (isNaN(num) || num <= 0) return 'Unknown';
+    if (num <= 2) return 'Very Low';
+    if (num <= 4) return 'Low';
+    if (num <= 6) return 'Medium';
+    if (num <= 8) return 'High';
+    if (num <= 10) return 'Very High';
+    return 'Unknown';
 }
 
 function sanitizeIsoTimestamp(value) {
@@ -2482,7 +2534,7 @@ function registerTools(server) {
         "get_kanban_state",
         {
             column: z.string().optional().describe("Optional kanban column to return. Supports internal IDs like 'CREATED' and UI labels like 'New'."),
-            complexity: z.string().optional().describe("Filter by complexity: 'Low' or 'High'."),
+            complexity: z.string().optional().describe("Filter by complexity: 'low_and_below' (1-4), 'medium_and_below' (1-6), 'medium_and_above' (5-10), 'high_and_above' (7-10), or legacy 'Low'/'High'."),
             tag: z.string().optional().describe("Filter by a specific tag, e.g., 'backend' or 'authentication'.")
         },
         async ({ column, complexity, tag } = {}) => {

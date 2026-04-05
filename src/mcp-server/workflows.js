@@ -1,4 +1,4 @@
-﻿/**
+/**
  * Switchboard Workflow Definitions
  * Defines the FSM (Finite State Machine) logic for each mode.
  */
