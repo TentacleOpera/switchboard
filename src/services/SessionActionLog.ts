@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { KanbanDatabase } from './KanbanDatabase';
+import { parseComplexityScore } from './complexityScale';
 
 export interface ArchiveSpec { sourcePath: string; destPath: string; }
 export interface ArchiveResult { sourcePath: string; success: boolean; error?: string; }
@@ -494,15 +495,22 @@ export class SessionActionLog {
                     planFile: normalized.planFile || '',
                     kanbanColumn: 'CREATED',
                     status: 'active' as const,
-                    complexity: (['Low', 'High'].includes(normalized.complexity) ? normalized.complexity : 'Unknown') as 'Unknown' | 'Low' | 'High',
+                    complexity: (function(c: any) {
+                        const score = parseComplexityScore(String(c || ''));
+                        return score > 0 ? String(score) : 'Unknown';
+                    })(normalized.complexity),
                     tags: '',
+                    dependencies: '',
                     workspaceId,
                     createdAt: normalized.createdAt,
                     updatedAt: normalized.createdAt,
                     lastAction: '',
                     sourceType: 'local',
                     brainSourcePath: normalized.brainSourcePath || '',
-                    mirrorPath: ''
+                    mirrorPath: '',
+                    routedTo: '',
+                    dispatchedAgent: '',
+                    dispatchedIde: ''
                 }]);
                 if (normalized.events.length > 0) {
                     await db.migrateSessionEvents(sessionId, normalized.events);

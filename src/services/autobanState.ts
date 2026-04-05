@@ -3,7 +3,7 @@ export type AutobanRuleState = {
     intervalMinutes: number;
 };
 
-export type AutobanComplexityFilter = 'all' | 'low_only' | 'high_only';
+export type AutobanComplexityFilter = 'all' | 'low_and_below' | 'medium_and_below' | 'medium_and_above' | 'high_and_above';
 export type AutobanRoutingMode = 'dynamic' | 'all_coder' | 'all_lead';
 
 export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED'] as const;
@@ -28,7 +28,7 @@ export type AutobanConfigState = {
     poolCursor: Record<string, number>;
     rules: Record<string, AutobanRuleState>;
     lastTickAt?: Record<string, number>;
-    pairProgrammingEnabled: boolean;
+    pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
 };
 
@@ -181,9 +181,12 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
     return {
         enabled: state?.enabled === true,
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
-        complexityFilter: state?.complexityFilter === 'low_only' || state?.complexityFilter === 'high_only'
-            ? state.complexityFilter
-            : 'all',
+        complexityFilter: (function(f: any) {
+            if (f === 'low_only') return 'low_and_below';
+            if (f === 'high_only') return 'high_and_above';
+            const valid: AutobanComplexityFilter[] = ['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'];
+            return valid.includes(f) ? (f as AutobanComplexityFilter) : 'all';
+        })(state?.complexityFilter),
         routingMode: state?.routingMode === 'all_coder' || state?.routingMode === 'all_lead'
             ? state.routingMode
             : 'dynamic',
@@ -207,7 +210,13 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         poolCursor: normalizedPoolCursor,
         rules: normalizedRules,
         lastTickAt: state?.lastTickAt ? { ...state.lastTickAt } : undefined,
-        pairProgrammingEnabled: state?.pairProgrammingEnabled === true,
+        pairProgrammingMode: (function(m: any, legacyEnabled: any) {
+            const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
+            if (valid.includes(m)) return m;
+            // Legacy migration: boolean true → cli-cli
+            if (legacyEnabled === true) return 'cli-cli';
+            return 'off';
+        })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
         aggressivePairProgramming: state?.aggressivePairProgramming === true
     };
 }

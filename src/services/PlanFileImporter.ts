@@ -82,13 +82,17 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
             status: 'active',
             complexity,
             tags,
+            dependencies: '',
             workspaceId,
             createdAt: now,
             updatedAt: now,
             lastAction: 'imported_from_plan_file',
             sourceType: 'local',
             brainSourcePath: '',
-            mirrorPath: ''
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
         });
     }
 
@@ -108,12 +112,15 @@ function extractTopic(content: string, filename: string): string {
     return filename.replace(/\.md$/i, '').replace(/[_-]/g, ' ');
 }
 
-function extractComplexity(content: string): 'Unknown' | 'Low' | 'High' {
-    const metadataMatch = content.match(/## Metadata[\s\S]*?\*\*Complexity:\*\*\s*(Low|High)/i);
+function extractComplexity(content: string): string {
+    const metadataMatch = content.match(/## Metadata[\s\S]*?\*\*Complexity:\*\*\s*(Low|High|[\d]{1,2})/i);
     if (metadataMatch) {
         const val = metadataMatch[1];
-        if (val.toLowerCase() === 'low') return 'Low';
-        if (val.toLowerCase() === 'high') return 'High';
+        const lowVal = val.toLowerCase();
+        if (lowVal === 'low') return '3';
+        if (lowVal === 'high') return '8';
+        const num = parseInt(val, 10);
+        if (!isNaN(num) && num >= 1 && num <= 10) return num.toString();
     }
     return 'Unknown';
 }

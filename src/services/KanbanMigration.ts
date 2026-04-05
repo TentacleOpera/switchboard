@@ -6,8 +6,9 @@ export type LegacyKanbanSnapshotRow = {
     topic: string;
     planFile: string;
     kanbanColumn: string;
-    complexity: 'Unknown' | 'Low' | 'High';
+    complexity: string;
     tags: string;
+    dependencies: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -37,8 +38,12 @@ export class KanbanMigration {
             kanbanColumn: KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction),
             status: 'active',
             tags: row.tags || '',
+            dependencies: row.dependencies || '',
             brainSourcePath: (row as any).brainSourcePath || '',
-            mirrorPath: (row as any).mirrorPath || ''
+            mirrorPath: (row as any).mirrorPath || '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
         }));
     }
 
@@ -102,8 +107,9 @@ export class KanbanMigration {
         db: KanbanDatabase,
         workspaceId: string,
         snapshotRows: LegacyKanbanSnapshotRow[],
-        resolveComplexity?: (planFile: string) => Promise<'Unknown' | 'Low' | 'High'>,
-        resolveTags?: (planFile: string) => Promise<string>
+        resolveComplexity?: (planFile: string) => Promise<string>,
+        resolveTags?: (planFile: string) => Promise<string>,
+        resolveDependencies?: (planFile: string) => Promise<string>
     ): Promise<boolean> {
         const ready = await db.ensureReady();
         if (!ready) return false;
@@ -115,20 +121,20 @@ export class KanbanMigration {
                 sessionId: string;
                 topic: string;
                 planFile: string;
-                complexity?: 'Unknown' | 'Low' | 'High';
+                complexity?: string;
                 tags?: string;
+                dependencies?: string;
             }> = [];
 
             for (const row of snapshotRows) {
                 if (!existingIds.has(row.sessionId)) {
                     newRows.push(row);
                 } else {
-                    let resolvedComplexity: 'Unknown' | 'Low' | 'High' | undefined;
-                    if (row.complexity === 'Low' || row.complexity === 'High') {
+                    let resolvedComplexity: string | undefined;
+                    if (row.complexity && row.complexity !== 'Unknown') {
                         resolvedComplexity = row.complexity;
                     } else if (resolveComplexity) {
-                        const parsed = await resolveComplexity(row.planFile);
-                        resolvedComplexity = (parsed === 'Low' || parsed === 'High') ? parsed : undefined;
+                        resolvedComplexity = await resolveComplexity(row.planFile);
                     }
                     let resolvedTags: string | undefined;
                     if (row.tags) {
@@ -137,12 +143,20 @@ export class KanbanMigration {
                         const parsed = await resolveTags(row.planFile);
                         resolvedTags = parsed || undefined;
                     }
+                    let resolvedDependencies: string | undefined;
+                    if (row.dependencies) {
+                        resolvedDependencies = row.dependencies;
+                    } else if (resolveDependencies) {
+                        const parsed = await resolveDependencies(row.planFile);
+                        resolvedDependencies = parsed || undefined;
+                    }
                     metadataUpdates.push({
                         sessionId: row.sessionId,
                         topic: row.topic,
                         planFile: row.planFile,
                         complexity: resolvedComplexity,
-                        tags: resolvedTags
+                        tags: resolvedTags,
+                        dependencies: resolvedDependencies
                     });
                 }
             }
@@ -154,7 +168,7 @@ export class KanbanMigration {
             }
 
             if (metadataUpdates.length > 0) {
-                const updated = await db.updateMetadataBatch(metadataUpdates);
+                const updated = await db.updateMetadataBatch(metadataUpdates, { preserveTimestamps: true });
                 if (!updated) return false;
             }
         }

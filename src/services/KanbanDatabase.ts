@@ -13,8 +13,9 @@ export interface KanbanPlanRecord {
     planFile: string;
     kanbanColumn: string;
     status: KanbanPlanStatus;
-    complexity: 'Unknown' | 'Low' | 'High';
+    complexity: string; // 'Unknown' or string integer '1'-'10'
     tags: string;
+    dependencies: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -22,6 +23,9 @@ export interface KanbanPlanRecord {
     sourceType: 'local' | 'brain';
     brainSourcePath: string;
     mirrorPath: string;
+    routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
+    dispatchedAgent: string; // terminal/tool name: 'claude cli', 'copilot cli', etc.
+    dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
 }
 
 type SqlJsDatabase = {
@@ -50,13 +54,17 @@ CREATE TABLE IF NOT EXISTS plans (
     status        TEXT NOT NULL DEFAULT 'active',
     complexity    TEXT DEFAULT 'Unknown',
     tags          TEXT DEFAULT '',
+    dependencies  TEXT DEFAULT '',
     workspace_id  TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
     last_action   TEXT,
     source_type   TEXT DEFAULT 'local',
     brain_source_path TEXT DEFAULT '',
-    mirror_path       TEXT DEFAULT ''
+    mirror_path       TEXT DEFAULT '',
+    routed_to         TEXT DEFAULT '',
+    dispatched_agent  TEXT DEFAULT '',
+    dispatched_ide    TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
@@ -110,38 +118,52 @@ const MIGRATION_V5_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_activity_session ON activity_log(session_id, timestamp)`,
 ];
 
+const MIGRATION_V6_SQL = [
+    `ALTER TABLE plans ADD COLUMN dependencies TEXT DEFAULT ''`,
+];
+
+const MIGRATION_V7_SQL = [
+    `ALTER TABLE plans ADD COLUMN routed_to TEXT DEFAULT ''`,
+    `ALTER TABLE plans ADD COLUMN dispatched_agent TEXT DEFAULT ''`,
+    `ALTER TABLE plans ADD COLUMN dispatched_ide TEXT DEFAULT ''`,
+];
+
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
-    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
     workspace_id, created_at, updated_at, last_action, source_type,
-    brain_source_path, mirror_path
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_id) DO UPDATE SET
     session_id = excluded.session_id,
     topic = excluded.topic,
     plan_file = excluded.plan_file,
     complexity = excluded.complexity,
     tags = excluded.tags,
+    dependencies = excluded.dependencies,
     workspace_id = excluded.workspace_id,
     updated_at = excluded.updated_at,
     last_action = excluded.last_action,
     source_type = excluded.source_type,
     brain_source_path = excluded.brain_source_path,
-    mirror_path = excluded.mirror_path
+    mirror_path = excluded.mirror_path,
+    routed_to = excluded.routed_to,
+    dispatched_agent = excluded.dispatched_agent,
+    dispatched_ide = excluded.dispatched_ide
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 
-const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
+const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
                     workspace_id, created_at, updated_at, last_action, source_type,
-                    brain_source_path, mirror_path`;
+                    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide`;
 
 const runtimeRequire = createRequire(__filename);
 
 const VALID_KANBAN_COLUMNS = new Set([
-    'CREATED', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+    'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ]);
-const VALID_COMPLEXITIES = new Set(['Unknown', 'Low', 'High']);
+// VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
 
 // Allow built-in columns plus custom agent columns (alphanumeric, underscores, spaces)
@@ -500,21 +522,25 @@ export class KanbanDatabase {
         try {
             for (const record of records) {
                 this._db.run(UPSERT_PLAN_SQL, [
-                    record.planId,
-                    record.sessionId,
-                    record.topic,
-                    this._normalizePath(record.planFile),
-                    record.kanbanColumn,
-                    record.status,
-                    record.complexity,
-                    record.tags || '',
-                    record.workspaceId,
-                    record.createdAt,
-                    record.updatedAt,
-                    record.lastAction,
-                    record.sourceType,
-                    this._normalizePath(record.brainSourcePath),
-                    this._normalizePath(record.mirrorPath)
+                    record.planId,        // 1
+                    record.sessionId,     // 2
+                    record.topic,         // 3
+                    this._normalizePath(record.planFile), // 4
+                    record.kanbanColumn,  // 5
+                    record.status,        // 6
+                    record.complexity,    // 7
+                    record.tags || '',    // 8
+                    record.dependencies || '', // 9
+                    record.workspaceId,   // 10
+                    record.createdAt,     // 11
+                    record.updatedAt,     // 12
+                    record.lastAction,    // 13
+                    record.sourceType,    // 14
+                    this._normalizePath(record.brainSourcePath), // 15
+                    this._normalizePath(record.mirrorPath), // 16
+                    record.routedTo || '',       // 17
+                    record.dispatchedAgent || '', // 18
+                    record.dispatchedIde || ''    // 19
                 ]);
             }
             this._db.run('COMMIT');
@@ -577,8 +603,11 @@ export class KanbanDatabase {
         return result;
     }
 
-    public async updateComplexity(sessionId: string, complexity: 'Unknown' | 'Low' | 'High'): Promise<boolean> {
-        if (!VALID_COMPLEXITIES.has(complexity)) {
+    public async updateComplexity(sessionId: string, complexity: string): Promise<boolean> {
+        // Import or use local validation to avoid circular dependency if possible, 
+        // but here we are in a central service.
+        const { isValidComplexityValue } = require('./complexityScale');
+        if (!isValidComplexityValue(complexity)) {
             console.error(`[KanbanDatabase] Rejected invalid complexity value: ${complexity}`);
             return false;
         }
@@ -593,6 +622,46 @@ export class KanbanDatabase {
             'UPDATE plans SET tags = ?, updated_at = ? WHERE session_id = ?',
             [tags, new Date().toISOString(), sessionId]
         );
+    }
+
+    public async updateDependencies(sessionId: string, dependencies: string): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET dependencies = ?, updated_at = ? WHERE session_id = ?',
+            [dependencies, new Date().toISOString(), sessionId]
+        );
+    }
+
+    public async getDependencyStatus(
+        dependenciesCsv: string
+    ): Promise<Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }>> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const deps = dependenciesCsv.split(',').map(d => d.trim()).filter(Boolean);
+        if (deps.length === 0) return [];
+
+        const results: Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }> = [];
+        for (const depId of deps) {
+            const stmt = this._db.prepare(
+                `SELECT plan_id, session_id, topic, kanban_column FROM plans
+                 WHERE plan_id = ? OR session_id = ? OR LOWER(topic) = LOWER(?)
+                 LIMIT 1`,
+                [depId, depId, depId]
+            );
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                const column = String(row.kanban_column || 'CREATED');
+                results.push({
+                    planId: String(row.plan_id || depId),
+                    sessionId: String(row.session_id || ''),
+                    topic: String(row.topic || depId),
+                    column,
+                    ready: column === 'COMPLETED' || column === 'CODE REVIEWED'
+                });
+            } else {
+                results.push({ planId: depId, sessionId: '', topic: depId, column: 'UNKNOWN', ready: true });
+            }
+            stmt.free();
+        }
+        return results;
     }
 
     public async updateStatus(sessionId: string, status: KanbanPlanStatus): Promise<boolean> {
@@ -698,31 +767,48 @@ export class KanbanDatabase {
         return ids;
     }
 
-    /** Batch-update topic, planFile, and (optionally) complexity and tags for multiple plans in one transaction + persist. */
+    /**
+     * Batch-update topic, planFile, and (optionally) complexity, tags, and dependencies
+     * for multiple plans in one transaction + persist.
+     *
+     * @param options.preserveTimestamps - Pass `true` for background/system operations
+     *   (e.g. self-healing complexity or tags). Pass `false` (or omit) ONLY for genuine
+     *   user-initiated actions that should update the "last edited" timestamp.
+     */
     public async updateMetadataBatch(updates: Array<{
         sessionId: string;
         topic: string;
         planFile: string;
-        complexity?: 'Unknown' | 'Low' | 'High';
+        complexity?: string;
         tags?: string;
-    }>): Promise<boolean> {
+        dependencies?: string;
+    }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (updates.length === 0) return true;
 
-        const now = new Date().toISOString();
         this._db.run('BEGIN');
         try {
             for (const u of updates) {
-                const setClauses = ['topic = ?', 'plan_file = ?', 'updated_at = ?'];
-                const params: unknown[] = [u.topic, this._normalizePath(u.planFile), now];
+                const setClauses = ['topic = ?', 'plan_file = ?'];
+                const params: unknown[] = [u.topic, this._normalizePath(u.planFile)];
 
-                if (u.complexity === 'Low' || u.complexity === 'High') {
+                if (!options?.preserveTimestamps) {
+                    const now = new Date().toISOString();
+                    setClauses.push('updated_at = ?');
+                    params.push(now);
+                }
+
+                if (u.complexity && u.complexity !== 'Unknown') {
                     setClauses.push('complexity = ?');
                     params.push(u.complexity);
                 }
                 if (typeof u.tags === 'string') {
                     setClauses.push('tags = ?');
                     params.push(u.tags);
+                }
+                if (typeof u.dependencies === 'string') {
+                    setClauses.push('dependencies = ?');
+                    params.push(u.dependencies);
                 }
 
                 params.push(u.sessionId);
@@ -1332,6 +1418,25 @@ export class KanbanDatabase {
         for (const sql of MIGRATION_V5_SQL) {
             try { this._db.exec(sql); } catch { /* table/index already exists */ }
         }
+
+        // V6: add dependencies column
+        for (const sql of MIGRATION_V6_SQL) {
+            try { this._db.exec(sql); } catch { /* column already exists */ }
+        }
+
+        // V7: add dispatch identity columns for routing analytics
+        for (const sql of MIGRATION_V7_SQL) {
+            try { this._db.exec(sql); } catch { /* column already exists */ }
+        }
+
+        // V8: migrate legacy complexity values to numeric 1-10 scale
+        // Low → 3, High → 8. Idempotent: won't re-match already-migrated rows.
+        try {
+            this._db.exec("UPDATE plans SET complexity = '3' WHERE LOWER(complexity) = 'low'");
+            this._db.exec("UPDATE plans SET complexity = '8' WHERE LOWER(complexity) = 'high'");
+        } catch (e) {
+            console.error('[KanbanDatabase] V8 complexity migration failed:', e);
+        }
     }
 
     private async _persist(): Promise<boolean> {
@@ -1567,6 +1672,20 @@ export class KanbanDatabase {
         );
     }
 
+    /**
+     * Update dispatch identity fields for a plan (routing analytics).
+     */
+    public async updateDispatchInfo(sessionId: string, info: {
+        routedTo: string;
+        dispatchedAgent: string;
+        dispatchedIde: string;
+    }): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET routed_to = ?, dispatched_agent = ?, dispatched_ide = ?, updated_at = ? WHERE session_id = ?',
+            [info.routedTo, info.dispatchedAgent, info.dispatchedIde, new Date().toISOString(), sessionId]
+        );
+    }
+
     /** Normalize paths to use forward slashes for cross-platform compatibility */
     private _normalizePath(filePath: string): string {
         if (!filePath) return '';
@@ -1585,15 +1704,19 @@ export class KanbanDatabase {
                     planFile: this._normalizePath(String(row.plan_file || "")),
                     kanbanColumn: String(row.kanban_column || "CREATED"),
                     status: String(row.status || "active") as KanbanPlanStatus,
-                    complexity: String(row.complexity || "Unknown") as "Unknown" | "Low" | "High",
+                    complexity: String(row.complexity || "Unknown"),
                     tags: String(row.tags || ""),
+                    dependencies: String(row.dependencies || ""),
                     workspaceId: String(row.workspace_id || ""),
                     createdAt: String(row.created_at || ""),
                     updatedAt: String(row.updated_at || ""),
                     lastAction: String(row.last_action || ""),
                     sourceType: (String(row.source_type || "local") === "brain" ? "brain" : "local"),
                     brainSourcePath: this._normalizePath(String(row.brain_source_path || "")),
-                    mirrorPath: this._normalizePath(String(row.mirror_path || ""))
+                    mirrorPath: this._normalizePath(String(row.mirror_path || "")),
+                    routedTo: String(row.routed_to || ""),
+                    dispatchedAgent: String(row.dispatched_agent || ""),
+                    dispatchedIde: String(row.dispatched_ide || "")
                 });
             }
         } finally {

@@ -1233,10 +1233,10 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setAutobanFromKanbanDisposable);
 
-    const setPairProgrammingDisposable = vscode.commands.registerCommand('switchboard.setPairProgrammingFromKanban', async (enabled: boolean) => {
-        await taskViewerProvider.setPairProgrammingEnabled(enabled);
+    const setPairProgrammingModeDisposable = vscode.commands.registerCommand('switchboard.setPairProgrammingModeFromKanban', async (mode: string) => {
+        await taskViewerProvider.setPairProgrammingMode(mode);
     });
-    context.subscriptions.push(setPairProgrammingDisposable);
+    context.subscriptions.push(setPairProgrammingModeDisposable);
 
     const dispatchToCoderTerminalDisposable = vscode.commands.registerCommand('switchboard.dispatchToCoderTerminal', async (prompt: string) => {
         await taskViewerProvider.dispatchToCoderTerminal(prompt);
@@ -1996,9 +1996,10 @@ export async function activate(context: vscode.ExtensionContext) {
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents();
         const allBuiltInAgents = [
+            { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
             { name: 'Coder', role: 'coder' },
-            { name: 'Planner', role: 'planner' },
+            { name: 'Intern', role: 'intern' },
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Analyst', role: 'analyst' }
         ];
@@ -2088,8 +2089,17 @@ export async function activate(context: vscode.ExtensionContext) {
             // Clear stale state entries for grid agents before re-registering.
             await taskViewerProvider.updateState(async (state: any) => {
                 if (!state.terminals) state.terminals = {};
+                const currentIde = (vscode.env.appName || '').toLowerCase();
                 for (const name of agentNames) {
-                    delete state.terminals[name];
+                    const entry = state.terminals[name];
+                    if (!entry) continue;
+                    const entryIde = (entry.ideName || '').toLowerCase();
+                    // Only clear entries belonging to this IDE (or legacy entries with no ideName)
+                    if (!entryIde || entryIde === currentIde ||
+                        (entryIde === 'antigravity' && currentIde.includes('visual studio code')) ||
+                        (entryIde.includes('visual studio code') && currentIde === 'antigravity')) {
+                        delete state.terminals[name];
+                    }
                 }
             });
         };

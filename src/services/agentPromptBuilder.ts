@@ -9,6 +9,7 @@ export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
     complexity?: string;
+    dependencies?: string;
 }
 
 export interface PromptBuilderOptions {
@@ -87,6 +88,12 @@ export function buildKanbanBatchPrompt(
     const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
     const planList = plans.map(plan => `- [${plan.topic}] Plan File: ${plan.absolutePath}`).join('\n');
 
+    const plansWithDeps = plans.filter(p => p.dependencies);
+    const depSection = plansWithDeps.length > 0
+        ? `\n\nDEPENDENCY ORDER: Execute in order; do not start a plan until its dependencies are implemented:\n${
+            plansWithDeps.map((p, i) => `${i + 1}. [${p.topic}] depends on: ${p.dependencies}`).join('\n')}\n`
+        : '';
+
     const chatCritiqueDirective =
         `When you output the adversarial critique (Grumpy and Balanced sections), include them verbatim in your chat response as formatted markdown — do not only write them to the plan file. The user must be able to read the critique directly in chat without opening the plan.`;
 
@@ -113,13 +120,20 @@ For each plan:
 4. Ensure the plan has a "## Metadata" section immediately after the "## Goal" section. You MUST explicitly assign metadata using EXACTLY this format:
 ## Metadata
 **Tags:** [comma-separated list chosen ONLY from: ${ALLOWED_TAGS}]
-**Complexity:** [Low | High]
+**Complexity:** [integer 1-10]
 
-Use 'High' for complex logic, new frameworks, or risky state mutations. Use 'Low' for routine changes. Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** none
+Scoring guide:
+1-2: Very Low — trivial config/copy changes
+3-4: Low — routine single-file changes
+5-6: Medium — multi-file changes, moderate logic
+7-8: High — new patterns, complex state, security-sensitive
+9-10: Very High — architectural changes, new framework integrations
+
+Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** none
 5. Perform adversarial review: post a Grumpy critique (dramatic "Grumpy Principal Engineer" voice: incisive, specific, theatrical) then a Balanced synthesis.
 6. ${chatCritiqueDirective}
 7. Update the original plan with the enhancement findings. Do NOT truncate, summarize, or delete existing implementation steps, code blocks, or goal statements.
-8. Recommend agent: if the plan is simple (routine changes, only Routine tasks), say "Send to Coder". If complex (Complex tasks, new frameworks), say "Send to Lead Coder".
+8. Recommend agent: if complexity ≤ 6, say "Send to Coder". If complexity ≥ 7, say "Send to Lead Coder".
 
 ${focusDirective}
 
@@ -182,6 +196,7 @@ ${focusDirective}
 
 PLANS TO PROCESS:
 ${planList}`;
+        leadPrompt += depSection;
         if (pairProgrammingEnabled) {
             leadPrompt += `\n\nNote: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
             if (aggressivePairProgramming) {
@@ -205,6 +220,7 @@ ${focusDirective}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
+        coderPrompt += depSection;
         if (pairProgrammingEnabled) {
             coderPrompt += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
         }

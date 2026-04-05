@@ -1,4 +1,4 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'reviewer' | 'planner' | 'analyst';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'planner' | 'analyst';
 
 export interface CustomAgentConfig {
     id: string;
@@ -19,11 +19,13 @@ export interface KanbanColumnDefinition {
     kind: 'created' | 'review' | 'coded' | 'reviewed' | 'custom' | 'completed';
     autobanEnabled: boolean;
     dragDropMode: 'cli' | 'prompt';
+    hideWhenNoAgent?: boolean;
 }
 
 const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     lead: 'Lead Coder',
     coder: 'Coder',
+    intern: 'Intern',
     reviewer: 'Reviewer',
     planner: 'Planner',
     analyst: 'Analyst'
@@ -32,8 +34,9 @@ const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 190, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 200, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', autobanEnabled: false, dragDropMode: 'cli' },
 ];

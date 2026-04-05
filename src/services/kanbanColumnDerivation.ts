@@ -1,6 +1,6 @@
 import { CustomAgentConfig } from './agentConfig';
 
-export type KanbanDerivedColumn = 'CREATED' | 'PLAN REVIEWED' | 'LEAD CODED' | 'CODER CODED' | 'CODE REVIEWED' | 'CODED' | string;
+export type KanbanDerivedColumn = 'CREATED' | 'PLAN REVIEWED' | 'LEAD CODED' | 'CODER CODED' | 'INTERN CODED' | 'CODE REVIEWED' | 'CODED' | string;
 
 type WorkflowEvent = {
     workflow?: string | null;

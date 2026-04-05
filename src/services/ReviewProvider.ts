@@ -51,7 +51,7 @@ export type ReviewTicketData = {
     planFileAbsolute: string;
     column: string;
     isCompleted: boolean;
-    complexity: 'Unknown' | 'Low' | 'High';
+    complexity: string;
     dependencies: string[];
     planText: string;
     renderedHtml?: string;
@@ -65,7 +65,7 @@ export type ReviewTicketUpdateRequest = {
     type: 'setColumn' | 'setComplexity' | 'setDependencies' | 'setTopic' | 'savePlanText';
     sessionId?: string;
     column?: string;
-    complexity?: 'Unknown' | 'Low' | 'High';
+    complexity?: string;
     dependencies?: string[];
     topic?: string;
     content?: string;

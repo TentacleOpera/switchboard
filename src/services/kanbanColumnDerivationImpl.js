@@ -21,6 +21,7 @@ function deriveKanbanColumn(events, customAgents) {
     const SLUG_MAP = {
         'created': 'CREATED',
         'plan-reviewed': 'PLAN REVIEWED',
+        'intern-coded': 'INTERN CODED',
         'lead-coded': 'LEAD CODED',
         'coder-coded': 'CODER CODED',
         'code-reviewed': 'CODE REVIEWED',

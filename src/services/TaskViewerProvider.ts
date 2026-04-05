@@ -28,6 +28,7 @@ import {
     normalizeAutobanConfigState,
     shouldSkipSharedReviewerAutobanDispatch
 } from './autobanState';
+import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
     syncMirrorToBrain: (options: {
         mirrorPath: string;
@@ -97,6 +98,15 @@ type PlanRegistry = {
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'switchboard-view';
     private static readonly ACTIVE_TAB_STATE_KEY = 'switchboard.activeTab';
+    private static readonly DEFAULT_CLIPBOARD_SEPARATOR_PATTERN = '^###\\s*PLAN\\s*\\d+\\s*START\\s*$';
+    private static readonly MAX_SEPARATOR_PATTERN_LENGTH = 200;
+
+    private static readonly SEPARATOR_PRESETS = [
+        { key: 'classic', label: 'Classic', literalPattern: '### PLAN [N] START' },
+        { key: 'hash', label: 'Hash Headers', literalPattern: '### Plan [N]' },
+        { key: 'hr', label: 'Markdown HR', literalPattern: '--- Plan [N] ---' },
+        { key: 'xml', label: 'XML Tags', literalPattern: '<plan id="[N]">' },
+    ];
     private _view?: vscode.WebviewView;
     private _stateWatcher?: vscode.FileSystemWatcher;
     private _planWatcher?: vscode.FileSystemWatcher;
@@ -208,9 +218,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Restore persisted Autoban state
         const savedAutoban = this._context.workspaceState.get<Partial<AutobanConfigState>>('autoban.state');
         this._autobanState = normalizeAutobanConfigState(savedAutoban);
-        
+
         // Ensure pair programming defaults to OFF on load regardless of previous session state
-        this._autobanState.pairProgrammingEnabled = false;
+        this._autobanState.pairProgrammingMode = 'off';
         // Seed aggressive pair programming from VS Code config so KanbanProvider starts with the correct value
         this._autobanState.aggressivePairProgramming = vscode.workspace.getConfiguration('switchboard').get<boolean>('pairProgramming.aggressive', false);
 
@@ -718,18 +728,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'coder':
             case 'jules':
                 return 'CODER CODED';
+            case 'intern':
+                return 'INTERN CODED';
             default:
                 return null;
         }
     }
 
     private _codedColumnForDispatchRoles(roles: string[]): string {
-        return roles.includes('lead') ? 'LEAD CODED' : 'CODER CODED';
+        if (roles.includes('lead')) return 'LEAD CODED';
+        if (roles.includes('intern')) return 'INTERN CODED';
+        return 'CODER CODED';
     }
 
     private _isCompletedCodingColumn(column: string | null | undefined): boolean {
         const normalizedColumn = this._normalizeLegacyKanbanColumn(column);
-        return normalizedColumn === 'LEAD CODED' || normalizedColumn === 'CODER CODED';
+        return normalizedColumn === 'LEAD CODED' || normalizedColumn === 'CODER CODED' || normalizedColumn === 'INTERN CODED';
     }
 
     private _targetColumnForRole(role: string): string | null {
@@ -738,6 +752,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'PLAN REVIEWED';
             case 'lead':
             case 'coder':
+            case 'intern':
             case 'jules':
             case 'team':
                 return this._codedColumnForRole(role);
@@ -756,6 +771,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'lead';
             case 'CODER CODED':
                 return 'coder';
+            case 'INTERN CODED':
+                return 'intern';
             case 'CODE REVIEWED':
                 return 'reviewer';
             default:
@@ -763,7 +780,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _resolvePlanReviewedDispatchRole(sessionId: string, workspaceRoot: string): Promise<'lead' | 'coder'> {
+    private async _resolvePlanReviewedDispatchRole(sessionId: string, workspaceRoot: string): Promise<'lead' | 'coder' | 'intern'> {
         if (!this._kanbanProvider) {
             return 'lead';
         }
@@ -774,7 +791,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, sheet.planFile);
-        return complexity === 'Low' ? 'coder' : 'lead';
+        const score = parseComplexityScore(complexity);
+        return scoreToRoutingRole(score);
     }
 
     private async _getNextKanbanColumnForSession(
@@ -791,6 +809,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return this._targetColumnForRole(await this._resolvePlanReviewedDispatchRole(sessionId, workspaceRoot));
             case 'LEAD CODED':
             case 'CODER CODED':
+            case 'INTERN CODED':
                 return 'CODE REVIEWED';
             case 'CODE REVIEWED':
                 return null;
@@ -867,7 +886,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const updatedAt = activityTs > 0 ? new Date(activityTs).toISOString() : createdAt;
         const rawPlanFile = typeof sheet.planFile === 'string' ? sheet.planFile : '';
 
-        let complexity: 'Unknown' | 'Low' | 'High' = 'Unknown';
+        let complexity: string = 'Unknown';
         if (this._kanbanProvider && rawPlanFile) {
             try {
                 complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, rawPlanFile);
@@ -885,13 +904,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             status: sheet.completed ? 'completed' : 'active',
             complexity,
             tags: '',
+            dependencies: '',
             workspaceId,
             createdAt,
             updatedAt,
             lastAction: this._deriveLastActionFromEvents(events),
             sourceType: sheet.brainSourcePath ? 'brain' : 'local',
             brainSourcePath: typeof sheet.brainSourcePath === 'string' ? sheet.brainSourcePath : '',
-            mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : ''
+            mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: ''
         };
     }
 
@@ -928,7 +951,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!bootstrapped) return null;
         const synced = await KanbanMigration.syncPlansMetadata(db, workspaceId, records,
             (planFile) => this._kanbanProvider ? this._kanbanProvider.getComplexityFromPlan(workspaceRoot, planFile) : Promise.resolve('Unknown'),
-            (planFile) => this._kanbanProvider ? this._kanbanProvider.getTagsFromPlan(workspaceRoot, planFile) : Promise.resolve('')
+            (planFile) => this._kanbanProvider ? this._kanbanProvider.getTagsFromPlan(workspaceRoot, planFile) : Promise.resolve(''),
+            (planFile) => this._kanbanProvider ? this._kanbanProvider.getDependenciesFromPlan(workspaceRoot, planFile) : Promise.resolve('')
         );
         if (!synced) return null;
 
@@ -1349,17 +1373,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         // Resolve valid plan paths from session IDs via DB
-        const validPlans: { sessionId: string; topic: string; absolutePath: string }[] = [];
+        const validPlans: { sessionId: string; topic: string; absolutePath: string; dependencies?: string }[] = [];
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         for (const sid of sessionIds) {
             try {
                 let planFile: string | undefined;
                 let topic: string | undefined;
+                let dependencies: string | undefined;
                 if (db) {
                     const plan = await db.getPlanBySessionId(sid);
                     if (plan && plan.planFile) {
                         planFile = plan.planFile;
                         topic = plan.topic;
+                        dependencies = plan.dependencies;
                     }
                 }
                 if (!planFile) { continue; }
@@ -1368,7 +1394,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 validPlans.push({
                     sessionId: sid,
                     topic: topic || planFile || 'Untitled',
-                    absolutePath
+                    absolutePath,
+                    dependencies: dependencies || ''
                 });
             } catch {
                 console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}`);
@@ -1406,7 +1433,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (workflowName) {
                     await this._updateSessionRunSheet(plan.sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
                 }
-                await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, plan.sessionId, this._targetColumnForRole(role));
+                const targetColumn = this._targetColumnForRole(role);
+                await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, plan.sessionId, targetColumn);
+                // Record dispatch identity
+                if (targetColumn) {
+                    await this._kanbanProvider?._recordDispatchIdentity(
+                        resolvedWorkspaceRoot, plan.sessionId, targetColumn, targetAgent
+                    );
+                }
             }
 
             await this._logEvent('dispatch', {
@@ -1418,12 +1452,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }, undefined, resolvedWorkspaceRoot);
 
             // Pair Programming: if lead dispatch and pair programming enabled, also dispatch to coder
-            if (role === 'lead' && this._autobanState.pairProgrammingEnabled) {
+            if (role === 'lead' && this._autobanState.pairProgrammingMode !== 'off') {
+                const coderUsesIde = this._autobanState.pairProgrammingMode === 'cli-ide'
+                    || this._autobanState.pairProgrammingMode === 'ide-ide';
                 const coderPrompt = buildKanbanBatchPrompt('coder', validPlans, {
                     pairProgrammingEnabled: true,
-                    accurateCodingEnabled: this._isAccurateCodingEnabled()
+                    accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled()
                 });
-                await this.dispatchToCoderTerminal(coderPrompt);
+                if (coderUsesIde) {
+                    await vscode.env.clipboard.writeText(coderPrompt);
+                    const choice = await vscode.window.showInformationMessage(
+                        'Pair Programming: Routine tasks ready. Copy Coder prompt?',
+                        'Copy Coder Prompt'
+                    );
+                    if (choice === 'Copy Coder Prompt') {
+                        await vscode.env.clipboard.writeText(coderPrompt);
+                    }
+                } else {
+                    await this.dispatchToCoderTerminal(coderPrompt);
+                }
             }
 
             return true;
@@ -1520,7 +1567,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async getVisibleAgents(workspaceRoot?: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { lead: true, coder: true, reviewer: true, planner: true, analyst: true, jules: true };
+        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: true };
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) return defaults;
         const statePath = path.join(resolvedRoot, '.switchboard', 'state.json');
@@ -1805,7 +1852,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const isLocal = pidMatch || (nameMatch && ideMatches);
             const lastSeenMs = Date.parse(info.lastSeen || '');
             const heartbeatAlive = !Number.isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < 60_000;
-            const alive = isLocal || heartbeatAlive;
+            const alive = isLocal || (heartbeatAlive && ideMatches);
 
             if (!alive) {
                 continue;
@@ -2107,20 +2154,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         eligibleCards: KanbanDispatchCard[],
         batchSize: number
-    ): Promise<Array<{ sessionId: string; complexity: 'Low' | 'High'; sourceColumn: string }>> {
+    ): Promise<Array<{ sessionId: string; complexity: string; sourceColumn: string }>> {
         const complexityFilter = this._autobanState.complexityFilter;
-        const selectedCards: Array<{ sessionId: string; complexity: 'Low' | 'High'; sourceColumn: string }> = [];
+        const selectedCards: Array<{ sessionId: string; complexity: string; sourceColumn: string }> = [];
 
         for (const card of eligibleCards) {
-            let complexity: 'Low' | 'High' = 'High';
+            let complexity: string = '8'; // default to high
             try {
                 if (card.planFile) {
-                    complexity = this._normalizeAutobanComplexity(
-                        await this._kanbanProvider!.getComplexityFromPlan(workspaceRoot, card.planFile)
-                    );
+                    complexity = await this._kanbanProvider!.getComplexityFromPlan(workspaceRoot, card.planFile);
+                    if (complexity === 'Unknown') complexity = '8';
                 }
             } catch {
-                complexity = 'High';
+                complexity = '8';
             }
 
             if (!this._autobanMatchesComplexityFilter(complexity, complexityFilter)) {
@@ -2488,12 +2534,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._postAutobanStateNow();
     }
 
-    /** Called by Kanban controls strip to toggle Pair Programming mode. */
-    public async setPairProgrammingEnabled(enabled: boolean): Promise<void> {
-        this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, pairProgrammingEnabled: enabled });
+    /** Called by Kanban controls strip to set Pair Programming mode. */
+    public async setPairProgrammingMode(mode: string): Promise<void> {
+        const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
+        const normalizedMode = valid.includes(mode) ? mode : 'off';
+        this._autobanState = normalizeAutobanConfigState({ ...this._autobanState, pairProgrammingMode: normalizedMode as any });
         await this._persistAutobanState();
         this._postAutobanStateNow();
-        vscode.window.showInformationMessage(`Pair Programming mode ${enabled ? 'enabled' : 'disabled'}.`);
+        const label = normalizedMode === 'off' ? 'disabled' : normalizedMode;
+        vscode.window.showInformationMessage(`Pair Programming mode: ${label}.`);
     }
 
     /** Dispatch a prompt to the Coder terminal for Routine pair programming. */
@@ -2519,6 +2568,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         switch (column) {
             case 'CREATED': return 'planner';
             case 'PLAN REVIEWED': return 'lead';
+            case 'INTERN CODED':
             case 'LEAD CODED':
             case 'CODER CODED':
             case 'CODED':
@@ -2527,34 +2577,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private _normalizeAutobanComplexity(complexity: 'Unknown' | 'Low' | 'High' | undefined): 'Low' | 'High' {
-        return complexity === 'Low' ? 'Low' : 'High';
-    }
-
     private _autobanMatchesComplexityFilter(
-        complexity: 'Low' | 'High',
+        complexity: string,
         filter: AutobanConfigState['complexityFilter']
     ): boolean {
-        if (filter === 'low_only') {
-            return complexity === 'Low';
+        if (filter === 'all') return true;
+
+        let score = parseComplexityScore(complexity);
+        if (score === 0) score = 8; // Treat Unknown as High for filtering
+
+        switch (filter) {
+            case 'low_and_below':
+                return score <= 4;
+            case 'medium_and_below':
+                return score <= 6;
+            case 'medium_and_above':
+                return score >= 5;
+            case 'high_and_above':
+                return score >= 7;
+            default:
+                return true;
         }
-        if (filter === 'high_only') {
-            return complexity === 'High';
-        }
-        return true;
     }
 
     private _autobanRoutePlanReviewedCard(
-        complexity: 'Low' | 'High',
+        complexity: string,
         routingMode: AutobanConfigState['routingMode']
-    ): 'coder' | 'lead' {
+    ): 'intern' | 'coder' | 'lead' {
         if (routingMode === 'all_coder') {
             return 'coder';
         }
         if (routingMode === 'all_lead') {
             return 'lead';
         }
-        return complexity === 'Low' ? 'coder' : 'lead';
+        return scoreToRoutingRole(parseComplexityScore(complexity));
     }
 
     /** Column-to-instruction mapping for Autoban dispatches. */
@@ -2629,7 +2685,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     ): string {
         const { includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
         const accurateCodingEnabled = this._isAccurateCodingEnabled();
-        const pairProgrammingEnabled = this._autobanState.pairProgrammingEnabled;
+        const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
         const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
         const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
         const designDocLink = this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined;
@@ -2827,7 +2883,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            const routedSessions: Record<'coder' | 'lead', Array<{ sessionId: string; sourceColumn: string }>> = {
+            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; sourceColumn: string }>> = {
+                intern: [],
                 coder: [],
                 lead: []
             };
@@ -2836,14 +2893,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 routedSessions[targetRole].push({ sessionId: card.sessionId, sourceColumn: card.sourceColumn });
             }
 
-            console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
+            console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions.intern.length} → intern, ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
 
-            // Dispatch sequentially to avoid file and terminal lock contention
-            if (routedSessions.coder.length > 0) {
-                await dispatchWithAutobanTerminal('coder', routedSessions.coder);
-            }
-            if (routedSessions.lead.length > 0) {
-                await dispatchWithAutobanTerminal('lead', routedSessions.lead);
+            // Dispatch sequentially to avoid file and terminal lock contention.
+            // Fallback chain: if the preferred role has no terminal, escalate via getFallbackRole
+            // until lead (which has no further fallback).
+            for (const role of ['intern', 'coder', 'lead'] as const) {
+                if (routedSessions[role].length > 0) {
+                    let targetRole: 'intern' | 'coder' | 'lead' = role;
+                    let ok = await dispatchWithAutobanTerminal(targetRole, routedSessions[role]);
+                    while (!ok && targetRole !== 'lead') {
+                        const fallback = getFallbackRole(targetRole);
+                        console.log(`[Autoban] ${targetRole} dispatch failed, falling back to ${fallback}`);
+                        targetRole = fallback;
+                        ok = await dispatchWithAutobanTerminal(targetRole, routedSessions[role]);
+                    }
+                }
             }
             return;
         }
@@ -2892,7 +2957,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const availableLowSessions: string[] = [];
         for (const card of orderedCandidates) {
             const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, card.planFile || '');
-            if (complexity === 'Low') {
+            const score = parseComplexityScore(complexity);
+            if (score > 0 && score <= 4) {
                 availableLowSessions.push(card.sessionId);
             }
         }
@@ -3321,6 +3387,54 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         this._view?.webview.postMessage({ type: 'aggressivePairSetting', enabled });
                         break;
                     }
+                    case 'getClipboardSeparatorPattern': {
+                        const preset = this._context.workspaceState.get<string>(
+                            'switchboard.clipboardImport.separatorPreset'
+                        ) || 'classic';
+                        const hasStoredPattern = !!this._context.workspaceState.get<string>('switchboard.clipboardImport.separatorPattern');
+                        this._view?.webview.postMessage({
+                            type: 'clipboardSeparatorPattern',
+                            pattern: this._getClipboardSeparatorPatternString(),
+                            preset,
+                            presets: TaskViewerProvider.SEPARATOR_PRESETS,
+                            isDefault: !hasStoredPattern,
+                            isLegacy: hasStoredPattern && TaskViewerProvider.isLegacyRegexPattern(
+                                this._getClipboardSeparatorPatternString()
+                            )
+                        });
+                        break;
+                    }
+                    case 'setClipboardSeparatorPattern': {
+                        const result = await this._setClipboardSeparatorPattern(data.pattern);
+                        this._view?.webview.postMessage({
+                            type: 'clipboardSeparatorPatternResult',
+                            ...result,
+                            pattern: this._getClipboardSeparatorPatternString()
+                        });
+                        break;
+                    }
+                    case 'setClipboardSeparatorPreset': {
+                        const presetKey = data.preset;
+                        await this._context.workspaceState.update('switchboard.clipboardImport.separatorPreset', presetKey);
+                        if (presetKey !== 'custom') {
+                            const preset = TaskViewerProvider.SEPARATOR_PRESETS.find(p => p.key === presetKey);
+                            if (preset) {
+                                await this._context.workspaceState.update(
+                                    'switchboard.clipboardImport.separatorPattern', preset.literalPattern
+                                );
+                            }
+                        }
+                        // Echo back the new state
+                        this._view?.webview.postMessage({
+                            type: 'clipboardSeparatorPattern',
+                            pattern: this._getClipboardSeparatorPatternString(),
+                            preset: presetKey,
+                            presets: TaskViewerProvider.SEPARATOR_PRESETS,
+                            isDefault: false,
+                            isLegacy: false
+                        });
+                        break;
+                    }
                     case 'setActiveTab': {
                         const activeTab = data.tab === 'activity' ? 'activity' : 'agents';
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, activeTab);
@@ -3536,24 +3650,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             vscode.window.showErrorMessage('Custom database path cannot be empty.');
                             break;
                         }
-                        
+
                         const validation = KanbanDatabase.validatePath(customPath);
                         if (!validation.valid) {
                             vscode.window.showErrorMessage(`❌ Invalid path: ${validation.error}`);
                             break;
                         }
-                        
+
                         const wsRoot = this._getWorkspaceRoot();
                         if (!wsRoot) {
                             vscode.window.showErrorMessage('No workspace root found.');
                             break;
                         }
-                        
+
                         const customConfig = vscode.workspace.getConfiguration('switchboard');
                         const oldDbPath = customConfig.get<string>('kanban.dbPath', '');
                         const oldResolvedPath = this._resolveDbPathSetting(oldDbPath, wsRoot);
                         const newResolvedPath = this._resolveDbPathSetting(customPath, wsRoot);
-                        
+
                         // Attempt migration before switching
                         const migResult = await KanbanDatabase.migrateIfNeeded(oldResolvedPath, newResolvedPath);
                         if (migResult.skipped === 'target_has_data') {
@@ -3568,7 +3682,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         } else if (migResult.migrated) {
                             vscode.window.showInformationMessage('✅ Migrated plans to custom database location.');
                         }
-                        
+
                         await customConfig.update('kanban.dbPath', customPath, vscode.ConfigurationTarget.Workspace);
                         await KanbanDatabase.invalidateWorkspace(wsRoot);
                         this._view?.webview.postMessage({ type: 'dbPathUpdated', path: customPath, workspaceRoot: wsRoot });
@@ -3905,7 +4019,10 @@ What would you like to find?`;
         let titleSyncTimer: NodeJS.Timeout | undefined;
         const debouncedTitleSync = (uri: vscode.Uri) => {
             if (titleSyncTimer) clearTimeout(titleSyncTimer);
-            titleSyncTimer = setTimeout(() => this._handlePlanTitleSync(uri, workspaceRoot), 300);
+            titleSyncTimer = setTimeout(() => {
+                this._handlePlanTitleSync(uri, workspaceRoot);
+                this._handlePlanMetadataSync(uri, workspaceRoot);
+            }, 300);
         };
 
         // Unified watcher for all plans at the plans root
@@ -4453,7 +4570,7 @@ What would you like to find?`;
                     if (db) {
                         await this._migrateLegacyPlanRegistryEntries(db, data.entries);
                         // Delete the legacy file
-                        try { await fs.promises.unlink(registryPath); } catch {}
+                        try { await fs.promises.unlink(registryPath); } catch { }
                         console.log('[TaskViewerProvider] Migrated plan_registry.json into DB and deleted legacy file');
                     }
                     return this._planRegistry;
@@ -4484,6 +4601,7 @@ What would you like to find?`;
                 status: status as KanbanPlanRecord['status'],
                 complexity: 'Unknown',
                 tags: '',
+                dependencies: '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -4491,6 +4609,9 @@ What would you like to find?`;
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
+                routedTo: '',
+                dispatchedAgent: '',
+                dispatchedIde: '',
             });
         }
         if (records.length > 0) {
@@ -4506,7 +4627,7 @@ What would you like to find?`;
                 await fs.promises.unlink(registryPath);
                 console.log('[TaskViewerProvider] Deleted legacy plan_registry.json (DB has plans)');
             }
-        } catch {}
+        } catch { }
     }
 
     /**
@@ -4527,6 +4648,7 @@ What would you like to find?`;
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
                 complexity: existing?.complexity || 'Unknown',
                 tags: existing?.tags || '',
+                dependencies: existing?.dependencies || '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -4534,6 +4656,9 @@ What would you like to find?`;
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
+                routedTo: existing?.routedTo || '',
+                dispatchedAgent: existing?.dispatchedAgent || '',
+                dispatchedIde: existing?.dispatchedIde || '',
             });
         }
         if (records.length > 0) {
@@ -4562,16 +4687,30 @@ What would you like to find?`;
                 ? path.join('.switchboard', 'plans', entry.mirrorPath).replace(/\\/g, '/')
                 : (entry.localPlanPath || '');
 
-            let insertComplexity: 'Unknown' | 'Low' | 'High' = existing?.complexity || 'Unknown';
+            let insertComplexity: string = existing?.complexity || 'Unknown';
             if (insertComplexity === 'Unknown' && insertPlanFile && this._kanbanProvider) {
                 try {
                     const parsed = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, insertPlanFile);
-                    if (parsed === 'Low' || parsed === 'High') {
+                    if (parsed !== 'Unknown') {
                         insertComplexity = parsed;
                     }
                 } catch {
                     // Non-critical: leave as 'Unknown' and let self-heal fix it on next refresh
                 }
+            }
+
+            let insertTags: string = existing?.tags || '';
+            if (!insertTags && insertPlanFile && this._kanbanProvider) {
+                try {
+                    insertTags = await this._kanbanProvider.getTagsFromPlan(workspaceRoot, insertPlanFile);
+                } catch { /* Non-critical */ }
+            }
+
+            let insertDependencies: string = existing?.dependencies || '';
+            if (!insertDependencies && insertPlanFile && this._kanbanProvider) {
+                try {
+                    insertDependencies = await this._kanbanProvider.getDependenciesFromPlan(workspaceRoot, insertPlanFile);
+                } catch { /* Non-critical */ }
             }
 
             await db.upsertPlans([{
@@ -4582,7 +4721,8 @@ What would you like to find?`;
                 kanbanColumn: existing?.kanbanColumn || 'CREATED',
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
                 complexity: insertComplexity,
-                tags: existing?.tags || '',
+                tags: insertTags,
+                dependencies: insertDependencies,
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -4590,6 +4730,9 @@ What would you like to find?`;
                 sourceType: entry.sourceType,
                 brainSourcePath: entry.brainSourcePath || '',
                 mirrorPath: entry.mirrorPath || '',
+                routedTo: existing?.routedTo || '',
+                dispatchedAgent: existing?.dispatchedAgent || '',
+                dispatchedIde: existing?.dispatchedIde || '',
             }]);
         }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
@@ -5130,13 +5273,17 @@ What would you like to find?`;
                             status: 'deleted',
                             complexity: 'Unknown',
                             tags: '',
+                            dependencies: '',
                             workspaceId: wsId,
                             createdAt: new Date().toISOString(),
                             updatedAt: new Date().toISOString(),
                             lastAction: '',
                             sourceType: 'brain',
                             brainSourcePath: '',
-                            mirrorPath: ''
+                            mirrorPath: '',
+                            routedTo: '',
+                            dispatchedAgent: '',
+                            dispatchedIde: ''
                         }]);
                     } else {
                         await db.tombstonePlan(hash);
@@ -5173,13 +5320,17 @@ What would you like to find?`;
                     status: 'deleted',
                     complexity: 'Unknown',
                     tags: '',
+                    dependencies: '',
                     workspaceId: wsId,
                     createdAt: new Date().toISOString(),
                     updatedAt: new Date().toISOString(),
                     lastAction: '',
                     sourceType: 'brain',
                     brainSourcePath: '',
-                    mirrorPath: ''
+                    mirrorPath: '',
+                    routedTo: '',
+                    dispatchedAgent: '',
+                    dispatchedIde: ''
                 }]);
             }
             this._tombstones.add(hash);
@@ -6075,12 +6226,17 @@ What would you like to find?`;
         return `${normalizedContent.slice(0, match.index)}${replacement}${normalizedContent.slice(sectionEnd).replace(/^\n*/, '\n')}`;
     }
 
-    private _applyComplexityToPlanContent(content: string, complexity: 'Unknown' | 'Low' | 'High'): string {
-        const bandBBody = complexity === 'High'
-            ? '\n### Complex / Risky\n- User marked this plan as high complexity.\n'
-            : complexity === 'Low'
+    private _applyComplexityToPlanContent(content: string, complexity: string): string {
+        const score = parseComplexityScore(complexity);
+        const category = scoreToCategory(score);
+        const isHigh = score >= 7;
+        const isLow = score > 0 && score <= 4;
+
+        const bandBBody = isHigh
+            ? `\n### Complex / Risky\n- User marked this plan as ${category.toLowerCase()} complexity (${score}/10).\n`
+            : isLow
                 ? '\n### Complex / Risky\n- None.\n'
-                : '\n### Complex / Risky\n- Unknown.\n';
+                : `\n### Complex / Risky\n- ${category} complexity (${score}/10).\n`;
 
         const normalizedContent = content.replace(/\r\n/g, '\n');
         const auditRegex = /^#{1,4}\s+Complexity\s+Audit\b[^\n]*$/im;
@@ -6099,7 +6255,7 @@ What would you like to find?`;
             ? afterAuditHeadingIndex + nextSectionMatch.index
             : normalizedContent.length;
         const auditSection = normalizedContent.slice(auditStart, auditEnd);
-        const bandBRegex = /^#{1,4}\s+(?:Band\s+B|Complex)\b[^\n]*$/im;
+        const bandBRegex = /^(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex)\b[^\n]*$/im;
         const bandBMatch = bandBRegex.exec(auditSection);
 
         let updatedAuditSection = auditSection;
@@ -6117,7 +6273,7 @@ What would you like to find?`;
         }
 
         // Insert or update the manual complexity override marker
-        const overrideRegex = /\*\*Manual Complexity Override:\*\*\s*(Low|High|Unknown)/i;
+        const overrideRegex = /\*\*Manual Complexity Override:\*\*\s*(?:\d{1,2}|Low|High|Unknown|[^\n]*?\(\d+\/10\))/i;
         const overrideLine = `**Manual Complexity Override:** ${complexity}`;
         if (overrideRegex.test(updatedAuditSection)) {
             updatedAuditSection = updatedAuditSection.replace(overrideRegex, overrideLine);
@@ -6194,7 +6350,7 @@ What would you like to find?`;
         planFileAbsolute: string;
         column: string;
         isCompleted: boolean;
-        complexity: 'Unknown' | 'Low' | 'High';
+        complexity: string;
         dependencies: string[];
         planText: string;
         planMtimeMs: number;
@@ -6222,10 +6378,10 @@ What would you like to find?`;
         const dependencies = this._parsePlanDependencies(planText);
         const row = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
         let column = this._getEffectiveKanbanColumnForSession(sheet, customAgents, row);
-        let complexity: 'Unknown' | 'Low' | 'High' = 'Unknown';
+        let complexity: string = 'Unknown';
 
         if (row) {
-            complexity = row.complexity;
+            complexity = row.complexity || 'Unknown';
         }
 
         if (complexity === 'Unknown' && this._kanbanProvider && typeof sheet.planFile === 'string' && sheet.planFile.trim()) {
@@ -6366,7 +6522,7 @@ What would you like to find?`;
         type: 'setColumn' | 'setComplexity' | 'setDependencies' | 'setTopic' | 'savePlanText';
         sessionId?: string;
         column?: string;
-        complexity?: 'Unknown' | 'Low' | 'High';
+        complexity?: string;
         dependencies?: string[];
         topic?: string;
         content?: string;
@@ -6595,17 +6751,17 @@ What would you like to find?`;
             let role: string;
             if (effectiveColumn === 'PLAN REVIEWED' && this._kanbanProvider) {
                 const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, planFileAbsolute);
-                role = complexity === 'Low' ? 'coder' : 'lead';
+                role = scoreToRoutingRole(parseComplexityScore(complexity));
             } else {
                 role = columnToPromptRole(effectiveColumn) || 'coder';
             }
 
             const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute };
-            const copyInstruction = role === 'coder' ? 'low-complexity' : undefined;
+            const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
             const includeInlineChallenge = this._isLeadInlineChallengeEnabled();
             const accurateCodingEnabled = this._isAccurateCodingEnabled();
-            const pairProgrammingEnabled = this._autobanState.pairProgrammingEnabled;
+            const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
             const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
             const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
             // Accuracy mode excluded from clipboard prompts — requires MCP tools only in CLI terminals
@@ -6642,6 +6798,10 @@ What would you like to find?`;
                             workflowName,
                             `Auto-advanced after copying ${role} prompt`,
                             resolvedWorkspaceRoot
+                        );
+                        // Record IDE dispatch identity after copy-prompt
+                        await this._kanbanProvider?._recordDispatchIdentity(
+                            resolvedWorkspaceRoot, sessionId, targetColumn, undefined, true
                         );
                         // Trigger a full refresh so the Kanban board (and sidebar) reflects the move immediately
                         await vscode.commands.executeCommand('switchboard.refreshUI');
@@ -7155,6 +7315,49 @@ What would you like to find?`;
         }
     }
 
+    private async _handlePlanMetadataSync(uri: vscode.Uri, workspaceRoot?: string) {
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRootForPath(uri.fsPath, workspaceRoot);
+        if (!resolvedWorkspaceRoot) return;
+        const relPath = path.relative(resolvedWorkspaceRoot, uri.fsPath).replace(/\\/g, '/');
+        try {
+            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+            if (!db) return;
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId();
+            if (!workspaceId) return;
+            const plan = await db.getPlanByPlanFile(relPath, workspaceId);
+            if (!plan) return;
+
+            let changed = false;
+            const updates: { tags?: string; dependencies?: string } = {};
+
+            if (this._kanbanProvider) {
+                const newTags = await this._kanbanProvider.getTagsFromPlan(resolvedWorkspaceRoot, relPath);
+                if (newTags !== plan.tags) {
+                    updates.tags = newTags;
+                    changed = true;
+                }
+                const newDeps = await this._kanbanProvider.getDependenciesFromPlan(resolvedWorkspaceRoot, relPath);
+                if (newDeps !== plan.dependencies) {
+                    updates.dependencies = newDeps;
+                    changed = true;
+                }
+            }
+
+            if (changed) {
+                // Intentionally omits preserveTimestamps — this handler fires on user file-save,
+                // so updated_at should be refreshed to reflect the genuine edit time.
+                await db.updateMetadataBatch([{
+                    sessionId: plan.sessionId,
+                    topic: plan.topic,
+                    planFile: plan.planFile,
+                    ...updates
+                }]);
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to sync plan metadata:', e);
+        }
+    }
+
     private async _updateSessionRunSheet(sessionId: string, workflow: string, outcome?: string, isStop: boolean = false, workspaceRoot?: string) {
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
@@ -7479,7 +7682,7 @@ What would you like to find?`;
                     // Update existing entry
                     state.terminals[existingName].lastSeen = new Date().toISOString();
                     state.terminals[existingName].friendlyName = rawName;
-                    
+
                     if (state.terminals[existingName].role === 'none') {
                         const lowerName = rawName.toLowerCase();
                         let autoRole = 'none';
@@ -7909,6 +8112,44 @@ What would you like to find?`;
         return true;
     }
 
+    /**
+     * Pre-dispatch dependency gate: checks if all declared dependencies are in a
+     * completed column (DONE, REVIEWED, *CODED). Returns true if dispatch can proceed.
+     */
+    private async _checkDependenciesBeforeDispatch(
+        sessionId: string,
+        workspaceRoot: string,
+        headless: boolean = false
+    ): Promise<{ canProceed: boolean; includeInBatch?: string[] }> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) return { canProceed: true };
+        const plan = await db.getPlanBySessionId(sessionId);
+        if (!plan || !plan.dependencies) return { canProceed: true };
+
+        const status = await db.getDependencyStatus(plan.dependencies);
+        const blocked = status.filter(d => !d.ready);
+        if (blocked.length === 0) return { canProceed: true };
+
+        if (headless) {
+            console.warn(`[TaskViewerProvider] Plan "${plan.topic}" has unmet deps (autoban — proceeding): ${blocked.map(d => d.topic).join(', ')}`);
+            return { canProceed: true };
+        }
+
+        const notReadyList = blocked.map(d => `• ${d.topic} (${d.column})`).join('\n');
+        const choice = await vscode.window.showWarningMessage(
+            `Plan "${plan.topic}" has unmet dependencies:\n${notReadyList}`,
+            { modal: true },
+            'Include Dependencies in Batch', 'Proceed Anyway', 'Cancel'
+        );
+
+        if (choice === 'Cancel' || !choice) return { canProceed: false };
+        if (choice === 'Include Dependencies in Batch') {
+            const depSessionIds = blocked.map(d => d.sessionId).filter(Boolean);
+            return { canProceed: true, includeInBatch: depSessionIds };
+        }
+        return { canProceed: true };
+    }
+
     private async _handleTriggerAgentAction(role: string, sessionId: string, instruction?: string, workspaceRoot?: string): Promise<boolean> {
         return this._handleTriggerAgentActionInternal(role, sessionId, instruction, workspaceRoot);
     }
@@ -7973,6 +8214,19 @@ What would you like to find?`;
         }
 
         const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planFileRelative);
+
+        // Dependency gate: warn if upstream plans are not yet complete
+        const depResult = await this._checkDependenciesBeforeDispatch(sessionId, resolvedWorkspaceRoot);
+        if (!depResult.canProceed) {
+            clearDispatchLock();
+            return false;
+        }
+        if (depResult.includeInBatch && depResult.includeInBatch.length > 0) {
+            // User chose to include blocked dependencies — dispatch as a batch
+            clearDispatchLock();
+            const batchSessionIds = [...depResult.includeInBatch, sessionId];
+            return this.handleKanbanBatchTrigger(role, batchSessionIds, instruction, resolvedWorkspaceRoot);
+        }
 
         // Safety invariant: jules_monitor is monitor-only and cannot receive execute dispatches.
         if (role === 'jules_monitor') {
@@ -8176,8 +8430,8 @@ What would you like to find?`;
 - Post adversarial critique and balanced synthesis directly in chat, then update the original plan.`;
             }
         } else if (role === 'reviewer') {
-            messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], { 
-                advancedReviewerEnabled: this._isAdvancedReviewerEnabled() 
+            messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
+                advancedReviewerEnabled: this._isAdvancedReviewerEnabled()
             });
             messageMetadata.phase_gate = {
                 enforce_persona: 'reviewer',
@@ -8501,20 +8755,127 @@ Create this file exactly as specified, then continue your work.`);
             return;
         }
 
-        const h1Match = text.match(/^#\s+(.+)$/m);
-        const title = h1Match ? h1Match[1].trim() : 'Imported Plan';
+        // Check for multi-plan markers: ### PLAN N START
+        const multiPlanDetect = this._getClipboardSeparatorRegex('gm');
+        const hasMultiPlanMarkers = multiPlanDetect.test(text);
 
-        if (!h1Match) {
-            vscode.window.showWarningMessage('No "# Title" found in clipboard. Importing with default title.');
+        if (!hasMultiPlanMarkers) {
+            // Single plan import (existing behavior, preserved exactly)
+            const h1Match = text.match(/^#\s+(.+)$/m);
+            const title = h1Match ? h1Match[1].trim() : 'Imported Plan';
+
+            if (!h1Match) {
+                vscode.window.showWarningMessage('No "# Title" found in clipboard. Importing with default title.');
+            }
+
+            try {
+                await this._createInitiatedPlan(title, text, false);
+                await this._syncFilesAndRefreshRunSheets();
+                vscode.window.showInformationMessage(`Imported plan: ${title}`);
+            } catch (err: any) {
+                const msg = err?.message || String(err);
+                vscode.window.showErrorMessage(`Clipboard import failed: ${msg}`);
+            }
+            return;
         }
 
-        try {
-            const { sessionId } = await this._createInitiatedPlan(title, text, false);
-            await this._syncFilesAndRefreshRunSheets();
-            vscode.window.showInformationMessage(`Imported plan: ${title}`);
-        } catch (err: any) {
-            const msg = err?.message || String(err);
-            vscode.window.showErrorMessage(`Clipboard import failed: ${msg}`);
+        // Multi-plan import
+        await this._importMultiplePlansFromClipboard(text);
+    }
+
+    private async _importMultiplePlansFromClipboard(text: string): Promise<void> {
+        // Build split + marker-test regexes from the centralized helper
+        const separatorSource = this._getClipboardSeparatorRegex('m').source;
+        const splitRegex = new RegExp(`(${separatorSource})`, 'gm');
+        const parts = text.split(splitRegex).filter(p => p.trim());
+
+        // Non-global regex for marker identification inside the loop
+        // CRITICAL: Do NOT reuse the /g regex here — lastIndex statefulness
+        // would cause .test() to alternate true/false on identical inputs.
+        const markerTest = new RegExp(separatorSource, 'm');
+
+        const plans: Array<{ title: string; content: string }> = [];
+        let currentPlan: { marker?: string; lines: string[] } | null = null;
+
+        for (const part of parts) {
+            if (markerTest.test(part)) {
+                // Finalize previous plan if it has content
+                if (currentPlan && currentPlan.lines.length > 0) {
+                    const content = currentPlan.lines.join('\n').trim();
+                    if (content) {
+                        const h1Match = content.match(/^#\s+(.+)$/m);
+                        const title = h1Match ? h1Match[1].trim() : `Imported Plan ${plans.length + 1}`;
+                        plans.push({ title, content });
+                    }
+                }
+                // Start new plan accumulator
+                currentPlan = { marker: part, lines: [] };
+            } else {
+                // Content chunk — add to current plan
+                if (!currentPlan) {
+                    // Content before first marker — treat as standalone plan
+                    currentPlan = { lines: [] };
+                }
+                currentPlan.lines.push(part);
+            }
+        }
+
+        // Finalize the last plan in the buffer
+        if (currentPlan && currentPlan.lines.length > 0) {
+            const content = currentPlan.lines.join('\n').trim();
+            if (content) {
+                const h1Match = content.match(/^#\s+(.+)$/m);
+                const title = h1Match ? h1Match[1].trim() : `Imported Plan ${plans.length + 1}`;
+                plans.push({ title, content });
+            }
+        }
+
+        if (plans.length === 0) {
+            vscode.window.showWarningMessage('No valid plans found in clipboard content.');
+            return;
+        }
+
+        // Confirmation dialog for bulk imports (>5 plans)
+        if (plans.length > 5) {
+            const proceed = await vscode.window.showWarningMessage(
+                `Found ${plans.length} plans in clipboard. Import all?`,
+                { modal: true },
+                'Yes',
+                'No'
+            );
+            if (proceed !== 'Yes') {
+                return;
+            }
+        }
+
+        // Import each plan sequentially (sequential await ensures distinct timestamps)
+        const importedTitles: string[] = [];
+        const failedPlans: string[] = [];
+
+        for (const plan of plans) {
+            try {
+                await this._createInitiatedPlan(plan.title, plan.content, false);
+                importedTitles.push(plan.title);
+            } catch (err: any) {
+                const msg = err?.message || String(err);
+                failedPlans.push(`${plan.title}: ${msg}`);
+            }
+        }
+
+        // Refresh UI once after all imports (not per-plan)
+        await this._syncFilesAndRefreshRunSheets();
+
+        // Show summary
+        if (importedTitles.length > 0) {
+            const summary = importedTitles.length === 1
+                ? `Imported plan: ${importedTitles[0]}`
+                : `Imported ${importedTitles.length} plans: ${importedTitles.slice(0, 3).join(', ')}${importedTitles.length > 3 ? '...' : ''}`;
+            vscode.window.showInformationMessage(summary);
+        }
+
+        if (failedPlans.length > 0) {
+            vscode.window.showErrorMessage(`Failed to import ${failedPlans.length} plan(s). Check output panel for details.`);
+            console.error('Plan import failures:', failedPlans);
         }
     }
 
@@ -8611,6 +8972,107 @@ Create this file exactly as specified, then continue your work.`);
 
         await fs.promises.copyFile(planFileAbsolute, destPath);
         console.log(`[TaskViewerProvider] Auto-promoted plan to brain: ${fileName}`);
+    }
+
+    // --- Clipboard Separator Helpers ---
+
+    /**
+     * Returns the compiled RegExp for clipboard multi-plan separator detection.
+     * Reads custom pattern from workspaceState, validates it, and falls back to default.
+     */
+    /**
+     * Converts a user-friendly literal pattern (with [N] placeholder) to a regex string.
+     * - Replaces [N] with \d+ (via sentinel to avoid escaping)
+     * - Escapes regex metacharacters
+     * - Converts spaces to \s*
+     * - Wraps with ^ and $ anchors
+     */
+    private static literalToRegex(literal: string): string {
+        // Replace [N] placeholder with sentinel before escaping metacharacters
+        let s = literal.replace(/\[N\]/g, '\x00');
+        s = s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        s = s.replace(/ /g, '\\s*');
+        s = s.replace(/\x00/g, '\\d+');
+        return `^${s}$`;
+    }
+
+    /**
+     * Detects if a stored pattern is legacy raw regex (vs. new literal format).
+     * Legacy patterns contain regex syntax characters that wouldn't appear in literal patterns.
+     */
+    private static isLegacyRegexPattern(pattern: string): boolean {
+        return /\\[sdwSDW]|^\^|[$]$|\.\*|\.\+|\[[^\]]{2,}\]/.test(pattern);
+    }
+
+    private _getClipboardSeparatorRegex(flags: string = 'gm'): RegExp {
+        const stored = this._context.workspaceState.get<string>(
+            'switchboard.clipboardImport.separatorPattern'
+        );
+        if (stored && stored.trim()) {
+            try {
+                const regexStr = TaskViewerProvider.isLegacyRegexPattern(stored.trim())
+                    ? stored.trim()
+                    : TaskViewerProvider.literalToRegex(stored.trim());
+                return new RegExp(regexStr, flags);
+            } catch {
+                console.warn('[TaskViewerProvider] Invalid separator pattern, using default:', stored);
+            }
+        }
+        return new RegExp(TaskViewerProvider.DEFAULT_CLIPBOARD_SEPARATOR_PATTERN, flags);
+    }
+
+    /**
+     * Returns the raw pattern string (for display in UI).
+     */
+    private _getClipboardSeparatorPatternString(): string {
+        const stored = this._context.workspaceState.get<string>(
+            'switchboard.clipboardImport.separatorPattern'
+        );
+        return (stored && stored.trim()) || TaskViewerProvider.DEFAULT_CLIPBOARD_SEPARATOR_PATTERN;
+    }
+
+    /**
+     * Validates and persists a custom separator pattern.
+     * Returns { success: boolean; error?: string }.
+     */
+    private async _setClipboardSeparatorPattern(pattern: string): Promise<{ success: boolean; error?: string }> {
+        const trimmed = (pattern || '').trim();
+
+        // Empty = reset to default
+        if (!trimmed) {
+            await this._context.workspaceState.update('switchboard.clipboardImport.separatorPattern', undefined);
+            return { success: true };
+        }
+
+        if (trimmed.length > TaskViewerProvider.MAX_SEPARATOR_PATTERN_LENGTH) {
+            return { success: false, error: `Pattern too long (max ${TaskViewerProvider.MAX_SEPARATOR_PATTERN_LENGTH} characters)` };
+        }
+
+        // Convert literal pattern to regex for validation
+        const regexStr = TaskViewerProvider.literalToRegex(trimmed);
+
+        // Validate regex compilation
+        try {
+            new RegExp(regexStr, 'gm');
+        } catch (e: any) {
+            return { success: false, error: `Invalid pattern: ${e.message}` };
+        }
+
+        // ReDoS sanity check on converted regex
+        const testStr = '### PLAN 1 START\nContent\n### PLAN 2 START\nContent';
+        const start = performance.now();
+        try {
+            new RegExp(regexStr, 'gm').test(testStr);
+        } catch {
+            return { success: false, error: 'Pattern caused an error during test' };
+        }
+        const elapsed = performance.now() - start;
+        if (elapsed > 100) {
+            return { success: false, error: 'Pattern is too complex (possible catastrophic backtracking)' };
+        }
+
+        await this._context.workspaceState.update('switchboard.clipboardImport.separatorPattern', trimmed);
+        return { success: true };
     }
 
     // --- Persona Injection System ---
@@ -9610,12 +10072,12 @@ Create this file exactly as specified, then continue your work.`);
                     termInfo._isLocal = pidMatch || (nameMatch && ideMatches);
 
                     // Heartbeat-based liveliness: agents are alive if local OR if
-                    // lastSeen is within the heartbeat threshold (60s). This ensures
+                    // lastSeen is within the heartbeat threshold (120s). This ensures
                     // external/CLI agents appear in the sidebar.
-                    const HEARTBEAT_THRESHOLD_MS = 60_000;
+                    const HEARTBEAT_THRESHOLD_MS = 120_000;
                     const lastSeenMs = Date.parse(termInfo.lastSeen || '');
                     const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
-                    termInfo.alive = termInfo._isLocal || heartbeatAlive;
+                    termInfo.alive = termInfo._isLocal || (heartbeatAlive && ideMatches);
 
                     if (termInfo.activeWorkflow) {
                         const wfLabel = `Workflow: ${termInfo.activeWorkflow}`;
@@ -9635,7 +10097,7 @@ Create this file exactly as specified, then continue your work.`);
                 const chatAgents = state.chatAgents || {};
                 for (const [name, data] of Object.entries(chatAgents)) {
                     // For chat agents, liveliness is based on heartbeat
-                    const HEARTBEAT_THRESHOLD_MS = 60_000;
+                    const HEARTBEAT_THRESHOLD_MS = 120_000;
                     const lastSeenMs = Date.parse((data as any).lastSeen || '');
                     const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < HEARTBEAT_THRESHOLD_MS;
 
