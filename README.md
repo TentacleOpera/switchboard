@@ -25,7 +25,8 @@ What this shows: Using the pair programming mode, Windsurf Opus reported token s
 - **Batch and parallelise** — send entire columns of plans to agents in one prompt, with instructions to spawn subagents. Multiple tasks execute simultaneously without you doing anything
 - **Assign by complexity** — put an Opus subscription in the Planner slot and it will organise which tasks can be sent to cheap agents based on a complexity threshold you set
 - **Amplify other tools** — put Claude Code, OpenCode, Copilot Squads, or anything else into the kanban to route between them
-- **No repo pollution** — kanban state, routing rules and archived plans live in a multi-repo database on Google Drive, so you can share across machines without random files appearing in every commit
+- **No repo pollution** — kanban state, routing rules and archived plans live in a multi-repo database on Google Drive, so you can share across machines and between developers without random files appearing in every commit
+- **Sync to project management tools** — plan state is stored in a structured database, making it trivially easy to sync Switchboard to JIRA, Clickup, or any other PM tool using their official MCP servers
 
 ---
 
@@ -133,6 +134,14 @@ Enable **Aggressive Pair Programming** in the setup sidebar to shift more tasks 
 
 Highlight text within any plan to send a targeted comment to your Planner referencing that exact text. Useful for precise plan improvements without rewriting the whole plan. A good use of this is running Claude Code Sonnet in the Planner terminal — ask Sonnet questions about Opus-written plans without spending Copilot quota.
 
+### Code mapping
+
+Press the **Code Map** button at the top of the AUTOBAN to auto-copy a research prompt to your clipboard. The prompt asks an agent to identify relevant code paths for all plans in the current column. Paste it into a free model like Kimi 2.5 or Gemini Flash to gather context without spending premium quota. The research output is attached directly to each plan, so when a Lead Coder or Planner picks up the card, it already knows where to look.
+
+### Report and send back
+
+When manual testing fails, select the offending plan cards and press the **Report** button. Enter your feedback and Switchboard sends the plans back to the Lead Coder column with your comments attached. The agent picks them up with full context — the original plan, the implementation, the review findings, and your report — so nothing gets lost in the loop.
+
 ### Cross-IDE workflows
 
 Plan with Antigravity, implement in Windsurf. Click **Copy** on any plan to copy a link and auto-generated implementation prompt to your clipboard, then paste into your other IDE's chat.
@@ -200,9 +209,10 @@ Coordination uses the official VS Code `terminal.sendText` API to automate agent
 
 - **VS Code Extension** — manages terminals, sidebar UI, AUTOBAN, plan watcher, and inbox watcher
 - **Bundled MCP Server** — exposes tools to agents (`send_message`, `check_inbox`, `get_kanban_state`, `start_workflow`, `run_in_terminal`)
-- **Local database** — stores plans, routing state, and complexity classifications locally with optional Google Drive sync
+- **Local database** — stores plans, routing state, and complexity classifications locally with optional Google Drive sync for multi-developer sharing
 - **DuckDB archive** — stores completed plans for historical querying
 - **File Protocol** — all coordination happens via `.switchboard/` in your workspace — transparent, auditable, and entirely local
+- **PM tool sync** — structured plan metadata makes it easy to sync state to JIRA, Clickup, or any PM tool using their official MCP servers
 
 ---
 
