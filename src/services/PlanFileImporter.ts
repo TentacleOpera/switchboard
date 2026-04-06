@@ -1,11 +1,14 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
+import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
+import { extractKanbanState } from './planStateUtils';
 
 /**
  * Scans `.switchboard/plans/*.md` and upserts records into the kanban DB.
  * Used by the "Reset Database" command to repopulate from plan files.
+ * When a plan file contains a `## Switchboard State` section, the embedded
+ * kanban column and status are used instead of defaulting to CREATED/active.
  */
 export async function importPlanFiles(workspaceRoot: string): Promise<number> {
     const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
@@ -29,9 +32,25 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
     let workspaceId = await db.getWorkspaceId()
         || await db.getDominantWorkspaceId();
 
+    const committedIdPath = path.join(workspaceRoot, '.switchboard', 'workspace-id');
+
+    // Read the committed workspace-id file (cross-machine stable ID).
+    // Checked after DB so that the local machine's established ID takes precedence,
+    // but before legacy/hash fallbacks so fresh clones pick up the team's ID.
     if (!workspaceId) {
-        // Mirror the legacy-file fallback used by TaskViewerProvider._getOrCreateWorkspaceId()
-        // so imported plans use the same workspace ID the kanban board queries against.
+        try {
+            const fileContent = await fs.promises.readFile(committedIdPath, 'utf-8');
+            const trimmed = fileContent.trim();
+            if (/^[0-9a-f]{8,36}(?:-[0-9a-f]{4,})*$/i.test(trimmed) && trimmed.length >= 8) {
+                workspaceId = trimmed;
+            }
+        } catch {
+            // File doesn't exist or unreadable — fall through
+        }
+    }
+
+    if (!workspaceId) {
+        // Legacy workspace_identity.json fallback (backward compat)
         const legacyIdPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
         try {
             if (fs.existsSync(legacyIdPath)) {
@@ -44,12 +63,23 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
     }
 
     if (!workspaceId) {
+        // Deterministic hash fallback — stable for the same absolute path
         workspaceId = crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 12);
     }
 
     // Persist the resolved workspace ID so downstream consumers (board queries,
     // _getOrCreateWorkspaceId) find it in the config table immediately.
     await db.setWorkspaceId(workspaceId);
+
+    // Opportunistically write committed file for cross-machine sync (wx = exclusive create)
+    try {
+        await fs.promises.mkdir(path.dirname(committedIdPath), { recursive: true });
+        await fs.promises.writeFile(committedIdPath, workspaceId + '\n', { flag: 'wx' });
+    } catch (err: any) {
+        if (err?.code !== 'EEXIST') {
+            console.warn('[PlanFileImporter] Failed to write workspace-id file:', err);
+        }
+    }
 
     const now = new Date().toISOString();
     const records: KanbanPlanRecord[] = [];
@@ -73,13 +103,19 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
         const tags = extractTags(content);
         const planFileNormalized = filePath.replace(/\\/g, '/');
 
+        // Use embedded kanban state if present; fall back to defaults for
+        // legacy files that pre-date the ## Switchboard State section.
+        const embeddedState = extractKanbanState(content);
+        const kanbanColumn = embeddedState?.kanbanColumn ?? 'CREATED';
+        const status: KanbanPlanStatus = (embeddedState?.status === 'completed' ? 'completed' : 'active');
+
         records.push({
             planId: sessionId,
             sessionId,
             topic,
             planFile: planFileNormalized,
-            kanbanColumn: 'CREATED',
-            status: 'active',
+            kanbanColumn,
+            status,
             complexity,
             tags,
             dependencies: '',

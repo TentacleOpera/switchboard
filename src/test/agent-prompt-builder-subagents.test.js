@@ -56,6 +56,16 @@ function testExecutionDirective() {
     console.log('  PASS: Execution directive correctly limited to lead and coder (all plan counts)');
 }
 
+function testGitProhibitionDirective() {
+    console.log('Testing git prohibition directive presence...');
+    const allRoles = ['planner', 'reviewer', 'lead', 'coder', 'unknown_role'];
+    for (const role of allRoles) {
+        const prompt = buildKanbanBatchPrompt(role, plans1);
+        assert.ok(prompt.includes('GIT POLICY'), `Role ${role} SHOULD include git prohibition directive`);
+    }
+    console.log('  PASS: Git prohibition directive present for all roles');
+}
+
 function testChatCritiqueDirective() {
     console.log('Testing chat critique directive presence...');
     const promptRoles = ['planner', 'reviewer'];
@@ -75,6 +85,7 @@ try {
     testSinglePlan();
     testMultiplePlans();
     testExecutionDirective();
+    testGitProhibitionDirective();
     testChatCritiqueDirective();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {

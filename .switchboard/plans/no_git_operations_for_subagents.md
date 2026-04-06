@@ -298,3 +298,39 @@ to the parent agent or user with an explicit request.
 
 ### Recommended Agent
 **Send to Coder** (complexity 3 — all changes are additive text/config, no logic changes).
+
+## Review Pass Results
+
+### Files Reviewed & Validation Status
+
+| File | Status | Notes |
+|:-----|:-------|:------|
+| `src/services/agentPromptBuilder.ts` | ✅ PASS | `GIT_PROHIBITION_DIRECTIVE` constant at line 57. Injected into all 5 role branches (planner L140, reviewer L184, lead L197, coder L221, default L236). Content matches plan exactly. |
+| `.agent/personas/lead_coder.md` | ✅ PASS | Line 17 replaced: old "Atomic Commits" → new "No Git Mutations". Exact match to plan. |
+| `.agent/personas/coder.md` | ✅ PASS | Line 18 appended with git prohibition rule. Exact match to plan. |
+| `.agent/personas/intern.md` | ✅ PASS | Line 18 appended with git prohibition rule. Exact match to plan. |
+| `.agent/rules/no_git_for_agents.md` | ✅ PASS | Created, content matches plan verbatim (35 lines). Currently untracked in git. |
+| `src/test/agent-prompt-builder-subagents.test.js` | ⚠️ FIXED | Missing test — see Issues below. |
+
+### Issues Found
+
+| # | Severity | Description | Resolution |
+|:--|:---------|:------------|:-----------|
+| 1 | **MAJOR** | Plan §Verification recommended adding a test asserting `.includes('GIT POLICY')` for all roles. No such test was added by the implementing agent. The directive had zero automated regression coverage. | **Fixed**: Added `testGitProhibitionDirective()` function to `agent-prompt-builder-subagents.test.js` covering all 5 roles (planner, reviewer, lead, coder, default/unknown). |
+| 2 | **NIT** | `GIT_PROHIBITION_DIRECTIVE` is module-private (`const` not `export const`). | No action — tests use `.includes()` on output strings, which is the correct pattern. |
+
+### Fixes Applied
+1. **Added** `testGitProhibitionDirective()` to `src/test/agent-prompt-builder-subagents.test.js` — verifies `'GIT POLICY'` substring is present in prompts for all 5 roles (`planner`, `reviewer`, `lead`, `coder`, and default fallback via `'unknown_role'`).
+2. Wired the new test function into the test runner's `try` block.
+
+### Verification Results
+- **TypeScript (`npx tsc --noEmit`)**: 1 pre-existing error in `KanbanProvider.ts:1875` (unrelated `--moduleResolution` import issue). Zero errors in any plan-related file.
+- **Webpack build (`npm run compile`)**: Compiled successfully.
+- **Test: `agent-prompt-builder-subagents.test.js`**: All 5 tests PASS (including new git prohibition test).
+- **Test: `autoban-reviewer-prompt-regression.test.js`**: PASS.
+- **Test: `kanban-batch-prompt-regression.test.js`**: PASS.
+
+### Remaining Risks
+1. **Persona directory mismatch** (pre-existing, documented in plan): `_getPersonaForRole()` looks in `.agent/personas/roles/` but persona files live in `.agent/personas/`. Persona-level prohibition is defense-in-depth only; the prompt builder injection is the primary enforcement. No action needed for this plan.
+2. **Advisory-only enforcement**: The prohibition is prompt text, not runtime interception. A sufficiently adversarial model could ignore it. Tool-level enforcement is deferred to a future plan (documented in §6).
+3. **Untracked rule file**: `.agent/rules/no_git_for_agents.md` needs to be staged and committed by the user.

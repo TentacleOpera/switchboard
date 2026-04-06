@@ -10,8 +10,40 @@ import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole } from './a
 import { KanbanDatabase } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
+import { writePlanStateToFile } from './planStateUtils';
 import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
+
+/** Debounce timers keyed by sessionId to coalesce rapid column moves into a single file write. */
+const _planStateWriteTimers = new Map<string, NodeJS.Timeout>();
+
+/**
+ * Schedules a fire-and-forget write of the kanban state section to the plan file.
+ * Debounced per sessionId (300ms) so rapid successive moves only trigger one write.
+ */
+async function _schedulePlanStateWrite(
+    db: import('./KanbanDatabase').KanbanDatabase,
+    workspaceRoot: string,
+    sessionId: string,
+    column: string,
+    status: string
+): Promise<void> {
+    const existing = _planStateWriteTimers.get(sessionId);
+    if (existing) {
+        clearTimeout(existing);
+    }
+    _planStateWriteTimers.set(
+        sessionId,
+        setTimeout(async () => {
+            _planStateWriteTimers.delete(sessionId);
+            const planFilePath = await db.getPlanFilePath(sessionId);
+            if (!planFilePath) {
+                return;
+            }
+            await writePlanStateToFile(planFilePath, workspaceRoot, column, status);
+        }, 300)
+    );
+}
 
 export type KanbanColumn = string;
 type McpMoveTargetResolution = { role: string; normalizedTarget: string; usesComplexityRouting: boolean };
@@ -1020,6 +1052,8 @@ export class KanbanProvider implements vscode.Disposable {
                 if (normalizedColumn) {
                     const db = this._getKanbanDb(resolvedWorkspaceRoot);
                     await db.updateColumn(sessionId, normalizedColumn);
+                    _schedulePlanStateWrite(db, resolvedWorkspaceRoot, sessionId, normalizedColumn,
+                        normalizedColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                 }
                 advanced.push(sessionId);
             }
@@ -1685,6 +1719,8 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.env.clipboard.writeText(leadPrompt);
                             vscode.window.showInformationMessage('Lead prompt copied to clipboard (IDE mode).');
                             await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
+                            _schedulePlanStateWrite(this._getKanbanDb(workspaceRoot), workspaceRoot, sessionId, targetColumn,
+                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn, undefined, true);
                             if (!this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
@@ -1695,6 +1731,8 @@ export class KanbanProvider implements vscode.Disposable {
                         const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', role, sessionId, instruction, workspaceRoot);
                         if (dispatched && workspaceRoot) {
                             await this._getKanbanDb(workspaceRoot).updateColumn(sessionId, targetColumn);
+                            _schedulePlanStateWrite(this._getKanbanDb(workspaceRoot), workspaceRoot, sessionId, targetColumn,
+                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             await this._recordDispatchIdentity(workspaceRoot, sessionId, targetColumn);
 
                             // Pair programming: when a high-complexity card is dispatched to Lead,
@@ -1736,6 +1774,8 @@ export class KanbanProvider implements vscode.Disposable {
                     if (await db.ensureReady()) {
                         for (const sid of sessionIds) {
                             await db.updateColumn(sid, targetColumn);
+                            _schedulePlanStateWrite(db, workspaceRoot, sid, targetColumn,
+                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
                     // Fast-path: push DB-accurate state to board before slow runsheet I/O.
@@ -1755,6 +1795,8 @@ export class KanbanProvider implements vscode.Disposable {
                     if (await db.ensureReady()) {
                         for (const sid of sessionIds) {
                             await db.updateColumn(sid, targetColumn);
+                            _schedulePlanStateWrite(db, workspaceRoot, sid, targetColumn,
+                                targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
                     // Fast-path: push DB-accurate state to board before slow runsheet I/O.
@@ -2080,7 +2122,11 @@ export class KanbanProvider implements vscode.Disposable {
                         // DB-first: update column immediately
                         const dbMs = this._getKanbanDb(workspaceRoot);
                         if (await dbMs.ensureReady()) {
-                            for (const sid of sids) { await dbMs.updateColumn(sid, targetCol); }
+                            for (const sid of sids) {
+                                await dbMs.updateColumn(sid, targetCol);
+                                _schedulePlanStateWrite(dbMs, workspaceRoot, sid, targetCol,
+                                    targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                            }
                         }
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
@@ -2103,7 +2149,11 @@ export class KanbanProvider implements vscode.Disposable {
                     // DB-first: update column immediately
                     const dbMs2 = this._getKanbanDb(workspaceRoot);
                     if (await dbMs2.ensureReady()) {
-                        for (const sid of msg.sessionIds) { await dbMs2.updateColumn(sid, nextCol); }
+                        for (const sid of msg.sessionIds) {
+                            await dbMs2.updateColumn(sid, nextCol);
+                            _schedulePlanStateWrite(dbMs2, workspaceRoot, sid, nextCol,
+                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                        }
                     }
                     if (this._cliTriggersEnabled) {
                         const role = this._columnToRole(nextCol);
@@ -2153,7 +2203,11 @@ export class KanbanProvider implements vscode.Disposable {
                         // DB-first: update column immediately
                         const dbMa = this._getKanbanDb(workspaceRoot);
                         if (await dbMa.ensureReady()) {
-                            for (const sid of sids) { await dbMa.updateColumn(sid, targetCol); }
+                            for (const sid of sids) {
+                                await dbMa.updateColumn(sid, targetCol);
+                                _schedulePlanStateWrite(dbMa, workspaceRoot, sid, targetCol,
+                                    targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                            }
                         }
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
@@ -2175,7 +2229,11 @@ export class KanbanProvider implements vscode.Disposable {
                     // DB-first: update column immediately
                     const dbMa2 = this._getKanbanDb(workspaceRoot);
                     if (await dbMa2.ensureReady()) {
-                        for (const sid of sessionIds) { await dbMa2.updateColumn(sid, nextCol); }
+                        for (const sid of sessionIds) {
+                            await dbMa2.updateColumn(sid, nextCol);
+                            _schedulePlanStateWrite(dbMa2, workspaceRoot, sid, nextCol,
+                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                        }
                     }
                     if (this._cliTriggersEnabled) {
                         const role = this._columnToRole(nextCol);
@@ -2258,7 +2316,11 @@ export class KanbanProvider implements vscode.Disposable {
                             // DB-first
                             const dbPs = this._getKanbanDb(workspaceRoot);
                             if (await dbPs.ensureReady()) {
-                                for (const sid of sids) { await dbPs.updateColumn(sid, targetCol); }
+                                for (const sid of sids) {
+                                    await dbPs.updateColumn(sid, targetCol);
+                                    _schedulePlanStateWrite(dbPs, workspaceRoot, sid, targetCol,
+                                        targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                                }
                             }
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
@@ -2273,7 +2335,11 @@ export class KanbanProvider implements vscode.Disposable {
                     // DB-first
                     const dbPs2 = this._getKanbanDb(workspaceRoot);
                     if (await dbPs2.ensureReady()) {
-                        for (const sid of msg.sessionIds) { await dbPs2.updateColumn(sid, nextCol); }
+                        for (const sid of msg.sessionIds) {
+                            await dbPs2.updateColumn(sid, nextCol);
+                            _schedulePlanStateWrite(dbPs2, workspaceRoot, sid, nextCol,
+                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                        }
                     }
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                     await this._refreshBoard(workspaceRoot);
@@ -2316,7 +2382,11 @@ export class KanbanProvider implements vscode.Disposable {
                             // DB-first
                             const dbPa = this._getKanbanDb(workspaceRoot);
                             if (await dbPa.ensureReady()) {
-                                for (const sid of sids) { await dbPa.updateColumn(sid, targetCol); }
+                                for (const sid of sids) {
+                                    await dbPa.updateColumn(sid, targetCol);
+                                    _schedulePlanStateWrite(dbPa, workspaceRoot, sid, targetCol,
+                                        targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                                }
                             }
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             movedParts.push(`${sids.length} → ${targetCol}`);
@@ -2332,7 +2402,11 @@ export class KanbanProvider implements vscode.Disposable {
                     // DB-first
                     const dbPa2 = this._getKanbanDb(workspaceRoot);
                     if (await dbPa2.ensureReady()) {
-                        for (const sid of sessionIds) { await dbPa2.updateColumn(sid, nextCol); }
+                        for (const sid of sessionIds) {
+                            await dbPa2.updateColumn(sid, nextCol);
+                            _schedulePlanStateWrite(dbPa2, workspaceRoot, sid, nextCol,
+                                nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
+                        }
                     }
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                     await this._refreshBoard(workspaceRoot);
@@ -2368,6 +2442,8 @@ export class KanbanProvider implements vscode.Disposable {
                         const db = this._getKanbanDb(workspaceRoot);
                         if (await db.ensureReady()) {
                             await db.updateColumn(msg.sessionId, 'COMPLETED');
+                            _schedulePlanStateWrite(db, workspaceRoot, msg.sessionId, 'COMPLETED',
+                                'completed').catch(() => { /* fire-and-forget */ });
                             await db.updateStatus(msg.sessionId, 'completed');
                         }
                     }
@@ -2383,6 +2459,8 @@ export class KanbanProvider implements vscode.Disposable {
                 if (await db.ensureReady()) {
                     for (const sessionId of msg.sessionIds) {
                         await db.updateColumn(sessionId, 'COMPLETED');
+                        _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
+                            'completed').catch(() => { /* fire-and-forget */ });
                         await db.updateStatus(sessionId, 'completed');
                     }
                 }
@@ -2409,6 +2487,8 @@ export class KanbanProvider implements vscode.Disposable {
                 if (await dbAll.ensureReady()) {
                     for (const card of reviewedCards) {
                         await dbAll.updateColumn(card.sessionId, 'COMPLETED');
+                        _schedulePlanStateWrite(dbAll, workspaceRoot, card.sessionId, 'COMPLETED',
+                            'completed').catch(() => { /* fire-and-forget */ });
                         await dbAll.updateStatus(card.sessionId, 'completed');
                     }
                 }
@@ -2441,6 +2521,8 @@ export class KanbanProvider implements vscode.Disposable {
                     // that could see stale 'completed' status and re-sync a duplicate entry.
                     await db.updateStatus(sessionId, 'active');
                     await db.updateColumn(sessionId, targetColumn);
+                    _schedulePlanStateWrite(db, workspaceRoot, sessionId, targetColumn,
+                        targetColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                     const ok = await vscode.commands.executeCommand<boolean>('switchboard.restorePlanFromKanban', planId, workspaceRoot);
                     if (ok) {
                         await vscode.commands.executeCommand('switchboard.kanbanBackwardMove', [sessionId], targetColumn, workspaceRoot);
@@ -2449,6 +2531,8 @@ export class KanbanProvider implements vscode.Disposable {
                         // Rollback DB changes if restore failed
                         await db.updateStatus(sessionId, 'completed');
                         await db.updateColumn(sessionId, 'COMPLETED');
+                        _schedulePlanStateWrite(db, workspaceRoot, sessionId, 'COMPLETED',
+                            'completed').catch(() => { /* fire-and-forget */ });
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -2483,6 +2567,8 @@ export class KanbanProvider implements vscode.Disposable {
                 if (!resolvedRoot) break;
                 const db = this._getKanbanDb(resolvedRoot);
                 await db.updateColumn(msg.sessionId, 'BACKLOG');
+                _schedulePlanStateWrite(db, resolvedRoot, msg.sessionId, 'BACKLOG',
+                    'active').catch(() => { /* fire-and-forget */ });
                 this.refresh();
                 break;
             }
@@ -2491,6 +2577,8 @@ export class KanbanProvider implements vscode.Disposable {
                 if (!resolvedRoot) break;
                 const db = this._getKanbanDb(resolvedRoot);
                 await db.updateColumn(msg.sessionId, 'CREATED');
+                _schedulePlanStateWrite(db, resolvedRoot, msg.sessionId, 'CREATED',
+                    'active').catch(() => { /* fire-and-forget */ });
                 this.refresh();
                 break;
             }
@@ -2673,6 +2761,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     if (await db.ensureReady()) {
                         for (const sid of msg.sessionIds) {
                             await db.updateColumn(sid, 'LEAD CODED');
+                            _schedulePlanStateWrite(db, workspaceRoot, sid, 'LEAD CODED',
+                                'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
 

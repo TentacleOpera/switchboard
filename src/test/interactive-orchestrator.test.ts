@@ -1,5 +1,5 @@
 import * as assert from 'assert';
-import { InteractiveOrchestrator } from '../services/InteractiveOrchestrator.ts';
+import { InteractiveOrchestrator } from '../services/InteractiveOrchestrator';
 
 /**
  * Helper to wait for a condition with timeout

@@ -603,6 +603,26 @@ export class KanbanDatabase {
         return result;
     }
 
+    /**
+     * Returns the stored plan_file path for a given session ID, or null if not found.
+     * Used by the kanban state write hook to locate the plan file for state section updates.
+     */
+    async getPlanFilePath(sessionId: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db) {
+            return null;
+        }
+        const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
+        try {
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                return (row.plan_file as string) || null;
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
     public async updateComplexity(sessionId: string, complexity: string): Promise<boolean> {
         // Import or use local validation to avoid circular dependency if possible, 
         // but here we are in a central service.

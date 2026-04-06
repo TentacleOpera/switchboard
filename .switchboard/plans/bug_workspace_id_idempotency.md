@@ -356,3 +356,38 @@ With:
 
 ### Integration with Path-Normalization Fix
 - Verify `bug_handlePlanCreation_path_normalization.md` fix works end-to-end: import a plan on Machine A, edit the plan file on Machine B (after pulling the committed workspace-id file), confirm dedup guard finds the plan and does not create a duplicate.
+
+## Review Pass Results
+
+### Files Reviewed
+| File | Status |
+|------|--------|
+| `.gitignore` | ✅ PASS — `!.switchboard/workspace-id` exception present at line 43, correctly placed after `.switchboard/*` wildcard. |
+| `src/services/TaskViewerProvider.ts` | ✅ PASS — `_getOrCreateWorkspaceId()` (lines 4501–4564) implements the full 6-step resolution chain. `_isValidWorkspaceId()` (line 4573) and `_tryWriteCommittedId()` (line 4582) present with correct logic. `crypto` imported at line 5. |
+| `src/services/PlanFileImporter.ts` | ✅ PASS — Committed file read (lines 40–50) inserted between DB resolution and legacy fallback. Opportunistic `wx` write (lines 75–82) present. `crypto` imported at line 2. |
+
+### Issues Found
+
+**NIT-1: Plan prose vs. code inconsistency (plan-level, not implementation)**
+The plan's Logic section for PlanFileImporter says "Insert a committed-file read between the legacy-file fallback and the hash fallback." The plan's code block actually places it between DB and legacy (correct). Implementation follows the code, not the misleading prose. No action needed.
+
+**NIT-2: Resolution chain asymmetry between TVP and PFI**
+TaskViewerProvider chain: DB config → committed file → DB dominant → legacy → hash.
+PlanFileImporter chain: (DB config + DB dominant) → committed file → legacy → hash.
+If DB config is empty but DB dominant returns UUID-A while committed file says UUID-B, TVP returns UUID-B but PFI returns UUID-A. This is faithful to the plan's code and is an intentional design choice (PFI batches DB lookups for simplicity). The edge case is rare and transient — once `setWorkspaceId` is called, DB config is populated and both converge.
+
+**NIT-3: Duplicated validation regex**
+`/^[0-9a-f]{8,36}(?:-[0-9a-f]{4,})*$/i` appears in both `_isValidWorkspaceId()` (TVP) and inline in PFI (line 44). A shared utility would reduce drift risk, but PFI is a standalone module — extracting a shared function would add coupling for minimal benefit.
+
+**NIT-4: No random UUID last resort**
+Plan prose mentions step 7 (random UUID) but the plan's code and implementation both correctly omit it. `crypto.createHash('sha256')` cannot fail for non-empty input, so the deterministic hash is the terminal case.
+
+### Fixes Applied
+None required. All findings are NITs. Implementation matches the plan's code blocks character-for-character across all three files.
+
+### Verification Results
+- **TypeScript compilation (`npx tsc --noEmit`):** PASS — zero new errors. Only pre-existing `KanbanProvider.ts:1875` ArchiveManager relative import error (unrelated, documented as known).
+
+### Remaining Risks
+1. **NIT-2 asymmetry** could theoretically produce different IDs from TVP vs PFI in the narrow window where DB config is empty but DB dominant exists and differs from the committed file. In practice this state is transient — both paths call `db.setWorkspaceId()`, so subsequent calls converge. Monitor if ID divergence reports appear.
+2. **NIT-3 regex duplication** — if validation rules change, update both `TaskViewerProvider._isValidWorkspaceId()` and `PlanFileImporter.ts` line 44. Consider extracting to a shared utility if a third consumer appears.

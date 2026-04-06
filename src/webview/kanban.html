@@ -1929,7 +1929,7 @@
                 CODED_COLUMN_IDS.forEach(colId => {
                     coderItems.push(...(buckets[colId] || []));
                 });
-                coderItems.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
+                coderItems.sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''));
                 const autoContainer = document.getElementById('col-CODED_AUTO');
                 const autoCountEl = document.getElementById('count-CODED_AUTO');
                 if (autoContainer && autoCountEl) {
@@ -1947,7 +1947,7 @@
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
-                items.sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''));
+                items.sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''));
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -2010,7 +2010,7 @@
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
                     btn.disabled = true;
-                    const column = btn.closest('.kanban-column')?.dataset?.column;
+                    const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
                     postKanbanMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session, column, workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
@@ -2083,7 +2083,7 @@
                 } else if (card.column === 'LEAD CODED' || card.column === 'CODER CODED' || card.column === 'INTERN CODED') {
                     copyLabel = 'Copy review prompt';
                 }
-                primaryActionBtn = `<button class="card-btn copy" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
+                primaryActionBtn = `<button class="card-btn copy" data-session="${card.sessionId}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
             }
 
             const numericScore = parseInt(complexityValue, 10);

@@ -699,6 +699,50 @@ if (workspaceRoot) {
 - [ ] Existing users automatically get the explicit `.gitignore` entry on first activation
 - [ ] No regression in existing kanban functionality
 
+## Review Pass Results
+
+**Reviewer:** Grumpy Principal Engineer → Balanced Synthesis
+**Date:** 2025-07-15
+
+### Files Reviewed & Validation Status
+
+| File | Status | Notes |
+|------|--------|-------|
+| `src/services/planStateUtils.ts` | ✅ PASS | Created per spec. `extractKanbanState`, `applyKanbanStateToPlanContent`, `writePlanStateToFile` all present and correct. VALID_COLUMNS set matches plan. Atomic write via rename with cleanup. Path traversal guard present. |
+| `src/services/PlanFileImporter.ts` | ✅ PASS | Imports `extractKanbanState` from `./planStateUtils`. Uses it at line 108 with `?? 'CREATED'` fallback. Type-safe status via `KanbanPlanStatus`. |
+| `src/services/KanbanDatabase.ts` | ✅ PASS | `getPlanFilePath()` at line 610, placed after `updateColumn()`. Uses `prepare/step/getAsObject/free` pattern consistent with rest of file. |
+| `src/services/KanbanProvider.ts` | ✅ PASS | Import at line 13, debounce map at line 18, `_schedulePlanStateWrite` at line 24. **All 26 `updateColumn` call sites** in this file have matching `_schedulePlanStateWrite` hooks (exceeds the 5 sites specified in plan — comprehensive coverage). |
+| `.gitignore` | ✅ PASS | Lines 44-48: comment + explicit `kanban.db`, `*.db-shm`, `*.db-wal` entries present after `!.switchboard/SWITCHBOARD_PROTOCOL.md`. |
+| `src/webview/implementation.html` | ✅ PASS | Yellow warning banner at lines 1792-1796 with `rgba(255, 193, 7, 0.12)` background, above REBUILD DATABASE button. Content matches plan spec. |
+| `src/extension.ts` | ✅ PASS | `_runGitignoreMigrationV1` at line 926. Activation call at line 974 (fire-and-forget). Regex-based detection avoids comment false positives. |
+
+### Issues Found
+
+| Severity | Location | Description | Resolution |
+|----------|----------|-------------|------------|
+| NIT | `extension.ts:936` | Dead variable `explicitEntry` declared but never used — regex on line 952 uses inline literal. | **Fixed** — removed unused variable. |
+| NIT | `KanbanProvider.ts:1721-1722, 1733-1734` | `this._getKanbanDb(workspaceRoot)` called twice in succession (once for `updateColumn`, once for `_schedulePlanStateWrite`). Other sites use a local `db` variable. Functionally correct (returns cached singleton) but inconsistent style. | Not fixed — cosmetic only, no functional impact. |
+| ADVISORY | `TaskViewerProvider.ts:841, 6978` | Two `updateColumn` calls outside `KanbanProvider.ts` lack `_schedulePlanStateWrite` hooks. These paths (`_updateKanbanColumnForSession` and `markComplete`) can change columns without embedding state in plan files. | Out of plan scope. `_schedulePlanStateWrite` is module-private to `KanbanProvider.ts`. Future work should either export it from `planStateUtils` or centralize all column updates through a single method that always writes state. |
+| ADVISORY | `KanbanMigration.ts:58` | `updateColumn` in one-time migration lacks hook. | Acceptable — migration normalizes legacy column names; next real user move will write state. |
+
+### Fixes Applied
+
+1. **Removed dead variable** `explicitEntry` in `src/extension.ts:936` — unused since the regex on line 952 uses an inline literal pattern.
+
+### Verification Results
+
+```
+$ npx tsc --noEmit 2>&1
+src/services/KanbanProvider.ts(1875,57): error TS2835: Relative import paths need explicit file extensions...
+```
+
+**Result:** Only the **pre-existing** ArchiveManager import error (known, unrelated). No new errors introduced by this plan's implementation.
+
+### Remaining Risks
+
+1. **Coverage gap in TaskViewerProvider**: Column moves via `_updateKanbanColumnForSession()` and direct `markComplete` do not write state sections. If a user exclusively uses the Task Viewer (not the Kanban board) to move/complete plans, their plan files won't have embedded state until the next Kanban-board-initiated move. Recovery from those files will fall back to `CREATED`.
+2. **Debounce timer cleanup**: `_planStateWriteTimers` map is never cleaned up on extension deactivation. Pending timers could fire after the extension context is torn down. Low risk — `writePlanStateToFile` catches all errors — but a `dispose()` hook clearing all timers would be cleaner.
+
 ## Switchboard State
 **Kanban Column:** CREATED
 **Status:** active

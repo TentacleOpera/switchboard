@@ -918,12 +918,63 @@ function syncSettingsToMcp() {
     mcpOutputChannel?.appendLine(`[MCP] Synced settings (YOLO: ${settings.cli.yolo})`);
 }
 
+/**
+ * One-time migration: ensures .switchboard/kanban.db is explicitly listed in .gitignore.
+ * The .switchboard/* wildcard already covers it, but an explicit entry improves discoverability.
+ * Tracked via workspaceState so it runs at most once per workspace installation.
+ */
+async function _runGitignoreMigrationV1(
+    workspaceRoot: string,
+    context: vscode.ExtensionContext
+): Promise<void> {
+    const MIGRATION_KEY = 'switchboard.gitignoreMigrationV1';
+    if (context.workspaceState.get<boolean>(MIGRATION_KEY)) {
+        return;
+    }
+
+    const gitignorePath = path.join(workspaceRoot, '.gitignore');
+    const appendBlock = [
+        '',
+        '# Switchboard kanban database — machine-local, do not commit.',
+        '.switchboard/kanban.db',
+        '.switchboard/*.db-shm',
+        '.switchboard/*.db-wal',
+        ''
+    ].join('\n');
+
+    try {
+        let content = '';
+        if (fs.existsSync(gitignorePath)) {
+            content = await fs.promises.readFile(gitignorePath, 'utf-8');
+        }
+
+        const alreadyExplicit = /^\.switchboard\/kanban\.db\s*$/m.test(content);
+        if (!alreadyExplicit) {
+            await fs.promises.appendFile(gitignorePath, appendBlock, 'utf-8');
+            vscode.window.showInformationMessage(
+                'Switchboard: Added kanban.db to .gitignore to protect your local kanban state.'
+            );
+        }
+    } catch (err) {
+        console.warn(`[Switchboard] gitignore migration failed: ${err}`);
+        return;
+    }
+
+    await context.workspaceState.update(MIGRATION_KEY, true);
+}
 
 export async function activate(context: vscode.ExtensionContext) {
     const workspaceRoot = getPreferredWorkspaceRoot();
     const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
     const dispatchSigningKey = await getOrCreateDispatchSigningKey(context);
+
+    // One-time gitignore migration (fire-and-forget — does not block activation).
+    if (workspaceRoot) {
+        _runGitignoreMigrationV1(workspaceRoot, context).catch(err => {
+            console.warn('[Switchboard] gitignore migration error:', err);
+        });
+    }
 
     process.env.SWITCHBOARD_STRICT_INBOX_AUTH = strictInboxAuthSetting.value ? 'true' : 'false';
     process.env.SWITCHBOARD_DISPATCH_SIGNING_KEY = dispatchSigningKey;

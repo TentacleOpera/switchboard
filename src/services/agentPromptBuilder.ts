@@ -54,6 +54,8 @@ function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): st
     return `${basePayload}${accuracyInstruction}`;
 }
 
+const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+
 /**
  * Canonical prompt builder.  Every UI surface that produces a prompt for an
  * agent role MUST call this function so that "Copy Prompt", "Advance",
@@ -135,7 +137,7 @@ Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** n
 7. Update the original plan with the enhancement findings. Do NOT truncate, summarize, or delete existing implementation steps, code blocks, or goal statements.
 8. Recommend agent: if complexity ≤ 6, say "Send to Coder". If complexity ≥ 7, say "Send to Lead Coder".
 
-${focusDirective}
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -179,7 +181,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
 ${chatCritiqueDirective}
 
-${focusDirective}
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -192,7 +194,7 @@ ${executionDirective}
 
 ${batchExecutionRules}${challengeBlock}
 
-${focusDirective}
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -216,7 +218,7 @@ ${executionDirective}
 
 ${batchExecutionRules}${challengeBlock}
 
-${focusDirective}
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
@@ -231,7 +233,7 @@ ${planList}`, accurateCodingEnabled);
 
 ${batchExecutionRules}
 
-${focusDirective}
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;

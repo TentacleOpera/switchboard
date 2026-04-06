@@ -4499,35 +4499,56 @@ What would you like to find?`;
     // ── Workspace Identity ──────────────────────────────────────────────
 
     private async _getOrCreateWorkspaceId(workspaceRoot: string): Promise<string> {
+        // ── Step 1: In-memory cache ──
         if (this._workspaceId) return this._workspaceId;
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
-        if (await db.ensureReady()) {
-            // Try config table first
+        const dbReady = await db.ensureReady();
+        const committedPath = path.join(workspaceRoot, '.switchboard', 'workspace-id');
+
+        // ── Step 2: DB config table (local machine's established ID) ──
+        if (dbReady) {
             const stored = await db.getWorkspaceId();
             if (stored) {
                 this._workspaceId = stored;
+                this._tryWriteCommittedId(committedPath, stored);
                 return stored;
             }
-            // Config table empty/missing — derive from existing plans
+        }
+
+        // ── Step 3: Committed file (cross-machine stable ID) ──
+        try {
+            const fileContent = await fs.promises.readFile(committedPath, 'utf-8');
+            const trimmed = fileContent.trim();
+            if (this._isValidWorkspaceId(trimmed)) {
+                this._workspaceId = trimmed;
+                if (dbReady) { await db.setWorkspaceId(trimmed); }
+                return trimmed;
+            }
+        } catch {
+            // File doesn't exist or unreadable — fall through
+        }
+
+        // ── Step 4: DB dominant workspace ID (most-used in plans table) ──
+        if (dbReady) {
             const derived = await db.getDominantWorkspaceId();
             if (derived) {
                 this._workspaceId = derived;
                 await db.setWorkspaceId(derived);
+                this._tryWriteCommittedId(committedPath, derived);
                 return derived;
             }
         }
 
-        // Migrate from legacy file if it exists
+        // ── Step 5: Legacy workspace_identity.json ──
         const legacyPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
         try {
             if (fs.existsSync(legacyPath)) {
                 const data = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
                 if (typeof data?.workspaceId === 'string' && data.workspaceId.length > 0) {
                     this._workspaceId = data.workspaceId;
-                    if (await db.ensureReady()) {
-                        await db.setWorkspaceId(data.workspaceId);
-                    }
+                    if (dbReady) { await db.setWorkspaceId(data.workspaceId); }
+                    this._tryWriteCommittedId(committedPath, data.workspaceId);
                     return data.workspaceId as string;
                 }
             }
@@ -4535,14 +4556,42 @@ What would you like to find?`;
             console.error('[TaskViewerProvider] Failed to read legacy workspace identity:', e);
         }
 
-        // Create new identity in DB
-        const { v4: uuidv4 } = await import('uuid');
-        const newId = uuidv4();
-        this._workspaceId = newId;
-        if (await db.ensureReady()) {
-            await db.setWorkspaceId(newId);
-        }
-        return newId;
+        // ── Step 6: Deterministic hash fallback (stable for same absolute path) ──
+        const hashId = crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 12);
+        this._workspaceId = hashId;
+        if (dbReady) { await db.setWorkspaceId(hashId); }
+        this._tryWriteCommittedId(committedPath, hashId);
+        return hashId;
+    }
+
+    /**
+     * Validates a workspace ID string. Accepts:
+     * - Standard UUIDs (8-4-4-4-12 hex format)
+     * - 12-character hex hashes (from PlanFileImporter's SHA-256 fallback)
+     * - Any non-empty string of hex chars 8–36 chars long (future-proof)
+     */
+    private _isValidWorkspaceId(str: string): boolean {
+        return /^[0-9a-f]{8,36}(?:-[0-9a-f]{4,})*$/i.test(str) && str.length >= 8;
+    }
+
+    /**
+     * Opportunistically write workspace ID to the committed file.
+     * Uses exclusive-create (wx flag) to avoid race conditions —
+     * if the file already exists, this is a no-op.
+     */
+    private _tryWriteCommittedId(committedPath: string, id: string): void {
+        (async () => {
+            try {
+                await fs.promises.mkdir(path.dirname(committedPath), { recursive: true });
+                // wx = exclusive create — fails with EEXIST if file already exists
+                await fs.promises.writeFile(committedPath, id + '\n', { flag: 'wx' });
+            } catch (err: any) {
+                // EEXIST is expected (file already written by another window or previous run)
+                if (err?.code !== 'EEXIST') {
+                    console.warn('[TaskViewerProvider] Failed to write workspace-id file:', err);
+                }
+            }
+        })();
     }
 
     // ── Plan Registry (DB-backed in-memory cache) ─────────────────────
@@ -4763,7 +4812,10 @@ What would you like to find?`;
 
     private async _updatePlanRegistryStatus(workspaceRoot: string, planId: string, status: PlanRegistryEntry['status']): Promise<void> {
         const entry = this._planRegistry.entries[planId];
-        if (!entry) return;
+        if (!entry) {
+            console.warn(`[TaskViewerProvider] _updatePlanRegistryStatus: no registry entry found for planId="${planId}" (attempted status="${status}"). Registry keys may use a different ID format.`);
+            return;
+        }
         entry.status = status;
         entry.updatedAt = new Date().toISOString();
         // Update DB directly
@@ -4907,6 +4959,37 @@ What would you like to find?`;
                     updatedAt
                 });
             }
+
+            // Cross-system recovery: detect plans stuck as 'active' in registry
+            // but actually 'completed' in kanban DB (sync gap from planId mismatch)
+            if (entry.status === 'active' && db) {
+                const sessionIds = entry.sourceType === 'brain'
+                    ? [`antigravity_${entry.planId}`]
+                    : [entry.planId, `antigravity_${entry.planId}`];
+                let isCompletedInDb = false;
+                for (const sid of sessionIds) {
+                    const plan = await db.getPlanBySessionId(sid);
+                    if (plan && plan.status === 'completed') {
+                        isCompletedInDb = true;
+                        break;
+                    }
+                }
+                if (isCompletedInDb) {
+                    let topic = entry.topic;
+                    if (this._isGenericTopic(topic)) {
+                        topic = this._inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
+                    }
+                    recoverable.push({
+                        planId: entry.planId,
+                        topic,
+                        sourceType: entry.sourceType,
+                        status: 'completed',
+                        brainSourcePath: entry.brainSourcePath,
+                        localPlanPath: entry.localPlanPath,
+                        updatedAt: entry.updatedAt
+                    });
+                }
+            }
         }
         recoverable.sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime());
         return recoverable;
@@ -4922,9 +5005,32 @@ What would you like to find?`;
             vscode.window.showErrorMessage('Plan not found in registry.');
             return false;
         }
-        if (entry.status !== 'archived' && entry.status !== 'orphan') {
-            vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
-            return false;
+        const allowedRestoreStatuses = ['archived', 'orphan', 'completed'];
+        if (!allowedRestoreStatuses.includes(entry.status)) {
+            // For 'active' plans, check if kanban DB shows 'completed' (sync gap recovery)
+            if (entry.status === 'active') {
+                const db = await this._getKanbanDb(workspaceRoot);
+                const sessionIds = entry.sourceType === 'brain'
+                    ? [`antigravity_${entry.planId}`]
+                    : [planId, `antigravity_${entry.planId}`];
+                let isCompletedInDb = false;
+                if (db) {
+                    for (const sid of sessionIds) {
+                        const plan = await db.getPlanBySessionId(sid);
+                        if (plan && plan.status === 'completed') {
+                            isCompletedInDb = true;
+                            break;
+                        }
+                    }
+                }
+                if (!isCompletedInDb) {
+                    vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
+                    return false;
+                }
+            } else {
+                vscode.window.showErrorMessage(`Plan cannot be restored from status "${entry.status}".`);
+                return false;
+            }
         }
 
         // For brain plans that are orphaned, claim to current workspace
@@ -5027,6 +5133,8 @@ What would you like to find?`;
             }
 
             // Update DB: mark plan as active again
+            // Note: upsertPlans ON CONFLICT excludes status/kanban_column, so we must
+            // call updateStatus + updateColumn explicitly to move the card out of COMPLETED.
             if (plan) {
                 const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId();
                 if (workspaceId) {
@@ -5037,6 +5145,8 @@ What would you like to find?`;
                         kanbanColumn: 'CREATED'
                     }]);
                 }
+                await db.updateStatus(sessionId, 'active');
+                await db.updateColumn(sessionId, 'CREATED');
             }
 
             // Update run sheet to mark as not completed
@@ -6063,7 +6173,18 @@ What would you like to find?`;
             const db = await this._getKanbanDb(resolvedWorkspaceRoot);
             if (db) {
                 const workspaceId = this._workspaceId || await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
-                const dbEntry = await db.getPlanByPlanFile(normalizedPlanFileRelative, workspaceId);
+
+                // First try the relative path (format used by the file watcher).
+                let dbEntry = await db.getPlanByPlanFile(normalizedPlanFileRelative, workspaceId);
+
+                // Fallback: try the absolute path. PlanFileImporter stores plans with absolute paths
+                // (e.g. `/Users/pat/.../plans/foo.md`), so the relative lookup above will miss them
+                // and incorrectly allow a duplicate sess_* row to be created.
+                if (!dbEntry) {
+                    const absolutePlanFile = path.join(resolvedWorkspaceRoot, normalizedPlanFileRelative).replace(/\\/g, '/');
+                    dbEntry = await db.getPlanByPlanFile(absolutePlanFile, workspaceId);
+                }
+
                 if (dbEntry) {
                     console.log(`[TaskViewerProvider] Plan already in DB (session: ${dbEntry.sessionId}), skipping file creation for: ${normalizedPlanFileRelative}`);
                     await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);

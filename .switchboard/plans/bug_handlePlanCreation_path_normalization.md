@@ -140,3 +140,37 @@ The fix is intentionally minimal. It is the least-invasive correct solution for 
 
 ---
 **Recommendation:** Send to Coder (Complexity 3 — single targeted change, no schema impact, no interface changes).
+
+## Review Pass Results
+
+### Files Reviewed
+| File | Status |
+|------|--------|
+| `src/services/TaskViewerProvider.ts` — `_handlePlanCreation()` (lines 6110–6132) | ✅ **PASS** — matches plan specification exactly |
+| `src/services/TaskViewerProvider.ts` — `_getOrCreateWorkspaceId()` (lines 4499–4596) | ⚠️ **OUT-OF-SCOPE** — 60+ lines of unplanned changes detected |
+
+### Issues Found
+
+| # | Severity | Finding | In Scope? |
+|---|----------|---------|-----------|
+| 1 | **MAJOR** | `_getOrCreateWorkspaceId()` was rewritten with a committed-file layer, SHA-256 hash fallback, and two new private methods (`_isValidWorkspaceId`, `_tryWriteCommittedId`). The plan explicitly stated this should be a separate effort ("Fixing that here would expand scope from Complexity 3 to Complexity 6+"). | ❌ Out of scope |
+| 2 | **MAJOR** | `_tryWriteCommittedId` uses fire-and-forget `(async () => { ... })()` pattern. Unhandled promise rejection risk on strict runtimes. | ❌ Out of scope |
+| 3 | **MAJOR** | New workspace IDs use `SHA-256(workspaceRoot).slice(0,12)` instead of `uuidv4()`. Behavioral change: two machines with identical paths now share a workspace ID. No test coverage. | ❌ Out of scope |
+| 4 | **NIT** | Explanatory parenthetical in fallback comment is slightly verbose for production code. | ✅ In scope (cosmetic, no fix needed) |
+
+### Fixes Applied
+None required. The in-scope `_handlePlanCreation` dedup fix is correct and complete:
+- ✅ Two-step DB lookup (relative path → absolute path fallback) is present
+- ✅ Absolute path constructed correctly: `path.join(resolvedWorkspaceRoot, normalizedPlanFileRelative).replace(/\\/g, '/')`
+- ✅ Log message includes `dbEntry.sessionId` and `normalizedPlanFileRelative`
+- ✅ `_syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot)` called on dedup match
+- ✅ `workspaceId` resolved correctly (`this._workspaceId || await this._getOrCreateWorkspaceId(...)`)
+
+### Verification Results
+- **TypeScript compilation**: ✅ PASS (only pre-existing `KanbanProvider.ts:1875` ArchiveManager import error — known, unrelated)
+- **No new type errors** introduced by the plan's changes
+
+### Remaining Risks
+1. **Out-of-scope `_getOrCreateWorkspaceId` rewrite** needs its own plan and review pass. It introduces cross-machine workspace ID sharing (SHA-256 hash), a committed file persistence layer, and fire-and-forget async writes — all untested and undocumented.
+2. **WorkspaceId consistency** (flagged in plan's own adversarial section): if a plan was imported under a different `workspaceId` than what resolves at watcher time, the dedup still misses. This is pre-existing and orthogonal to this fix.
+3. **Symlink divergence**: if `resolvedWorkspaceRoot` and the importer's `workspaceRoot` differ due to symlinks, the absolute path fallback won't match. Pre-existing, noted for future audit.
