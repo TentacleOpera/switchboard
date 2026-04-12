@@ -1,0 +1,33 @@
+{
+  "id": "task-parent",
+  "name": "Parent Task",
+  "url": "https://app.clickup.com/t/task-parent",
+  "status": { "status": "in progress" },
+  "priority": { "priority": "high" },
+  "assignees": [
+    { "username": "patrick" }
+  ],
+  "tags": [
+    { "name": "frontend" }
+  ],
+  "markdown_description": "Implement the parent task",
+  "start_date": null,
+  "time_estimate": 3600000,
+  "creator": { "username": "owner" },
+  "linked_tasks": [
+    { "task_id": "linked-1" }
+  ],
+  "dependencies": [
+    { "task_id": "dep-1" }
+  ],
+  "checklists": [
+    {
+      "items": [
+        { "name": "Checklist item", "resolved": false }
+      ]
+    }
+  ],
+  "custom_fields": [
+    { "name": "Impact", "value": "High" }
+  ]
+}

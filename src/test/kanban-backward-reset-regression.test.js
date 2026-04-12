@@ -3,7 +3,7 @@
 const assert = require('assert');
 const path = require('path');
 
-const { deriveKanbanColumn } = require(path.join(process.cwd(), 'src', 'services', 'kanbanColumnDerivation.js'));
+const { deriveKanbanColumn } = require(path.join(process.cwd(), 'src', 'services', 'kanbanColumnDerivationImpl.js'));
 
 function run() {
     assert.strictEqual(
@@ -16,6 +16,18 @@ function run() {
         deriveKanbanColumn([{ workflow: 'move-to-code-reviewed' }], []),
         'CODE REVIEWED',
         'move-to-code-reviewed should derive forward manual moves to CODE REVIEWED'
+    );
+
+    assert.strictEqual(
+        deriveKanbanColumn([{ workflow: 'reset-to-acceptance-tested' }], []),
+        'ACCEPTANCE TESTED',
+        'reset-to-acceptance-tested should derive back to ACCEPTANCE TESTED'
+    );
+
+    assert.strictEqual(
+        deriveKanbanColumn([{ workflow: 'move-to-acceptance-tested' }], []),
+        'ACCEPTANCE TESTED',
+        'move-to-acceptance-tested should derive forward manual moves to ACCEPTANCE TESTED'
     );
 
     const customAgents = [

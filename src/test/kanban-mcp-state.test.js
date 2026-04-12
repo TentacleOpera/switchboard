@@ -7,6 +7,7 @@ const assert = require('assert');
 const fs = require('fs');
 const os = require('os');
 const path = require('path');
+const initSqlJs = require('sql.js');
 
 const TEST_ROOT = path.join(os.tmpdir(), `switchboard-kanban-mcp-${Date.now()}`);
 const SWITCHBOARD_DIR = path.join(TEST_ROOT, '.switchboard');
@@ -43,7 +44,39 @@ function writeJson(filePath, value) {
     fs.writeFileSync(filePath, JSON.stringify(value, null, 2));
 }
 
-function resetWorkspace() {
+async function writeKanbanDb() {
+    const SQL = await initSqlJs({
+        locateFile: (file) => require.resolve(`sql.js/dist/${file}`)
+    });
+    const db = new SQL.Database();
+    db.run(`
+        CREATE TABLE plans (
+            topic TEXT,
+            session_id TEXT PRIMARY KEY,
+            created_at TEXT,
+            updated_at TEXT,
+            kanban_column TEXT,
+            complexity TEXT,
+            tags TEXT,
+            workspace_id TEXT,
+            status TEXT
+        );
+    `);
+    db.run(
+        `INSERT INTO plans (topic, session_id, created_at, updated_at, kanban_column, complexity, tags, workspace_id, status)
+         VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?),
+            (?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+        [
+            'Created ticket', 'sess-created', '2026-03-17T00:00:00.000Z', '2026-03-17T00:00:00.000Z', 'CREATED', 'Unknown', ',setup,', 'ws-test', 'active',
+            'Reviewed ticket', 'sess-reviewed', '2026-03-17T01:00:00.000Z', '2026-03-17T01:00:00.000Z', 'PLAN REVIEWED', '5', ',planning,', 'ws-test', 'active'
+        ]
+    );
+    fs.writeFileSync(path.join(SWITCHBOARD_DIR, 'kanban.db'), Buffer.from(db.export()));
+    db.close();
+}
+
+async function resetWorkspace() {
     if (fs.existsSync(TEST_ROOT)) {
         fs.rmSync(TEST_ROOT, { recursive: true, force: true });
     }
@@ -72,11 +105,13 @@ function resetWorkspace() {
         completed: false,
         events: [{ workflow: 'improve-plan' }]
     });
+
+    await writeKanbanDb();
 }
 
 async function test(name, fn) {
     try {
-        resetWorkspace();
+        await resetWorkspace();
         await fn();
         console.log(`  PASS ${name}`);
         passed += 1;
@@ -96,13 +131,16 @@ async function run() {
 
         assert.deepStrictEqual(
             Object.keys(payload),
-            ['CREATED', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED']
+            ['CREATED', 'PLAN REVIEWED', 'INTERN CODED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'ACCEPTANCE TESTED', 'COMPLETED']
         );
         assert.strictEqual(payload.CREATED.label, 'New');
         assert.strictEqual(payload['PLAN REVIEWED'].label, 'Planned');
+        assert.strictEqual(payload['INTERN CODED'].label, 'Intern');
         assert.strictEqual(payload['LEAD CODED'].label, 'Lead Coder');
         assert.strictEqual(payload['CODER CODED'].label, 'Coder');
         assert.strictEqual(payload['CODE REVIEWED'].label, 'Reviewed');
+        assert.strictEqual(payload['ACCEPTANCE TESTED'].label, 'Acceptance Tested');
+        assert.strictEqual(payload.COMPLETED.label, 'Completed');
         assert.strictEqual(payload.CREATED.items.length, 1);
         assert.strictEqual(payload['PLAN REVIEWED'].items.length, 1);
         assert.strictEqual(payload['LEAD CODED'].items.length, 0);

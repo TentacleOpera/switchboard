@@ -138,6 +138,8 @@ ON CONFLICT(plan_id) DO UPDATE SET
     session_id = excluded.session_id,
     topic = excluded.topic,
     plan_file = excluded.plan_file,
+    kanban_column = excluded.kanban_column,
+    status = excluded.status,
     complexity = excluded.complexity,
     tags = excluded.tags,
     dependencies = excluded.dependencies,
@@ -756,6 +758,17 @@ export class KanbanDatabase {
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE session_id = ? LIMIT 1`,
             [sessionId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async getPlanByPlanId(planId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE plan_id = ? LIMIT 1`,
+            [planId]
         );
         const rows = this._readRows(stmt);
         return rows.length > 0 ? rows[0] : null;
@@ -1807,4 +1820,3 @@ export class KanbanDatabase {
         throw new Error(`Unable to locate sql-wasm.wasm. Checked: ${candidates.join(', ')}`);
     }
 }
-

@@ -1,0 +1,58 @@
+{
+  "id": "issue-parent",
+  "identifier": "ENG-101",
+  "title": "Parent Issue",
+  "description": "Ship the parent issue",
+  "url": "https://linear.app/acme/issue/ENG-101",
+  "priority": 2,
+  "state": { "name": "In Progress", "type": "started" },
+  "assignee": { "name": "Patrick", "email": "patrick@example.com" },
+  "labels": {
+    "nodes": [
+      { "name": "switchboard" },
+      { "name": "backend" }
+    ]
+  },
+  "dueDate": null,
+  "createdAt": "2026-04-01T00:00:00.000Z",
+  "estimate": 3,
+  "parent": null,
+  "children": {
+    "nodes": [
+      {
+        "id": "issue-child",
+        "identifier": "ENG-102",
+        "title": "Child Issue",
+        "description": "Nested child issue",
+        "url": "https://linear.app/acme/issue/ENG-102",
+        "priority": 3,
+        "state": { "name": "Backlog", "type": "backlog" },
+        "assignee": { "name": "Patrick", "email": "patrick@example.com" },
+        "labels": { "nodes": [{ "name": "backend" }] },
+        "dueDate": null,
+        "createdAt": "2026-04-01T00:00:00.000Z",
+        "estimate": 1,
+        "parent": { "id": "issue-parent" }
+      }
+    ]
+  },
+  "project": { "name": "Acme Project" },
+  "cycle": { "name": "Cycle 12", "number": 12 },
+  "comments": {
+    "nodes": [
+      {
+        "body": "Looks good",
+        "user": { "name": "Reviewer" },
+        "createdAt": "2026-04-02T00:00:00.000Z"
+      }
+    ]
+  },
+  "attachments": {
+    "nodes": [
+      {
+        "title": "Spec",
+        "url": "https://example.com/spec"
+      }
+    ]
+  }
+}

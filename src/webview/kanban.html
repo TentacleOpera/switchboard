@@ -914,6 +914,15 @@
             border-color: var(--accent-teal-dim);
             box-shadow: var(--glow-teal);
         }
+        .kanban-mode-dropdown.is-off {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+        }
+        .kanban-mode-dropdown.is-off:hover,
+        .kanban-mode-dropdown.is-off:focus {
+            border-color: var(--accent-orange);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 30%, transparent);
+        }
         .kanban-mode-dropdown option {
             background: var(--bg-color);
             color: var(--text-primary);
@@ -1138,6 +1147,8 @@
     </div>
     <div class="controls-strip">
         <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
+        <button class="strip-btn" id="clickup-setup-btn" data-tooltip="Setup ClickUp Integration">Setup ClickUp</button>
+        <button class="strip-btn" id="linear-setup-btn" data-tooltip="Setup Linear Integration">Setup Linear</button>
         <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
         <span class="controls-spacer"></span>
         <span class="triggers-off-badge" id="triggers-off-badge" hidden>⚠ TRIGGERS OFF</span>
@@ -1228,6 +1239,35 @@
         </div>
     </div>
 
+    <div id="integration-settings-modal" class="modal-overlay hidden">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 class="modal-title" id="integration-settings-title">Integration Settings</h3>
+                <button class="modal-close-btn" id="integration-settings-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <label class="cli-toggle-inline" style="margin: 0 0 12px 0;">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="integration-autopull-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">Enable Auto-Pull</span>
+                </label>
+                <label for="integration-interval-select" style="display:block; margin-bottom:6px;">Pull Interval</label>
+                <select id="integration-interval-select" class="kanban-mode-dropdown">
+                    <option value="5">Every 5 minutes</option>
+                    <option value="15">Every 15 minutes</option>
+                    <option value="30">Every 30 minutes</option>
+                    <option value="60">Every 60 minutes</option>
+                </select>
+            </div>
+            <div class="modal-footer">
+                <button class="modal-btn modal-btn-secondary" id="integration-settings-cancel">Cancel</button>
+                <button class="modal-btn modal-btn-primary" id="integration-settings-save">Save</button>
+            </div>
+        </div>
+    </div>
+
     <div id="tooltip-overlay"></div>
 
     <script>
@@ -1303,16 +1343,19 @@
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },
             { id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },
             { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },
+            { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
-        let columns = columnDefinitions.map(col => col.id);
+        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': false, jules: true };
+        let columns = columnDefinitions
+            .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
+            .map(col => col.id);
         let currentCards = [];
         let lastAgentNames = {};
-        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: true };
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = false;
-        let collapseCodersEnabled = false;
+        let collapseCodersEnabled = true;
         // Restore collapse toggle from webview state if available
         try {
             const savedState = vscode.getState();
@@ -1327,6 +1370,11 @@
         let currentWorkspaceRoot = '';
         let workspaceItems = [];
         let columnDragDropModes = {};
+        const integrationState = {
+            clickup: { setupComplete: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false },
+            linear: { setupComplete: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false }
+        };
+        let activeIntegration = null;
         const selectedCards = new Set();
         let testingFailSessionIds = [];
         let testingFailSourceColumn = '';
@@ -1399,8 +1447,12 @@
 
         function updateUnknownComplexityToggleUi() {
             const toggle = document.getElementById('unknown-complexity-toggle');
+            const toggleLabel = document.getElementById('unknown-complexity-label');
             if (toggle) {
                 toggle.checked = !!allowUnknownComplexityAutoMove;
+            }
+            if (toggleLabel) {
+                toggleLabel.classList.toggle('is-off', !allowUnknownComplexityAutoMove);
             }
         }
 
@@ -1441,6 +1493,50 @@
 
         function escapeAttr(value) {
             return String(value || '').replace(/"/g, '&quot;');
+        }
+
+        function updateIntegrationIntervalState() {
+            const toggle = document.getElementById('integration-autopull-toggle');
+            const select = document.getElementById('integration-interval-select');
+            if (!toggle || !select) return;
+            select.disabled = !toggle.checked;
+        }
+
+        function openIntegrationSettings(kind) {
+            const modal = document.getElementById('integration-settings-modal');
+            const title = document.getElementById('integration-settings-title');
+            const toggle = document.getElementById('integration-autopull-toggle');
+            const select = document.getElementById('integration-interval-select');
+            const state = integrationState[kind];
+            if (!modal || !title || !toggle || !select || !state) return;
+
+            activeIntegration = kind;
+            title.textContent = kind === 'clickup' ? 'ClickUp Auto-Pull Settings' : 'Linear Auto-Pull Settings';
+            toggle.checked = !!state.autoPullEnabled;
+            select.value = String(state.pullIntervalMinutes || 60);
+            updateIntegrationIntervalState();
+            modal.classList.remove('hidden');
+        }
+
+        function closeIntegrationSettings() {
+            const modal = document.getElementById('integration-settings-modal');
+            if (!modal) return;
+            modal.classList.add('hidden');
+            activeIntegration = null;
+        }
+
+        function saveIntegrationSettings() {
+            const toggle = document.getElementById('integration-autopull-toggle');
+            const select = document.getElementById('integration-interval-select');
+            if (!activeIntegration || !toggle || !select) return;
+
+            postKanbanMessage({
+                type: 'saveIntegrationAutoPullSettings',
+                integration: activeIntegration,
+                autoPullEnabled: !!toggle.checked,
+                pullIntervalMinutes: Number(select.value || 60)
+            });
+            closeIntegrationSettings();
         }
 
         function openTestingFailModal(sessionIds, column) {
@@ -1669,6 +1765,14 @@
 
             document.getElementById('btn-toggle-backlog')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'toggleBacklogView' });
+            });
+
+            document.getElementById('clickup-setup-btn')?.addEventListener('click', () => {
+                postKanbanMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
+            });
+
+            document.getElementById('linear-setup-btn')?.addEventListener('click', () => {
+                postKanbanMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
             });
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
@@ -2557,6 +2661,56 @@
                     allowUnknownComplexityAutoMove = msg.enabled !== false;
                     updateUnknownComplexityToggleUi();
                     break;
+                case 'clickupState': {
+                    integrationState.clickup = {
+                        setupComplete: msg.setupComplete === true,
+                        autoPullEnabled: msg.autoPullEnabled === true,
+                        pullIntervalMinutes: Number(msg.pullIntervalMinutes || 60),
+                        syncError: msg.syncError === true
+                    };
+                    const btn = document.getElementById('clickup-setup-btn');
+                    if (!btn) break;
+                    
+                    if (msg.syncError) {
+                        btn.textContent = 'ClickUp Error';
+                        btn.dataset.tooltip = 'ClickUp sync error — open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    } else if (msg.setupComplete) {
+                        btn.textContent = 'ClickUp Synced';
+                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    } else {
+                        btn.textContent = 'Setup ClickUp';
+                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    }
+                    break;
+                }
+                case 'linearState': {
+                    integrationState.linear = {
+                        setupComplete: msg.setupComplete === true,
+                        autoPullEnabled: msg.autoPullEnabled === true,
+                        pullIntervalMinutes: Number(msg.pullIntervalMinutes || 60),
+                        syncError: msg.syncError === true
+                    };
+                    const btn = document.getElementById('linear-setup-btn');
+                    if (!btn) break;
+                    
+                    if (msg.syncError) {
+                        btn.textContent = 'Linear Error';
+                        btn.dataset.tooltip = 'Linear sync error — open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    } else if (msg.setupComplete) {
+                        btn.textContent = 'Linear Synced';
+                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    } else {
+                        btn.textContent = 'Setup Linear';
+                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
+                        btn.disabled = false;
+                    }
+                    break;
+                }
                 case 'visibleAgents':
                     if (msg.agents) {
                         lastVisibleAgents = { ...lastVisibleAgents, ...msg.agents };
@@ -2593,7 +2747,10 @@
                     break;
                 case 'updatePairProgrammingMode': {
                     const ppSelect = document.getElementById('pairProgrammingModeSelect');
-                    if (ppSelect) { ppSelect.value = msg.mode || 'off'; }
+                    if (ppSelect) {
+                        ppSelect.value = msg.mode || 'off';
+                        ppSelect.classList.toggle('is-off', ppSelect.value === 'off');
+                    }
                     break;
                 }
                 case 'updateColumnDragDropModes':
@@ -2728,7 +2885,9 @@
             postKanbanMessage({ type: 'toggleAllowUnknownComplexityAutoMove', enabled: checked });
         });
         document.getElementById('pairProgrammingModeSelect')?.addEventListener('change', (e) => {
-            postKanbanMessage({ type: 'setPairProgrammingMode', mode: e.target.value });
+            const select = e.target;
+            select.classList.toggle('is-off', select.value === 'off');
+            postKanbanMessage({ type: 'setPairProgrammingMode', mode: select.value });
         });
 
         updateCliToggleUi();
@@ -2736,6 +2895,14 @@
         renderBoard([]);
         updateAutobanButtonState();
         syncAutobanCountdownTimer();
+
+        document.getElementById('integration-autopull-toggle')?.addEventListener('change', updateIntegrationIntervalState);
+        document.getElementById('integration-settings-close')?.addEventListener('click', closeIntegrationSettings);
+        document.getElementById('integration-settings-cancel')?.addEventListener('click', closeIntegrationSettings);
+        document.getElementById('integration-settings-save')?.addEventListener('click', saveIntegrationSettings);
+        document.getElementById('integration-settings-modal')?.addEventListener('click', function(e) {
+            if (e.target === e.currentTarget) closeIntegrationSettings();
+        });
 
         // Testing Fail Modal event listeners
         document.getElementById('testing-fail-close').addEventListener('click', closeTestingFailModal);

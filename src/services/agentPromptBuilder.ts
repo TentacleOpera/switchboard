@@ -5,6 +5,8 @@
  * prompt text is identical for the same role regardless of UI entry point.
  */
 
+import { DefaultPromptOverride } from './agentConfig';
+
 export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
@@ -27,6 +29,28 @@ export interface PromptBuilderOptions {
     advancedReviewerEnabled?: boolean;
     /** When present, appends a Design Doc / PRD link to planner prompts. */
     designDocLink?: string;
+    /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
+    designDocContent?: string;
+    /** Per-role prompt customisations loaded from state.json. */
+    defaultPromptOverrides?: Partial<Record<string, DefaultPromptOverride>>;
+}
+
+function applyPromptOverride(
+    generated: string,
+    planList: string,
+    override: DefaultPromptOverride | undefined
+): string {
+    if (!override || !override.text) return generated;
+    switch (override.mode) {
+        case 'prepend':
+            return `${override.text}\n\n${generated}`;
+        case 'append':
+            return `${generated}\n\n${override.text}`;
+        case 'replace':
+            return `${override.text}\n\nPLANS TO PROCESS:\n${planList}`;
+        default:
+            return generated;
+    }
 }
 
 function buildReviewerExecutionIntro(planCount: number): string {
@@ -72,6 +96,7 @@ export function buildKanbanBatchPrompt(
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
+    const promptOverride = options?.defaultPromptOverrides?.[role] as DefaultPromptOverride | undefined;
 
     const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
     const parallelInstruction = plans.length > 1
@@ -142,11 +167,14 @@ ${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 PLANS TO PROCESS:
 ${planList}`;
 
-        if (designDocLink) {
+        const designDocContent = options?.designDocContent?.trim();
+        if (designDocContent) {
+            plannerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
+        } else if (designDocLink) {
             plannerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}`;
         }
 
-        return plannerPrompt;
+        return applyPromptOverride(plannerPrompt, planList, promptOverride);
     }
 
     if (role === 'reviewer') {
@@ -163,7 +191,7 @@ ADVANCED REGRESSION ANALYSIS (enabled):
 5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
 This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.` : '';
 
-        return `${reviewerExecutionIntro}
+        return applyPromptOverride(`${reviewerExecutionIntro}
 
 ${batchExecutionRules}
 
@@ -184,7 +212,46 @@ ${chatCritiqueDirective}
 ${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
+${planList}`, planList, promptOverride);
+    }
+
+    if (role === 'tester') {
+        const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
+        const designDocContent = options?.designDocContent?.trim();
+        const designDocLink = options?.designDocLink?.trim();
+        let testerPrompt = `${plans.length <= 1
+            ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
+            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`}
+
+${executionDirective}
+
+${batchExecutionRules}
+
+Mode:
+- You are the acceptance-tester-executor for this task.
+- Do not start any auxiliary workflow; execute this task directly.
+- Use the attached Design Doc / PRD as the authoritative requirements baseline.
+- For ${planTarget}, assess the actual code changes against the product requirements, fix material requirement gaps in code when needed, then verify.
+
+For each plan:
+1. Use the plan file and Design Doc / PRD as the source of truth for acceptance criteria.
+2. Identify any missing, incomplete, or incorrect implementation of product requirements.
+3. Apply code fixes for valid requirement gaps.
+4. Run verification checks as applicable and include results.
+5. Update the original plan with files changed, validation results, and remaining requirement gaps.
+
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+
+PLANS TO PROCESS:
 ${planList}`;
+
+        if (designDocContent) {
+            testerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
+        } else if (designDocLink) {
+            testerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
+        }
+
+        return applyPromptOverride(testerPrompt, planList, promptOverride);
     }
 
     if (role === 'lead') {
@@ -205,7 +272,7 @@ ${planList}`;
                 leadPrompt += ` Routine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
             }
         }
-        return leadPrompt;
+        return applyPromptOverride(leadPrompt, planList, promptOverride);
     }
 
     if (role === 'coder') {
@@ -226,17 +293,28 @@ ${planList}`, accurateCodingEnabled);
         if (pairProgrammingEnabled) {
             coderPrompt += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
         }
-        return coderPrompt;
+        return applyPromptOverride(coderPrompt, planList, promptOverride);
     }
 
-    return `Please process the following ${plans.length} plans.
+    if (role === 'team-lead') {
+        return applyPromptOverride(`You are a Team Lead orchestrator. Spin up a team of specialist agents and drive the following plan(s) to completion.
+
+You own all internal coordination: decomposing work, assigning tasks, routing between specialists, running your own review cycles, and handling retries. Do NOT escalate to the user for task routing decisions or intermediate failures — those are yours to resolve internally. Only escalate if the plan genuinely requires external credentials, access, or human approval that is outside the codebase.
+
+${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+
+PLANS TO PROCESS:
+${planList}`, planList, promptOverride);
+    }
+
+    return applyPromptOverride(`Please process the following ${plans.length} plans.
 
 ${batchExecutionRules}
 
 ${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
-${planList}`;
+${planList}`, planList, promptOverride);
 }
 
 /**
@@ -248,10 +326,13 @@ export function columnToPromptRole(column: string): string | null {
     switch (normalized) {
         case 'CREATED': return 'planner';
         case 'PLAN REVIEWED': return 'lead';
+        case 'TEAM LEAD CODED':
         case 'LEAD CODED':
         case 'CODER CODED':
         case 'INTERN CODED':
             return 'reviewer';
+        case 'CODE REVIEWED':
+            return 'tester';
         default:
             return column.startsWith('custom_agent_') ? column : null;
     }

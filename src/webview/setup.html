@@ -1,0 +1,1949 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Switchboard Setup</title>
+    <style>
+        :root {
+            --bg-color: #0d0d0d;
+            --panel-bg: #000000;
+            --panel-bg2: #050505;
+            --border-color: #222222;
+            --border-bright: #444444;
+            --border-dim: #252525;
+            --bg-dim: #111111;
+            --text-primary: #e0e0e0;
+            --text-secondary: #777777;
+            --accent-teal: #3ddbd9;
+            --accent-green: #4ec9b0;
+            --accent-red: #f85149;
+            --accent-orange: #d18616;
+            --glow-green: 0 0 10px rgba(78, 201, 176, 0.6), 0 0 20px rgba(78, 201, 176, 0.25);
+            --glow-red: 0 0 10px rgba(248, 81, 73, 0.6), 0 0 20px rgba(248, 81, 73, 0.25);
+            --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+        }
+
+        * {
+            box-sizing: border-box;
+        }
+
+        body {
+            margin: 0;
+            padding: 16px;
+            background: var(--bg-color);
+            color: var(--text-primary);
+            font-family: var(--font-family);
+            font-size: 13px;
+        }
+
+        .hidden {
+            display: none !important;
+        }
+
+        .flex {
+            display: flex;
+        }
+
+        .gap-2 {
+            gap: 8px;
+        }
+
+        .w-full {
+            width: 100%;
+        }
+
+        .setup-shell {
+            max-width: 980px;
+            margin: 0 auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .startup-section {
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg);
+        }
+
+        .startup-toggle {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            cursor: pointer;
+            user-select: none;
+            padding: 12px 14px;
+        }
+
+        .startup-toggle .chevron {
+            font-size: 10px;
+            color: var(--text-secondary);
+            transition: transform 0.15s;
+        }
+
+        .startup-toggle .chevron.open {
+            transform: rotate(90deg);
+        }
+
+        .startup-fields {
+            display: none;
+            flex-direction: column;
+            gap: 8px;
+            padding: 0 14px 14px;
+        }
+
+        .startup-fields.open,
+        .db-sync-fields.open {
+            display: flex;
+        }
+
+        .section-label {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 2px;
+            color: var(--accent-green);
+            font-weight: 600;
+            opacity: 0.8;
+        }
+
+        .startup-row label {
+            display: block;
+            font-size: 9px;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            font-family: var(--font-mono);
+            margin-bottom: 2px;
+        }
+
+        .startup-row span {
+            color: var(--text-secondary);
+        }
+
+        .startup-row input,
+        .startup-row select {
+            width: 100%;
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            padding: 6px 8px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .startup-row input:focus,
+        .startup-row input:hover,
+        .startup-row select:focus,
+        .startup-row select:hover {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .hint-text {
+            font-size: 10px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+        }
+
+        .kanban-structure-list {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .kanban-structure-item {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 10px 12px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+        }
+
+        .kanban-structure-item.is-fixed {
+            opacity: 0.8;
+        }
+
+        .kanban-structure-item.drag-over {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        .kanban-structure-handle,
+        .kanban-structure-lock {
+            width: 18px;
+            flex-shrink: 0;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            text-align: center;
+            color: var(--text-secondary);
+        }
+
+        .kanban-structure-item-label {
+            flex: 1;
+            min-width: 0;
+            font-size: 11px;
+            color: var(--text-primary);
+        }
+
+        .kanban-structure-item-kind {
+            flex-shrink: 0;
+            font-family: var(--font-mono);
+            font-size: 9px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: var(--text-secondary);
+        }
+
+        .secondary-btn,
+        .action-btn {
+            border-radius: 2px;
+            cursor: pointer;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1.2px;
+            transition: all 0.2s ease;
+        }
+
+        .secondary-btn {
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            padding: 8px;
+            font-size: 10px;
+        }
+
+        .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--border-bright) 10%, transparent);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .action-btn {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
+            padding: 9px;
+            font-size: 11px;
+            font-weight: 600;
+        }
+
+        .action-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+        }
+
+        .db-sync-fields {
+            display: none;
+            flex-direction: column;
+            gap: 12px;
+            padding: 0 14px 14px;
+        }
+
+        .db-subsection {
+            padding-bottom: 12px;
+            border-bottom: 1px solid var(--border-dim);
+        }
+
+        .db-subsection:last-child {
+            border-bottom: none;
+            padding-bottom: 0;
+        }
+
+        .subsection-header {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            margin-bottom: 8px;
+        }
+
+        .db-path-display {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            background: var(--bg-dim);
+            padding: 6px 10px;
+            border-radius: 4px;
+            word-break: break-all;
+            margin-bottom: 8px;
+            border: 1px solid var(--border-dim);
+        }
+
+        .db-location-options {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .db-radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .db-radio-option:hover {
+            background: var(--bg-dim);
+            color: var(--text-primary);
+        }
+
+        .db-radio-option input[type="radio"] {
+            width: auto;
+            margin: 0;
+            flex-shrink: 0;
+        }
+
+        .db-custom-path-input {
+            width: 100%;
+            padding: 6px 10px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            background: var(--bg-dim);
+            border: 1px solid var(--border-dim);
+            border-radius: 4px;
+            color: var(--text-primary);
+            margin-top: 4px;
+        }
+
+        .db-custom-path-input:not(.hidden) {
+            display: block;
+        }
+
+        .db-action-btn {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            gap: 4px;
+            padding: 8px 4px;
+            border: 1px solid var(--border-dim);
+            background: var(--bg-dim);
+            color: var(--text-secondary);
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 9px;
+            text-align: center;
+            transition: all 0.2s ease;
+            text-transform: uppercase;
+            font-weight: 600;
+        }
+
+        .db-action-btn:hover {
+            background: var(--border-dim);
+            border-color: var(--border-bright);
+            color: var(--text-primary);
+        }
+
+        .db-action-btn.danger {
+            border-color: rgba(220, 53, 69, 0.4);
+            color: #dc3545;
+        }
+
+        .db-action-btn.danger:hover {
+            background: rgba(220, 53, 69, 0.2);
+            border-color: #dc3545;
+        }
+
+        .modal-overlay {
+            position: fixed;
+            inset: 0;
+            background: rgba(0, 0, 0, 0.72);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            z-index: 1000;
+        }
+
+        .modal-card {
+            width: min(100%, 640px);
+            max-height: calc(100vh - 40px);
+            overflow-y: auto;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-bright);
+            box-shadow: 0 24px 48px rgba(0, 0, 0, 0.45);
+            padding: 16px;
+        }
+
+        .modal-title {
+            font-family: var(--font-mono);
+            font-size: 12px;
+            letter-spacing: 1.6px;
+            color: var(--accent-green);
+            margin-bottom: 12px;
+            text-transform: uppercase;
+        }
+
+        .modal-label {
+            display: block;
+            margin-bottom: 4px;
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-mono);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .modal-input,
+        .modal-textarea {
+            width: 100%;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 10px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            margin-bottom: 10px;
+        }
+
+        .modal-input:hover,
+        .modal-input:focus,
+        .modal-textarea:hover,
+        .modal-textarea:focus {
+            border-color: var(--border-bright);
+            outline: none;
+        }
+
+        .modal-textarea {
+            min-height: 120px;
+            resize: vertical;
+        }
+    </style>
+</head>
+
+<body>
+    <div class="setup-shell">
+        <div class="startup-section">
+            <div class="startup-toggle" id="setup-toggle">
+                <div class="section-label">Setup</div>
+                <span class="chevron" id="setup-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="startup-fields" data-accordion="true">
+                <div class="flex gap-2">
+                    <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
+                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
+                </div>
+                <button id="btn-copy-mcp-config" class="secondary-btn w-full">COPY MCP CONFIG</button>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    GIT IGNORE STRATEGY
+                </div>
+                <div class="startup-row" style="display:flex; flex-direction:column; gap:6px; align-items:stretch; margin-top:6px;">
+                    <select id="git-ignore-strategy" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
+                        <option value="targetedGitignore">targetedGitignore — .gitignore (targeted, recommended)</option>
+                        <option value="localExclude">localExclude - .git/info/exclude (local only)</option>
+                        <option value="custom">custom — .gitignore (you manage the rules)</option>
+                        <option value="none">none - do not manage ignore files</option>
+                    </select>
+                </div>
+                <div class="startup-row" style="display:flex; flex-direction:column; gap:6px; align-items:stretch;">
+                    <label for="git-ignore-rules" style="font-size:11px; color:var(--text-secondary);">Ignore rules (one glob per line)</label>
+                    <textarea id="git-ignore-rules" class="modal-textarea" style="min-height:96px; font-size:11px;" readonly placeholder="Rules displayed here (read-only for preset strategies)"></textarea>
+                </div>
+                <div id="git-ignore-target-status" style="font-size:10px; color:var(--text-secondary); margin-top:2px; font-family:var(--font-mono);">
+                    Target: .gitignore (targeted)
+                </div>
+                <div id="git-ignore-warning" style="font-size:10px; color:var(--text-secondary); line-height:1.4; font-family:var(--font-mono);">
+                    Preset strategies are read-only. Switchboard updates only its fenced managed block and preserves unrelated rules. Cloud coders (e.g., Jules) require .switchboard/plans/ to be in the repository, so avoid blanket .switchboard/* rules unless you intentionally want to hide plans from git.
+                </div>
+                <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);">
+                    IDLE
+                </div>
+                <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="agents-toggle">
+                <div class="section-label">Agents</div>
+                <span class="chevron" id="agents-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="agents-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Configure agent behavior, built-in agent visibility, and default prompts.
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Prompt Controls</span>
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Append Design Doc to planner prompts</span>
+                    </label>
+                    <div id="design-doc-status-line" style="font-size:10px; color:var(--text-secondary); margin-top:4px; font-family:var(--font-mono);">
+                        Not configured — configure in Planning tab
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Accurate coding mode for Coder prompts</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Inline challenge step for Lead Coder prompts</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="advanced-reviewer-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Advanced reviewer mode (deep regression analysis — high token usage)</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="aggressive-pair-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Aggressive pair programming (shift more tasks to Coder)</span>
+                    </label>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Agent Visibility &amp; CLI Commands</span>
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
+                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
+                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="coder" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Coder</label><input type="text" data-role="coder"
+                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="intern" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Intern</label><input type="text" data-role="intern"
+                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
+                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="tester"
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester"
+                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                    </div>
+                    <div style="font-size: 9px; color: var(--text-secondary); margin-top: 6px; line-height: 1.3; font-style: italic;">
+                        Note: You must use the attached PRD or Notion integration. This compares the implementation against the overall spec to prevent scope drift.
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
+                            placeholder="e.g. qwen" style="flex:1;">
+                    </div>
+                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                        <input type="checkbox" class="agent-visible-toggle" data-role="jules" checked
+                            style="width:auto; margin:0; flex-shrink:0;">
+                        <label style="min-width:70px;">Jules</label>
+                        <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="jules-auto-sync-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Auto-sync repo before sending to Jules</span>
+                    </label>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Default Prompt Overrides</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Customize the default system prompts used by agents. These overrides apply globally unless specific agents have their own custom prompts configured.
+                    </div>
+                    <div id="default-prompt-override-summary" style="font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); min-height:14px;"></div>
+                    <button id="btn-customize-default-prompts" class="secondary-btn w-full">CUSTOMIZE DEFAULT PROMPTS</button>
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="custom-agents-toggle">
+                <div class="section-label">Custom Agents</div>
+                <span class="chevron" id="custom-agents-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="custom-agents-fields" data-accordion="true">
+                <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="kanban-structure-toggle">
+                <div class="section-label">Kanban Structure</div>
+                <span class="chevron" id="kanban-structure-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="kanban-structure-fields" data-accordion="true">
+                <div id="kanban-structure-list" class="kanban-structure-list"></div>
+                <div class="hint-text">
+                    Drag active middle columns to change board order. New and Completed stay fixed.
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="orchestration-toggle">
+                <div class="section-label">Orchestration Framework Integration</div>
+                <span class="chevron" id="orchestration-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="orchestration-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    TEAM LEAD (OPENCODE)
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                    Use this section when Switchboard is acting as a GUI for OpenCode, GitHub Squads, or other multi-agent orchestration frameworks.
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                    Team Lead is the orchestration agent that receives instructions and coordinates the rest of the system.
+                </div>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                    <input id="team-lead-visible-toggle" type="checkbox" style="width:auto; margin:0;">
+                    <span>Enable Team Lead agent</span>
+                </label>
+                <label class="startup-row" style="display:block; margin-top:6px;">
+                    <span style="display:block; margin-bottom:4px;">Team Lead startup command</span>
+                    <input id="team-lead-command-input" type="text" placeholder="e.g. opencode" style="width:100%;">
+                </label>
+                <label class="startup-row" style="display:block; margin-top:6px;">
+                    <span style="display:block; margin-bottom:4px;">Team Lead complexity cutoff</span>
+                    <input id="team-lead-complexity-cutoff" type="range" min="0" max="10" step="1" value="0" style="width:100%; padding:0;">
+                    <span id="team-lead-complexity-cutoff-label" style="display:block; margin-top:4px; font-size:10px; color:var(--text-secondary);">
+                        0 (disabled)
+                    </span>
+                </label>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="database-toggle">
+                <div class="section-label">Database Operations</div>
+                <span class="chevron" id="database-chevron">▶</span>
+            </div>
+            <div class="db-sync-fields" id="db-sync-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    PLAN INGESTION
+                </div>
+                <label class="startup-row" style="display:block; margin-top:6px;">
+                    <span style="display:block; margin-bottom:4px;">Additional plan folder</span>
+                    <input id="plan-ingestion-folder-input" type="text" placeholder="e.g. C:\Plans\Switchboard" style="width:100%;">
+                </label>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Database Location</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Using a cloud location (Google Drive, Dropbox, iCloud) allows plan metadata to sync across machines without git merge conflicts.
+                    </div>
+                    <div class="db-path-display" id="current-db-path">.switchboard/kanban.db</div>
+                    <div class="db-location-options">
+                        <label class="db-radio-option">
+                            <input type="radio" name="db-location" value="local" checked>
+                            <span>Local (.switchboard/kanban.db)</span>
+                        </label>
+                        <label class="db-radio-option">
+                            <input type="radio" name="db-location" value="google-drive">
+                            <span>Google Drive App</span>
+                        </label>
+                        <label class="db-radio-option">
+                            <input type="radio" name="db-location" value="dropbox">
+                            <span>Dropbox</span>
+                        </label>
+                        <label class="db-radio-option">
+                            <input type="radio" name="db-location" value="icloud">
+                            <span>iCloud</span>
+                        </label>
+                        <label class="db-radio-option">
+                            <input type="radio" name="db-location" value="custom">
+                            <span>Custom Path</span>
+                        </label>
+                        <input type="text" id="db-custom-path-input" class="db-custom-path-input hidden" placeholder="Enter custom database path...">
+                    </div>
+                    <button id="db-update-location-btn" class="db-action-btn w-full" style="margin-top: 8px;">UPDATE LOCATION</button>
+                </div>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Rebuild Database</span>
+                    </div>
+                    <div style="font-size: 10px; background: rgba(255, 193, 7, 0.12); border: 1px solid rgba(255, 193, 7, 0.4); border-radius: 4px; padding: 8px; margin-bottom: 8px; line-height: 1.5; color: var(--text-primary);">
+                        ⚠️ <strong>Local database only.</strong> <code>kanban.db</code> is machine-local state and is gitignored automatically.
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        If the database is corrupted, this will delete and recreate it from your plan files in .switchboard/plans/.
+                    </div>
+                    <button id="db-reset-btn" class="db-action-btn danger w-full" title="WARNING: Permanently delete and rebuild database">
+                        REBUILD DATABASE
+                    </button>
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="project-mgmt-toggle">
+                <div class="section-label">ClickUp, Linear and Notion Integration</div>
+                <span class="chevron" id="project-mgmt-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="project-mgmt-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>ClickUp</span>
+                        <span id="clickup-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Sync plans to ClickUp tasks and import tasks from ClickUp.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">API Token</span>
+                        <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
+                    </label>
+                    <button id="btn-setup-clickup" class="action-btn w-full" style="margin-top: 8px;">SETUP CLICKUP</button>
+                    <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Linear</span>
+                        <span id="linear-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Sync plans to Linear issues and import issues from Linear.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">API Token</span>
+                        <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
+                    </label>
+                    <button id="btn-setup-linear" class="action-btn w-full" style="margin-top: 8px;">SETUP LINEAR</button>
+                    <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Notion</span>
+                        <span id="notion-setup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Fetch design documents from Notion pages for planner prompts.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">Integration Token</span>
+                        <input id="notion-token-input" type="password" placeholder="Enter Notion integration token (secret_... or ntn_...)" style="width:100%;">
+                    </label>
+                    <button id="btn-setup-notion" class="action-btn w-full" style="margin-top: 8px;">SAVE NOTION TOKEN</button>
+                    <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="custom-agent-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 520px;">
+            <div class="modal-title">Custom Agent</div>
+            <label class="modal-label" for="custom-agent-name">Agent name</label>
+            <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+            <label class="modal-label" for="custom-agent-command">Startup command</label>
+            <input id="custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
+            <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
+            <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
+            <label class="modal-label" for="custom-agent-dragdrop">Drag &amp; Drop Mode</label>
+            <select id="custom-agent-dragdrop" class="modal-input">
+                <option value="cli">CLI Agent (trigger terminal action)</option>
+                <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
+            </select>
+            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
+                <span>Show as Kanban column</span>
+            </label>
+            <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+                <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
+                <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="custom-prompts-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 560px;">
+            <div class="modal-title">Customize Default Prompts</div>
+            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                Override the prompt sent to each built-in agent role. Changes apply to all dispatch paths.
+            </div>
+            <div id="prompt-role-tabs" style="display:flex; gap:4px; flex-wrap:wrap; margin-bottom:10px;"></div>
+            <details id="prompt-preview-details" style="margin-bottom:10px;">
+                <summary style="font-size:10px; font-family:var(--font-mono); letter-spacing:1px; cursor:pointer; color:var(--text-secondary); user-select:none;">
+                    DEFAULT PROMPT PREVIEW (read only)
+                </summary>
+                <div style="font-size:9px; color:var(--text-secondary); margin:4px 0 6px; line-height:1.4;">
+                    Base prompt structure only. Toggle options are applied at dispatch time on top of any override.
+                </div>
+                <textarea id="prompt-preview-text" class="modal-textarea" rows="10" readonly style="font-family:var(--font-mono); font-size:10px; opacity:0.7; cursor:default; resize:vertical;" placeholder="Loading preview..."></textarea>
+            </details>
+            <label class="modal-label" for="prompt-override-mode">Mode</label>
+            <select id="prompt-override-mode" class="modal-input">
+                <option value="append">Append — add after generated prompt</option>
+                <option value="prepend">Prepend — insert before generated prompt</option>
+                <option value="replace">Replace — replace prompt body (plan list always appended)</option>
+            </select>
+            <label class="modal-label" for="prompt-override-text">Custom instructions</label>
+            <textarea id="prompt-override-text" class="modal-textarea" rows="8" placeholder="Enter custom instructions for this role..."></textarea>
+            <div style="display:flex; align-items:center; gap:6px; margin-top:6px;">
+                <button id="btn-clear-prompt-override" class="secondary-btn" style="width:auto;">CLEAR OVERRIDE</button>
+                <span style="flex:1;"></span>
+            </div>
+            <div class="flex gap-2" style="margin-top:10px;">
+                <button id="btn-save-prompt-overrides" class="action-btn w-full">SAVE ALL OVERRIDES</button>
+                <button id="btn-cancel-prompt-overrides" class="secondary-btn w-full">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const vscode = acquireVsCodeApi();
+
+        const customAgentList = document.getElementById('custom-agent-list');
+        const customAgentModal = document.getElementById('custom-agent-modal');
+        const customAgentNameInput = document.getElementById('custom-agent-name');
+        const customAgentCommandInput = document.getElementById('custom-agent-command');
+        const customAgentPromptInput = document.getElementById('custom-agent-prompt');
+        const customAgentDragDropModeInput = document.getElementById('custom-agent-dragdrop');
+        const customAgentKanbanInput = document.getElementById('custom-agent-kanban');
+        const customAgentError = document.getElementById('custom-agent-error');
+        const kanbanStructureList = document.getElementById('kanban-structure-list');
+        const customPromptsModal = document.getElementById('custom-prompts-modal');
+        const promptRoleTabs = document.getElementById('prompt-role-tabs');
+        const promptOverrideMode = document.getElementById('prompt-override-mode');
+        const promptOverrideText = document.getElementById('prompt-override-text');
+        const promptOverrideSummary = document.getElementById('default-prompt-override-summary');
+        const promptPreviewText = document.getElementById('prompt-preview-text');
+        const dbCustomPathInput = document.getElementById('db-custom-path-input');
+        const dbPathDisplay = document.getElementById('current-db-path');
+        const setupSaveStatus = document.getElementById('setup-save-status');
+        const teamLeadVisibleToggle = document.getElementById('team-lead-visible-toggle');
+        const teamLeadCommandInput = document.getElementById('team-lead-command-input');
+        const teamLeadComplexityCutoffInput = document.getElementById('team-lead-complexity-cutoff');
+        const teamLeadComplexityCutoffLabel = document.getElementById('team-lead-complexity-cutoff-label');
+
+        let editingCustomAgentId = null;
+        let lastStartupCommands = {};
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true };
+        let lastCustomAgents = [];
+        let lastKanbanStructure = [];
+        let lastPromptOverrides = {};
+        let lastPromptPreviews = {};
+        let editingPromptRole = 'planner';
+        let lastDesignDocLink = '';
+        let currentDbPath = '';
+        let workspaceRoot = '';
+        let lastPlanIngestionFolder = '';
+        let lastGitIgnoreConfig = {
+            strategy: 'targetedGitignore',
+            rules: [],
+            targetedRulesDisplay: ''
+        };
+        let isHydratingSetupState = false;
+        let pendingSetupAutosaveTimer = null;
+        let lastSentSetupSignature = '';
+        let lastAckedSetupSignature = '';
+        let draggedKanbanStructureId = null;
+
+        const PROMPT_ROLES = [
+            { key: 'planner', label: 'Planner' },
+            { key: 'lead', label: 'Lead Coder' },
+            { key: 'coder', label: 'Coder' },
+            { key: 'reviewer', label: 'Reviewer' },
+            { key: 'tester', label: 'Acceptance Tester' },
+            { key: 'intern', label: 'Intern' },
+            { key: 'analyst', label: 'Analyst' },
+            { key: 'team-lead', label: 'Team Lead' },
+        ];
+
+        function collapseAllAccordions(exceptFieldsId) {
+            document.querySelectorAll('[data-accordion="true"]').forEach(fieldsEl => {
+                if (fieldsEl.id === exceptFieldsId) return;
+                if (!fieldsEl.classList.contains('open')) return;
+                fieldsEl.classList.remove('open');
+                const toggleEl = fieldsEl.previousElementSibling;
+                const chevron = toggleEl?.querySelector('.chevron');
+                if (chevron) chevron.classList.remove('open');
+            });
+        }
+
+        function bindAccordion(toggleId, fieldsId, chevronId, onOpen) {
+            const toggle = document.getElementById(toggleId);
+            const fields = document.getElementById(fieldsId);
+            const chevron = document.getElementById(chevronId);
+            if (!toggle || !fields || !chevron) return;
+            toggle.addEventListener('click', () => {
+                const willOpen = !fields.classList.contains('open');
+                if (willOpen) collapseAllAccordions(fieldsId);
+                const isOpen = fields.classList.toggle('open');
+                chevron.classList.toggle('open', isOpen);
+                if (isOpen && typeof onOpen === 'function') {
+                    onOpen();
+                }
+            });
+        }
+
+        function openAccordion(fieldsId, chevronId, onOpen) {
+            const fields = document.getElementById(fieldsId);
+            const chevron = document.getElementById(chevronId);
+            if (!fields || !chevron) return;
+            collapseAllAccordions(fieldsId);
+            const wasOpen = fields.classList.contains('open');
+            fields.classList.add('open');
+            chevron.classList.add('open');
+            if (!wasOpen && typeof onOpen === 'function') {
+                onOpen();
+            }
+        }
+
+        function sanitizeCustomAgentId(value) {
+            const normalized = String(value || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 48);
+            return normalized || `agent_${Date.now().toString(36)}`;
+        }
+
+        function toCustomAgentRole(id) {
+            return `custom_agent_${sanitizeCustomAgentId(id)}`;
+        }
+
+        function openCustomAgentModal(agent) {
+            editingCustomAgentId = agent ? agent.id : null;
+            customAgentNameInput.value = agent?.name || '';
+            customAgentCommandInput.value = agent?.startupCommand || '';
+            customAgentPromptInput.value = agent?.promptInstructions || '';
+            customAgentDragDropModeInput.value = agent?.dragDropMode || 'cli';
+            customAgentKanbanInput.checked = agent?.includeInKanban === true;
+            customAgentError.textContent = '';
+            customAgentModal.classList.remove('hidden');
+            setTimeout(() => customAgentNameInput.focus(), 0);
+        }
+
+        function closeCustomAgentModal() {
+            editingCustomAgentId = null;
+            customAgentModal.classList.add('hidden');
+            customAgentError.textContent = '';
+        }
+
+        function saveCustomAgentDraft() {
+            const name = customAgentNameInput.value.trim();
+            const startupCommand = customAgentCommandInput.value.trim();
+            if (!name || !startupCommand) {
+                customAgentError.textContent = 'Name and startup command are required.';
+                return;
+            }
+
+            const existingId = editingCustomAgentId || sanitizeCustomAgentId(name);
+            const role = toCustomAgentRole(existingId);
+            const nextAgent = {
+                id: existingId,
+                role,
+                name,
+                startupCommand,
+                promptInstructions: customAgentPromptInput.value.trim(),
+                includeInKanban: !!customAgentKanbanInput.checked,
+                kanbanOrder: 0,
+                dragDropMode: customAgentDragDropModeInput.value
+            };
+
+            const duplicate = lastCustomAgents.find(agent =>
+                agent.id !== nextAgent.id &&
+                agent.name.toLowerCase() === nextAgent.name.toLowerCase()
+            );
+            if (duplicate) {
+                customAgentError.textContent = 'Agent names must be unique.';
+                return;
+            }
+
+            const previousAgent = lastCustomAgents.find(agent => agent.id === nextAgent.id);
+            if (previousAgent?.includeInKanban) {
+                nextAgent.kanbanOrder = previousAgent.kanbanOrder;
+            } else if (nextAgent.includeInKanban) {
+                const maxOrder = getRenderableKanbanStructure().reduce((highest, item) => {
+                    if (item.fixed || item.id === nextAgent.role) {
+                        return highest;
+                    }
+                    return Math.max(highest, Number(item.order) || 0);
+                }, 300);
+                nextAgent.kanbanOrder = maxOrder + 100;
+            } else {
+                nextAgent.kanbanOrder = previousAgent?.kanbanOrder || 0;
+            }
+
+            lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
+            lastCustomAgents.push(nextAgent);
+            lastCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
+            if (!(nextAgent.role in lastVisibleAgents)) {
+                lastVisibleAgents[nextAgent.role] = true;
+            }
+            lastStartupCommands[nextAgent.role] = nextAgent.startupCommand;
+            syncLocalKanbanStructureWithCustomAgents();
+            renderCustomAgentConfigList();
+            renderKanbanStructureList();
+            closeCustomAgentModal();
+            queueSetupAutosave(`custom-agent-save:${nextAgent.role}`, true);
+        }
+
+        function syncLocalKanbanStructureWithCustomAgents() {
+            if (!Array.isArray(lastKanbanStructure) || !lastKanbanStructure.length) {
+                return;
+            }
+
+            const itemMap = new Map(
+                lastKanbanStructure
+                    .filter(item => item.kind !== 'custom')
+                    .map(item => [item.id, { ...item }])
+            );
+
+            lastCustomAgents
+                .filter(agent => agent.includeInKanban)
+                .forEach(agent => {
+                    const existing = lastKanbanStructure.find(item => item.id === agent.role);
+                    itemMap.set(agent.role, {
+                        id: agent.role,
+                        label: agent.name,
+                        role: agent.role,
+                        kind: 'custom',
+                        fixed: false,
+                        reorderable: true,
+                        visible: lastVisibleAgents[agent.role] !== false,
+                        order: existing?.order ?? agent.kanbanOrder
+                    });
+                });
+
+            lastKanbanStructure = Array.from(itemMap.values()).sort((left, right) => {
+                const orderDelta = (Number(left.order) || 0) - (Number(right.order) || 0);
+                return orderDelta || String(left.label || '').localeCompare(String(right.label || ''));
+            });
+        }
+
+        function getRenderableKanbanStructure() {
+            if (!Array.isArray(lastKanbanStructure) || !lastKanbanStructure.length) {
+                return [];
+            }
+
+            syncLocalKanbanStructureWithCustomAgents();
+            const activeCustomRoles = new Set(
+                lastCustomAgents
+                    .filter(agent => agent.includeInKanban)
+                    .map(agent => agent.role)
+            );
+
+            return lastKanbanStructure.map(item => {
+                const currentCustom = lastCustomAgents.find(agent => agent.role === item.id);
+                const visible = item.fixed
+                    ? true
+                    : item.kind === 'custom'
+                        ? activeCustomRoles.has(item.id) && lastVisibleAgents[item.id] !== false
+                        : !item.role || lastVisibleAgents[item.role] !== false;
+
+                return {
+                    ...item,
+                    label: currentCustom?.name || item.label,
+                    visible
+                };
+            });
+        }
+
+        function reorderVisibleKanbanStructure(draggedId, targetId) {
+            const renderable = getRenderableKanbanStructure();
+            const middleIds = renderable
+                .filter(item => !item.fixed && item.visible !== false)
+                .map(item => item.id);
+            const fromIndex = middleIds.indexOf(draggedId);
+            const toIndex = middleIds.indexOf(targetId);
+            if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) {
+                return;
+            }
+
+            const nextSequence = [...middleIds];
+            const [movedId] = nextSequence.splice(fromIndex, 1);
+            nextSequence.splice(toIndex, 0, movedId);
+
+            const itemMap = new Map(renderable.map(item => [item.id, { ...item }]));
+            const visibleWeightSlots = renderable
+                .filter(item => !item.fixed && item.visible !== false)
+                .map(item => Number(item.order) || 0)
+                .sort((left, right) => left - right);
+            let sequenceIndex = 0;
+            lastKanbanStructure = renderable.map(item => {
+                if (item.fixed || item.visible === false) {
+                    return { ...itemMap.get(item.id) };
+                }
+                const nextId = nextSequence[sequenceIndex++];
+                return {
+                    ...itemMap.get(nextId),
+                    order: visibleWeightSlots[sequenceIndex - 1]
+                };
+            });
+
+            renderKanbanStructureList();
+            setSetupSaveStatus('SAVING...');
+            vscode.postMessage({
+                type: 'updateKanbanStructure',
+                sequence: nextSequence
+            });
+        }
+
+        function renderKanbanStructureList() {
+            if (!kanbanStructureList) {
+                return;
+            }
+
+            const structure = getRenderableKanbanStructure();
+            kanbanStructureList.innerHTML = '';
+            if (!structure.length) {
+                return;
+            }
+
+            const fixedStart = structure.find(item => item.id === 'CREATED');
+            const fixedEnd = structure.find(item => item.id === 'COMPLETED');
+            const middle = structure.filter(item => !item.fixed && item.visible !== false);
+            const rows = [fixedStart, ...middle, fixedEnd].filter(Boolean);
+
+            rows.forEach(item => {
+                const row = document.createElement('div');
+                row.className = `kanban-structure-item${item.fixed ? ' is-fixed' : ''}`;
+                row.dataset.id = item.id;
+
+                const handle = document.createElement('div');
+                handle.className = item.fixed ? 'kanban-structure-lock' : 'kanban-structure-handle';
+                handle.textContent = item.fixed ? '🔒' : '⋮⋮';
+
+                const label = document.createElement('div');
+                label.className = 'kanban-structure-item-label';
+                label.textContent = item.label;
+
+                const kind = document.createElement('div');
+                kind.className = 'kanban-structure-item-kind';
+                kind.textContent = item.fixed ? 'Fixed' : 'Active';
+
+                if (!item.fixed) {
+                    row.draggable = true;
+                    row.addEventListener('dragstart', () => {
+                        draggedKanbanStructureId = item.id;
+                    });
+                    row.addEventListener('dragend', () => {
+                        draggedKanbanStructureId = null;
+                        document.querySelectorAll('.kanban-structure-item.drag-over').forEach(node => node.classList.remove('drag-over'));
+                    });
+                    row.addEventListener('dragover', (event) => {
+                        event.preventDefault();
+                        if (draggedKanbanStructureId && draggedKanbanStructureId !== item.id) {
+                            row.classList.add('drag-over');
+                        }
+                    });
+                    row.addEventListener('dragleave', () => {
+                        row.classList.remove('drag-over');
+                    });
+                    row.addEventListener('drop', (event) => {
+                        event.preventDefault();
+                        row.classList.remove('drag-over');
+                        if (!draggedKanbanStructureId || draggedKanbanStructureId === item.id) {
+                            return;
+                        }
+                        reorderVisibleKanbanStructure(draggedKanbanStructureId, item.id);
+                    });
+                }
+
+                row.appendChild(handle);
+                row.appendChild(label);
+                row.appendChild(kind);
+                kanbanStructureList.appendChild(row);
+            });
+        }
+
+        function renderCustomAgentConfigList() {
+            customAgentList.innerHTML = '';
+            if (!lastCustomAgents.length) {
+                const empty = document.createElement('div');
+                empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-size:11px; text-align:center;';
+                empty.textContent = 'No custom agents configured.';
+                customAgentList.appendChild(empty);
+                return;
+            }
+
+            lastCustomAgents.forEach(agent => {
+                const row = document.createElement('div');
+                row.className = 'startup-row';
+                row.style.cssText = 'display:flex; flex-direction:column; gap:6px; align-items:stretch; border:1px solid var(--border-color); background:var(--panel-bg2); padding:10px;';
+
+                const top = document.createElement('div');
+                top.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                const visibility = document.createElement('input');
+                visibility.type = 'checkbox';
+                visibility.className = 'custom-agent-visible-toggle';
+                visibility.dataset.role = agent.role;
+                visibility.checked = lastVisibleAgents[agent.role] !== false;
+                visibility.style.cssText = 'width:auto; margin:0; flex-shrink:0;';
+                visibility.addEventListener('change', () => {
+                    lastVisibleAgents[agent.role] = visibility.checked;
+                    renderKanbanStructureList();
+                    queueSetupAutosave(`custom-agent-visibility:${agent.role}`, true);
+                });
+
+                const label = document.createElement('div');
+                label.style.cssText = 'flex:1; font-size:11px; color:var(--text-primary);';
+                label.textContent = agent.name;
+
+                const editBtn = document.createElement('button');
+                editBtn.className = 'secondary-btn';
+                editBtn.style.cssText = 'width:auto; min-width:64px;';
+                editBtn.textContent = 'EDIT';
+                editBtn.onclick = () => openCustomAgentModal(agent);
+
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'secondary-btn';
+                deleteBtn.style.cssText = 'width:auto; min-width:64px;';
+                deleteBtn.textContent = 'DELETE';
+                deleteBtn.onclick = () => {
+                    lastCustomAgents = lastCustomAgents.filter(item => item.id !== agent.id);
+                    delete lastVisibleAgents[agent.role];
+                    delete lastStartupCommands[agent.role];
+                    syncLocalKanbanStructureWithCustomAgents();
+                    renderCustomAgentConfigList();
+                    renderKanbanStructureList();
+                    queueSetupAutosave(`custom-agent-delete:${agent.role}`, true);
+                };
+
+                top.appendChild(visibility);
+                top.appendChild(label);
+                top.appendChild(editBtn);
+                top.appendChild(deleteBtn);
+
+                const meta = document.createElement('div');
+                meta.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+                const modeLabel = agent.dragDropMode === 'prompt' ? 'Clipboard Prompt' : 'CLI Agent';
+                meta.textContent = `${agent.startupCommand}${agent.includeInKanban ? ' • Kanban column' : ''} • Mode: ${modeLabel}`;
+
+                row.appendChild(top);
+                row.appendChild(meta);
+                customAgentList.appendChild(row);
+            });
+        }
+
+        function renderPromptRoleTabs() {
+            promptRoleTabs.innerHTML = '';
+            PROMPT_ROLES.forEach(({ key, label }) => {
+                const btn = document.createElement('button');
+                const isActive = key === editingPromptRole;
+                const hasOverride = !!(lastPromptOverrides[key]?.text);
+                btn.className = isActive ? 'action-btn' : 'secondary-btn';
+                btn.style.cssText = 'width:auto; min-width:60px; font-size:10px; padding:3px 8px;';
+                btn.textContent = hasOverride ? `${label} ●` : label;
+                btn.addEventListener('click', () => {
+                    saveCurrentRoleDraft();
+                    editingPromptRole = key;
+                    loadCurrentRoleIntoForm();
+                    loadPreviewForCurrentRole();
+                    renderPromptRoleTabs();
+                });
+                promptRoleTabs.appendChild(btn);
+            });
+        }
+
+        function saveCurrentRoleDraft() {
+            const text = promptOverrideText.value.trim();
+            const mode = promptOverrideMode.value;
+            if (text) {
+                lastPromptOverrides[editingPromptRole] = { mode, text };
+            } else {
+                delete lastPromptOverrides[editingPromptRole];
+            }
+        }
+
+        function loadCurrentRoleIntoForm() {
+            const override = lastPromptOverrides[editingPromptRole];
+            promptOverrideMode.value = override?.mode || 'append';
+            promptOverrideText.value = override?.text || '';
+        }
+
+        function updatePromptOverrideSummary() {
+            const count = Object.values(lastPromptOverrides).filter(o => o?.text).length;
+            promptOverrideSummary.textContent = count > 0 ? `${count} role${count > 1 ? 's' : ''} customised` : '';
+        }
+
+        function loadPreviewForCurrentRole() {
+            promptPreviewText.value = lastPromptPreviews[editingPromptRole] || 'Loading preview...';
+        }
+
+        function openCustomPromptsModal() {
+            editingPromptRole = PROMPT_ROLES[0].key;
+            loadCurrentRoleIntoForm();
+            renderPromptRoleTabs();
+            loadPreviewForCurrentRole();
+            customPromptsModal.classList.remove('hidden');
+            if (Object.keys(lastPromptPreviews).length === 0) {
+                vscode.postMessage({ type: 'getDefaultPromptPreviews' });
+            }
+        }
+
+        function closeCustomPromptsModal() {
+            customPromptsModal.classList.add('hidden');
+        }
+
+        function getCustomVisibleAgentsPatch() {
+            return Object.fromEntries(
+                lastCustomAgents.map(agent => [agent.role, lastVisibleAgents[agent.role] !== false])
+            );
+        }
+
+        function describeTeamLeadCutoff(value) {
+            const numeric = Number(value);
+            if (numeric <= 0) return '0 (disabled)';
+            if (numeric <= 1) return '1 (all plans)';
+            if (numeric >= 7) return `${numeric} (high only)`;
+            if (numeric >= 5) return `${numeric} (medium and above)`;
+            return `${numeric} (low+ scores also route to Team Lead)`;
+        }
+
+        function sanitizeGitIgnoreRules(raw) {
+            return Array.from(new Set(
+                String(raw || '')
+                    .split('\n')
+                    .map(rule => rule.trim())
+                    .filter(Boolean)
+            ));
+        }
+
+        function getRulesDisplayForStrategy(strategy) {
+            if (strategy === 'targetedGitignore') return lastGitIgnoreConfig.targetedRulesDisplay || '';
+            if (strategy === 'none') return '';
+            return lastGitIgnoreConfig.rules.join('\n');
+        }
+
+        function updateGitIgnoreTargetStatus() {
+            const strategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
+            const targetMap = {
+                targetedGitignore: '.gitignore (targeted)',
+                localExclude: '.git/info/exclude',
+                custom: '.gitignore (custom)',
+                none: 'No file (manual management)'
+            };
+            const status = document.getElementById('git-ignore-target-status');
+            if (status) {
+                status.textContent = `Target: ${targetMap[strategy] || strategy}`;
+            }
+        }
+
+        function renderGitIgnoreConfig() {
+            const strategySelect = document.getElementById('git-ignore-strategy');
+            const rulesTextarea = document.getElementById('git-ignore-rules');
+            if (strategySelect) strategySelect.value = lastGitIgnoreConfig.strategy;
+            if (rulesTextarea) {
+                rulesTextarea.value = getRulesDisplayForStrategy(lastGitIgnoreConfig.strategy);
+                rulesTextarea.readOnly = lastGitIgnoreConfig.strategy !== 'custom';
+            }
+            updateGitIgnoreTargetStatus();
+        }
+
+        function setSetupSaveStatus(label, isError = false) {
+            if (!setupSaveStatus) return;
+            setupSaveStatus.textContent = label;
+            setupSaveStatus.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)';
+        }
+
+        function collectSetupSavePayload() {
+            const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
+            const advancedReviewerEnabled = !!document.getElementById('advanced-reviewer-toggle')?.checked;
+            const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
+            const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
+            const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
+            const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
+            const gitIgnoreStrategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
+            const gitIgnoreRules = gitIgnoreStrategy === 'custom'
+                ? sanitizeGitIgnoreRules(document.getElementById('git-ignore-rules')?.value || '')
+                : [...lastGitIgnoreConfig.rules];
+            const commands = {
+                ...lastStartupCommands,
+                'team-lead': teamLeadCommandInput?.value.trim() || ''
+            };
+            document.querySelectorAll('#agents-fields input[type="text"][data-role]').forEach(input => {
+                const role = input.dataset.role;
+                if (role) {
+                    commands[role] = input.value.trim();
+                }
+            });
+            const visibleAgents = {
+                ...getCustomVisibleAgentsPatch(),
+                'team-lead': !!teamLeadVisibleToggle?.checked
+            };
+            document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(toggle => {
+                const role = toggle.dataset.role;
+                if (role) {
+                    visibleAgents[role] = toggle.checked;
+                }
+            });
+            lastGitIgnoreConfig = {
+                ...lastGitIgnoreConfig,
+                strategy: gitIgnoreStrategy,
+                rules: gitIgnoreRules
+            };
+            return {
+                type: 'saveStartupCommands',
+                accurateCodingEnabled,
+                advancedReviewerEnabled,
+                leadChallengeEnabled,
+                aggressivePairProgramming,
+                designDocEnabled,
+                designDocLink: lastDesignDocLink,
+                planIngestionFolder,
+                customAgents: lastCustomAgents,
+                commands,
+                visibleAgents,
+                teamLeadComplexityCutoff: Number(teamLeadComplexityCutoffInput?.value || 0),
+                julesAutoSyncEnabled: !!document.getElementById('jules-auto-sync-toggle')?.checked,
+                gitIgnoreStrategy,
+                gitIgnoreRules
+            };
+        }
+
+        function refreshSetupAutosaveSignature() {
+            if (isHydratingSetupState) return;
+            const signature = JSON.stringify(collectSetupSavePayload());
+            lastAckedSetupSignature = signature;
+            if (!lastSentSetupSignature || lastSentSetupSignature === signature) {
+                lastSentSetupSignature = signature;
+            }
+        }
+
+        function runSetupHydration(mutator) {
+            isHydratingSetupState = true;
+            try {
+                mutator();
+            } finally {
+                isHydratingSetupState = false;
+                refreshSetupAutosaveSignature();
+            }
+        }
+
+        function flushSetupAutosave(reason) {
+            if (isHydratingSetupState) return;
+            if (pendingSetupAutosaveTimer) {
+                clearTimeout(pendingSetupAutosaveTimer);
+                pendingSetupAutosaveTimer = null;
+            }
+            const payload = collectSetupSavePayload();
+            const signature = JSON.stringify(payload);
+            if (signature === lastSentSetupSignature || signature === lastAckedSetupSignature) {
+                return;
+            }
+            lastStartupCommands = payload.commands;
+            lastVisibleAgents = { ...lastVisibleAgents, ...payload.visibleAgents };
+            lastPlanIngestionFolder = payload.planIngestionFolder;
+            lastGitIgnoreConfig = {
+                ...lastGitIgnoreConfig,
+                strategy: payload.gitIgnoreStrategy,
+                rules: payload.gitIgnoreRules
+            };
+            lastSentSetupSignature = signature;
+            setSetupSaveStatus('SAVING...');
+            vscode.postMessage(payload);
+        }
+
+        function queueSetupAutosave(reason, immediate = false) {
+            if (isHydratingSetupState) return;
+            if (immediate) {
+                flushSetupAutosave(reason);
+                return;
+            }
+            if (pendingSetupAutosaveTimer) {
+                clearTimeout(pendingSetupAutosaveTimer);
+            }
+            pendingSetupAutosaveTimer = setTimeout(() => flushSetupAutosave(reason), 750);
+        }
+
+        function requestIntegrationSetupStates() {
+            vscode.postMessage({ type: 'getIntegrationSetupStates' });
+        }
+
+        function setIntegrationStatus(kind, state, errorText = '') {
+            const statusEl = document.getElementById(`${kind}-setup-status`);
+            const errorEl = document.getElementById(`${kind}-setup-error`);
+            const tokenInput = document.getElementById(`${kind}-token-input`);
+            if (statusEl) {
+                if (state === 'configured') {
+                    statusEl.textContent = 'Configured';
+                    statusEl.style.color = 'var(--accent-green)';
+                } else if (state === 'working') {
+                    statusEl.textContent = 'Working...';
+                    statusEl.style.color = 'var(--accent-orange)';
+                } else if (state === 'failed') {
+                    statusEl.textContent = 'Setup failed';
+                    statusEl.style.color = 'var(--accent-red)';
+                } else {
+                    statusEl.textContent = 'Not configured';
+                    statusEl.style.color = 'var(--text-secondary)';
+                }
+            }
+            if (errorEl) {
+                errorEl.textContent = errorText || '';
+            }
+            if (state === 'configured' && tokenInput) {
+                tokenInput.value = '';
+            }
+        }
+
+        function getProposedPath(location) {
+            if (!workspaceRoot) return '...';
+            const baseName = 'kanban.db';
+            switch (location) {
+                case 'local':
+                    return `${workspaceRoot}/.switchboard/${baseName}`;
+                case 'google-drive':
+                    return `~/Library/CloudStorage/GoogleDrive-*/.switchboard/${baseName}`;
+                case 'dropbox':
+                    return `~/Dropbox/.switchboard/${baseName}`;
+                case 'icloud':
+                    return `~/Library/Mobile Documents/com~apple~CloudDocs/.switchboard/${baseName}`;
+                case 'custom':
+                    return dbCustomPathInput.value.trim() || 'Enter custom path...';
+                default:
+                    return currentDbPath;
+            }
+        }
+
+        document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
+        document.getElementById('btn-connect-mcp')?.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
+        document.getElementById('btn-copy-mcp-config')?.addEventListener('click', () => vscode.postMessage({ type: 'copyMcpConfig' }));
+        document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
+        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
+        document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
+        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
+        document.getElementById('btn-customize-default-prompts')?.addEventListener('click', openCustomPromptsModal);
+        document.getElementById('btn-cancel-prompt-overrides')?.addEventListener('click', closeCustomPromptsModal);
+        document.getElementById('btn-clear-prompt-override')?.addEventListener('click', () => {
+            promptOverrideText.value = '';
+            delete lastPromptOverrides[editingPromptRole];
+            renderPromptRoleTabs();
+        });
+        document.getElementById('btn-save-prompt-overrides')?.addEventListener('click', () => {
+            saveCurrentRoleDraft();
+            vscode.postMessage({ type: 'saveDefaultPromptOverrides', overrides: lastPromptOverrides });
+            updatePromptOverrideSummary();
+            closeCustomPromptsModal();
+        });
+        teamLeadComplexityCutoffInput?.addEventListener('input', () => {
+            if (teamLeadComplexityCutoffLabel) {
+                teamLeadComplexityCutoffLabel.textContent = describeTeamLeadCutoff(teamLeadComplexityCutoffInput.value);
+            }
+        });
+        teamLeadVisibleToggle?.addEventListener('change', () => {
+            renderKanbanStructureList();
+        });
+        document.getElementById('git-ignore-strategy')?.addEventListener('change', () => {
+            const strategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
+            lastGitIgnoreConfig = { ...lastGitIgnoreConfig, strategy };
+            renderGitIgnoreConfig();
+        });
+        const instantAutosaveSelectors = [
+            '#git-ignore-strategy',
+            '#design-doc-toggle',
+            '#accurate-coding-toggle',
+            '#lead-challenge-toggle',
+            '#advanced-reviewer-toggle',
+            '#aggressive-pair-toggle',
+            '#jules-auto-sync-toggle',
+            '#agents-fields .agent-visible-toggle',
+            '#team-lead-visible-toggle',
+            '#team-lead-complexity-cutoff'
+        ];
+        const textAutosaveSelectors = [
+            '#git-ignore-rules',
+            '#agents-fields input[type="text"][data-role]',
+            '#team-lead-command-input',
+            '#plan-ingestion-folder-input'
+        ];
+        instantAutosaveSelectors.forEach(selector => {
+            document.querySelectorAll(selector).forEach(node => {
+                node.addEventListener('change', () => queueSetupAutosave(selector, true));
+            });
+        });
+        textAutosaveSelectors.forEach(selector => {
+            document.querySelectorAll(selector).forEach(node => {
+                node.addEventListener('input', () => queueSetupAutosave(selector, false));
+                node.addEventListener('blur', () => queueSetupAutosave(`${selector}:blur`, true));
+            });
+        });
+        document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(node => {
+            node.addEventListener('change', () => {
+                renderKanbanStructureList();
+            });
+        });
+        document.getElementById('btn-setup-clickup')?.addEventListener('click', () => {
+            const token = document.getElementById('clickup-token-input')?.value.trim() || '';
+            if (!token) {
+                setIntegrationStatus('clickup', 'failed', 'Token is required.');
+                return;
+            }
+            setIntegrationStatus('clickup', 'working');
+            vscode.postMessage({ type: 'setupClickUp', token });
+        });
+        document.getElementById('btn-setup-linear')?.addEventListener('click', () => {
+            const token = document.getElementById('linear-token-input')?.value.trim() || '';
+            if (!token) {
+                setIntegrationStatus('linear', 'failed', 'Token is required.');
+                return;
+            }
+            setIntegrationStatus('linear', 'working');
+            vscode.postMessage({ type: 'setupLinear', token });
+        });
+        document.getElementById('btn-setup-notion')?.addEventListener('click', () => {
+            const token = document.getElementById('notion-token-input')?.value.trim() || '';
+            if (!token) {
+                setIntegrationStatus('notion', 'failed', 'Token is required.');
+                return;
+            }
+            if (!token.startsWith('secret_') && !token.startsWith('ntn_')) {
+                setIntegrationStatus('notion', 'failed', 'Token must start with "secret_" or "ntn_".');
+                return;
+            }
+            setIntegrationStatus('notion', 'working');
+            vscode.postMessage({ type: 'setupNotion', token });
+        });
+
+        customAgentModal.addEventListener('click', (event) => {
+            if (event.target === customAgentModal) closeCustomAgentModal();
+        });
+        customPromptsModal.addEventListener('click', (event) => {
+            if (event.target === customPromptsModal) closeCustomPromptsModal();
+        });
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') {
+                closeCustomAgentModal();
+                closeCustomPromptsModal();
+            }
+        });
+
+        document.querySelectorAll('input[name="db-location"]').forEach(radio => {
+            radio.addEventListener('change', () => {
+                if (!radio.checked) return;
+                const proposed = getProposedPath(radio.value);
+                dbPathDisplay.textContent = proposed;
+                dbPathDisplay.style.opacity = '0.7';
+                dbPathDisplay.style.fontStyle = 'italic';
+                if (radio.value === 'custom') {
+                    dbCustomPathInput.classList.remove('hidden');
+                    dbCustomPathInput.focus();
+                } else {
+                    dbCustomPathInput.classList.add('hidden');
+                }
+            });
+        });
+
+        dbCustomPathInput?.addEventListener('input', () => {
+            const customRadio = document.querySelector('input[name="db-location"][value="custom"]');
+            if (customRadio?.checked) {
+                dbPathDisplay.textContent = dbCustomPathInput.value.trim() || 'Enter custom path...';
+            }
+        });
+
+        document.getElementById('db-update-location-btn')?.addEventListener('click', () => {
+            const selectedRadio = document.querySelector('input[name="db-location"]:checked');
+            if (!selectedRadio) return;
+            const location = selectedRadio.value;
+            if (location === 'custom') {
+                const customPath = dbCustomPathInput.value.trim();
+                if (!customPath) {
+                    return;
+                }
+                vscode.postMessage({ type: 'setCustomDbPath', path: customPath });
+            } else if (location === 'local') {
+                vscode.postMessage({ type: 'setLocalDb' });
+            } else {
+                vscode.postMessage({ type: 'setPresetDbPath', preset: location });
+            }
+        });
+
+        document.getElementById('db-reset-btn')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'resetDatabase' });
+        });
+
+        bindAccordion('setup-toggle', 'startup-fields', 'setup-chevron', () => {
+            vscode.postMessage({ type: 'getGitIgnoreConfig' });
+        });
+        bindAccordion('agents-toggle', 'agents-fields', 'agents-chevron', () => {
+            vscode.postMessage({ type: 'getAccurateCodingSetting' });
+            vscode.postMessage({ type: 'getAdvancedReviewerSetting' });
+            vscode.postMessage({ type: 'getLeadChallengeSetting' });
+            vscode.postMessage({ type: 'getAggressivePairSetting' });
+            vscode.postMessage({ type: 'getDesignDocSetting' });
+            vscode.postMessage({ type: 'getStartupCommands' });
+            vscode.postMessage({ type: 'getVisibleAgents' });
+            vscode.postMessage({ type: 'getDefaultPromptOverrides' });
+        });
+        bindAccordion('custom-agents-toggle', 'custom-agents-fields', 'custom-agents-chevron', () => {
+            vscode.postMessage({ type: 'getCustomAgents' });
+            vscode.postMessage({ type: 'getVisibleAgents' });
+        });
+        bindAccordion('kanban-structure-toggle', 'kanban-structure-fields', 'kanban-structure-chevron', () => {
+            vscode.postMessage({ type: 'getVisibleAgents' });
+            vscode.postMessage({ type: 'getCustomAgents' });
+            vscode.postMessage({ type: 'getKanbanStructure' });
+        });
+        bindAccordion('orchestration-toggle', 'orchestration-fields', 'orchestration-chevron', () => {
+            vscode.postMessage({ type: 'getStartupCommands' });
+            vscode.postMessage({ type: 'getVisibleAgents' });
+            vscode.postMessage({ type: 'getTeamLeadRoutingSettings' });
+        });
+        bindAccordion('database-toggle', 'db-sync-fields', 'database-chevron', () => {
+            vscode.postMessage({ type: 'getDbPath' });
+            vscode.postMessage({ type: 'getStartupCommands' });
+        });
+        bindAccordion('project-mgmt-toggle', 'project-mgmt-fields', 'project-mgmt-chevron', () => {
+            requestIntegrationSetupStates();
+        });
+
+        window.addEventListener('message', (event) => {
+            const message = event.data;
+            switch (message.type) {
+                case 'startupCommands': {
+                    runSetupHydration(() => {
+                        lastStartupCommands = message.commands || {};
+                        lastPlanIngestionFolder = message.planIngestionFolder || '';
+                        const input = document.getElementById('plan-ingestion-folder-input');
+                        if (input) {
+                            input.value = lastPlanIngestionFolder;
+                        }
+                        if (teamLeadCommandInput) {
+                            teamLeadCommandInput.value = lastStartupCommands['team-lead'] || '';
+                        }
+                        document.querySelectorAll('#agents-fields input[type="text"][data-role]').forEach(input => {
+                            const role = input.dataset.role;
+                            if (role) {
+                                input.value = lastStartupCommands[role] || '';
+                            }
+                        });
+                    });
+                    break;
+                }
+                case 'visibleAgents':
+                    if (message.agents) {
+                        runSetupHydration(() => {
+                            lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
+                            if (teamLeadVisibleToggle) {
+                                teamLeadVisibleToggle.checked = lastVisibleAgents['team-lead'] !== false;
+                            }
+                            document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(toggle => {
+                                const role = toggle.dataset.role;
+                                if (role) {
+                                    toggle.checked = lastVisibleAgents[role] !== false;
+                                }
+                            });
+                            renderCustomAgentConfigList();
+                            renderKanbanStructureList();
+                        });
+                    }
+                    break;
+                case 'teamLeadRoutingSettings':
+                    runSetupHydration(() => {
+                        if (teamLeadComplexityCutoffInput) {
+                            teamLeadComplexityCutoffInput.value = String(message.complexityCutoff ?? 0);
+                        }
+                        if (teamLeadComplexityCutoffLabel) {
+                            teamLeadComplexityCutoffLabel.textContent = describeTeamLeadCutoff(message.complexityCutoff ?? 0);
+                        }
+                    });
+                    break;
+                case 'customAgents':
+                    if (Array.isArray(message.customAgents)) {
+                        runSetupHydration(() => {
+                            lastCustomAgents = message.customAgents;
+                            syncLocalKanbanStructureWithCustomAgents();
+                            renderCustomAgentConfigList();
+                            renderKanbanStructureList();
+                        });
+                    }
+                    break;
+                case 'kanbanStructure':
+                    if (Array.isArray(message.items)) {
+                        runSetupHydration(() => {
+                            lastKanbanStructure = message.items;
+                            syncLocalKanbanStructureWithCustomAgents();
+                            renderKanbanStructureList();
+                        });
+                    }
+                    break;
+                case 'defaultPromptOverrides':
+                    lastPromptOverrides = message.overrides || {};
+                    updatePromptOverrideSummary();
+                    break;
+                case 'defaultPromptPreviews':
+                    lastPromptPreviews = message.previews || {};
+                    loadPreviewForCurrentRole();
+                    break;
+                case 'saveDefaultPromptOverridesResult':
+                    break;
+                case 'saveStartupCommandsResult':
+                    if (message.success === false) {
+                        lastSentSetupSignature = '';
+                        setSetupSaveStatus('FAILED', true);
+                        break;
+                    }
+                    lastAckedSetupSignature = lastSentSetupSignature;
+                    setSetupSaveStatus('SAVED');
+                    break;
+                case 'accurateCodingSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('accurate-coding-toggle');
+                        if (toggle) toggle.checked = message.enabled !== false;
+                    });
+                    break;
+                }
+                case 'advancedReviewerSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('advanced-reviewer-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'leadChallengeSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('lead-challenge-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'aggressivePairSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('aggressive-pair-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'designDocSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('design-doc-toggle');
+                        if (toggle) toggle.checked = !!message.enabled;
+                        lastDesignDocLink = message.link || '';
+                        const statusLine = document.getElementById('design-doc-status-line');
+                        if (statusLine) {
+                            statusLine.textContent = lastDesignDocLink
+                                ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
+                                : 'Not configured — configure in Planning tab';
+                        }
+                    });
+                    break;
+                }
+                case 'gitIgnoreConfig': {
+                    runSetupHydration(() => {
+                        const validStrategies = ['targetedGitignore', 'localExclude', 'custom', 'none'];
+                        const strategy = validStrategies.includes(message.strategy) ? message.strategy : 'targetedGitignore';
+                        const rules = Array.isArray(message.rules)
+                            ? message.rules.map(rule => String(rule).trim()).filter(Boolean)
+                            : [];
+                        const targetedRulesDisplay = Array.isArray(message.targetedRulesDisplay)
+                            ? message.targetedRulesDisplay.map(rule => String(rule)).join('\n')
+                            : '';
+                        lastGitIgnoreConfig = { strategy, rules, targetedRulesDisplay };
+                        renderGitIgnoreConfig();
+                    });
+                    break;
+                }
+                case 'saveGitIgnoreConfigResult': {
+                    setSetupSaveStatus(message.success === false ? 'FAILED' : 'SAVED', message.success === false);
+                    break;
+                }
+                case 'julesAutoSyncSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('jules-auto-sync-toggle');
+                        if (toggle) {
+                            toggle.checked = message.enabled === true;
+                        }
+                    });
+                    break;
+                }
+                case 'dbPathUpdated': {
+                    if (dbPathDisplay) {
+                        dbPathDisplay.textContent = message.path || '.switchboard/kanban.db';
+                        dbPathDisplay.style.opacity = '';
+                        dbPathDisplay.style.fontStyle = '';
+                    }
+                    workspaceRoot = message.workspaceRoot || workspaceRoot;
+                    currentDbPath = message.path || '.switchboard/kanban.db';
+
+                    const pathValue = message.path || '';
+                    let selectedValue = 'local';
+                    if (pathValue.includes('GoogleDrive') || pathValue.includes('Google Drive')) {
+                        selectedValue = 'google-drive';
+                    } else if (pathValue.includes('Dropbox')) {
+                        selectedValue = 'dropbox';
+                    } else if (pathValue.includes('iCloud') || pathValue.includes('com~apple~CloudDocs')) {
+                        selectedValue = 'icloud';
+                    } else if (pathValue && !pathValue.includes('.switchboard/kanban.db')) {
+                        selectedValue = 'custom';
+                        dbCustomPathInput.value = pathValue;
+                        dbCustomPathInput.classList.remove('hidden');
+                    }
+                    const radioToSelect = document.querySelector(`input[name="db-location"][value="${selectedValue}"]`);
+                    if (radioToSelect) {
+                        radioToSelect.checked = true;
+                    }
+                    break;
+                }
+                case 'dbConnectionResult':
+                    if (dbPathDisplay) {
+                        dbPathDisplay.style.borderLeft = message.success ? '3px solid #28a745' : '3px solid #dc3545';
+                        if (!message.success) dbPathDisplay.title = message.error || 'Connection failed';
+                        setTimeout(() => { dbPathDisplay.style.borderLeft = ''; }, 2000);
+                    }
+                    break;
+                case 'integrationSetupStates':
+                    setIntegrationStatus('clickup', message.clickupSetupComplete ? 'configured' : 'idle');
+                    setIntegrationStatus('linear', message.linearSetupComplete ? 'configured' : 'idle');
+                    setIntegrationStatus('notion', message.notionSetupComplete ? 'configured' : 'idle');
+                    break;
+                case 'clickupSetupResult':
+                    setIntegrationStatus('clickup', message.success ? 'configured' : 'failed', message.error || '');
+                    break;
+                case 'linearSetupResult':
+                    setIntegrationStatus('linear', message.success ? 'configured' : 'failed', message.error || '');
+                    break;
+                case 'notionSetupResult':
+                    setIntegrationStatus('notion', message.success ? 'configured' : 'failed', message.error || '');
+                    break;
+                case 'openSetupSection':
+                    if (message.section === 'project-mgmt') {
+                        openAccordion('project-mgmt-fields', 'project-mgmt-chevron', requestIntegrationSetupStates);
+                    }
+                    break;
+                default:
+                    break;
+            }
+        });
+
+        vscode.postMessage({ type: 'ready' });
+    </script>
+</body>
+
+</html>

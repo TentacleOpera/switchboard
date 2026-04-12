@@ -47,7 +47,7 @@ function run() {
     });
 
     test('resolveRequestedKanbanColumn accepts internal keys and UI labels', () => {
-        const availableColumns = ['CREATED', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED'];
+        const availableColumns = ['CREATED', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'ACCEPTANCE TESTED'];
 
         assert.strictEqual(resolveRequestedKanbanColumn('CREATED', availableColumns), 'CREATED');
         assert.strictEqual(resolveRequestedKanbanColumn('New', availableColumns), 'CREATED');
@@ -55,6 +55,7 @@ function run() {
         assert.strictEqual(resolveRequestedKanbanColumn('Planned', availableColumns), 'PLAN REVIEWED');
         assert.strictEqual(resolveRequestedKanbanColumn('Lead Coder', availableColumns), 'LEAD CODED');
         assert.strictEqual(resolveRequestedKanbanColumn('Reviewed', availableColumns), 'CODE REVIEWED');
+        assert.strictEqual(resolveRequestedKanbanColumn('Acceptance Tested', availableColumns), 'ACCEPTANCE TESTED');
     });
 
     test('register-tools filters SQLite reads when a column is requested', () => {
@@ -65,11 +66,11 @@ function run() {
         );
     });
 
-    test('file fallback skips complexity reads for non-matching columns', () => {
+    test('DB fallback returns null when SQLite state is unavailable', () => {
         assert.match(
             registerToolsSource,
-            /const col = normalizeKanbanColumnId\(deriveKanbanColumn\(sheet\.events \|\| \[\]\)\);[\s\S]*if \(requestedColumnId && col !== requestedColumnId\) continue;[\s\S]*let complexity = 'unknown';/s,
-            'Expected the file fallback to short-circuit non-matching columns before reading plan files for complexity.'
+            /catch \(e\) \{[\s\S]*DB unavailable, using file-derived fallback[\s\S]*return null;[\s\S]*\}/s,
+            'Expected readKanbanStateFromDb to return null when the SQLite board state cannot be read.'
         );
     });
 

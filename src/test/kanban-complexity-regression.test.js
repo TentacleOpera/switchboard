@@ -76,17 +76,17 @@ function run() {
         'Send it to the **Lead Coder**.'
     ].join('\n');
 
-    test('register-tools treats parenthesized Complex/Band B label with None as low complexity', () => {
-        assert.strictEqual(getComplexityFromContent(lowPlan), 'low');
+    test('register-tools treats parenthesized Complex/Band B label with None as low complexity score', () => {
+        assert.strictEqual(getComplexityFromContent(lowPlan), '3');
     });
 
-    test('register-tools keeps substantive Complex items as high complexity', () => {
-        assert.strictEqual(getComplexityFromContent(highPlan), 'high');
+    test('register-tools keeps substantive Complex items as high complexity score', () => {
+        assert.strictEqual(getComplexityFromContent(highPlan), '8');
     });
 
-    test('register-tools matches recommendation-only fallback routing', () => {
-        assert.strictEqual(getComplexityFromContent(recommendationOnlyCoderPlan), 'low');
-        assert.strictEqual(getComplexityFromContent(recommendationOnlyLeadPlan), 'high');
+    test('register-tools matches recommendation-only fallback routing scores', () => {
+        assert.strictEqual(getComplexityFromContent(recommendationOnlyCoderPlan), '3');
+        assert.strictEqual(getComplexityFromContent(recommendationOnlyLeadPlan), '8');
     });
 
     test('KanbanProvider strips parenthesized complexity labels before evaluating meaning', () => {

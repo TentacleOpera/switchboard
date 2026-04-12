@@ -15,8 +15,12 @@ export interface PipelineState {
 
 type GetRunSheetsCallback = () => Promise<any[]>;
 type DispatchCallback = (role: string, sessionId: string, instruction?: string) => Promise<void>;
+type IsAcceptanceTesterActiveCallback = (sheet: any) => Promise<boolean>;
 
-function getNextStage(sheet: any): { role: string; instruction?: string; label: string } | 'done' {
+async function getNextStage(
+    sheet: any,
+    isAcceptanceTesterActive?: IsAcceptanceTesterActiveCallback
+): Promise<{ role: string; instruction?: string; label: string } | 'done'> {
     const events = Array.isArray(sheet.events) ? sheet.events : [];
     const startEvents = events.filter((e: any) => e.action === 'start');
     const lastWorkflow: string | undefined = startEvents.length > 0
@@ -29,7 +33,12 @@ function getNextStage(sheet: any): { role: string; instruction?: string; label: 
         return { role: 'lead', label: 'Lead Coder' };
     } else if (lastWorkflow === 'handoff-lead' || lastWorkflow === 'handoff') {
         return { role: 'reviewer', label: 'Reviewer' };
-    } else if (lastWorkflow === 'challenge' || lastWorkflow === 'reviewer-pass') {
+    } else if (lastWorkflow === 'reviewer-pass') {
+        if (isAcceptanceTesterActive && await isAcceptanceTesterActive(sheet)) {
+            return { role: 'tester', label: 'Acceptance Tester' };
+        }
+        return 'done';
+    } else if (lastWorkflow === 'challenge' || lastWorkflow === 'tester-pass') {
         return 'done';
     } else {
         // Unknown last workflow — fall back to planner
@@ -49,17 +58,20 @@ export class PipelineOrchestrator {
 
     private _onStateChange: (() => void) | undefined;
     private _dispatchCallback: DispatchCallback | undefined;
+    private _isAcceptanceTesterActiveCallback: IsAcceptanceTesterActiveCallback | undefined;
     private _getRunSheetsCallback: GetRunSheetsCallback | undefined;
     private _globalState: vscode.Memento | undefined;
 
     constructor(
         onStateChange: () => void,
         dispatchCallback: DispatchCallback,
+        isAcceptanceTesterActiveCallback: IsAcceptanceTesterActiveCallback,
         getRunSheetsCallback: GetRunSheetsCallback,
         globalState: vscode.Memento
     ) {
         this._onStateChange = onStateChange;
         this._dispatchCallback = dispatchCallback;
+        this._isAcceptanceTesterActiveCallback = isAcceptanceTesterActiveCallback;
         this._getRunSheetsCallback = getRunSheetsCallback;
         this._globalState = globalState;
         this._intervalSeconds = this._normalizeInterval(
@@ -161,6 +173,7 @@ export class PipelineOrchestrator {
         this._clearTimer();
         this._onStateChange = undefined;
         this._dispatchCallback = undefined;
+        this._isAcceptanceTesterActiveCallback = undefined;
         this._getRunSheetsCallback = undefined;
     }
 
@@ -181,9 +194,13 @@ export class PipelineOrchestrator {
             }
 
             // Compute next stage for each active sheet, filter to pending.
-            const pending = activeSheets
-                .map(s => ({ sheet: s, stage: getNextStage(s) }))
-                .filter(({ stage }) => stage !== 'done');
+            const pending: Array<{ sheet: any; stage: { role: string; instruction?: string; label: string } }> = [];
+            for (const sheet of activeSheets) {
+                const stage = await getNextStage(sheet, this._isAcceptanceTesterActiveCallback);
+                if (stage !== 'done') {
+                    pending.push({ sheet, stage });
+                }
+            }
 
             this._pendingCount = pending.length;
 
@@ -204,7 +221,6 @@ export class PipelineOrchestrator {
             });
 
             const { sheet, stage } = pending[0];
-            if (stage === 'done') { return; } // safety guard
 
             const sessionId: string = sheet.sessionId;
             const planTitle: string = sheet.topic || sheet.planName || sheet.title || sessionId;

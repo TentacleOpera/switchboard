@@ -19,7 +19,7 @@ const runtimeRequire = createRequire(__filename);
 
 const { loadState, updateState } = require("./state-manager");
 const { getWorkflow, WORKFLOWS } = require("./workflows");
-const { deriveKanbanColumn } = require('../services/kanbanColumnDerivation');
+const { deriveKanbanColumn } = require('../services/kanbanColumnDerivationImpl.js');
 
 // DYNAMICALLY derived from WORKFLOWS object keys
 const WorkflowEnum = z.enum(Object.keys(WORKFLOWS));
@@ -325,6 +325,7 @@ const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
     { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
     { id: 'CODER CODED', label: 'Coder', order: 200 },
     { id: 'CODE REVIEWED', label: 'Reviewed', order: 300 },
+    { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', order: 350 },
     { id: 'COMPLETED', label: 'Completed', order: 9999 }
 ];
 
@@ -345,6 +346,8 @@ const KANBAN_COLUMN_ALIASES = {
     'CODER': 'CODER CODED',
     'CODE REVIEWED': 'CODE REVIEWED',
     'REVIEWED': 'CODE REVIEWED',
+    'ACCEPTANCE TESTED': 'ACCEPTANCE TESTED',
+    'ACCEPTANCE TEST': 'ACCEPTANCE TESTED',
     'COMPLETED': 'COMPLETED',
     'DONE': 'COMPLETED',
     'CODED': 'LEAD CODED'
@@ -3772,4 +3775,3 @@ module.exports = {
     WORKFLOWS,
     PhaseGateSchema
 };
-

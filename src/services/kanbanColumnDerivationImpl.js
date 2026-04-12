@@ -25,6 +25,7 @@ function deriveKanbanColumn(events, customAgents) {
         'lead-coded': 'LEAD CODED',
         'coder-coded': 'CODER CODED',
         'code-reviewed': 'CODE REVIEWED',
+        'acceptance-tested': 'ACCEPTANCE TESTED',
         'coded': 'CODED'
     };
 
@@ -83,6 +84,9 @@ function deriveKanbanColumn(events, customAgents) {
             case 'review':
             case 'reviewer-pass':
                 return 'CODE REVIEWED';
+
+            case 'tester-pass':
+                return 'ACCEPTANCE TESTED';
 
             // Workflows that do not determine column position — skip
             case 'accuracy':

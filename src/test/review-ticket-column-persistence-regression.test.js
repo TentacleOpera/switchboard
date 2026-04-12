@@ -6,7 +6,7 @@ const path = require('path');
 
 const providerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
 const providerSource = fs.readFileSync(providerPath, 'utf8');
-const { deriveKanbanColumn } = require(path.join(process.cwd(), 'src', 'services', 'kanbanColumnDerivation.js'));
+const { deriveKanbanColumn } = require(path.join(process.cwd(), 'src', 'services', 'kanbanColumnDerivationImpl.js'));
 
 function run() {
     const start = providerSource.indexOf("case 'setColumn': {");
@@ -21,14 +21,14 @@ function run() {
         'Expected ticket-view column updates to validate against the live Kanban column list.'
     );
     assert.ok(
-        setColumnBranch.includes('const ticketData = await this.getReviewTicketData(sessionId);') &&
-        setColumnBranch.includes('const currentColumn = this._normalizeLegacyKanbanColumn(ticketData.column);'),
+        setColumnBranch.includes('const currentRow = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);') &&
+        setColumnBranch.includes('const currentColumn = this._getEffectiveKanbanColumnForSession(sheet, customAgents, currentRow);'),
         'Expected ticket-view column updates to compare against the current ticket column before moving.'
     );
     assert.ok(
-        setColumnBranch.includes('await this.handleKanbanBackwardMove([sessionId], column, workspaceRoot);') &&
-        setColumnBranch.includes('await this.handleKanbanForwardMove([sessionId], column, workspaceRoot);'),
-        'Expected ticket-view column updates to reuse the existing forward/backward Kanban move paths.'
+        setColumnBranch.includes('const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents);') &&
+        setColumnBranch.includes('await this._applyManualKanbanColumnChange('),
+        'Expected ticket-view column updates to reuse the shared manual Kanban change persistence path.'
     );
     assert.ok(
         !setColumnBranch.includes('await db.updateColumn(sessionId, column);'),
@@ -54,6 +54,11 @@ function run() {
         deriveKanbanColumn([{ workflow: 'reset-to-coder-coded' }], []),
         'CODER CODED',
         'reset-to-coder-coded should survive refresh by deriving back to CODER CODED'
+    );
+    assert.strictEqual(
+        deriveKanbanColumn([{ workflow: 'move-to-acceptance-tested' }], []),
+        'ACCEPTANCE TESTED',
+        'move-to-acceptance-tested should survive refresh by deriving to ACCEPTANCE TESTED'
     );
 
     console.log('review ticket column persistence regression test passed');

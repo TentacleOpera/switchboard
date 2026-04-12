@@ -1,5 +1,5 @@
 const assert = require('assert');
-const { parseCustomAgents, buildKanbanColumns } = require('../services/agentConfig');
+const { parseCustomAgents, buildKanbanColumns, reweightSequence } = require('../services/agentConfig');
 
 describe('agentConfig — dragDropMode', () => {
     describe('parseCustomAgents()', () => {
@@ -77,6 +77,43 @@ describe('agentConfig — dragDropMode', () => {
             const customCol = columns.find(c => c.kind === 'custom');
             assert.ok(customCol, 'Custom column should exist');
             assert.strictEqual(customCol.dragDropMode, 'cli');
+        });
+
+        it('applies persisted built-in order overrides', () => {
+            const columns = buildKanbanColumns([], {
+                orderOverrides: {
+                    'CODE REVIEWED': 150,
+                    'LEAD CODED': 250
+                }
+            });
+            const orderedIds = columns.map(column => column.id);
+            assert.ok(
+                orderedIds.indexOf('CODE REVIEWED') < orderedIds.indexOf('LEAD CODED'),
+                'Expected built-in overrides to change sorted column order.'
+            );
+        });
+    });
+
+    describe('reweightSequence()', () => {
+        it('returns deterministic gap-based weights', () => {
+            assert.deepStrictEqual(
+                reweightSequence(['PLAN REVIEWED', 'LEAD CODED', 'CODER CODED']),
+                {
+                    'PLAN REVIEWED': 100,
+                    'LEAD CODED': 200,
+                    'CODER CODED': 300
+                }
+            );
+        });
+
+        it('ignores duplicate and fixed-anchor IDs', () => {
+            assert.deepStrictEqual(
+                reweightSequence(['CREATED', 'PLAN REVIEWED', 'PLAN REVIEWED', 'COMPLETED', 'LEAD CODED']),
+                {
+                    'PLAN REVIEWED': 100,
+                    'LEAD CODED': 200
+                }
+            );
         });
     });
 });

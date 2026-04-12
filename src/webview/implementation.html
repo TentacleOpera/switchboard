@@ -952,72 +952,6 @@
             background: color-mix(in srgb, var(--accent-green) 12%, transparent);
         }
 
-        /* Agent Startup Config */
-        .startup-section {
-            padding: 10px;
-            background: var(--panel-bg);
-            border-top: 1px solid var(--border-color);
-        }
-
-        .startup-toggle {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            user-select: none;
-        }
-
-        .startup-toggle .chevron {
-            font-size: 10px;
-            color: var(--text-secondary);
-            transition: transform 0.15s;
-        }
-
-        .startup-toggle .chevron.open {
-            transform: rotate(90deg);
-        }
-
-        .startup-fields {
-            display: none;
-            flex-direction: column;
-            gap: 6px;
-            margin-top: 8px;
-        }
-
-        .startup-fields.open {
-            display: flex;
-        }
-
-        .startup-row label {
-            display: block;
-            font-size: 9px;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            font-family: var(--font-mono);
-            margin-bottom: 2px;
-        }
-
-        .startup-row span {
-            color: var(--text-secondary);
-        }
-
-        .startup-row input {
-            width: 100%;
-            background: #0a0a0a;
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            padding: 5px 7px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-        }
-
-        .startup-row input:focus,
-        .startup-row input:hover {
-            border-color: var(--border-bright);
-            outline: none;
-        }
-
         /* Action Button Feedback Animations */
         @keyframes pulse-green {
             0% {
@@ -1193,215 +1127,21 @@
             margin-bottom: 6px;
         }
 
-
-        .db-sync-fields {
-            display: none;
-            flex-direction: column;
-            gap: 12px;
-            padding: 12px;
-            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
-            backdrop-filter: blur(8px);
+        .startup-row input[type="text"] {
+            background: #0a0a0a;
+            color: var(--text-primary);
             border: 1px solid var(--border-color);
-            border-top: none;
-            border-radius: 0 0 4px 4px;
-            margin-top: -1px;
-        }
-
-        .db-sync-fields.open {
-            display: flex;
-        }
-
-        .db-subsection {
-            padding-bottom: 12px;
-            border-bottom: 1px solid var(--border-dim);
-        }
-
-        .db-subsection:last-child {
-            border-bottom: none;
-            padding-bottom: 0;
-        }
-
-        .subsection-header {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            font-family: var(--font-mono);
-            font-size: 10px;
-            font-weight: 600;
-            color: var(--text-secondary);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            margin-bottom: 8px;
-        }
-
-        .db-status-badge {
-            margin-left: auto;
-            padding: 2px 8px;
-            border-radius: 12px;
-            font-size: 9px;
-            font-weight: 700;
-            text-transform: uppercase;
-            letter-spacing: 0.5px;
-            background: var(--bg-dim);
-            color: var(--text-secondary);
-            border: 1px solid var(--border-dim);
-        }
-
-        .db-status-badge.synced {
-            background: color-mix(in srgb, var(--accent-green) 10%, transparent);
-            color: var(--accent-green);
-            border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
-            text-shadow: var(--glow-green);
-        }
-
-        .db-status-badge.error {
-            background: color-mix(in srgb, var(--accent-red) 10%, transparent);
-            color: var(--accent-red);
-            border-color: color-mix(in srgb, var(--accent-red) 40%, transparent);
-            text-shadow: var(--glow-red);
-        }
-
-        .db-path-display {
-            font-family: var(--font-mono);
-            font-size: 10px;
-            color: var(--text-secondary);
-            background: var(--bg-dim);
-            padding: 6px 10px;
-            border-radius: 4px;
-            word-break: break-all;
-            margin-bottom: 8px;
-            border: 1px solid var(--border-dim);
-        }
-
-        .db-path-actions {
-            display: flex;
-            gap: 8px;
-            margin-bottom: 8px;
-        }
-
-        .db-location-options {
-            display: flex;
-            flex-direction: column;
-            gap: 6px;
-            margin-bottom: 8px;
-        }
-
-        .db-radio-option {
-            display: flex;
-            align-items: center;
-            gap: 8px;
             padding: 6px 8px;
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 11px;
-            color: var(--text-secondary);
-            transition: all 0.2s ease;
-        }
-
-        .db-radio-option:hover {
-            background: var(--bg-dim);
-            color: var(--text-primary);
-        }
-
-        .db-radio-option input[type="radio"] {
-            width: auto;
-            margin: 0;
-            flex-shrink: 0;
-        }
-
-        .db-custom-path-input {
-            width: 100%;
-            padding: 6px 10px;
             font-family: var(--font-mono);
-            font-size: 10px;
-            background: var(--bg-dim);
-            border: 1px solid var(--border-dim);
-            border-radius: 4px;
-            color: var(--text-primary);
-            margin-top: 4px;
+            font-size: 11px;
         }
 
-        .db-custom-path-input:not(.hidden) {
-            display: block;
-        }
-
-        .db-cli-tool-row {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 6px 0;
-            background: var(--bg-dim);
-            border-radius: 4px;
-            padding: 6px 10px;
-            border: 1px solid var(--border-dim);
-        }
-
-        .db-tool-status {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            font-size: 10px;
-            color: var(--text-secondary);
-        }
-
-        .db-status-dot {
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            display: inline-block;
-        }
-
-        .db-status-dot.green {
-            background: var(--accent-green);
-            box-shadow: var(--glow-green);
-        }
-
-        .db-status-dot.red {
-            background: var(--accent-red);
-            box-shadow: var(--glow-red);
-        }
-
-        .db-quick-actions {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: 6px;
-            margin-top: 4px;
-        }
-
-        .db-action-btn {
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            gap: 4px;
-            padding: 8px 4px;
-            border: 1px solid var(--border-dim);
-            background: var(--bg-dim);
-            color: var(--text-secondary);
-            border-radius: 4px;
-            cursor: pointer;
-            font-size: 9px;
-            text-align: center;
-            transition: all 0.2s ease;
-            text-transform: uppercase;
-            font-weight: 600;
-        }
-
-        .db-action-btn:hover {
-            background: var(--border-dim);
+        .startup-row input[type="text"]:focus,
+        .startup-row input[type="text"]:hover {
             border-color: var(--border-bright);
-            color: var(--text-primary);
+            outline: none;
         }
 
-        .db-action-btn.danger {
-            border-color: rgba(220, 53, 69, 0.4);
-            color: #dc3545;
-        }
-
-        .db-action-btn.danger:hover {
-            background: rgba(220, 53, 69, 0.2);
-            border-color: #dc3545;
-        }
 
         .db-action-icon {
             font-size: 16px;
@@ -1517,6 +1257,12 @@
                         placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="tester"
+                        style="width:auto; margin:0; flex-shrink:0;">
+                    <label style="min-width:70px;">Acceptance Tester</label><input type="text" id="onboard-cli-tester"
+                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
+                </div>
+                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="analyst" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Analyst</label><input type="text" id="onboard-cli-analyst"
@@ -1584,7 +1330,7 @@
         <div id="panel-agents" class="tab-panel">
             <div class="sub-tab-bar">
                 <button class="sub-tab-btn is-active" data-tab="agents">Agents</button>
-                <button class="sub-tab-btn" data-tab="webai">Airlock</button>
+                <button class="sub-tab-btn" data-tab="webai">Planning</button>
                 <button class="sub-tab-btn" data-tab="autoban">Autoban</button>
             </div>
             <div id="agent-list-standard" class="agent-list">
@@ -1621,188 +1367,8 @@
             <div class="panel-fields open" id="terminal-operations-fields" data-accordion="true">
                 <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
                 <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
-                <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main
-                    program</button>
-                <div
-                    style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    AGENT VISIBILITY &amp; CLI COMMANDS</div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
-                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="coder" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Coder</label><input type="text" data-role="coder"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="intern" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Intern</label><input type="text" data-role="intern"
-                        placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
-                        placeholder="e.g. qwen" style="flex:1;">
-                </div>
-                <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="agent-visible-toggle" data-role="jules" checked
-                        style="width:auto; margin:0; flex-shrink:0;">
-                    <label style="min-width:70px;">Jules</label>
-                    <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility
-                        only</span>
-                </div>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="jules-auto-sync-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Auto-sync repo before sending to Jules</span>
-                </label>
-                <div
-                    style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    CUSTOM AGENTS</div>
-                <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
-                <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
-            </div>
-        </div>
-        <!-- SETUP -->
-        <div class="startup-section">
-            <div class="startup-toggle" id="startup-toggle">
-                <div class="section-label" style="margin:0">SETUP</div>
-                <span class="chevron" id="startup-chevron">▶</span>
-            </div>
-            <div class="startup-fields" id="startup-fields" data-accordion="true">
-                <div class="flex gap-2">
-                    <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
-                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
-                </div>
-                <button id="btn-copy-mcp-config" class="secondary-btn w-full" style="margin-top: 4px;">COPY MCP
-                    CONFIG</button>
-                <div
-                    style="font-size: 10px; color: var(--text-secondary); margin: 8px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    PROMPT CONTROLS</div>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Append Design Doc to planner prompts</span>
-                </label>
-                <label class="startup-row" style="display:block; margin-top:4px;">
-                    <input id="design-doc-link-input" type="text"
-                        placeholder="https://example.com/prd or /path/to/design.md" style="width:100%;">
-                </label>
-                <div style="font-size:10px; color:var(--accent-orange); margin-top:4px; font-family:var(--font-mono);">
-                    ⚠️ Security: File contents are embedded in AI prompts. Do not link files containing API keys,
-                    passwords, or sensitive data.
-                </div>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Accurate coding mode for Coder prompts</span>
-                </label>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Inline challenge step for Lead Coder prompts</span>
-                </label>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="advanced-reviewer-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Advanced reviewer mode (deep regression analysis — high token usage)</span>
-                </label>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="aggressive-pair-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Aggressive pair programming (shift more tasks to Coder)</span>
-                </label>
-                <button id="btn-save-startup" class="secondary-btn w-full"
-                    style="margin-top:4px; color: var(--accent-green); border-color: color-mix(in srgb, var(--accent-green) 250%, transparent);">SAVE
-                    CONFIGURATION</button>
-                <button id="btn-open-docs" class="secondary-btn w-full" style="margin-top:4px;">OPEN DOCS</button>
-
-            </div>
-        </div>
-
-        <!-- DATABASE OPERATIONS -->
-        <div class="system-section">
-            <div class="panel-toggle" id="db-sync-toggle-btn">
-                <div class="section-label" style="margin:0">Database operations</div>
-                <span class="chevron" id="db-sync-chevron">▶</span>
-            </div>
-            <div class="db-sync-fields" id="db-sync-fields" data-accordion="true">
-                <div
-                    style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    PLAN INGESTION</div>
-                <label class="startup-row" style="display:block; margin-top:6px;">
-                    <span style="display:block; margin-bottom:4px;">Additional plan folder</span>
-                    <input id="plan-ingestion-folder-input" type="text" placeholder="e.g. C:\Plans\Switchboard"
-                        style="width:100%;">
-                </label>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Database Location</span>
-                    </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Using a cloud location (Google Drive, Dropbox, iCloud) allows plan metadata to sync across
-                        machines without git merge conflicts. The database file stays in sync automatically via your
-                        cloud provider.
-                    </div>
-                    <div class="db-path-display" id="current-db-path">.switchboard/kanban.db</div>
-                    <div class="db-location-options">
-                        <label class="db-radio-option">
-                            <input type="radio" name="db-location" value="local" checked>
-                            <span>Local (.switchboard/kanban.db)</span>
-                        </label>
-                        <label class="db-radio-option">
-                            <input type="radio" name="db-location" value="google-drive">
-                            <span>Google Drive App</span>
-                        </label>
-                        <label class="db-radio-option">
-                            <input type="radio" name="db-location" value="dropbox">
-                            <span>Dropbox</span>
-                        </label>
-                        <label class="db-radio-option">
-                            <input type="radio" name="db-location" value="icloud">
-                            <span>iCloud</span>
-                        </label>
-                        <label class="db-radio-option">
-                            <input type="radio" name="db-location" value="custom">
-                            <span>Custom Path</span>
-                        </label>
-                        <input type="text" id="db-custom-path-input" class="db-custom-path-input hidden"
-                            placeholder="Enter custom database path...">
-                    </div>
-                    <button id="db-update-location-btn" class="db-action-btn w-full" style="margin-top: 8px;">Update
-                        Location</button>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Rebuild Database</span>
-                    </div>
-                    <div style="font-size: 10px; background: rgba(255, 193, 7, 0.12); border: 1px solid rgba(255, 193, 7, 0.4); border-radius: 4px; padding: 8px; margin-bottom: 8px; line-height: 1.5; color: var(--text-primary);">
-                        ⚠️ <strong>Local database only.</strong> <code>kanban.db</code> is machine-local state and is
-                        gitignored automatically. Do <strong>not</strong> commit it — git reset or branch switches
-                        will not affect your kanban state. To recover a lost database, use Rebuild below.
-                    </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        If the database is corrupted, this will delete and recreate it from your plan files in
-                        .switchboard/plans/. Plan metadata will be restored from the markdown files.
-                    </div>
-                    <button id="db-reset-btn" class="db-action-btn danger w-full"
-                        title="WARNING: Permanently delete and rebuild database">
-                        REBUILD DATABASE
-                    </button>
-                </div>
+                <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">OPEN SETUP</button>
+                <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
             </div>
         </div>
 
@@ -1834,39 +1400,6 @@
         </div>
     </div>
 
-    <div id="custom-agent-modal" class="modal-overlay hidden">
-        <div class="modal-card" style="max-width: 520px;">
-            <div class="modal-title">CUSTOM AGENT</div>
-            <label class="modal-label" for="custom-agent-name">Agent name</label>
-            <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
-            <label class="modal-label" for="custom-agent-command">Startup command</label>
-            <input id="custom-agent-command" class="modal-input" type="text"
-                placeholder="e.g. claude --dangerously-skip-permissions">
-            <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
-            <textarea id="custom-agent-prompt" class="modal-textarea"
-                placeholder="Extra instructions to append when this agent is dispatched"></textarea>
-            <label class="modal-label" for="custom-agent-order">Kanban order</label>
-            <input id="custom-agent-order" class="modal-input" type="number" value="400">
-            <label class="modal-label" for="custom-agent-dragdrop">Drag &amp; Drop Mode</label>
-            <select id="custom-agent-dragdrop" class="modal-input">
-                <option value="cli">CLI Agent (trigger terminal action)</option>
-                <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
-            </select>
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
-                <span>Show as Kanban column</span>
-            </label>
-            <div id="custom-agent-error"
-                style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
-            <div class="flex gap-2" style="margin-top: 10px;">
-                <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
-                <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
-            </div>
-        </div>
-    </div>
-
-
-
     <script>
         const vscode = acquireVsCodeApi();
 
@@ -1893,20 +1426,20 @@
         const recoverPlanList = document.getElementById('recover-plan-list');
         const recoverEmptyMsg = document.getElementById('recover-empty-msg');
         const recoverSearchInput = document.getElementById('recover-search');
-        const customAgentList = document.getElementById('custom-agent-list');
-        const customAgentModal = document.getElementById('custom-agent-modal');
-        const customAgentNameInput = document.getElementById('custom-agent-name');
-        const customAgentCommandInput = document.getElementById('custom-agent-command');
-        const customAgentPromptInput = document.getElementById('custom-agent-prompt');
-        const customAgentOrderInput = document.getElementById('custom-agent-order');
-        const customAgentDragDropModeInput = document.getElementById('custom-agent-dragdrop');
-        const customAgentKanbanInput = document.getElementById('custom-agent-kanban');
-        const customAgentError = document.getElementById('custom-agent-error');
         let recoverablePlansCache = [];
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
-        let editingCustomAgentId = null;
+        let lastDesignDocLink = '';
+
+        // Global helper — no class scope (underscore prefix is convention only, not enforced)
+        function _relativeTime(date) {
+            const diff = Math.floor((Date.now() - date.getTime()) / 1000);
+            if (diff < 60) { return 'just now'; }
+            if (diff < 3600) { return `${Math.floor(diff / 60)}m ago`; }
+            if (diff < 86400) { return `${Math.floor(diff / 3600)}h ago`; }
+            return `${Math.floor(diff / 86400)}d ago`;
+        }
 
         function isPlanSelected() {
             return Boolean(runSheetSelect && runSheetSelect.value);
@@ -1933,144 +1466,6 @@
                 copyPlanLinkBtn.classList.remove('success', 'error');
                 copyPlanLinkTimer = null;
             }, 1500);
-        }
-
-        function sanitizeCustomAgentId(value) {
-            const normalized = String(value || '')
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '_')
-                .replace(/^_+|_+$/g, '')
-                .slice(0, 48);
-            return normalized || `agent_${Date.now().toString(36)}`;
-        }
-
-        function toCustomAgentRole(id) {
-            return `custom_agent_${sanitizeCustomAgentId(id)}`;
-        }
-
-        function openCustomAgentModal(agent) {
-            editingCustomAgentId = agent ? agent.id : null;
-            customAgentNameInput.value = agent?.name || '';
-            customAgentCommandInput.value = agent?.startupCommand || '';
-            customAgentPromptInput.value = agent?.promptInstructions || '';
-            customAgentOrderInput.value = String(agent?.kanbanOrder ?? 150);
-            customAgentDragDropModeInput.value = agent?.dragDropMode || 'cli';
-            customAgentKanbanInput.checked = agent?.includeInKanban === true;
-            customAgentError.textContent = '';
-            customAgentModal.classList.remove('hidden');
-            setTimeout(() => customAgentNameInput.focus(), 0);
-        }
-
-        function closeCustomAgentModal() {
-            editingCustomAgentId = null;
-            customAgentModal.classList.add('hidden');
-            customAgentError.textContent = '';
-        }
-
-        function saveCustomAgentDraft() {
-            const name = customAgentNameInput.value.trim();
-            const startupCommand = customAgentCommandInput.value.trim();
-            if (!name || !startupCommand) {
-                customAgentError.textContent = 'Name and startup command are required.';
-                return;
-            }
-
-            const existingId = editingCustomAgentId || sanitizeCustomAgentId(name);
-            const role = toCustomAgentRole(existingId);
-            const nextAgent = {
-                id: existingId,
-                role,
-                name,
-                startupCommand,
-                promptInstructions: customAgentPromptInput.value.trim(),
-                includeInKanban: !!customAgentKanbanInput.checked,
-                kanbanOrder: Number(customAgentOrderInput.value) || 400,
-                dragDropMode: customAgentDragDropModeInput.value
-            };
-
-            const duplicate = lastCustomAgents.find(agent =>
-                agent.id !== nextAgent.id &&
-                agent.name.toLowerCase() === nextAgent.name.toLowerCase()
-            );
-            if (duplicate) {
-                customAgentError.textContent = 'Agent names must be unique.';
-                return;
-            }
-
-            lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
-            lastCustomAgents.push(nextAgent);
-            lastCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
-            if (!(nextAgent.role in lastVisibleAgents)) {
-                lastVisibleAgents[nextAgent.role] = true;
-            }
-            lastStartupCommands[nextAgent.role] = nextAgent.startupCommand;
-            renderCustomAgentConfigList();
-            renderAgentList();
-            closeCustomAgentModal();
-        }
-
-        function renderCustomAgentConfigList() {
-            if (!customAgentList) return;
-            customAgentList.innerHTML = '';
-            if (!lastCustomAgents.length) {
-                const empty = document.createElement('div');
-                empty.style.cssText = 'padding:8px; color:var(--text-secondary); font-size:11px; text-align:center;';
-                empty.textContent = 'No custom agents configured.';
-                customAgentList.appendChild(empty);
-                return;
-            }
-
-            lastCustomAgents.forEach(agent => {
-                const row = document.createElement('div');
-                row.className = 'startup-row';
-                row.style.cssText = 'display:flex; flex-direction:column; gap:6px; align-items:stretch;';
-
-                const top = document.createElement('div');
-                top.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                const visibility = document.createElement('input');
-                visibility.type = 'checkbox';
-                visibility.className = 'agent-visible-toggle custom-agent-visible-toggle';
-                visibility.dataset.role = agent.role;
-                visibility.checked = lastVisibleAgents[agent.role] !== false;
-                visibility.style.cssText = 'width:auto; margin:0; flex-shrink:0;';
-
-                const label = document.createElement('div');
-                label.style.cssText = 'flex:1; font-size:11px; color:var(--text-primary);';
-                label.textContent = agent.name;
-
-                const editBtn = document.createElement('button');
-                editBtn.className = 'secondary-btn';
-                editBtn.style.cssText = 'width:auto; min-width:64px;';
-                editBtn.textContent = 'EDIT';
-                editBtn.onclick = () => openCustomAgentModal(agent);
-
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'secondary-btn';
-                deleteBtn.style.cssText = 'width:auto; min-width:64px;';
-                deleteBtn.textContent = 'DELETE';
-                deleteBtn.onclick = () => {
-                    lastCustomAgents = lastCustomAgents.filter(item => item.id !== agent.id);
-                    delete lastVisibleAgents[agent.role];
-                    delete lastStartupCommands[agent.role];
-                    renderCustomAgentConfigList();
-                    renderAgentList();
-                };
-
-                top.appendChild(visibility);
-                top.appendChild(label);
-                top.appendChild(editBtn);
-                top.appendChild(deleteBtn);
-
-                const meta = document.createElement('div');
-                meta.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
-                const modeLabel = agent.dragDropMode === 'prompt' ? 'Clipboard Prompt' : 'CLI Agent';
-                meta.textContent = `${agent.startupCommand}${agent.includeInKanban ? ` • Kanban ${agent.kanbanOrder}` : ''} • Mode: ${modeLabel}`;
-
-                row.appendChild(top);
-                row.appendChild(meta);
-                customAgentList.appendChild(row);
-            });
         }
 
         document.getElementById('btn-create-plan').addEventListener('click', () => {
@@ -2139,34 +1534,22 @@
                 });
             });
         }
+
         document.getElementById('btn-recover-plans').addEventListener('click', openRecoverPlansModal);
         document.getElementById('btn-close-recover').addEventListener('click', closeRecoverPlansModal);
-        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
-        document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
-        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
         document.getElementById('mcp-recheck-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'recheckMcpConnection' });
         });
         recoverPlansModal.addEventListener('click', (event) => {
             if (event.target === recoverPlansModal) closeRecoverPlansModal();
         });
-        customAgentModal.addEventListener('click', (event) => {
-            if (event.target === customAgentModal) closeCustomAgentModal();
-        });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { closeRecoverPlansModal(); closeCustomAgentModal(); }
+            if (e.key === 'Escape') { closeRecoverPlansModal(); }
         });
         recoverSearchInput.addEventListener('input', () => {
             renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
         });
 
-        // Setup Buttons
-        const btnInit = document.getElementById('btn-initialize');
-        if (btnInit) btnInit.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
-        const btnConnect = document.getElementById('btn-connect-mcp');
-        if (btnConnect) btnConnect.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
-        const btnCopyMcp = document.getElementById('btn-copy-mcp-config');
-        if (btnCopyMcp) btnCopyMcp.addEventListener('click', () => vscode.postMessage({ type: 'copyMcpConfig' }));
         const btnGrid = document.getElementById('createAgentGrid');
         if (btnGrid) {
             btnGrid.addEventListener('click', () => {
@@ -2187,27 +1570,21 @@
                 }
 
                 // Collect current CLI commands and custom agent state
-                const commands = { ...lastStartupCommands };
-                document.querySelectorAll('input[type="text"][data-role]').forEach(input => {
-                    const role = input.dataset.role;
-                    commands[role] = input.value.trim();
-                });
-                const visibleAgents = {};
-                document.querySelectorAll('.agent-visible-toggle').forEach(cb => {
-                    const role = cb.dataset.role;
-                    if (role) visibleAgents[role] = cb.checked;
-                });
-                const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-                const advancedReviewerEnabled = !!document.getElementById('advanced-reviewer-toggle')?.checked;
-                const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
-                const julesAutoSyncEnabled = !!document.getElementById('jules-auto-sync-toggle')?.checked;
-                const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
-                const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
-                const designDocLink = document.getElementById('design-doc-link-input')?.value.trim() || '';
-                const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
+                const commands = {
+                    ...lastStartupCommands,
+                    'team-lead': lastStartupCommands['team-lead'] || ''
+                };
+                const visibleAgents = {
+                    ...lastVisibleAgents,
+                    'team-lead': lastVisibleAgents['team-lead'] === true
+                };
                 // Save config first, then launch on acknowledgement
                 btnGrid._pendingLaunch = true;
-                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, designDocEnabled, designDocLink, planIngestionFolder, customAgents: lastCustomAgents });
+                const payload = { type: 'saveStartupCommands', commands, visibleAgents };
+                if (typeof lastJulesAutoSyncEnabled === 'boolean') {
+                    payload.julesAutoSyncEnabled = lastJulesAutoSyncEnabled;
+                }
+                vscode.postMessage(payload);
                 // Safety fallback: launch anyway if save ack doesn't arrive
                 btnGrid._saveTimeout = setTimeout(() => {
                     if (btnGrid._pendingLaunch) {
@@ -2230,6 +1607,12 @@
         if (btnDeregister) btnDeregister.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
         const btnKanban = document.getElementById('btn-open-kanban');
         if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
+        const btnOpenCentralSetup = document.getElementById('btn-open-central-setup');
+        if (btnOpenCentralSetup) {
+            btnOpenCentralSetup.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openSetupPanel' });
+            });
+        }
 
         // Easter egg button - Jurassic Park reference
         const btnEasterEgg = document.getElementById('btn-easter-egg');
@@ -2323,69 +1706,6 @@
             });
         }
 
-        // Startup Commands
-        const startupToggle = document.getElementById('startup-toggle');
-        if (startupToggle) {
-            startupToggle.addEventListener('click', () => {
-                const fields = document.getElementById('startup-fields');
-                const chevron = document.getElementById('startup-chevron');
-                if (fields && chevron) {
-                    const willOpen = !fields.classList.contains('open');
-                    if (willOpen) {
-                        // Collapse all other accordions before opening this one
-                        collapseAllAccordions('startup-fields');
-                    }
-                    const isOpen = fields.classList.toggle('open');
-                    chevron.classList.toggle('open', isOpen);
-                    if (isOpen) {
-                        vscode.postMessage({ type: 'getAccurateCodingSetting' });
-                        vscode.postMessage({ type: 'getAdvancedReviewerSetting' });
-                        vscode.postMessage({ type: 'getLeadChallengeSetting' });
-                        vscode.postMessage({ type: 'getAggressivePairSetting' });
-                        vscode.postMessage({ type: 'getClipboardSeparatorPattern' });
-                    }
-                }
-            });
-        }
-
-        const btnSaveStartup = document.getElementById('btn-save-startup');
-        if (btnSaveStartup) {
-            btnSaveStartup.addEventListener('click', () => {
-                const commands = { ...lastStartupCommands };
-                document.querySelectorAll('input[type="text"][data-role]').forEach(input => {
-                    const role = input.dataset.role;
-                    commands[role] = input.value.trim();
-                });
-                const visibleAgents = {};
-                document.querySelectorAll('.agent-visible-toggle').forEach(cb => {
-                    const role = cb.dataset.role;
-                    if (role) visibleAgents[role] = cb.checked;
-                });
-                const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-                const advancedReviewerEnabled = !!document.getElementById('advanced-reviewer-toggle')?.checked;
-                const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
-                const julesAutoSyncEnabled = !!document.getElementById('jules-auto-sync-toggle')?.checked;
-                const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
-                const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
-                const designDocLink = document.getElementById('design-doc-link-input')?.value.trim() || '';
-                const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
-                vscode.postMessage({ type: 'saveStartupCommands', commands, visibleAgents, accurateCodingEnabled, advancedReviewerEnabled, leadChallengeEnabled, julesAutoSyncEnabled, aggressivePairProgramming, designDocEnabled, designDocLink, planIngestionFolder, customAgents: lastCustomAgents });
-                lastVisibleAgents = { ...lastVisibleAgents, ...visibleAgents };
-                lastPlanIngestionFolder = planIngestionFolder;
-                renderCustomAgentConfigList();
-                renderAgentList();
-                btnSaveStartup.textContent = 'SAVED';
-                setTimeout(() => { btnSaveStartup.textContent = 'SAVE CONFIGURATION'; }, 1500);
-            });
-        }
-
-        const btnOpenDocs = document.getElementById('btn-open-docs');
-        if (btnOpenDocs) {
-            btnOpenDocs.addEventListener('click', () => {
-                vscode.postMessage({ type: 'openDocs' });
-            });
-        }
-
         const btnComplete = document.getElementById('btn-complete-plan');
         if (btnComplete) {
             btnComplete.addEventListener('click', () => {
@@ -2421,11 +1741,9 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastPlanIngestionFolder = '';
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, analyst: true, jules: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true };
         let lastCustomAgents = [];
-        let currentDbPath = '';
-        let workspaceRoot = '';
+        let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
         let autobanState = {
             enabled: false,
@@ -2457,7 +1775,6 @@
         let noAgentsDetectionTime = null;        // timestamp of first 0-green detection
         let hasManuallyCollapsedThisSession = false; // true if user collapsed Terminal Ops this session
         const RECOVERY_THRESHOLD_MS = 5000;      // ms before onboarding activates
-        let _onboardingRetryTimer = null;         // handle for the single pending follow-up render
         let _setupComplete = false;               // true once needsSetup === false
 
         function getDispatchKey(role) {
@@ -2509,8 +1826,10 @@
         function roleLabel(role) {
             const roleMap = {
                 lead: 'Lead coder',
+                'team-lead': 'Team Lead',
                 coder: 'Coder',
                 reviewer: 'Reviewer',
+                tester: 'Acceptance Tester',
                 planner: 'Planner',
                 team: 'Team',
                 analyst: 'Analyst',
@@ -2740,18 +2059,12 @@
                 case 'startupCommands':
                     if (message.commands) {
                         lastStartupCommands = message.commands;
-                        lastPlanIngestionFolder = message.planIngestionFolder || '';
-                        document.querySelectorAll('input[type="text"][data-role]').forEach(input => {
-                            input.value = message.commands[input.dataset.role] || '';
-                        });
-                        const planIngestionFolderInput = document.getElementById('plan-ingestion-folder-input');
-                        if (planIngestionFolderInput) {
-                            planIngestionFolderInput.value = lastPlanIngestionFolder;
-                        }
                         const onboardingFields = {
                             lead: document.getElementById('onboard-cli-lead'),
                             coder: document.getElementById('onboard-cli-coder'),
+                            intern: document.getElementById('onboard-cli-intern'),
                             reviewer: document.getElementById('onboard-cli-reviewer'),
+                            tester: document.getElementById('onboard-cli-tester'),
                             planner: document.getElementById('onboard-cli-planner'),
                             analyst: document.getElementById('onboard-cli-analyst')
                         };
@@ -2763,65 +2076,35 @@
                 case 'visibleAgents':
                     if (message.agents) {
                         lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
-                        document.querySelectorAll('.agent-visible-toggle').forEach(cb => {
-                            const role = cb.dataset.role;
-                            if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
-                        });
                         document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                             const role = cb.dataset.role;
                             if (role && role in lastVisibleAgents) cb.checked = lastVisibleAgents[role];
                         });
-                        renderCustomAgentConfigList();
                         renderAgentList();
                     }
                     break;
                 case 'customAgents':
                     if (Array.isArray(message.customAgents)) {
                         lastCustomAgents = message.customAgents;
-                        renderCustomAgentConfigList();
                         renderAgentList();
                     }
                     break;
-                case 'accurateCodingSetting': {
-                    const toggle = document.getElementById('accurate-coding-toggle');
-                    if (toggle) {
-                        toggle.checked = message.enabled !== false;
-                    }
-                    break;
-                }
-                case 'advancedReviewerSetting': {
-                    const toggle = document.getElementById('advanced-reviewer-toggle');
-                    if (toggle) {
-                        toggle.checked = message.enabled === true;
-                    }
-                    break;
-                }
-                case 'leadChallengeSetting': {
-                    const toggle = document.getElementById('lead-challenge-toggle');
-                    if (toggle) {
-                        toggle.checked = message.enabled === true;
-                    }
-                    break;
-                }
                 case 'julesAutoSyncSetting': {
-                    const toggle = document.getElementById('jules-auto-sync-toggle');
-                    if (toggle) {
-                        toggle.checked = message.enabled === true;
-                    }
-                    break;
-                }
-                case 'aggressivePairSetting': {
-                    const toggle = document.getElementById('aggressive-pair-toggle');
-                    if (toggle) {
-                        toggle.checked = message.enabled === true;
-                    }
+                    lastJulesAutoSyncEnabled = message.enabled === true;
                     break;
                 }
                 case 'designDocSetting': {
-                    const ddToggle = document.getElementById('design-doc-toggle');
-                    const ddLink = document.getElementById('design-doc-link-input');
-                    if (ddToggle) ddToggle.checked = !!message.enabled;
-                    if (ddLink) ddLink.value = message.link || '';
+                    lastDesignDocLink = message.link || '';
+
+                    const notionUrlInput = document.getElementById('notion-url-input');
+                    if (notionUrlInput) { notionUrlInput.value = lastDesignDocLink; }
+
+                    const statusLine = document.getElementById('design-doc-status-line');
+                    if (statusLine) {
+                        statusLine.textContent = lastDesignDocLink
+                            ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
+                            : 'Not configured — configure in Planning tab';
+                    }
                     break;
                 }
                 case 'recentActivity': {
@@ -2930,50 +2213,10 @@
                     if (cStatus2) cStatus2.innerText = '⚠ ' + (message.message || 'Send to coder failed');
                     break;
                 }
-                case 'dbPathUpdated': {
-                    const dbPathEl = document.getElementById('current-db-path');
-                    if (dbPathEl) {
-                        dbPathEl.textContent = message.path || '.switchboard/kanban.db';
-                        dbPathEl.style.opacity = '';
-                        dbPathEl.style.fontStyle = '';
-                    }
-                    if (message.workspaceRoot) {
-                        workspaceRoot = message.workspaceRoot;
-                    }
-                    currentDbPath = message.path || '.switchboard/kanban.db';
-
-                    // Restore correct radio button selection based on current path
-                    const path = message.path || '';
-                    const homedir = path.includes('~') ? path : '';
-                    let selectedValue = 'local';
-
-                    if (path.includes('GoogleDrive') || path.includes('Google Drive')) {
-                        selectedValue = 'google-drive';
-                    } else if (path.includes('Dropbox')) {
-                        selectedValue = 'dropbox';
-                    } else if (path.includes('iCloud') || path.includes('com~apple~CloudDocs')) {
-                        selectedValue = 'icloud';
-                    } else if (path && !path.includes('.switchboard/kanban.db')) {
-                        selectedValue = 'custom';
-                        const customInput = document.getElementById('db-custom-path-input');
-                        if (customInput) {
-                            customInput.value = path;
-                            customInput.classList.remove('hidden');
-                        }
-                    }
-
-                    const radioToSelect = document.querySelector(`input[name="db-location"][value="${selectedValue}"]`);
-                    if (radioToSelect) {
-                        radioToSelect.checked = true;
-                    }
-                    break;
-                }
-                case 'dbConnectionResult': {
-                    const dbPathEl2 = document.getElementById('current-db-path');
-                    if (dbPathEl2) {
-                        dbPathEl2.style.borderLeft = message.success ? '3px solid #28a745' : '3px solid #dc3545';
-                        if (!message.success) dbPathEl2.title = message.error || 'Connection failed';
-                        setTimeout(() => { dbPathEl2.style.borderLeft = ''; }, 2000);
+                case 'notionFetchState': {
+                    const notionPanel = document.querySelector('[data-panel="notion"]');
+                    if (notionPanel && notionPanel._handleNotionFetchState) {
+                        notionPanel._handleNotionFetchState(message);
                     }
                     break;
                 }
@@ -3301,6 +2544,31 @@
             return termData.alive !== undefined ? !!termData.alive : (!!termData._isLocal || heartbeatAlive);
         }
 
+        function shouldShowTeamLeadSidebarRow() {
+            if (lastVisibleAgents['team-lead'] !== true) {
+                return false;
+            }
+
+            if ((lastStartupCommands['team-lead'] || '').trim()) {
+                return true;
+            }
+
+            if (Object.keys(lastTerminals || {}).some(key => lastTerminals[key]?.role === 'team-lead')) {
+                return true;
+            }
+
+            const dispatchInfo = lastDispatchReadiness ? lastDispatchReadiness['team-lead'] : null;
+            if (!dispatchInfo) {
+                return false;
+            }
+
+            if (dispatchInfo.terminalName) {
+                return true;
+            }
+
+            return dispatchInfo.state === 'ready' || dispatchInfo.state === 'recoverable';
+        }
+
         function renderAgentList() {
             // Skip re-render when user is interacting with autoban dropdowns
             if (isAutobanPanelInteracting && currentAgentTab === 'autoban') return;
@@ -3313,9 +2581,11 @@
                 const allRoles = [
                     ...(va.planner !== false ? ['planner'] : []),
                     ...(va.lead !== false ? ['lead'] : []),
+                    ...(shouldShowTeamLeadSidebarRow() ? ['team-lead'] : []),
                     ...(va.coder !== false ? ['coder'] : []),
                     ...(va.intern !== false ? ['intern'] : []),
                     ...(va.reviewer !== false ? ['reviewer'] : []),
+                    ...(va.tester !== false ? ['tester'] : []),
                     ...(va.analyst !== false ? ['analyst'] : []),
                     ...lastCustomAgents.filter(a => va[a.role] !== false).map(a => a.role)
                 ];
@@ -3326,8 +2596,6 @@
                     if (greenCount > 0) {
                         // Agents connected — reset detection state
                         noAgentsDetectionTime = null;
-                        clearTimeout(_onboardingRetryTimer);
-                        _onboardingRetryTimer = null;
                         // Fall through to normal render below
                     } else {
                         // No green agents
@@ -3336,9 +2604,7 @@
                         }
                         const elapsed = Date.now() - noAgentsDetectionTime;
                         if (elapsed < RECOVERY_THRESHOLD_MS) {
-                            // Still within grace period — schedule follow-up and bail out early
-                            clearTimeout(_onboardingRetryTimer);
-                            _onboardingRetryTimer = setTimeout(() => renderAgentList(), RECOVERY_THRESHOLD_MS - elapsed + 100);
+                            // Still within grace period — keep the current display unchanged.
                             return; // keep current display unchanged during grace period
                         }
                         // Grace period expired — render onboarding state
@@ -3372,7 +2638,8 @@
                         // Restore autoban and webai panels so other tabs still work
                         agentListAutoban.appendChild(createAutobanPanel());
                         agentListWebai.appendChild(createClipboardImportPanel());
-                        agentListWebai.appendChild(createAirlockPanel());
+                        agentListWebai.appendChild(createNotionPanel());
+                        agentListWebai.appendChild(createNotebookLMPanel());
                         switchAgentTab(currentAgentTab);
                         return; // skip the rest of normal renderAgentList
                     }
@@ -3437,6 +2704,13 @@
                 ));
             }
 
+            if (va.tester !== false) {
+                agentListStandard.appendChild(createAgentRow('ACCEPTANCE TESTER', 'tester',
+                    'TEST REQUIREMENTS',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'tester')
+                ));
+            }
+
             // 5. Analyst (unchanged position)
             if (va.analyst !== false) {
                 agentListStandard.appendChild(createAnalystRow());
@@ -3452,6 +2726,14 @@
                         }
                     }
                 }
+            }
+
+            // 5b. Team Lead
+            if (shouldShowTeamLeadSidebarRow()) {
+                agentListStandard.appendChild(createAgentRow('TEAM LEAD', 'team-lead',
+                    'START CODING',
+                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'team-lead')
+                ));
             }
 
             for (const customAgent of lastCustomAgents) {
@@ -3484,9 +2766,10 @@
             // === AUTOBAN TAB: Kanban automation control center ===
             agentListAutoban.appendChild(createAutobanPanel());
 
-            // === AIRLOCK TAB: Bundle, Convert to Plan, Send to Coder ===
+            // === PLANNING TAB: Notion Design Doc + NotebookLM Airlock ===
             agentListWebai.appendChild(createClipboardImportPanel());
-            agentListWebai.appendChild(createAirlockPanel());
+            agentListWebai.appendChild(createNotionPanel());
+            agentListWebai.appendChild(createNotebookLMPanel());
 
             // Restore active tab visibility after re-render
             switchAgentTab(currentAgentTab);
@@ -3629,7 +2912,146 @@
             return container;
         }
 
-        function createAirlockPanel() {
+        function createNotionPanel() {
+            const container = document.createElement('div');
+            container.className = 'agent-row';
+            container.dataset.panel = 'notion';
+
+            const header = document.createElement('div');
+            header.className = 'row-header';
+            const identity = document.createElement('div');
+            identity.className = 'agent-identity';
+            const name = document.createElement('div');
+            name.className = 'agent-name';
+            name.style.cssText = 'color:var(--text-secondary);';
+            name.innerText = 'NOTION DESIGN DOC';
+            identity.appendChild(name);
+            header.appendChild(identity);
+            container.appendChild(header);
+
+            const desc1 = document.createElement('div');
+            desc1.style.cssText = 'padding:6px 8px 4px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            desc1.innerText = 'Fetch a Notion page and embed its full content in every planner prompt. The page is cached locally—no MCP call at prompt time.';
+            container.appendChild(desc1);
+
+            const desc2 = document.createElement('div');
+            desc2.style.cssText = 'padding:0 8px 8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            desc2.innerText = 'As an alternative, you can link a regular URL or a local file path. These provide foundational context for planning decisions, appended as a reference link.';
+            container.appendChild(desc2);
+
+            const urlRow = document.createElement('div');
+            urlRow.style.cssText = 'padding:0 8px 4px;';
+            const urlInput = document.createElement('input');
+            urlInput.id = 'notion-url-input';
+            urlInput.type = 'text';
+            urlInput.placeholder = 'https://notion.so/... or /path/to/design.md';
+            urlInput.style.cssText = 'width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:10px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:3px 4px; border-radius:3px;';
+            urlInput.value = lastDesignDocLink;
+            urlRow.appendChild(urlInput);
+            container.appendChild(urlRow);
+
+            const syncRow = document.createElement('div');
+            syncRow.id = 'notion-sync-row';
+            syncRow.style.cssText = 'display:none; align-items:center; gap:8px; padding:0 8px 4px;';
+
+            const syncBtn = document.createElement('button');
+            syncBtn.id = 'notion-sync-btn';
+            syncBtn.style.cssText = 'font-size:11px; padding:3px 8px; cursor:pointer; white-space:nowrap;';
+            syncBtn.innerText = 'Sync from Notion';
+
+            const syncStatus = document.createElement('span');
+            syncStatus.id = 'notion-sync-status';
+            syncStatus.style.cssText = 'font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);';
+            syncStatus.textContent = 'Not synced';
+
+            syncRow.appendChild(syncBtn);
+            syncRow.appendChild(syncStatus);
+            container.appendChild(syncRow);
+
+            const sizeWarn = document.createElement('div');
+            sizeWarn.id = 'notion-size-warning';
+            sizeWarn.style.cssText = 'display:none; padding:0 8px 4px; font-size:10px; color:var(--accent-orange); font-family:var(--font-mono);';
+            container.appendChild(sizeWarn);
+
+            function isNotionUrl(val) {
+                return val && (val.includes('notion.so') || val.includes('notion.site'));
+            }
+
+            function updateSyncRowVisibility(val) {
+                syncRow.style.display = isNotionUrl(val) ? 'flex' : 'none';
+            }
+
+            function updateConfigStatusLine(url) {
+                const sl = document.getElementById('design-doc-status-line');
+                if (!sl) { return; }
+                sl.textContent = url
+                    ? `Source: ${url.length > 60 ? url.slice(0, 57) + '...' : url}`
+                    : 'Not configured — configure in Planning tab';
+            }
+
+            updateSyncRowVisibility(urlInput.value);
+
+            let urlDebounce = null;
+            urlInput.addEventListener('input', () => {
+                clearTimeout(urlDebounce);
+                urlDebounce = setTimeout(() => {
+                    const val = urlInput.value.trim();
+                    lastDesignDocLink = val;
+                    updateSyncRowVisibility(val);
+                    updateConfigStatusLine(val);
+
+                    if (isNotionUrl(val) && lastNotionSyncedUrl && val !== lastNotionSyncedUrl) {
+                        syncStatus.textContent = 'URL changed — sync required';
+                        syncStatus.style.color = 'var(--accent-orange)';
+                    }
+
+                    vscode.postMessage({ type: 'setDesignDocUrl', url: val });
+                }, 400);
+            });
+
+            let lastNotionSyncedUrl = null;
+            syncBtn.addEventListener('click', () => {
+                const url = urlInput.value.trim();
+                if (!url) { return; }
+                syncBtn.disabled = true;
+                syncBtn.innerText = '⏳ Syncing...';
+                syncStatus.textContent = 'Fetching...';
+                syncStatus.style.color = 'var(--text-secondary)';
+                vscode.postMessage({ type: 'fetchNotionContent', url });
+            });
+
+            container._handleNotionFetchState = function(msg) {
+                syncBtn.disabled = false;
+                syncBtn.innerText = 'Sync from Notion';
+
+                if (msg.error) {
+                    syncStatus.textContent = `⚠️ ${msg.error}`;
+                    syncStatus.style.color = 'var(--accent-orange)';
+                    return;
+                }
+
+                if (msg.syncedAt) {
+                    lastNotionSyncedUrl = msg.pageUrl || null;
+                    const ago = _relativeTime(new Date(msg.syncedAt));
+                    syncStatus.textContent = `✅ Synced ${ago}${msg.pageTitle ? ` — ${msg.pageTitle}` : ''}`;
+                    syncStatus.style.color = 'var(--text-secondary)';
+                    updateConfigStatusLine(msg.pageUrl || urlInput.value.trim());
+                }
+
+                if (msg.charCount && msg.charCount > 40000) {
+                    sizeWarn.style.display = 'block';
+                    sizeWarn.textContent = `⚠️ Content is large (${(msg.charCount / 1000).toFixed(0)}k chars). Consider linking a shorter summary page.`;
+                } else {
+                    sizeWarn.style.display = 'none';
+                }
+            };
+
+            vscode.postMessage({ type: 'getNotionFetchState' });
+
+            return container;
+        }
+
+        function createNotebookLMPanel() {
             const container = document.createElement('div');
             container.className = 'agent-row';
 
@@ -3641,7 +3063,7 @@
             const name = document.createElement('div');
             name.className = 'agent-name';
             name.style.cssText = 'color:var(--text-secondary);';
-            name.innerText = 'AIRLOCK';
+            name.innerText = 'NOTEBOOKLM';
             identity.appendChild(name);
             header.appendChild(identity);
             container.appendChild(header);
@@ -4423,14 +3845,17 @@
 
         document.getElementById('btn-onboard-save').addEventListener('click', () => {
             const agents = {
+                ...lastStartupCommands,
                 lead: document.getElementById('onboard-cli-lead').value,
                 coder: document.getElementById('onboard-cli-coder').value,
                 intern: document.getElementById('onboard-cli-intern').value,
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
+                tester: document.getElementById('onboard-cli-tester').value,
                 planner: document.getElementById('onboard-cli-planner').value,
-                analyst: document.getElementById('onboard-cli-analyst').value
+                analyst: document.getElementById('onboard-cli-analyst').value,
+                'team-lead': lastStartupCommands['team-lead'] || ''
             };
-            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, planner: true, analyst: true, jules: true };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': lastVisibleAgents['team-lead'] === true, jules: true };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;
@@ -4443,108 +3868,10 @@
             vscode.postMessage({ type: 'finishOnboarding' });
         });
 
-        // Database & Sync panel toggle
-        document.getElementById('db-sync-toggle-btn')?.addEventListener('click', () => {
-            const fields = document.getElementById('db-sync-fields');
-            const chevron = document.getElementById('db-sync-chevron');
-            if (fields && chevron) {
-                const willOpen = !fields.classList.contains('open');
-                if (willOpen) {
-                    // Collapse all other accordions before opening this one
-                    collapseAllAccordions('db-sync-fields');
-                }
-                const isOpen = fields.classList.toggle('open');
-                chevron.classList.toggle('open', isOpen);
-                if (isOpen) {
-                    vscode.postMessage({ type: 'getStartupCommands' });
-                }
-            }
-        });
-
-        // Database & Sync panel button handlers
-        const dbLocationRadios = document.querySelectorAll('input[name="db-location"]');
-        const dbCustomPathInput = document.getElementById('db-custom-path-input');
-        const dbPathDisplay = document.getElementById('current-db-path');
-
-        // Compute proposed path based on selected location
-        function getProposedPath(location) {
-            if (!workspaceRoot) return '...';
-            const baseName = 'kanban.db';
-            switch (location) {
-                case 'local':
-                    return `${workspaceRoot}/.switchboard/${baseName}`;
-                case 'google-drive':
-                    return `~/Library/CloudStorage/GoogleDrive-*/.switchboard/${baseName}`;
-                case 'dropbox':
-                    return `~/Dropbox/.switchboard/${baseName}`;
-                case 'icloud':
-                    return `~/Library/Mobile Documents/com~apple~CloudDocs/.switchboard/${baseName}`;
-                case 'custom':
-                    return dbCustomPathInput?.value?.trim() || 'Enter custom path...';
-                default:
-                    return currentDbPath;
-            }
-        }
-
-        // Show/hide custom path input and preview proposed path
-        dbLocationRadios.forEach(radio => {
-            radio.addEventListener('change', () => {
-                if (radio.checked) {
-                    // Show proposed path as preview
-                    if (dbPathDisplay) {
-                        const proposed = getProposedPath(radio.value);
-                        dbPathDisplay.textContent = proposed;
-                        dbPathDisplay.style.opacity = '0.7';
-                        dbPathDisplay.style.fontStyle = 'italic';
-                    }
-
-                    if (radio.value === 'custom') {
-                        dbCustomPathInput.classList.remove('hidden');
-                        dbCustomPathInput.focus();
-                    } else {
-                        dbCustomPathInput.classList.add('hidden');
-                    }
-                }
-            });
-        });
-
-        // Update preview when custom path input changes
-        dbCustomPathInput?.addEventListener('input', () => {
-            const customRadio = document.querySelector('input[name="db-location"][value="custom"]');
-            if (customRadio?.checked && dbPathDisplay) {
-                const proposed = dbCustomPathInput.value.trim() || 'Enter custom path...';
-                dbPathDisplay.textContent = proposed;
-            }
-        });
-
-        document.getElementById('db-update-location-btn')?.addEventListener('click', () => {
-            const selectedRadio = document.querySelector('input[name="db-location"]:checked');
-            if (!selectedRadio) return;
-
-            const location = selectedRadio.value;
-            if (location === 'custom') {
-                const customPath = dbCustomPathInput.value.trim();
-                if (!customPath) {
-                    alert('Please enter a custom database path');
-                    return;
-                }
-                vscode.postMessage({ type: 'setCustomDbPath', path: customPath });
-            } else if (location === 'local') {
-                vscode.postMessage({ type: 'setLocalDb' });
-            } else {
-                vscode.postMessage({ type: 'setPresetDbPath', preset: location });
-            }
-        });
-
-        document.getElementById('db-reset-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'resetDatabase' });
-        });
-
         // Notify extension we are ready to receive data
         updatePlanActionStates();
         setActiveTab(activeTab, false);
         vscode.postMessage({ type: 'getRecentActivity', limit: 50 });
-        vscode.postMessage({ type: 'getDbPath' });
         vscode.postMessage({ type: 'ready' });
 
     </script>

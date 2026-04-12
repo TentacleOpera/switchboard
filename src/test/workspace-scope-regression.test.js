@@ -31,6 +31,24 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
+    it('does not suppress new brain-plan auto-claim when the window is unfocused', () => {
+        assert.match(
+            source,
+            /const handleBrainEvent = \(uri: vscode\.Uri, allowAutoClaim: boolean\) => \{[\s\S]*const effectiveAutoClaim = allowAutoClaim;/,
+            'Expected the VS Code brain watcher to preserve create-event auto-claim without a focus gate.'
+        );
+        assert.match(
+            source,
+            /const rawAutoClaim = _eventType === 'rename';[\s\S]*const effectiveAutoClaim = rawAutoClaim;/,
+            'Expected the fs.watch fallback to preserve rename-event auto-claim without a focus gate.'
+        );
+        assert.doesNotMatch(
+            source,
+            /Brain auto-claim suppressed \(window not focused\)|Brain auto-claim suppressed via fs\.watch \(window not focused\)/,
+            'Expected brain auto-claim to remain enabled when Antigravity creates a new plan while the IDE is in the background.'
+        );
+    });
+
     it('mirror write-back resolves brain path via runsheet lookup with active registry fallback', () => {
         assert.match(
             source,

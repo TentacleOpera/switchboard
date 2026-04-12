@@ -8,11 +8,13 @@ const fs = require('fs');
 const path = require('path');
 
 const providerPath = path.join(__dirname, '..', 'services', 'TaskViewerProvider.ts');
-const webviewPath = path.join(__dirname, '..', 'webview', 'implementation.html');
+const setupWebviewPath = path.join(__dirname, '..', 'webview', 'setup.html');
+const implementationWebviewPath = path.join(__dirname, '..', 'webview', 'implementation.html');
 const packagePath = path.join(__dirname, '..', '..', 'package.json');
 
 const providerSource = fs.readFileSync(providerPath, 'utf8');
-const webviewSource = fs.readFileSync(webviewPath, 'utf8');
+const setupWebviewSource = fs.readFileSync(setupWebviewPath, 'utf8');
+const implementationWebviewSource = fs.readFileSync(implementationWebviewPath, 'utf8');
 const packageSource = fs.readFileSync(packagePath, 'utf8');
 
 let passed = 0;
@@ -74,26 +76,26 @@ function run() {
 
     test('setup stores a lead-only challenge option instead of dedicated dispatch buttons', () => {
         expectRegex(
-            webviewSource,
+            setupWebviewSource,
             /id="lead-challenge-toggle"/,
             'Expected the setup UI to expose a Lead Coder challenge toggle.'
         );
         expectRegex(
-            webviewSource,
+            setupWebviewSource,
             /type:\s*'getLeadChallengeSetting'/,
             'Expected the setup panel to request the saved Lead Coder challenge setting.'
         );
         expectRegex(
-            webviewSource,
+            setupWebviewSource,
             /leadChallengeEnabled/,
             'Expected the setup save payload to include the Lead Coder challenge setting.'
         );
         assert.ok(
-            !/challengeBtn\.innerText\s*=\s*'WITH CHALLENGE';/.test(webviewSource),
+            !/challengeBtn\.innerText\s*=\s*'WITH CHALLENGE';/.test(implementationWebviewSource),
             'Implementation view should not render a dedicated WITH CHALLENGE action button.'
         );
         assert.ok(
-            !/instruction:\s*'with-challenge'/.test(webviewSource),
+            !/instruction:\s*'with-challenge'/.test(implementationWebviewSource),
             'Implementation view should not dispatch with-challenge directly from the action buttons.'
         );
     });

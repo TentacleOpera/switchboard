@@ -405,11 +405,19 @@ Priority chain:
 
 Auto-routing behavior:
 
-- When advancing from `PLAN REVIEWED`, `_partitionByComplexityRoute()` splits session IDs into `lead` and `coder` groups
-- `_targetColumnForDispatchRole()`: `lead` → `LEAD CODED`, `coder` → `CODER CODED`
+- When advancing from `PLAN REVIEWED`, `_partitionByComplexityRoute()` splits session IDs into routed groups (`intern`, `coder`, `lead`, and optional `team-lead`)
+- `_targetColumnForDispatchRole()`: `intern` → `INTERN CODED`, `coder` → `CODER CODED`, `lead` → `LEAD CODED`, `team-lead` → `TEAM LEAD CODED`
 - Both `moveSelected` and `moveAll` use this partition when the source column is `PLAN REVIEWED`
 
 The same complexity classification logic is duplicated in `register-tools.js` for the MCP `get_kanban_state` tool (kept aligned via the `normalizeBandBLine` helper).
+
+### Team Lead routing override
+
+- `TEAM LEAD CODED` remains a built-in column with `hideWhenNoAgent: true`, so it stays hidden unless Team Lead is enabled.
+- Setup exposes `kanban.teamLeadComplexityCutoff` on the same 0-10 scale used elsewhere: `0` disables Team Lead routing, higher values route scores at or above the cutoff to `team-lead` before the standard routing map runs.
+- Pair-programming mode still only rewrites `intern -> coder`; it does not rewrite `team-lead`.
+- Team Lead board placement is controlled by `kanban.teamLeadKanbanOrder`, which overrides the built-in column order when `buildKanbanColumns()` clones the default column definitions for the current workspace.
+- Scores below the Team Lead cutoff, or all scores when the cutoff is `0`, continue through the normal Lead/Coder/Intern routing flow.
 
 ## 16) AUTOBAN automation subsystem
 
@@ -466,6 +474,13 @@ AutobanConfigState {
 - Autoban config is managed from the sidebar (`TaskViewerProvider`)
 - Config state is relayed to the Kanban webview via `updateAutobanConfig(state)` message
 - Kanban UI displays enable/disable toggle and reflects current AUTOBAN state
+
+### ClickUp / Linear auto-pull
+
+- `ClickUpSyncService` and `LinearSyncService` persist `autoPullEnabled` and `pullIntervalMinutes` alongside their existing integration config, with load/save normalization so legacy configs default to `false` and `60`.
+- `KanbanProvider` owns timed integration imports via `IntegrationAutoPullService`, which uses per-workspace `setTimeout` scheduling instead of overlapping `setInterval` loops.
+- The Kanban webview remains the only integration settings surface: once setup is complete, the ClickUp / Linear strip buttons open an auto-pull modal instead of re-running setup immediately.
+- Manual imports and timed imports must resolve the same destination folder through `TaskViewerProvider.getPlanIngestionFolder(workspaceRoot)` with `.switchboard/plans` only as the fallback.
 
 ## 17) Plan Review subsystem (`ReviewProvider`)
 

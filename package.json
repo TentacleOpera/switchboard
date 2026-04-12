@@ -10,7 +10,7 @@
     "mcp",
     "multi-agent"
   ],
-  "version": "1.5.3",
+  "version": "1.5.4",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {
@@ -80,6 +80,10 @@
         "title": "Switchboard: Open AUTOBAN"
       },
       {
+        "command": "switchboard.openSetupPanel",
+        "title": "Switchboard: Open Setup"
+      },
+      {
         "command": "switchboard.reviewPlan",
         "title": "Switchboard: Review Plan"
       },
@@ -102,6 +106,46 @@
       {
         "command": "switchboard.exportAllToArchive",
         "title": "Switchboard: Export All Completed Plans to Archive"
+      },
+      {
+        "command": "switchboard.setClickUpToken",
+        "title": "Set ClickUp API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setupClickUp",
+        "title": "Setup ClickUp Integration",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.importFromClickUp",
+        "title": "Switchboard: Import Tasks from ClickUp",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.importFromLinear",
+        "title": "Switchboard: Import Issues from Linear",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setLinearToken",
+        "title": "Set Linear API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setupLinear",
+        "title": "Setup Linear Integration",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setNotionToken",
+        "title": "Set Notion API Token",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.fetchNotionDesignDoc",
+        "title": "Fetch Notion Design Doc",
+        "category": "Switchboard"
       }
     ],
     "configuration": {
@@ -253,6 +297,33 @@
           "description": "Custom file path for the Kanban database (e.g., ~/Google Drive/Switchboard/kanban.db). If empty, uses the default .switchboard/kanban.db in the workspace root. Use this to store the DB in a cloud-synced folder for multi-machine handover.",
           "scope": "resource"
         },
+        "switchboard.workspace.ignoreStrategy": {
+          "type": "string",
+          "enum": [
+            "targetedGitignore",
+            "localExclude",
+            "custom",
+            "none"
+          ],
+          "default": "targetedGitignore",
+          "enumDescriptions": [
+            "Write targeted rules to .gitignore while keeping shared plans, reviews, sessions, and workflow files tracked (recommended)",
+            "Write rules to .git/info/exclude (local only, not committed)",
+            "Write your own rules to .gitignore (editable)",
+            "Do not manage ignore rules (manual management required)"
+          ],
+          "description": "Strategy for excluding Switchboard files from git tracking.",
+          "scope": "resource"
+        },
+        "switchboard.workspace.ignoreRules": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [],
+          "description": "Stored ignore rules used by the localExclude preset and the editable custom preset. Each entry is appended as a separate line.",
+          "scope": "resource"
+        },
         "switchboard.archive.dbPath": {
           "type": "string",
           "default": "",
@@ -278,6 +349,10 @@
     "pretest": "npm run compile-tests && npm run compile && npm run lint",
     "lint": "eslint src",
     "test": "vscode-test",
+    "test:integration:notion": "node src/test/integrations/run-integration-tests.js notion",
+    "test:integration:clickup": "node src/test/integrations/run-integration-tests.js clickup",
+    "test:integration:linear": "node src/test/integrations/run-integration-tests.js linear",
+    "test:integration:all": "node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
   },
   "devDependencies": {

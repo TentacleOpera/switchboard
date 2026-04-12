@@ -40,14 +40,17 @@ Install from any VS Code marketplace. Search for **Switchboard**.
 
 ### 2. Set up your agent team
 
-Open the Switchboard sidebar and navigate to **Setup**. Enter your CLI agent startup commands — for example `copilot --allow-all-tools` or `gemini --approval-mode yolo`. Switchboard boots them in VS Code terminals, tracks their PIDs, and dispatches messages using the official VS Code `terminal.sendText` API.
+Open the Switchboard sidebar and navigate to **Setup**. Enter your CLI agent startup commands — for example `copilot --allow-all-tools` or `gemini --approval-mode yolo`. Switchboard boots them in VS Code terminals, tracks their PIDs, and dispatches messages using the official VS Code `terminal.sendText` API. Team Lead is configured separately under **Orchestration Framework Integration**, stays off by default, and now exposes a routing cutoff slider plus a board-position override.
 
 Assign agents to roles in the sidebar:
 
 - **Planner** — your premium model (Opus, Windsurf, Copilot). Writes detailed plans, assigns complexity scores, recommends routing.
+- **Team Lead** — optional orchestration role for cross-agent coordination. Configure it in **Orchestration Framework Integration** when you want a dedicated Team Lead lane.
 - **Lead Coder** — handles high-complexity tasks. Typically your best CLI agent.
 - **Coder** — handles low-complexity and boilerplate. A cheap, fast model like Gemini Flash.
+- **Intern** — lowest-cost execution lane for simple, repetitive, or heavily guided work.
 - **Reviewer** — compares implementations against plans, flags scope creep, and ships with the Grumpy Principal Engineer persona.
+- **Acceptance Tester** — validates finished work against the plan and attached Design Doc / PRD, then reports failures back into the workflow.
 - **Analyst** — general purpose questions and research.
 
 You can add custom agent roles with their own prompts and routing rules via the setup menu.
@@ -59,6 +62,8 @@ Click **Create Plan** in the AUTOBAN to add plans to the New column. Write basic
 - Import plans automatically from any folder you specify (point it at Antigravity Brain, a Claude Code output directory, or anywhere else)
 - Use the NotebookLM Airlock to generate plans at zero token cost
 - Use IDE chat commands like `/improve-plan` to deep-plan directly into the database
+
+Project management integrations now live in **Setup → ClickUp, Linear and Notion Integration**. The Kanban strip keeps its ClickUp and Linear status buttons, but they now open the central setup panel instead of owning the setup flow directly. Manual imports still work the same way, and after setup you can optionally enable auto-pull on a 5/15/30/60-minute timer. Auto-pull is off by default for both integrations.
 
 ### 4. Run your pipeline
 
@@ -98,6 +103,8 @@ When you advance plans, Switchboard reads the complexity classification your Pla
 - High complexity → Lead Coder
 - Low complexity → Coder
 - Dynamic → routes based on the threshold you set in the setup menu
+
+If you enable Team Lead routing in Setup, scores at or above the Team Lead cutoff route to **TEAM LEAD CODED** first; lower scores still fall back to the normal Lead/Coder/Intern routing.
 
 ### AUTOBAN Automation
 
@@ -148,6 +155,40 @@ Plan with Antigravity, implement in Windsurf. Click **Copy** on any plan to copy
 
 ---
 
+## Planning Tools
+
+Switchboard includes both board-based planning and chat-based planning workflows.
+
+### IDE chat commands
+
+Use these within Antigravity or Windsurf chat:
+
+| Command | What it does |
+| :--- | :--- |
+| `/chat` | Starts a planning conversation / product-manager style consultation. Use it for shaping scope and writing plans without jumping straight into code. |
+| `/improve-plan` | Deep planning, dependency checks, and adversarial review in one pass |
+| `/archive` | Query or search the historical DuckDB plan archive |
+| `/export` | Export the current conversation to the plan archive database |
+
+### Plan file convention
+
+By default, Switchboard-authored workspace plans live in `.switchboard/plans/` at the workspace root. That is the simplest convention for Windsurf, Antigravity, and the AUTOBAN to share.
+
+If you are using Windsurf chat for planning, treat `.switchboard/plans/` as the shared planning-memory location: plans written there are the durable handoff format that both IDE chat workflows and the AUTOBAN can read without any extra translation layer.
+
+If you want to ingest plans from another tool or directory, use the **Plan Ingestion Folder** setting in **Setup**. Switchboard will still mirror those plans into the board without changing the default workspace convention.
+
+### Collaborative planning
+
+The `/chat` workflow is useful when you want to refine a task before implementation:
+
+- break work into executable steps
+- assign complexity and likely routing
+- identify dependencies before coding starts
+- turn the result into plan files that the AUTOBAN can route
+
+---
+
 ## Advanced features
 
 ### NotebookLM Airlock
@@ -164,30 +205,61 @@ The Airlock bridges your IDE and Google NotebookLM, giving you quota-free sprint
 
 Completed plans are automatically sent to a DuckDB archive database rather than deleted. Search past tasks, query historical features, and review how complex systems were implemented over time without cluttering your active AUTOBAN. Query the archive using `/archive` in any IDE chat workflow.
 
+### Configuration Improvements
+
+Switchboard's newer configuration work is consolidated into the **Setup** panel, with **OPEN SETUP** also available from Terminal Operations.
+
+- **Custom Agents** — add your own roles, startup commands, prompt instructions, drag/drop mode, and Kanban placement
+- **Orchestration Framework Integration** — enable Team Lead separately from the standard agent list and control its routing / column position
+- **Default Prompt Overrides** — open **Customize Default Prompts** to override the built-in prompts per role
+- **Plan Ingestion Folder** — point Switchboard at an external plans directory when you want imported plans to come from another tool
+- **Git Ignore Management** — choose whether managed ignore rules go to `.git/info/exclude`, `.gitignore`, or nowhere
+- **Design Doc / PRD** — attach a requirements source so planning, review, and acceptance testing prompts carry the same product context
+
+### ClickUp, Linear, and Notion Integrations
+
+Switchboard now includes built-in integration flows for external planning tools and design-doc sources.
+
+#### ClickUp Integration
+
+- Use **Setup → ClickUp, Linear and Notion Integration → ClickUp** to connect a workspace, folder, and mapped ClickUp lists
+- Card moves can sync plan state back to ClickUp tasks
+- **Import from ClickUp** pulls existing tasks into plan files
+- The Kanban strip keeps a ClickUp status button as a shortcut back into the ClickUp, Linear and Notion Integration section
+
+#### Linear Integration
+
+- Use **Setup → ClickUp, Linear and Notion Integration → Linear** to connect a team, optional project, and mapped workflow states
+- Card moves can sync plan state back to Linear issues
+- **Import from Linear** pulls existing issues into plan files
+- The Kanban strip keeps a Linear status button as a shortcut back into the ClickUp, Linear and Notion Integration section
+
+#### Notion Design Doc Integration
+
+- Switchboard can fetch a Notion page, cache it locally, and treat it as the active Design Doc / PRD
+- This content is then available to planning, review, and acceptance-testing prompts
+- Configure the Notion token from **Setup → ClickUp, Linear and Notion Integration → Notion**, then point the Design Doc source at the page you want to fetch
+- Notion is currently documented as a requirements / design-doc source rather than a Kanban sync target
+
+#### Integration test suite
+
+- Run `npm run test:integration:notion`, `npm run test:integration:clickup`, or `npm run test:integration:linear` to execute the service-specific Node suites
+- Run `npm run test:integration:all` after `npm run compile-tests && npm run compile` to execute the shared, service, and end-to-end integration suites together
+- The suites mock `https`, VS Code prompts, and SecretStorage in memory, and they only write scratch files inside `src/test/integrations/fixtures/generated/`
+
 ### Google Jules integration
 
 Running low on quota with a Google Pro subscription? Press a button in the AUTOBAN to start sending tasks to Jules — 100 free Gemini requests per day. Works well for low-priority backlog items. Enable `switchboard.jules.autoSync` to automatically run `git add/commit/push` before dispatching to Jules.
 
 ### Prompt Controls
 
-Switchboard's automated prompts can be extended using the checkboxes in the Setup sidebar:
+Switchboard's automated prompts can be extended in **Setup**, and **Default Prompt Overrides** lets you replace or append to the built-in prompts per role:
 
 - **Accurate coding mode for Coder prompts** — adds stricter implementation instructions to Coder prompts
 - **Inline challenge step for Lead Coder prompts** — forces the Lead Coder to adversarially challenge a plan before writing any code
 - **Advanced reviewer mode** — enables deep regression analysis including orphaned reference checks and race condition detection. High token usage.
 - **Aggressive pair programming** — shifts more tasks to the Coder agent. Use with a capable Reviewer as your quality gate.
-- **Append PRD** — appends a link to your PRD to every automated prompt, so agents always have requirements context without you having to paste it manually. Supply a Google Drive local sync link to keep agents working from a living document.
-
-### IDE chat commands
-
-Use these within Antigravity or Windsurf chat:
-
-| Command | What it does |
-| :--- | :--- |
-| `/chat` | Switches the AI into planning mode — no code, just collaborative plan writing saved directly to switchboard/plans |
-| `/improve-plan` | Deep planning, dependency checks, and adversarial review in one pass |
-| `/archive` | Query or search the historical DuckDB plan archive |
-| `/export` | Export the current conversation to the plan archive database |
+- **Append Design Doc to planner prompts** — appends your Design Doc / PRD reference to planner prompts so agents always have the current requirements context without you having to paste it manually. Supply a Google Drive local sync link to keep agents working from a living document.
 
 ---
 

@@ -6,7 +6,7 @@ const path = require('path');
 
 function run() {
     const providerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
-    const webviewPath = path.join(process.cwd(), 'src', 'webview', 'implementation.html');
+    const webviewPath = path.join(process.cwd(), 'src', 'webview', 'setup.html');
 
     const providerSource = fs.readFileSync(providerPath, 'utf8');
     const webviewSource = fs.readFileSync(webviewPath, 'utf8');
@@ -38,7 +38,7 @@ function run() {
         'Expected TaskViewerProvider to expose the persisted plan ingestion folder.'
     );
     assert.ok(
-        providerSource.includes('const normalizedPlanIngestionFolder = this._normalizeConfiguredPlanFolder(data.planIngestionFolder);') &&
+        providerSource.includes('this._normalizeConfiguredPlanFolder(data.planIngestionFolder)') &&
         providerSource.includes('_getConfiguredPlanFolderValidationError(normalizedPlanIngestionFolder)') &&
         providerSource.includes('state.planIngestionFolder = normalizedPlanIngestionFolder;') &&
         providerSource.includes('delete state.planIngestionFolder;'),
@@ -49,9 +49,11 @@ function run() {
         /await this\._refreshConfiguredPlanWatcher\(\);/,
         'Expected plan-ingestion config changes to reinitialize the configured folder watcher.'
     );
-    assert.match(
-        providerSource,
-        /private _getManagedImportMirrorFilename\(sourcePath: string\): string \{[\s\S]*TaskViewerProvider\.MANAGED_IMPORT_PREFIX[\s\S]*private async _syncConfiguredPlanFolder\(planFolder: string, workspaceRoot: string(?:, cleanupMissingManagedImports: boolean = false)?\): Promise<void> \{[\s\S]*const mirrorFilename = this\._getManagedImportMirrorFilename\(filePath\);[\s\S]*await this\._handlePlanCreation\(mirrorUri, workspaceRoot\);/,
+    assert.ok(
+        providerSource.includes('private _getManagedImportMirrorFilename(sourcePath: string): string {') &&
+        providerSource.includes('private async _syncConfiguredPlanFolder(planFolder: string, workspaceRoot: string, cleanupMissingManagedImports: boolean = false): Promise<void> {') &&
+        providerSource.includes('const mirrorFilename = this._getManagedImportMirrorFilename(filePath);') &&
+        providerSource.includes('await this._handlePlanCreation(mirrorUri, workspaceRoot, true);'),
         'Expected configured folder ingestion to mirror into the existing .switchboard plan pipeline.'
     );
     assert.doesNotMatch(

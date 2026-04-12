@@ -17,7 +17,7 @@ function expectRegex(source, regex, message) {
 function run() {
     expectRegex(
         agentConfigSource,
-        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 190, kind: 'coded', autobanEnabled: true },[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 200, kind: 'coded', autobanEnabled: true },/s,
+        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' }[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' }/s,
         'Expected built-in Kanban columns to define separate Lead Coder and Coder lanes.'
     );
     expectRegex(
@@ -32,13 +32,13 @@ function run() {
     );
     expectRegex(
         kanbanHtmlSource,
-        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },/s,
+        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', autobanEnabled: true },[\s\S]*{ id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', autobanEnabled: false },[\s\S]*{ id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },/s,
         'Expected the Kanban webview to render separate Lead Coder and Coder columns.'
     );
     assert.ok(!kanbanHtmlSource.includes('coded-target-select'), 'Expected the Kanban coded-target dropdown to be removed.');
     expectRegex(
         registerToolsSource,
-        /const BUILTIN_KANBAN_COLUMN_DEFINITIONS = \[[\s\S]*\{ id: 'PLAN REVIEWED', label: 'Planned'[^}]*\},[\s\S]*\{ id: 'LEAD CODED', label: 'Lead Coder'[^}]*\},[\s\S]*\{ id: 'CODER CODED', label: 'Coder'[^}]*\},[\s\S]*\{ id: 'CODE REVIEWED', label: 'Reviewed'[^}]*\}/s,
+        /const BUILTIN_KANBAN_COLUMN_DEFINITIONS = \[[\s\S]*\{ id: 'PLAN REVIEWED', label: 'Planned'[^}]*\},[\s\S]*\{ id: 'INTERN CODED', label: 'Intern'[^}]*\},[\s\S]*\{ id: 'LEAD CODED', label: 'Lead Coder'[^}]*\},[\s\S]*\{ id: 'CODER CODED', label: 'Coder'[^}]*\},[\s\S]*\{ id: 'CODE REVIEWED', label: 'Reviewed'[^}]*\},[\s\S]*\{ id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested'[^}]*\}/s,
         'Expected MCP kanban readers to preserve the split coded columns in the shared column definitions.'
     );
 

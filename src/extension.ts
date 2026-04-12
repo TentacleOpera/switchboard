@@ -9,9 +9,14 @@ import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { KanbanDatabase } from './services/KanbanDatabase';
+import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { sendRobustText } from './services/terminalUtils';
 import { importPlanFiles } from './services/PlanFileImporter';
+import { ClickUpSyncService } from './services/ClickUpSyncService';
+import { LinearSyncService } from './services/LinearSyncService';
+import { NotionFetchService } from './services/NotionFetchService';
+import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
 
 // Status bar item for setup notification
@@ -918,62 +923,46 @@ function syncSettingsToMcp() {
     mcpOutputChannel?.appendLine(`[MCP] Synced settings (YOLO: ${settings.cli.yolo})`);
 }
 
-/**
- * One-time migration: ensures .switchboard/kanban.db is explicitly listed in .gitignore.
- * The .switchboard/* wildcard already covers it, but an explicit entry improves discoverability.
- * Tracked via workspaceState so it runs at most once per workspace installation.
- */
-async function _runGitignoreMigrationV1(
-    workspaceRoot: string,
-    context: vscode.ExtensionContext
-): Promise<void> {
-    const MIGRATION_KEY = 'switchboard.gitignoreMigrationV1';
-    if (context.workspaceState.get<boolean>(MIGRATION_KEY)) {
-        return;
-    }
-
-    const gitignorePath = path.join(workspaceRoot, '.gitignore');
-    const appendBlock = [
-        '',
-        '# Switchboard kanban database — machine-local, do not commit.',
-        '.switchboard/kanban.db',
-        '.switchboard/*.db-shm',
-        '.switchboard/*.db-wal',
-        ''
-    ].join('\n');
-
-    try {
-        let content = '';
-        if (fs.existsSync(gitignorePath)) {
-            content = await fs.promises.readFile(gitignorePath, 'utf-8');
-        }
-
-        const alreadyExplicit = /^\.switchboard\/kanban\.db\s*$/m.test(content);
-        if (!alreadyExplicit) {
-            await fs.promises.appendFile(gitignorePath, appendBlock, 'utf-8');
-            vscode.window.showInformationMessage(
-                'Switchboard: Added kanban.db to .gitignore to protect your local kanban state.'
-            );
-        }
-    } catch (err) {
-        console.warn(`[Switchboard] gitignore migration failed: ${err}`);
-        return;
-    }
-
-    await context.workspaceState.update(MIGRATION_KEY, true);
-}
-
 export async function activate(context: vscode.ExtensionContext) {
     const workspaceRoot = getPreferredWorkspaceRoot();
     const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
     const dispatchSigningKey = await getOrCreateDispatchSigningKey(context);
 
-    // One-time gitignore migration (fire-and-forget — does not block activation).
+    // Workspace exclusion management (replaces legacy _runGitignoreMigrationV1)
     if (workspaceRoot) {
-        _runGitignoreMigrationV1(workspaceRoot, context).catch(err => {
-            console.warn('[Switchboard] gitignore migration error:', err);
+        const excludeService = new WorkspaceExcludeService(workspaceRoot);
+        let pendingWorkspaceExcludeApply: ReturnType<typeof setTimeout> | undefined;
+        const scheduleWorkspaceExcludeApply = () => {
+            if (pendingWorkspaceExcludeApply) {
+                clearTimeout(pendingWorkspaceExcludeApply);
+            }
+            pendingWorkspaceExcludeApply = setTimeout(() => {
+                pendingWorkspaceExcludeApply = undefined;
+                excludeService.apply().catch(err => {
+                    console.warn('[Switchboard] Workspace exclusion re-evaluation error:', err);
+                });
+            }, 75);
+        };
+        excludeService.apply().catch(err => {
+            console.warn('[Switchboard] Workspace exclusion setup error:', err);
         });
+
+        context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (
+                    e.affectsConfiguration('switchboard.workspace.ignoreStrategy')
+                    || e.affectsConfiguration('switchboard.workspace.ignoreRules')
+                ) {
+                    scheduleWorkspaceExcludeApply();
+                }
+            })
+        );
+        context.subscriptions.push(new vscode.Disposable(() => {
+            if (pendingWorkspaceExcludeApply) {
+                clearTimeout(pendingWorkspaceExcludeApply);
+            }
+        }));
     }
 
     process.env.SWITCHBOARD_STRICT_INBOX_AUTH = strictInboxAuthSetting.value ? 'true' : 'false';
@@ -1017,6 +1006,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const knownAgentNames = new Set([
             'Lead Coder',
             'Coder',
+            'Intern',
             'Reviewer',
             'Planner',
             'Analyst'
@@ -1105,11 +1095,21 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Kanban Board
     const kanbanProvider = new KanbanProvider(context.extensionUri, context);
+    const setupPanelProvider = new SetupPanelProvider(context.extensionUri);
     const reviewProvider = new ReviewProvider(context.extensionUri);
     context.subscriptions.push(kanbanProvider);
+    context.subscriptions.push(setupPanelProvider);
     context.subscriptions.push(reviewProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
+    taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
     kanbanProvider.setTaskViewerProvider(taskViewerProvider);
+    setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
+    void kanbanProvider.initializeIntegrationAutoPull();
+    context.subscriptions.push(
+        vscode.workspace.onDidChangeWorkspaceFolders(() => {
+            void kanbanProvider.initializeIntegrationAutoPull();
+        })
+    );
     if (workspaceRoot) {
         void taskViewerProvider.initializeKanbanDbOnStartup();
     }
@@ -1117,6 +1117,10 @@ export async function activate(context: vscode.ExtensionContext) {
         await kanbanProvider.open();
     });
     context.subscriptions.push(openKanbanDisposable);
+    const openSetupPanelDisposable = vscode.commands.registerCommand('switchboard.openSetupPanel', async (section?: string) => {
+        await setupPanelProvider.open(typeof section === 'string' ? section : undefined);
+    });
+    context.subscriptions.push(openSetupPanelDisposable);
 
     // Full sync: file→DB sync + refresh both sidebar and kanban from DB
     const fullSyncDisposable = vscode.commands.registerCommand('switchboard.fullSync', async () => {
@@ -1317,6 +1321,217 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.dispatchToCoderTerminal(prompt);
     });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
+
+    const setClickUpTokenDisposable = vscode.commands.registerCommand('switchboard.setClickUpToken', async () => {
+        const token = await vscode.window.showInputBox({
+            prompt: 'Enter your ClickUp API token (starts with pk_)',
+            password: true,
+            placeHolder: 'pk_...',
+            ignoreFocusOut: true,
+            validateInput: (value) => {
+                if (!value || value.trim().length < 10) {
+                    return 'Token appears too short. ClickUp tokens typically start with pk_';
+                }
+                return null;
+            }
+        });
+        if (token) {
+            await context.secrets.store('switchboard.clickup.apiToken', token.trim());
+            vscode.window.showInformationMessage('ClickUp API token saved securely.');
+        }
+    });
+    context.subscriptions.push(setClickUpTokenDisposable);
+
+    const setupClickUpDisposable = vscode.commands.registerCommand('switchboard.setupClickUp', async () => {
+        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!wsRoot) {
+            vscode.window.showErrorMessage('No workspace open');
+            return;
+        }
+        const syncService = new ClickUpSyncService(wsRoot, context.secrets);
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Setting up ClickUp...', cancellable: false },
+            async () => {
+                const result = await syncService.setup();
+                if (result.success) {
+                    vscode.window.showInformationMessage('ClickUp integration setup complete!');
+                } else {
+                    vscode.window.showErrorMessage(`ClickUp setup failed: ${result.error}`);
+                }
+            }
+        );
+    });
+    context.subscriptions.push(setupClickUpDisposable);
+
+    const importFromClickUpDisposable = vscode.commands.registerCommand('switchboard.importFromClickUp', async () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace folder open.');
+            return;
+        }
+
+        const syncService = new ClickUpSyncService(workspaceRoot, context.secrets);
+        const config = await syncService.loadConfig();
+
+        if (!config?.setupComplete) {
+            vscode.window.showWarningMessage('ClickUp is not set up. Run "Switchboard: Setup ClickUp Integration" first.');
+            return;
+        }
+
+        const listOptions = Object.entries(config.columnMappings)
+            .filter(([, listId]) => listId)
+            .map(([column, listId]) => ({ label: column, description: `List ID: ${listId}`, listId }));
+
+        if (listOptions.length === 0) {
+            vscode.window.showErrorMessage('No ClickUp lists mapped. Re-run setup.');
+            return;
+        }
+
+        const selected = await vscode.window.showQuickPick(listOptions, { placeHolder: 'Select a ClickUp list to import tasks from' });
+        if (!selected) {
+            return;
+        }
+
+        const plansDir = await taskViewerProvider.getPlanIngestionFolder(workspaceRoot) || path.join(workspaceRoot, '.switchboard', 'plans');
+
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Importing from ClickUp...', cancellable: false },
+            async () => {
+                const result = await syncService.importTasksFromClickUp(selected.listId, plansDir);
+                if (!result.success) {
+                    vscode.window.showErrorMessage(`Import failed: ${result.error}`);
+                    return;
+                }
+
+                const msg = result.imported === 0
+                    ? `No new tasks to import (${result.skipped} already tracked).`
+                    : `Imported ${result.imported} task${result.imported !== 1 ? 's' : ''} as plan files.${result.skipped ? ` (${result.skipped} skipped)` : ''}`;
+                vscode.window.showInformationMessage(msg);
+            }
+        );
+    });
+    context.subscriptions.push(importFromClickUpDisposable);
+
+    const setLinearTokenDisposable = vscode.commands.registerCommand('switchboard.setLinearToken', async () => {
+        const token = await vscode.window.showInputBox({
+            prompt: 'Enter your Linear API token',
+            password: true,
+            placeHolder: 'lin_api_...',
+            ignoreFocusOut: true,
+            validateInput: (value) => {
+                if (!value || value.trim().length < 10) {
+                    return 'Token appears too short.';
+                }
+                return null;
+            }
+        });
+        if (token) {
+            await context.secrets.store('switchboard.linear.apiToken', token.trim());
+            vscode.window.showInformationMessage('Linear API token saved securely.');
+        }
+    });
+    context.subscriptions.push(setLinearTokenDisposable);
+
+    const setupLinearDisposable = vscode.commands.registerCommand('switchboard.setupLinear', async () => {
+        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!wsRoot) {
+            vscode.window.showErrorMessage('No workspace open');
+            return;
+        }
+        const syncService = new LinearSyncService(wsRoot, context.secrets);
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Setting up Linear...', cancellable: false },
+            async () => {
+                const success = await syncService.setup();
+                if (success) {
+                    vscode.window.showInformationMessage('Linear integration setup complete!');
+                } else {
+                    vscode.window.showErrorMessage('Linear setup failed. Check your API token and try again.');
+                }
+            }
+        );
+    });
+    context.subscriptions.push(setupLinearDisposable);
+
+    const setNotionTokenDisposable = vscode.commands.registerCommand('switchboard.setNotionToken', async () => {
+        const token = await vscode.window.showInputBox({
+            prompt: 'Enter your Notion integration token',
+            password: true,
+            placeHolder: 'secret_... or ntn_...',
+            ignoreFocusOut: true,
+            validateInput: (value) => {
+                if (!value || value.trim().length < 10) {
+                    return 'Token appears too short.';
+                }
+                const t = value.trim();
+                if (!t.startsWith('secret_') && !t.startsWith('ntn_')) {
+                    return 'Notion tokens typically start with "secret_" or "ntn_"';
+                }
+                return null;
+            }
+        });
+        if (token) {
+            await context.secrets.store('switchboard.notion.apiToken', token.trim());
+            vscode.window.showInformationMessage('Notion API token saved securely.');
+        }
+    });
+    context.subscriptions.push(setNotionTokenDisposable);
+
+    const fetchNotionDesignDocDisposable = vscode.commands.registerCommand('switchboard.fetchNotionDesignDoc', async () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace folder open.');
+            return;
+        }
+        const service = new NotionFetchService(workspaceRoot, context.secrets);
+        const config = await service.loadConfig();
+        const url = config?.designDocUrl;
+        if (!url) {
+            vscode.window.showWarningMessage('No Notion design doc URL configured. Set one in Switchboard settings.');
+            return;
+        }
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Fetching Notion design doc...', cancellable: false },
+            async () => {
+                const result = await service.fetchAndCache(url);
+                if (!result.success) {
+                    vscode.window.showErrorMessage(`Notion fetch failed: ${result.error}`);
+                } else {
+                    vscode.window.showInformationMessage(`Notion design doc fetched (${result.charCount?.toLocaleString()} chars).`);
+                }
+            }
+        );
+    });
+    context.subscriptions.push(fetchNotionDesignDocDisposable);
+
+    const importFromLinearDisposable = vscode.commands.registerCommand('switchboard.importFromLinear', async () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) { vscode.window.showErrorMessage('No workspace folder open.'); return; }
+
+        const service = new LinearSyncService(workspaceRoot, context.secrets);
+        const config = await service.loadConfig();
+
+        if (!config?.setupComplete) {
+            vscode.window.showWarningMessage('Linear is not set up. Run "Switchboard: Setup Linear Integration" first.');
+            return;
+        }
+
+        const plansDir = await taskViewerProvider.getPlanIngestionFolder(workspaceRoot) || path.join(workspaceRoot, '.switchboard', 'plans');
+
+        await vscode.window.withProgress(
+            { location: vscode.ProgressLocation.Notification, title: 'Importing from Linear...', cancellable: false },
+            async () => {
+                const result = await service.importIssuesFromLinear(plansDir);
+                if (!result.success) { vscode.window.showErrorMessage(`Import failed: ${result.error}`); return; }
+
+                const msg = result.imported === 0
+                    ? `No new issues to import (${result.skipped} already tracked or closed).`
+                    : `Imported ${result.imported} issue${result.imported !== 1 ? 's' : ''} as plan files.${result.skipped ? ` (${result.skipped} skipped)` : ''}`;
+                vscode.window.showInformationMessage(msg);
+            }
+        );
+    });
+    context.subscriptions.push(importFromLinearDisposable);
 
     const refreshMcpStatus = async () => {
         if (!workspaceRoot) return;
@@ -2070,6 +2285,8 @@ export async function activate(context: vscode.ExtensionContext) {
         const visibleAgents = await taskViewerProvider.getVisibleAgents();
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents();
+        const startupCommands = await taskViewerProvider.getStartupCommands();
+        const teamLeadCommand = (startupCommands['team-lead'] || '').trim();
         const allBuiltInAgents = [
             { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
@@ -2078,6 +2295,9 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Analyst', role: 'analyst' }
         ];
+        if (visibleAgents['team-lead'] === true && teamLeadCommand) {
+            allBuiltInAgents.push({ name: 'Team Lead', role: 'team-lead' });
+        }
 
         const agents: { name: string; role: string }[] = [];
         
@@ -2270,7 +2490,6 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // Auto-execute startup commands for each agent terminal
             try {
-                const startupCommands = await taskViewerProvider.getStartupCommands();
                 for (const agent of agents) {
                     let cmd = startupCommands[agent.role];
                     // Fallback: jules_monitor defaults to 'jules' when configured command is missing/blank

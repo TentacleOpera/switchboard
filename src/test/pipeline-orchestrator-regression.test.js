@@ -100,6 +100,19 @@ function run() {
         );
     });
 
+    test('reviewer-pass conditionally routes to tester and tester-pass is terminal', () => {
+        expectRegex(
+            orchestratorSource,
+            /lastWorkflow\s*===\s*'reviewer-pass'[\s\S]*isAcceptanceTesterActive[\s\S]*return\s*\{\s*role:\s*'tester',\s*label:\s*'Acceptance Tester'\s*\};[\s\S]*return\s*'done';/s,
+            'Expected reviewer-pass to route to tester only when the acceptance tester is active.'
+        );
+        expectRegex(
+            orchestratorSource,
+            /lastWorkflow\s*===\s*'challenge'\s*\|\|\s*lastWorkflow\s*===\s*'tester-pass'/,
+            'Expected tester-pass to be terminal in pipeline stage detection.'
+        );
+    });
+
     console.log(`\nResult: ${passed} passed, ${failed} failed`);
     if (failed > 0) {
         process.exit(1);

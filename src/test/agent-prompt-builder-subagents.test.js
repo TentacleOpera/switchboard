@@ -18,7 +18,7 @@ const chatCritiqueText = 'verbatim in your chat response';
 
 function testSinglePlan() {
     console.log('Testing single plan (no subagent info)...');
-    const roles = ['planner', 'reviewer', 'lead', 'coder'];
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(subagentText), `Role ${role} should NOT include subagent info for single plan`);
@@ -28,7 +28,7 @@ function testSinglePlan() {
 
 function testMultiplePlans() {
     console.log('Testing multiple plans (with subagent info)...');
-    const roles = ['planner', 'reviewer', 'lead', 'coder'];
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, plans2);
         assert.ok(prompt.includes(subagentText), `Role ${role} SHOULD include subagent info for multiple plans`);
@@ -38,7 +38,7 @@ function testMultiplePlans() {
 
 function testExecutionDirective() {
     console.log('Testing execution directive presence...');
-    const roles = ['lead', 'coder'];
+    const roles = ['tester', 'lead', 'coder'];
     for (const role of roles) {
         // Test single plan
         const prompt1 = buildKanbanBatchPrompt(role, plans1);
@@ -53,12 +53,12 @@ function testExecutionDirective() {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(executionDirective), `Role ${role} should NOT include execution directive`);
     }
-    console.log('  PASS: Execution directive correctly limited to lead and coder (all plan counts)');
+    console.log('  PASS: Execution directive correctly limited to tester, lead, and coder (all plan counts)');
 }
 
 function testGitProhibitionDirective() {
     console.log('Testing git prohibition directive presence...');
-    const allRoles = ['planner', 'reviewer', 'lead', 'coder', 'unknown_role'];
+    const allRoles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'unknown_role'];
     for (const role of allRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes('GIT POLICY'), `Role ${role} SHOULD include git prohibition directive`);
@@ -73,7 +73,7 @@ function testChatCritiqueDirective() {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes(chatCritiqueText), `Role ${role} SHOULD include chat critique directive`);
     }
-    const nonCritiqueRoles = ['lead', 'coder'];
+    const nonCritiqueRoles = ['tester', 'lead', 'coder'];
     for (const role of nonCritiqueRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(chatCritiqueText), `Role ${role} should NOT include chat critique directive`);
