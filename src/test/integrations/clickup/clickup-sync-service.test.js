@@ -64,7 +64,7 @@ async function testConfigNormalizationAndSetupFlow() {
         assert.strictEqual(normalized.pullIntervalMinutes, 60);
         assert.strictEqual(normalized.realTimeSyncEnabled, true);
         assert.strictEqual(normalized.autoPullEnabled, true);
-        assert.strictEqual(Object.keys(normalized.columnMappings).length, CANONICAL_COLUMNS.length);
+        assert.deepStrictEqual(normalized.columnMappings, {});
         await fs.promises.unlink(service.configPath);
 
         const http = installHttpsMock();
@@ -171,8 +171,13 @@ async function testApplyConfigOptionsAndValidation() {
 
             const folderOnlyConfig = readJson(service.configPath);
             assert.strictEqual(folderOnlyConfig.folderId, 'folder-1');
+            assert.deepStrictEqual(folderOnlyConfig.columnMappings, {});
             assert.strictEqual(folderOnlyConfig.realTimeSyncEnabled, false);
             assert.strictEqual(folderOnlyConfig.autoPullEnabled, false);
+
+            http.queueJson(200, { lists: [] }, (req) => req.method === 'GET' && req.path === '/api/v2/folder/folder-1/list?archived=false');
+            const folderOnlyMappingState = await service.getColumnMappingState(['CREATED']);
+            assert.strictEqual(folderOnlyMappingState.mappings[0].status, 'unmapped');
         } finally {
             http.restore();
         }

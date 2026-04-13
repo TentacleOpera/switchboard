@@ -690,8 +690,53 @@ Setup Options
 - `src/services/ClickUpSyncService.ts` - Granular setup functions
 - `src/services/LinearSyncService.ts` - Granular setup functions
 
+## Direct Reviewer Pass — 2026-04-13
+
+### Reviewer scope note
+
+- During review, the user explicitly clarified that the removed `switchboard.setupClickUp` / `switchboard.setupLinear` legacy setup path is intentionally unsupported and should stay removed. This reviewer pass treated the Setup panel as the sole supported setup entry point and did **not** count legacy-command removal as a defect.
+
+### Findings addressed
+
+- **MAJOR — Realtime-sync checkbox state did not reconfigure live sync at runtime.** `handleApplyClickUpConfig(...)` and `handleApplyLinearConfig(...)` reconfigured auto-pull timers, but they did not rerun `KanbanProvider.applyLiveSyncConfig(...)`. That left `ContinuousSyncService` stale after an apply: enabling realtime sync in Setup would not start live sync immediately, and disabling it would not stop live sync immediately.
+- **MAJOR — ClickUp hydration misrepresented untouched columns as intentionally excluded.** `ClickUpSyncService._normalizeConfig(...)` populated empty legacy/new `columnMappings` with every canonical column set to `''`. The mapping editor interprets explicit empty strings as **excluded**, not **unmapped**, so folder-only setups and legacy configs with no mappings rendered false exclusions and broke the `CREATE LISTS FOR UNMAPPED` helper.
+
+### Fixed items
+
+- Updated `src/services/TaskViewerProvider.ts` so successful ClickUp and Linear apply flows now rerun both:
+  - `initializeIntegrationAutoPull()`
+  - `applyLiveSyncConfig(resolvedRoot)`
+- Updated `src/services/ClickUpSyncService.ts` so empty `columnMappings` normalize to `{}` instead of synthetic blank mappings for every canonical column. This preserves the crucial distinction between:
+  - **unmapped** (no explicit user decision yet)
+  - **excluded** (explicitly opted out)
+- Updated regression coverage so the reviewer fixes are protected:
+  - `src/test/integration-auto-pull-regression.test.js`
+  - `src/test/integrations/clickup/clickup-sync-service.test.js`
+
+### Files changed in reviewer pass
+
+- `src/services/ClickUpSyncService.ts`
+- `src/services/TaskViewerProvider.ts`
+- `src/test/integration-auto-pull-regression.test.js`
+- `src/test/integrations/clickup/clickup-sync-service.test.js`
+- `.switchboard/plans/redesign_integration_setup_as_checkbox_options.md`
+
+### Validation results
+
+- `npm run compile` — success.
+- `npm run compile-tests` — success.
+- `node src/test/setup-panel-migration.test.js` — success.
+- `node src/test/operation-mode-toggle-regression.test.js` — success.
+- `node src/test/integration-auto-pull-regression.test.js` — success.
+- `node src/test/integrations/clickup/clickup-sync-service.test.js` — success.
+- `node src/test/integrations/linear/linear-sync-service.test.js` — success.
+
+### Remaining risks
+
+- **NIT / deferred UX polish:** the setup-panel apply buttons still rely on backend validation when no options are selected instead of proactively disabling the button in the webview. That is noisy UX, but it is not a correctness defect after the reviewer-pass fixes.
+
 ## Switchboard State
-**Kanban Column:** LEAD CODED
+**Kanban Column:** CODE REVIEWED
 **Status:** active
-**Last Updated:** 2026-04-13T20:16:45.035Z
+**Last Updated:** 2026-04-13T22:59:33.954Z
 **Format Version:** 1

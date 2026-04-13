@@ -12,6 +12,7 @@ function run() {
     const clickupSource = readSource('src', 'services', 'ClickUpSyncService.ts');
     const linearSource = readSource('src', 'services', 'LinearSyncService.ts');
     const providerSource = readSource('src', 'services', 'KanbanProvider.ts');
+    const taskViewerSource = readSource('src', 'services', 'TaskViewerProvider.ts');
     const extensionSource = readSource('src', 'extension.ts');
     const kanbanSource = readSource('src', 'webview', 'kanban.html');
 
@@ -71,6 +72,16 @@ function run() {
         providerSource,
         /case 'saveIntegrationAutoPullSettings': \{[\s\S]*await this\._configureClickUpAutoPull\(workspaceRoot\);[\s\S]*await this\._configureClickUpAutomation\(workspaceRoot\);[\s\S]*await this\._configureLinearAutoPull\(workspaceRoot\);[\s\S]*await this\._configureLinearAutomation\(workspaceRoot\);/m,
         'Expected saved auto-pull changes to re-run both import and automation scheduler configuration.'
+    );
+    assert.match(
+        taskViewerSource,
+        /public async handleApplyClickUpConfig\([\s\S]*await this\._kanbanProvider\?\.initializeIntegrationAutoPull\(\);[\s\S]*await this\._kanbanProvider\?\.applyLiveSyncConfig\(resolvedRoot\);/m,
+        'Expected ClickUp apply flows to reconfigure live sync immediately after realtime sync settings change.'
+    );
+    assert.match(
+        taskViewerSource,
+        /public async handleApplyLinearConfig\([\s\S]*await this\._kanbanProvider\?\.initializeIntegrationAutoPull\(\);[\s\S]*await this\._kanbanProvider\?\.applyLiveSyncConfig\(resolvedRoot\);/m,
+        'Expected Linear apply flows to reconfigure live sync immediately after realtime sync settings change.'
     );
 
     assert.match(

@@ -199,7 +199,7 @@ export class ClickUpSyncService {
         const normalizedMappings = this._normalizeStringRecord(raw.columnMappings);
         return Object.keys(normalizedMappings).length > 0
           ? normalizedMappings
-          : Object.fromEntries(CANONICAL_COLUMNS.map(c => [c, '']));
+          : {};
       })(),
       customFields: this._getCustomFieldState(raw),
       setupComplete: raw.setupComplete === true,

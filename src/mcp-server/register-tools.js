@@ -526,7 +526,14 @@ function resolveSqlWasmPath(workspaceRoot) {
     for (const candidate of candidates) {
         if (fs.existsSync(candidate)) return candidate;
     }
-    throw new Error('Unable to locate sql-wasm.wasm.');
+    throw new Error(`Unable to locate sql-wasm.wasm. Checked: ${candidates.join(', ')}`);
+}
+
+function buildWorkspaceInitializationGuidance(errorMessage) {
+    if (/Unable to locate sql-wasm\.(js|wasm)/.test(errorMessage)) {
+        return 'This Switchboard MCP runtime is missing its sql.js assets. Reinstall or update the Switchboard extension so .switchboard/MCP includes sql-wasm.js and sql-wasm.wasm, or run npm install sql.js in your workspace before retrying.';
+    }
+    return 'Inspect the Switchboard output logs, correct the underlying setup error, and retry.';
 }
 
 async function getSqlJs(workspaceRoot) {
@@ -2574,12 +2581,13 @@ function registerTools(server) {
                 try {
                     workspaceId = await ensureWorkspaceIdentityInMcp(workspaceRoot);
                 } catch (initErr) {
+                    const initErrorMessage = initErr?.message || String(initErr);
                     // Init failed (disk permissions, etc.) — surface a clear error
                     return {
                         isError: true,
                         content: [{
                             type: "text",
-                            text: `Error: Switchboard workspace could not be initialized. ${initErr?.message || String(initErr)}\n\nTry calling the init_workspace tool, then retry.`,
+                            text: `Error: Switchboard workspace could not be initialized. ${initErrorMessage}\n\n${buildWorkspaceInitializationGuidance(initErrorMessage)}`,
                         }],
                     };
                 }

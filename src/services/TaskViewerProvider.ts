@@ -2584,6 +2584,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
         if (result.success) {
             await this._kanbanProvider?.initializeIntegrationAutoPull();
+            await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
         }
         return result;
     }
@@ -2639,6 +2640,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const result = await this._getLinearService(resolvedRoot).applyConfig(options);
         if (result.success) {
             await this._kanbanProvider?.initializeIntegrationAutoPull();
+            await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
         }
         return result;
     }
