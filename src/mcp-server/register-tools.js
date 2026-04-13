@@ -495,6 +495,7 @@ function buildKanbanStateResponse(columns, requestedColumn, columnDefinitions = 
 
 function resolveSqlJsModulePath(workspaceRoot) {
     const candidates = [
+        path.join(__dirname, 'sql-wasm.js'),
         path.join(__dirname, '..', 'sql-wasm.js'),
         path.join(__dirname, '..', '..', 'sql-wasm.js'),
         path.join(process.cwd(), 'dist', 'sql-wasm.js'),
@@ -512,6 +513,7 @@ function resolveSqlJsModulePath(workspaceRoot) {
 
 function resolveSqlWasmPath(workspaceRoot) {
     const candidates = [
+        path.join(__dirname, 'sql-wasm.wasm'),
         path.join(__dirname, '..', 'sql-wasm.wasm'),
         path.join(__dirname, '..', '..', 'sql-wasm.wasm'),
         path.join(process.cwd(), 'dist', 'sql-wasm.wasm'),

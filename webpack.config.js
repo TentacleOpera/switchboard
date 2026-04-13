@@ -108,6 +108,20 @@ const mcpServerConfig = {
             }
         ]
     },
+    plugins: [
+        new CopyPlugin({
+            patterns: [
+                {
+                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
+                    to: 'sql-wasm.js'
+                },
+                {
+                    from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.wasm'),
+                    to: 'sql-wasm.wasm'
+                }
+            ]
+        })
+    ],
     devtool: 'nosources-source-map'
 };
 
