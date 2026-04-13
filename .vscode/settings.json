@@ -26,5 +26,7 @@
 	"switchboard.jules.autoSync": false,
 	"switchboard.pairProgramming.aggressive": false,
 	"switchboard.reviewer.advancedMode": false,
-	"switchboard.planner.designDocEnabled": false
+	"switchboard.planner.designDocEnabled": false,
+	"switchboard.workspace.ignoreStrategy": "targetedGitignore",
+	"switchboard.workspace.ignoreRules": []
 }

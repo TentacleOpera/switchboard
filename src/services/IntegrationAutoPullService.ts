@@ -1,5 +1,5 @@
 export type AutoPullIntervalMinutes = 5 | 15 | 30 | 60;
-export type AutoPullIntegration = 'clickup' | 'linear';
+export type AutoPullIntegration = 'clickup' | 'linear' | 'clickup-automation' | 'linear-automation';
 
 interface AutoPullState {
     timeout: NodeJS.Timeout | null;

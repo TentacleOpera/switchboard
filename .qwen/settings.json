@@ -3,7 +3,11 @@
     "allow": [
       "Bash(duckdb *)",
       "Read(//Users/patrickvuleta/.windsurf/extensions/turnzero.switchboard-1.5.0/**)",
-      "Bash(find *)"
+      "Bash(find *)",
+      "Bash(cat *)",
+      "Bash(grep *)",
+      "Bash(stat *)",
+      "Bash(brew *)"
     ]
   },
   "$version": 3

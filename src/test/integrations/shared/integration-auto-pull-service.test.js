@@ -67,17 +67,22 @@ async function testMultipleWorkspacesAndIntegrations() {
         service.configure('/workspace-a', 'clickup', true, 5, async () => {});
         service.configure('/workspace-a', 'linear', true, 15, async () => {});
         service.configure('/workspace-b', 'clickup', true, 30, async () => {});
+        service.configure('/workspace-b', 'linear-automation', true, 60, async () => {});
 
         const intervals = [...active.values()].map((timer) => timer.ms).sort((a, b) => a - b);
         assert.deepStrictEqual(
             intervals,
-            [5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000],
+            [5 * 60 * 1000, 15 * 60 * 1000, 30 * 60 * 1000, 60 * 60 * 1000],
             'each workspace/integration pair should maintain its own timeout'
         );
 
         service.stopWorkspace('/workspace-a');
-        assert.strictEqual(active.size, 1, 'stopWorkspace() should only remove timers for the matching workspace');
-        assert.strictEqual([...active.values()][0].ms, 30 * 60 * 1000);
+        const remainingIntervals = [...active.values()].map((timer) => timer.ms).sort((a, b) => a - b);
+        assert.deepStrictEqual(
+            remainingIntervals,
+            [30 * 60 * 1000, 60 * 60 * 1000],
+            'stopWorkspace() should only remove timers for the matching workspace'
+        );
 
         service.dispose();
     });

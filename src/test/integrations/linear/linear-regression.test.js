@@ -39,7 +39,7 @@ async function testAuthHeaderAndEndpoint() {
     });
 }
 
-async function testSetupCreatesSwitchboardLabelWithExpectedColor() {
+async function testApplyConfigCreatesSwitchboardLabelWithExpectedColor() {
     await withWorkspace('linear-regression-label', async ({ workspaceRoot }) => {
         const { service, vscodeState, CANONICAL_COLUMNS } = createContext(workspaceRoot);
         const http = installHttpsMock();
@@ -67,7 +67,14 @@ async function testSetupCreatesSwitchboardLabelWithExpectedColor() {
             http.queueJson(200, { data: { team: { labels: { nodes: [] } } } });
             http.queueJson(200, { data: { issueLabelCreate: { issueLabel: { id: 'label-switchboard' } } } });
 
-            assert.strictEqual(await service.setup(), true);
+            const result = await service.applyConfig({
+                mapColumns: true,
+                createLabel: true,
+                scopeProject: true,
+                enableRealtimeSync: true,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(result, { success: true });
             const labelRequest = http.requests.find((req) => req.jsonBody && req.jsonBody.variables && req.jsonBody.variables.color);
             assert.strictEqual(labelRequest.jsonBody.variables.color, '#6366f1');
         } finally {
@@ -78,7 +85,7 @@ async function testSetupCreatesSwitchboardLabelWithExpectedColor() {
 
 async function run() {
     await testAuthHeaderAndEndpoint();
-    await testSetupCreatesSwitchboardLabelWithExpectedColor();
+    await testApplyConfigCreatesSwitchboardLabelWithExpectedColor();
     console.log('linear regression test passed');
 }
 

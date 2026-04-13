@@ -17,7 +17,8 @@ function run() {
     const setColumnBranch = providerSource.slice(start, end);
 
     assert.ok(
-        setColumnBranch.includes('const columns = buildKanbanColumns(customAgents).map(entry => entry.id);'),
+        setColumnBranch.includes('const [customAgents, customKanbanColumns] = await Promise.all([')
+        && setColumnBranch.includes('const columns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns).map(entry => entry.id);'),
         'Expected ticket-view column updates to validate against the live Kanban column list.'
     );
     assert.ok(
@@ -26,7 +27,7 @@ function run() {
         'Expected ticket-view column updates to compare against the current ticket column before moving.'
     );
     assert.ok(
-        setColumnBranch.includes('const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents);') &&
+        setColumnBranch.includes('const workflowName = this._workflowForManualColumnChange(currentColumn, column, customAgents, customKanbanColumns);') &&
         setColumnBranch.includes('await this._applyManualKanbanColumnChange('),
         'Expected ticket-view column updates to reuse the shared manual Kanban change persistence path.'
     );

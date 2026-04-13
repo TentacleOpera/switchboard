@@ -17,7 +17,7 @@ function expectRegex(source, regex, message) {
 function run() {
     expectRegex(
         agentConfigSource,
-        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' }[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' }/s,
+        /{ id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli'[^}]*}[\s\S]*{ id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli'[^}]*}/s,
         'Expected built-in Kanban columns to define separate Lead Coder and Coder lanes.'
     );
     expectRegex(

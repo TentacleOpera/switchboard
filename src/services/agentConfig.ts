@@ -11,15 +11,26 @@ export interface CustomAgentConfig {
     dragDropMode: 'cli' | 'prompt';
 }
 
+export interface CustomKanbanColumnConfig {
+    id: string;
+    label: string;
+    role: string;
+    triggerPrompt: string;
+    order: number;
+    dragDropMode: 'cli' | 'prompt';
+}
+
 export interface KanbanColumnDefinition {
     id: string;
     label: string;
     role?: string;
     order: number;
-    kind: 'created' | 'review' | 'coded' | 'reviewed' | 'custom' | 'completed';
+    kind: 'created' | 'review' | 'coded' | 'reviewed' | 'custom-agent' | 'custom-user' | 'completed';
+    source: 'built-in' | 'custom-agent' | 'custom-user';
     autobanEnabled: boolean;
     dragDropMode: 'cli' | 'prompt';
     hideWhenNoAgent?: boolean;
+    triggerPrompt?: string;
 }
 
 export interface KanbanColumnBuildOverrides {
@@ -38,18 +49,19 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 };
 
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
-    { id: 'CREATED', label: 'New', order: 0, kind: 'created', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'TEAM LEAD CODED', label: 'Team Lead', role: 'team-lead', order: 170, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
-    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli' },
-    { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
-    { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', autobanEnabled: false, dragDropMode: 'cli' },
-    { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
-    { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', autobanEnabled: false, dragDropMode: 'cli' },
+    { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'TEAM LEAD CODED', label: 'Team Lead', role: 'team-lead', order: 170, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
+    { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];
 
 const DEFAULT_CUSTOM_AGENT_KANBAN_ORDER = Math.max(300, ...DEFAULT_KANBAN_COLUMNS.filter(c => c.kind !== 'completed').map(c => c.order)) + 100;
+const DEFAULT_CUSTOM_USER_KANBAN_ORDER = DEFAULT_CUSTOM_AGENT_KANBAN_ORDER + 100;
 const KANBAN_REWEIGHT_STEP = 100;
 
 function sanitizeId(raw: unknown): string {
@@ -68,6 +80,19 @@ function sanitizeRole(raw: unknown): string {
         .replace(/^_+|_+$/g, '')
         .slice(0, 64);
     return normalized || `custom_agent_${Date.now().toString(36)}`;
+}
+
+function sanitizeColumnRole(raw: unknown): string {
+    return String(raw || '')
+        .toLowerCase()
+        .replace(/[^a-z0-9_-]+/g, '_')
+        .replace(/^_+|_+$/g, '')
+        .slice(0, 64);
+}
+
+function sanitizeKanbanColumnId(raw: unknown): string {
+    const baseId = sanitizeId(raw);
+    return baseId.startsWith('custom_column_') ? baseId : `custom_column_${baseId}`;
 }
 
 export function toCustomAgentRole(id: string): string {
@@ -129,6 +154,46 @@ export function findCustomAgentByRole(customAgents: CustomAgentConfig[], role: s
     return customAgents.find(agent => agent.role === role);
 }
 
+export function parseCustomKanbanColumns(raw: unknown): CustomKanbanColumnConfig[] {
+    if (!Array.isArray(raw)) {
+        return [];
+    }
+
+    const seenIds = new Set<string>();
+    const result: CustomKanbanColumnConfig[] = [];
+
+    for (const item of raw) {
+        if (!item || typeof item !== 'object') {
+            continue;
+        }
+
+        const source = item as Record<string, unknown>;
+        const label = String(source.label || '').trim();
+        const role = sanitizeColumnRole(source.role || source.assignedAgent);
+        if (!label || !role) {
+            continue;
+        }
+
+        const rawId = String(source.id || label).trim();
+        const id = sanitizeKanbanColumnId(rawId);
+        if (seenIds.has(id)) {
+            continue;
+        }
+
+        result.push({
+            id,
+            label,
+            role,
+            triggerPrompt: String(source.triggerPrompt || '').trim(),
+            order: Number.isFinite(Number(source.order)) ? Number(source.order) : DEFAULT_CUSTOM_USER_KANBAN_ORDER,
+            dragDropMode: source.dragDropMode === 'prompt' ? 'prompt' : 'cli'
+        });
+        seenIds.add(id);
+    }
+
+    return result.sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+}
+
 export function reweightSequence(orderedIds: string[]): Record<string, number> {
     const seen = new Set<string>();
     const weights: Record<string, number> = {};
@@ -147,10 +212,18 @@ export function reweightSequence(orderedIds: string[]): Record<string, number> {
 
 export function buildKanbanColumns(
     customAgents: CustomAgentConfig[],
+    customKanbanColumnsOrOverrides: CustomKanbanColumnConfig[] | KanbanColumnBuildOverrides = [],
     overrides: KanbanColumnBuildOverrides = {}
 ): KanbanColumnDefinition[] {
+    const customKanbanColumns = Array.isArray(customKanbanColumnsOrOverrides)
+        ? customKanbanColumnsOrOverrides
+        : [];
+    const resolvedOverrides = Array.isArray(customKanbanColumnsOrOverrides)
+        ? overrides
+        : customKanbanColumnsOrOverrides;
+
     const defaultColumns = DEFAULT_KANBAN_COLUMNS.map(column => {
-        const override = overrides.orderOverrides?.[column.id];
+        const override = resolvedOverrides.orderOverrides?.[column.id];
         return {
             ...column,
             order: typeof override === 'number' ? override : column.order
@@ -164,12 +237,25 @@ export function buildKanbanColumns(
             label: agent.name,
             role: agent.role,
             order: agent.kanbanOrder,
-            kind: 'custom' as const,
+            kind: 'custom-agent' as const,
+            source: 'custom-agent' as const,
             autobanEnabled: false,
             dragDropMode: agent.dragDropMode,
         }));
 
-    return [...defaultColumns, ...customColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    const userColumns = customKanbanColumns.map(column => ({
+        id: column.id,
+        label: column.label,
+        role: column.role,
+        order: column.order,
+        kind: 'custom-user' as const,
+        source: 'custom-user' as const,
+        autobanEnabled: false,
+        dragDropMode: column.dragDropMode,
+        triggerPrompt: column.triggerPrompt
+    }));
+
+    return [...defaultColumns, ...customColumns, ...userColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
 }
 
 export function getBuiltInAgentLabels(): Record<BuiltInAgentRole, string> {

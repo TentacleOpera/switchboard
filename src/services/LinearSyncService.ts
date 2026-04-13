@@ -4,6 +4,10 @@ import * as fs from 'fs';
 import * as https from 'https';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
+import {
+  type LinearAutomationRule,
+  normalizeLinearAutomationRules
+} from '../models/PipelineDefinition';
 
 export interface LinearConfig {
   teamId: string;
@@ -13,8 +17,18 @@ export interface LinearConfig {
   switchboardLabelId: string;
   setupComplete: boolean;
   lastSync: string | null;
+  realTimeSyncEnabled: boolean;
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
+  automationRules: LinearAutomationRule[];
+}
+
+export interface LinearApplyOptions {
+  mapColumns: boolean;
+  createLabel: boolean;
+  scopeProject: boolean;
+  enableRealtimeSync: boolean;
+  enableAutoPull: boolean;
 }
 
 export { CANONICAL_COLUMNS };
@@ -43,6 +57,22 @@ export class LinearSyncService {
 
   // ── Config I/O ───────────────────────────────────────────────
 
+  private _createEmptyConfig(): LinearConfig {
+    return {
+      teamId: '',
+      teamName: '',
+      projectId: undefined,
+      columnToStateId: {},
+      switchboardLabelId: '',
+      setupComplete: false,
+      lastSync: null,
+      realTimeSyncEnabled: false,
+      autoPullEnabled: false,
+      pullIntervalMinutes: 60,
+      automationRules: []
+    };
+  }
+
   private _normalizeConfig(raw: Partial<LinearConfig> | null): LinearConfig | null {
     if (!raw) {
       return null;
@@ -60,8 +90,12 @@ export class LinearSyncService {
       switchboardLabelId: raw.switchboardLabelId || '',
       setupComplete: raw.setupComplete === true,
       lastSync: raw.lastSync || null,
+      realTimeSyncEnabled: raw.realTimeSyncEnabled === undefined
+        ? raw.setupComplete === true
+        : raw.realTimeSyncEnabled === true,
       autoPullEnabled: raw.autoPullEnabled === true,
-      pullIntervalMinutes: normalizedInterval
+      pullIntervalMinutes: normalizedInterval,
+      automationRules: normalizeLinearAutomationRules(raw.automationRules)
     };
   }
 
@@ -82,6 +116,64 @@ export class LinearSyncService {
     await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
     await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
     this._config = normalized;
+  }
+
+  async saveAutomationSettings(
+    automationRules: LinearAutomationRule[]
+  ): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear must be set up before saving automation settings.');
+    }
+
+    await this.saveConfig({
+      ...config,
+      automationRules: normalizeLinearAutomationRules(automationRules)
+    });
+  }
+
+  async getAutomationCatalog(): Promise<{
+    labels: Array<{ id: string; name: string }>;
+    states: Array<{ id: string; name: string; type: string }>;
+  }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear must be set up before loading automation labels and states.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($teamId: String!) {
+        team(id: $teamId) {
+          states { nodes { id name type } }
+          labels { nodes { id name } }
+        }
+      }
+    `, { teamId: config.teamId });
+
+    const team = result.data?.team;
+    if (!team) {
+      throw new Error('Failed to load Linear automation catalog.');
+    }
+
+    return {
+      labels: Array.isArray(team.labels?.nodes)
+        ? team.labels.nodes
+            .map((label: any) => ({
+              id: String(label?.id || '').trim(),
+              name: String(label?.name || '').trim()
+            }))
+            .filter((label: { id: string; name: string }) => label.id && label.name)
+        : [],
+      states: Array.isArray(team.states?.nodes)
+        ? team.states.nodes
+            .map((state: any) => ({
+              id: String(state?.id || '').trim(),
+              name: String(state?.name || '').trim(),
+              type: String(state?.type || '').trim()
+            }))
+            .filter((state: { id: string; name: string; type: string }) => state.id && state.name)
+        : []
+    };
   }
 
   // ── Local Sync Map (sessionId → Linear issueId) ──────────────
@@ -182,107 +274,189 @@ export class LinearSyncService {
 
   // ── Setup Flow ───────────────────────────────────────────────
 
-  async setup(): Promise<boolean> {
-    if (this._setupInProgress) { return false; }
+  private async _promptForApiToken(): Promise<string | null> {
+    const input = await vscode.window.showInputBox({
+      prompt: 'Enter your Linear API token — find it at linear.app/settings/api',
+      password: true,
+      placeHolder: 'lin_api_...',
+      ignoreFocusOut: true,
+      validateInput: (value) => (!value || value.trim().length < 10) ? 'Token appears too short' : null
+    });
+    return input ? input.trim() : null;
+  }
+
+  private async _selectTeam(config: LinearConfig): Promise<{ id: string; label: string }> {
+    if (config.teamId && config.teamName) {
+      return { id: config.teamId, label: config.teamName };
+    }
+
+    const teamsResult = await this.graphqlRequest(`{
+      teams { nodes { id name } }
+    }`);
+    const teams = Array.isArray(teamsResult.data?.teams?.nodes) ? teamsResult.data.teams.nodes : [];
+    const teamItems: Array<vscode.QuickPickItem & { id: string }> =
+      teams.map((team: any) => ({ label: String(team?.name || ''), id: String(team?.id || '') }))
+        .filter((team: vscode.QuickPickItem & { id: string }) => Boolean(team.label) && Boolean(team.id));
+    const selectedTeam = await vscode.window.showQuickPick(teamItems, { placeHolder: 'Select your Linear team' });
+    if (!selectedTeam) {
+      throw new Error('No Linear team selected.');
+    }
+    config.teamId = selectedTeam.id;
+    config.teamName = selectedTeam.label;
+    return { id: config.teamId, label: config.teamName };
+  }
+
+  private async _selectProjectScope(teamId: string): Promise<string | undefined> {
+    const projectsResult = await this.graphqlRequest(`
+      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
+    `, { teamId });
+    const projects = Array.isArray(projectsResult.data?.team?.projects?.nodes)
+      ? projectsResult.data.team.projects.nodes
+      : [];
+    const projectOptions = [
+      { label: '(All issues in team)', id: '' },
+      ...projects.map((project: any) => ({
+        label: String(project?.name || '').trim(),
+        id: String(project?.id || '').trim()
+      })).filter((project: { label: string; id: string }) => project.label.length > 0)
+    ];
+    const selectedProject = await vscode.window.showQuickPick(projectOptions, {
+      placeHolder: 'Scope to a project? (optional)'
+    });
+    if (selectedProject === undefined) {
+      throw new Error('No Linear project scope selected.');
+    }
+    return selectedProject.id || undefined;
+  }
+
+  private async _mapColumnsToStates(teamId: string): Promise<Record<string, string>> {
+    const statesResult = await this.graphqlRequest(`
+      query($teamId: String!) { team(id: $teamId) { states { nodes { id name type } } } }
+    `, { teamId });
+    const states = Array.isArray(statesResult.data?.team?.states?.nodes)
+      ? statesResult.data.team.states.nodes
+      : [];
+    const stateOptions = [
+      { label: '(skip — do not sync)', id: '' },
+      ...states.map((state: any) => ({
+        label: `${state.name} (${state.type})`,
+        id: String(state.id)
+      }))
+    ];
+
+    const columnToStateId: Record<string, string> = {};
+    for (const column of CANONICAL_COLUMNS) {
+      const selected = await vscode.window.showQuickPick(stateOptions, {
+        placeHolder: `Map Switchboard column "${column}" to a Linear state`
+      });
+      if (selected === undefined) {
+        throw new Error(`No Linear state selected for column "${column}".`);
+      }
+      if (selected.id) {
+        columnToStateId[column] = selected.id;
+      }
+    }
+    return columnToStateId;
+  }
+
+  private async _ensureSwitchboardLabel(teamId: string): Promise<string> {
+    const labelsResult = await this.graphqlRequest(`
+      query($teamId: String!) { team(id: $teamId) { labels { nodes { id name } } } }
+    `, { teamId });
+    const existingLabel = labelsResult.data?.team?.labels?.nodes?.find((label: any) => label.name === 'switchboard');
+    if (existingLabel?.id) {
+      return String(existingLabel.id);
+    }
+
+    const createResult = await this.graphqlRequest(`
+      mutation($teamId: String!, $name: String!, $color: String!) {
+        issueLabelCreate(input: { teamId: $teamId, name: $name, color: $color }) {
+          issueLabel { id }
+        }
+      }
+    `, { teamId, name: 'switchboard', color: '#6366f1' });
+    const labelId = String(createResult.data?.issueLabelCreate?.issueLabel?.id || '').trim();
+    if (!labelId) {
+      throw new Error('Failed to create the Switchboard label in Linear.');
+    }
+    return labelId;
+  }
+
+  async applyConfig(options: LinearApplyOptions): Promise<{ success: boolean; error?: string }> {
+    if (this._setupInProgress) {
+      return { success: false, error: 'Setup already in progress' };
+    }
     this._setupInProgress = true;
 
+    const existingConfig = await this.loadConfig();
+    const config = existingConfig
+      ? { ...existingConfig, columnToStateId: { ...(existingConfig.columnToStateId || {}) } }
+      : this._createEmptyConfig();
+
     try {
-      // 0. Token — prompt if not already stored
       let token = await this.getApiToken();
       if (!token) {
-        const input = await vscode.window.showInputBox({
-          prompt: 'Enter your Linear API token — find it at linear.app/settings/api',
-          password: true,
-          placeHolder: 'lin_api_...',
-          ignoreFocusOut: true,
-          validateInput: (v) => (!v || v.trim().length < 10) ? 'Token appears too short' : null
-        });
-        if (!input) { return false; }
-        await this._secretStorage.store('switchboard.linear.apiToken', input.trim());
-        token = input.trim();
+        token = await this._promptForApiToken();
+        if (!token) {
+          return { success: false, error: 'Setup cancelled — Linear API token required.' };
+        }
+        await this._secretStorage.store('switchboard.linear.apiToken', token);
       }
 
-      // Validate token before continuing
       if (!(await this.isAvailable())) {
-        vscode.window.showErrorMessage(
-          'Linear token is invalid. Get a valid token at linear.app/settings/api',
-          'Open linear.app'
-        ).then(choice => { if (choice) { vscode.env.openExternal(vscode.Uri.parse('https://linear.app/settings/api')); } });
-        return false;
+        return { success: false, error: 'Linear token is invalid. Get a valid token at linear.app/settings/api' };
       }
 
-      // 1. Select team
-      const teamsResult = await this.graphqlRequest(`{
-        teams { nodes { id name } }
-      }`);
-      const teams = teamsResult.data.teams.nodes;
-      const teamItems: Array<vscode.QuickPickItem & { id: string }> =
-        teams.map((t: any) => ({ label: String(t.name), id: String(t.id) }));
-      const selectedTeam = await vscode.window.showQuickPick(teamItems, { placeHolder: 'Select your Linear team' });
-      if (!selectedTeam) { return false; }
-
-      // 2. Optional project scope
-      const projectsResult = await this.graphqlRequest(`
-        query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
-      `, { teamId: selectedTeam.id });
-      const projects = projectsResult.data.team.projects.nodes;
-      const projectOptions = [{ label: '(All issues in team)', id: '' }, ...projects.map((p: any) => ({ label: p.name, id: p.id }))];
-      const selectedProject = await vscode.window.showQuickPick(projectOptions, { placeHolder: 'Scope to a project? (optional)' });
-      if (selectedProject === undefined) { return false; }
-
-      // 3. Map columns to states
-      const statesResult = await this.graphqlRequest(`
-        query($teamId: String!) { team(id: $teamId) { states { nodes { id name type } } } }
-      `, { teamId: selectedTeam.id });
-      const states = statesResult.data.team.states.nodes;
-      const stateOptions = [
-        { label: '(skip — do not sync)', id: '' },
-        ...states.map((s: any) => ({ label: `${s.name} (${s.type})`, id: s.id }))
-      ];
-
-      const columnToStateId: Record<string, string> = {};
-      for (const column of CANONICAL_COLUMNS) {
-        const selected = await vscode.window.showQuickPick(stateOptions, {
-          placeHolder: `Map Switchboard column "${column}" to a Linear state`
-        });
-        if (selected === undefined) { return false; }
-        if (selected.id) { columnToStateId[column] = selected.id; }
+      const needsTeamSelection = options.mapColumns || options.createLabel || options.scopeProject || options.enableRealtimeSync || options.enableAutoPull;
+      const hasExistingSetup = !!config.teamId || !!config.switchboardLabelId || Object.keys(config.columnToStateId || {}).length > 0 || config.setupComplete;
+      if (!hasExistingSetup && !needsTeamSelection) {
+        return { success: false, error: 'Select at least one Linear option to apply.' };
       }
 
-      // 4. Ensure "switchboard" label exists
-      const labelsResult = await this.graphqlRequest(`
-        query($teamId: String!) { team(id: $teamId) { labels { nodes { id name } } } }
-      `, { teamId: selectedTeam.id });
-      const existingLabel = labelsResult.data.team.labels.nodes.find((l: any) => l.name === 'switchboard');
-      let switchboardLabelId: string;
-      if (existingLabel) {
-        switchboardLabelId = existingLabel.id;
+      if (needsTeamSelection && !config.teamId) {
+        await this._selectTeam(config);
+      }
+
+      if (options.scopeProject) {
+        config.projectId = await this._selectProjectScope(config.teamId);
       } else {
-        const createResult = await this.graphqlRequest(`
-          mutation($teamId: String!, $name: String!, $color: String!) {
-            issueLabelCreate(input: { teamId: $teamId, name: $name, color: $color }) {
-              issueLabel { id }
-            }
-          }
-        `, { teamId: selectedTeam.id, name: 'switchboard', color: '#6366f1' });
-        switchboardLabelId = createResult.data.issueLabelCreate.issueLabel.id;
+        config.projectId = undefined;
       }
 
-      // 5. Save config
-      await this.saveConfig({
-        teamId: selectedTeam.id,
-        teamName: selectedTeam.label,
-        projectId: selectedProject.id || undefined,
-        columnToStateId,
-        switchboardLabelId,
-        setupComplete: true,
-        lastSync: null,
-        autoPullEnabled: false,
-        pullIntervalMinutes: 60
-      });
+      if (options.mapColumns) {
+        config.columnToStateId = await this._mapColumnsToStates(config.teamId);
+      }
 
-      vscode.window.showInformationMessage(`Linear integration set up for team "${selectedTeam.label}".`);
-      return true;
+      if (options.createLabel) {
+        config.switchboardLabelId = await this._ensureSwitchboardLabel(config.teamId);
+      }
+
+      const hasMappedStates = Object.values(config.columnToStateId || {}).some(
+        (stateId) => typeof stateId === 'string' && stateId.trim().length > 0
+      );
+      if (options.enableRealtimeSync) {
+        if (!config.teamId) {
+          throw new Error('Realtime sync requires a configured Linear team.');
+        }
+        if (!hasMappedStates) {
+          throw new Error('Realtime sync requires at least one mapped Linear state.');
+        }
+      }
+
+      if (options.enableAutoPull && !config.teamId) {
+        throw new Error('Auto-pull requires a configured Linear team.');
+      }
+
+      config.realTimeSyncEnabled = options.enableRealtimeSync === true;
+      config.autoPullEnabled = options.enableAutoPull === true;
+      config.setupComplete = true;
+      await this.saveConfig(config);
+      return { success: true };
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
     } finally {
       this._setupInProgress = false;
     }
@@ -326,6 +500,43 @@ export class LinearSyncService {
     } catch (error) {
       console.warn(`[LinearSync] Failed to sync plan ${plan.sessionId}:`, error);
       throw error;
+    }
+  }
+
+  /**
+   * Sync plan markdown content to Linear issue description.
+   * Used by ContinuousSyncService for live updates.
+   * Does NOT change issue state or other fields.
+   */
+  async syncPlanContent(issueId: string, markdownContent: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const config = await this.loadConfig();
+      if (!config?.setupComplete) {
+        return { success: false, error: 'Linear not set up' };
+      }
+
+      // Use existing graphqlRequest helper (line 192) — handles token, timeouts, error formatting
+      const mutation = `
+        mutation UpdateIssueDescription($id: String!, $description: String!) {
+          issueUpdate(id: $id, input: { description: $description }) {
+            success
+            issue { id }
+          }
+        }
+      `;
+
+      const result = await this.graphqlRequest(mutation, {
+        id: issueId,
+        description: markdownContent
+      });
+
+      if (result.data?.issueUpdate?.success) {
+        return { success: true };
+      } else {
+        return { success: false, error: 'Linear issueUpdate returned success=false' };
+      }
+    } catch (error) {
+      return { success: false, error: `Sync failed: ${error}` };
     }
   }
 
@@ -421,12 +632,13 @@ export class LinearSyncService {
       const allIssues: any[] = [];
       let cursor: string | null = null;
 
+      const projectFilter = config.projectId ? '\n              project: { id: { eq: $projectId } }' : '';
       const QUERY = `
-        query($teamId: String!, $projectId: String, $after: String) {
+        query($teamId: String!${config.projectId ? ', $projectId: String!' : ''}, $after: String) {
           issues(
             filter: {
               team: { id: { eq: $teamId } }
-              ${config.projectId ? 'project: { id: { eq: $projectId } }' : ''}
+              ${projectFilter}
             }
             after: $after
             first: 50
@@ -452,7 +664,7 @@ export class LinearSyncService {
       while (true) {
         const result = await this.graphqlRequest(QUERY, {
           teamId: config.teamId,
-          projectId: config.projectId,
+          ...(config.projectId ? { projectId: config.projectId } : {}),
           after: cursor
         });
         const page = result.data.issues;

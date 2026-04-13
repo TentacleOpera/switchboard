@@ -1,8 +1,9 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import { buildKanbanColumns, parseCustomAgents, parseCustomKanbanColumns } from './agentConfig';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
-import { extractKanbanState } from './planStateUtils';
+import { inspectKanbanState } from './planStateUtils';
 
 /**
  * Scans `.switchboard/plans/*.md` and upserts records into the kanban DB.
@@ -29,14 +30,16 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
         return 0;
     }
 
+    const validKanbanColumns = await readImportableKanbanColumns(workspaceRoot);
+
     let workspaceId = await db.getWorkspaceId()
         || await db.getDominantWorkspaceId();
 
     const committedIdPath = path.join(workspaceRoot, '.switchboard', 'workspace-id');
 
-    // Read the committed workspace-id file (cross-machine stable ID).
+    // Read the workspace-local workspace-id file if present.
     // Checked after DB so that the local machine's established ID takes precedence,
-    // but before legacy/hash fallbacks so fresh clones pick up the team's ID.
+    // but before legacy/hash fallbacks so existing local workspaces keep using the same ID source.
     if (!workspaceId) {
         try {
             const fileContent = await fs.promises.readFile(committedIdPath, 'utf-8');
@@ -71,7 +74,7 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
     // _getOrCreateWorkspaceId) find it in the config table immediately.
     await db.setWorkspaceId(workspaceId);
 
-    // Opportunistically write committed file for cross-machine sync (wx = exclusive create)
+    // Opportunistically write the workspace-local file (wx = exclusive create)
     try {
         await fs.promises.mkdir(path.dirname(committedIdPath), { recursive: true });
         await fs.promises.writeFile(committedIdPath, workspaceId + '\n', { flag: 'wx' });
@@ -93,10 +96,28 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
             continue;
         }
 
-        const sessionId = 'import_' + crypto.createHash('sha256')
+        const defaultSessionId = 'import_' + crypto.createHash('sha256')
             .update(filePath)
             .digest('hex')
             .slice(0, 16);
+        const planId = extractEmbeddedMetadata(content, 'Plan ID') || defaultSessionId;
+        const sessionId = extractEmbeddedMetadata(content, 'Session ID') || planId;
+        const automationRuleName = extractEmbeddedMetadata(content, 'Automation Rule');
+        const clickupTaskId = extractClickUpTaskId(content);
+        const linearIssueId = extractLinearIssueId(content);
+        const hasMixedAutomationMetadata = !!clickupTaskId && !!linearIssueId;
+        let sourceType: KanbanPlanRecord['sourceType'] = 'local';
+        if (hasMixedAutomationMetadata) {
+            console.warn(
+                `[PlanFileImporter] Found mixed ClickUp and Linear automation metadata in ${filePath.replace(/\\/g, '/')}; importing as local and ignoring provider-specific IDs.`
+            );
+        } else if (automationRuleName) {
+            if (clickupTaskId) {
+                sourceType = 'clickup-automation';
+            } else if (linearIssueId) {
+                sourceType = 'linear-automation';
+            }
+        }
 
         const topic = extractTopic(content, file);
         const complexity = extractComplexity(content);
@@ -105,12 +126,23 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
 
         // Use embedded kanban state if present; fall back to defaults for
         // legacy files that pre-date the ## Switchboard State section.
-        const embeddedState = extractKanbanState(content);
+        const embeddedStateInspection = inspectKanbanState(content, { validColumns: validKanbanColumns });
+        const embeddedState = embeddedStateInspection.state;
+        if (embeddedStateInspection.topLevelSectionCount > 1) {
+            console.warn(
+                `[PlanFileImporter] Detected ${embeddedStateInspection.topLevelSectionCount} top-level Switchboard State sections in ${planFileNormalized}; using the last valid section.`
+            );
+        } else if (!embeddedState && embeddedStateInspection.topLevelSectionCount > 0) {
+            console.warn(
+                `[PlanFileImporter] Found top-level Switchboard State section(s) in ${planFileNormalized} but '${embeddedStateInspection.lastSeenColumn || 'unknown'}' is not importable in this workspace; defaulting to CREATED/active.`
+            );
+        }
+
         const kanbanColumn = embeddedState?.kanbanColumn ?? 'CREATED';
-        const status: KanbanPlanStatus = (embeddedState?.status === 'completed' ? 'completed' : 'active');
+        const status: KanbanPlanStatus = embeddedState?.status === 'completed' ? 'completed' : 'active';
 
         records.push({
-            planId: sessionId,
+            planId,
             sessionId,
             topic,
             planFile: planFileNormalized,
@@ -123,12 +155,14 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
             createdAt: now,
             updatedAt: now,
             lastAction: 'imported_from_plan_file',
-            sourceType: 'local',
+            sourceType,
             brainSourcePath: '',
             mirrorPath: '',
             routedTo: '',
             dispatchedAgent: '',
-            dispatchedIde: ''
+            dispatchedIde: '',
+            clickupTaskId: hasMixedAutomationMetadata ? '' : clickupTaskId,
+            linearIssueId: hasMixedAutomationMetadata ? '' : linearIssueId
         });
     }
 
@@ -161,10 +195,58 @@ function extractComplexity(content: string): string {
     return 'Unknown';
 }
 
+function extractEmbeddedMetadata(content: string, label: string): string {
+    const pattern = new RegExp(`^(?:>\\s+)?\\*\\*${label.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:\\*\\*\\s*(.+)$`, 'im');
+    const match = content.match(pattern);
+    return match ? match[1].trim() : '';
+}
+
+function extractClickUpTaskId(content: string): string {
+    const explicitId = extractEmbeddedMetadata(content, 'ClickUp Task ID');
+    if (explicitId) {
+        return explicitId;
+    }
+
+    const importedMatch = content.match(/^>\s+Imported from ClickUp task\s+`([^`]+)`$/im);
+    return importedMatch ? importedMatch[1].trim() : '';
+}
+
+function extractLinearIssueId(content: string): string {
+    return extractEmbeddedMetadata(content, 'Linear Issue ID');
+}
+
 function extractTags(content: string): string {
     const tagsMatch = content.match(/## Metadata[\s\S]*?\*\*Tags:\*\*\s*(.+)/i);
     if (tagsMatch) {
         return tagsMatch[1].trim();
     }
     return '';
+}
+
+async function readImportableKanbanColumns(workspaceRoot: string): Promise<Set<string>> {
+    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+    let customAgents: unknown[] = [];
+    let customKanbanColumns: unknown[] = [];
+
+    try {
+        if (fs.existsSync(statePath)) {
+            const state = JSON.parse(await fs.promises.readFile(statePath, 'utf8'));
+            customAgents = Array.isArray(state.customAgents) ? state.customAgents : [];
+            customKanbanColumns = Array.isArray(state.customKanbanColumns) ? state.customKanbanColumns : [];
+        }
+    } catch (error) {
+        console.warn('[PlanFileImporter] Failed to read custom kanban column config from state.json:', error);
+    }
+
+    const validColumns = new Set(
+        buildKanbanColumns(
+            parseCustomAgents(customAgents),
+            parseCustomKanbanColumns(customKanbanColumns)
+        ).map((column) => column.id)
+    );
+
+    validColumns.add('BACKLOG');
+    validColumns.add('CODED');
+
+    return validColumns;
 }

@@ -87,6 +87,7 @@ async function run() {
             const backlogContent = readText(path.join(plansDir, 'clickup_import_task-backlog.md'));
 
             assert.ok(parentContent.includes('## ClickUp Ticket Notes'));
+            assert.ok(parentContent.includes('**ClickUp Task ID:** task-parent'));
             assert.ok(parentContent.includes('**Subtasks (each imported as a separate plan):**'));
             assert.ok(parentContent.includes('clickup_import_task-child.md'));
             assert.ok(parentContent.includes('**Custom Fields:**'));

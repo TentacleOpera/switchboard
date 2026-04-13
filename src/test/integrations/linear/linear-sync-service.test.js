@@ -42,8 +42,10 @@ function baseConfig(overrides = {}) {
         switchboardLabelId: 'label-switchboard',
         setupComplete: true,
         lastSync: null,
+        realTimeSyncEnabled: false,
         autoPullEnabled: false,
         pullIntervalMinutes: 60,
+        automationRules: [],
         ...overrides
     };
 }
@@ -62,6 +64,8 @@ async function testConfigAndSyncMapPersistence() {
         });
         const config = await service.loadConfig();
         assert.strictEqual(config.pullIntervalMinutes, 60);
+        assert.strictEqual(config.realTimeSyncEnabled, true);
+        assert.deepStrictEqual(config.automationRules, []);
 
         await service.setIssueIdForPlan('session-1', 'issue-1');
         assert.strictEqual(await service.getIssueIdForPlan('session-1'), 'issue-1');
@@ -99,14 +103,71 @@ async function testSetupAndSyncFallback() {
             http.queueJson(200, { data: { team: { labels: { nodes: [] } } } });
             http.queueJson(200, { data: { issueLabelCreate: { issueLabel: { id: 'label-switchboard' } } } });
 
-            const result = await service.setup();
-            assert.strictEqual(result, true);
+            const result = await service.applyConfig({
+                mapColumns: true,
+                createLabel: true,
+                scopeProject: true,
+                enableRealtimeSync: true,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(result, { success: true });
 
             const saved = readJson(service.configPath);
             assert.strictEqual(saved.teamId, 'team-1');
             assert.strictEqual(saved.projectId, 'project-1');
             assert.strictEqual(saved.switchboardLabelId, 'label-switchboard');
+            assert.strictEqual(saved.realTimeSyncEnabled, true);
+            assert.deepStrictEqual(saved.automationRules, []);
             assert.strictEqual(vscodeState.inputBoxCalls[0].password, true);
+
+            await service.saveAutomationSettings([{
+                name: 'Bug Intake',
+                triggerLabel: 'bug',
+                triggerStates: ['state-started', 'state-started'],
+                targetColumn: 'CREATED',
+                finalColumn: 'COMPLETED',
+                writeBackOnComplete: true
+            }]);
+            const automationConfig = await service.loadConfig();
+            assert.deepStrictEqual(automationConfig.automationRules, [{
+                name: 'Bug Intake',
+                enabled: true,
+                triggerLabel: 'bug',
+                triggerStates: ['state-started'],
+                targetColumn: 'CREATED',
+                finalColumn: 'COMPLETED',
+                writeBackOnComplete: true
+            }]);
+
+            http.queueJson(200, {
+                data: {
+                    team: {
+                        states: {
+                            nodes: [
+                                { id: 'state-created', name: 'Todo', type: 'backlog' },
+                                { id: 'state-started', name: 'In Progress', type: 'started' }
+                            ]
+                        },
+                        labels: {
+                            nodes: [
+                                { id: 'label-bug', name: 'bug' },
+                                { id: 'label-docs', name: 'docs' }
+                            ]
+                        }
+                    }
+                }
+            }, (req) => req.method === 'POST' && req.path === '/graphql' && req.jsonBody?.query.includes('states { nodes { id name type } }') && req.jsonBody?.query.includes('labels { nodes { id name } }'));
+            const catalog = await service.getAutomationCatalog();
+            assert.deepStrictEqual(catalog, {
+                labels: [
+                    { id: 'label-bug', name: 'bug' },
+                    { id: 'label-docs', name: 'docs' }
+                ],
+                states: [
+                    { id: 'state-created', name: 'Todo', type: 'backlog' },
+                    { id: 'state-started', name: 'In Progress', type: 'started' }
+                ]
+            });
 
             await service.saveConfig(baseConfig());
             http.queueJson(200, { data: { issueCreate: { success: true, issue: { id: 'issue-created', identifier: 'ENG-1' } } } });
@@ -128,6 +189,133 @@ async function testSetupAndSyncFallback() {
                 complexity: '5'
             }, 'CREATED');
             assert.strictEqual(await service.getIssueIdForPlan('session-update'), 'issue-recreated');
+        } finally {
+            http.restore();
+        }
+    });
+}
+
+async function testApplyConfigOptionsAndValidation() {
+    await withWorkspace('linear-apply', async ({ workspaceRoot }) => {
+        const { service, vscodeState, CANONICAL_COLUMNS } = createContext(workspaceRoot, {
+            'switchboard.linear.apiToken': 'lin_api_apply_token'
+        });
+
+        let http = installHttpsMock();
+        try {
+            vscodeState.quickPickResponses.push(
+                (items) => items[0],
+                ...CANONICAL_COLUMNS.map(() => (items) => items[1])
+            );
+
+            http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
+            http.queueJson(200, { data: { teams: { nodes: [{ id: 'team-1', name: 'Engineering' }] } } });
+            http.queueJson(200, {
+                data: {
+                    team: {
+                        states: {
+                            nodes: [
+                                { id: 'state-created', name: 'Todo', type: 'backlog' },
+                                { id: 'state-started', name: 'In Progress', type: 'started' }
+                            ]
+                        }
+                    }
+                }
+            });
+
+            const mappedOnly = await service.applyConfig({
+                mapColumns: true,
+                createLabel: false,
+                scopeProject: false,
+                enableRealtimeSync: false,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(mappedOnly, { success: true });
+
+            const mappedConfig = readJson(service.configPath);
+            assert.strictEqual(mappedConfig.teamId, 'team-1');
+            assert.strictEqual(mappedConfig.switchboardLabelId, '');
+            assert.strictEqual(mappedConfig.projectId, undefined);
+            assert.strictEqual(mappedConfig.realTimeSyncEnabled, false);
+            assert.ok(mappedConfig.columnToStateId.CREATED);
+        } finally {
+            http.restore();
+        }
+
+        await service.saveConfig(baseConfig({ switchboardLabelId: '', projectId: undefined, columnToStateId: {} }));
+        http = installHttpsMock();
+        try {
+            http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
+            http.queueJson(200, { data: { team: { labels: { nodes: [] } } } });
+            http.queueJson(200, { data: { issueLabelCreate: { issueLabel: { id: 'label-switchboard' } } } });
+
+            const labelOnly = await service.applyConfig({
+                mapColumns: false,
+                createLabel: true,
+                scopeProject: false,
+                enableRealtimeSync: false,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(labelOnly, { success: true });
+            assert.strictEqual(readJson(service.configPath).switchboardLabelId, 'label-switchboard');
+        } finally {
+            http.restore();
+        }
+
+        await service.saveConfig(baseConfig({ projectId: undefined }));
+        http = installHttpsMock();
+        try {
+            http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
+
+            const realtimeEnabled = await service.applyConfig({
+                mapColumns: false,
+                createLabel: false,
+                scopeProject: false,
+                enableRealtimeSync: true,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(realtimeEnabled, { success: true });
+            const realtimeConfig = readJson(service.configPath);
+            assert.strictEqual(realtimeConfig.realTimeSyncEnabled, true);
+            assert.strictEqual(realtimeConfig.columnToStateId.CREATED, 'state-created');
+        } finally {
+            http.restore();
+        }
+
+        await service.saveConfig(baseConfig({ projectId: undefined }));
+        http = installHttpsMock();
+        try {
+            http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
+
+            const autoPullEnabled = await service.applyConfig({
+                mapColumns: false,
+                createLabel: false,
+                scopeProject: false,
+                enableRealtimeSync: false,
+                enableAutoPull: true
+            });
+            assert.deepStrictEqual(autoPullEnabled, { success: true });
+            const autoPullConfig = readJson(service.configPath);
+            assert.strictEqual(autoPullConfig.autoPullEnabled, true);
+            assert.strictEqual(autoPullConfig.columnToStateId.CREATED, 'state-created');
+        } finally {
+            http.restore();
+        }
+
+        await service.saveConfig(baseConfig({ projectId: 'project-1' }));
+        http = installHttpsMock();
+        try {
+            http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
+
+            const projectCleared = await service.applyConfig({
+                mapColumns: false,
+                createLabel: false,
+                scopeProject: false,
+                enableRealtimeSync: false,
+                enableAutoPull: false
+            });
+            assert.deepStrictEqual(projectCleared, { success: true });
+            assert.strictEqual(readJson(service.configPath).projectId, undefined);
         } finally {
             http.restore();
         }
@@ -176,6 +364,7 @@ async function testDebouncedSyncAndUnmappedColumn() {
 async function run() {
     await testConfigAndSyncMapPersistence();
     await testSetupAndSyncFallback();
+    await testApplyConfigOptionsAndValidation();
     await testDebouncedSyncAndUnmappedColumn();
     console.log('linear sync service test passed');
 }

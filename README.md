@@ -247,6 +247,51 @@ Switchboard now includes built-in integration flows for external planning tools 
 - Run `npm run test:integration:all` after `npm run compile-tests && npm run compile` to execute the shared, service, and end-to-end integration suites together
 - The suites mock `https`, VS Code prompts, and SecretStorage in memory, and they only write scratch files inside `src/test/integrations/fixtures/generated/`
 
+#### Operation Modes
+
+Switchboard supports two operation modes that control how ClickUp and Linear integrations behave:
+
+**Coding Mode (default)**
+- Every column move syncs plan state back to ClickUp/Linear in real-time
+- Manual import from ClickUp/Linear is enabled
+- Plan status is reflected in external systems throughout the entire lifecycle
+- Use this mode when you want bidirectional sync and external teams to see progress as plans move through stages
+
+**Board Management Mode**
+- ClickUp/Linear tasks are imported automatically via automation polling (requires automation rules to be configured)
+- Intermediate column moves do NOT sync to external systems — plans evolve independently
+- Results are written back to ClickUp/Linear only when a plan reaches COMPLETED
+- Use this mode for source → result workflows where external systems are the source of truth and Switchboard is the execution engine
+
+Toggle between modes using the mode button in the Kanban header or from **Setup → ClickUp, Linear and Notion Integration**. The mode is persisted per workspace via VS Code's workspace state, so your preference survives window reloads.
+
+### Live Sync Mode
+
+Live Sync Mode continuously updates ClickUp/Linear task descriptions as you edit plans in Switchboard. Unlike Board Management Mode (which only writes back at completion), Live Sync shows stakeholders real-time progress.
+
+**How it works:**
+- Switchboard watches plan files for changes
+- Every 30 seconds (configurable), updated content syncs to external task
+- Visual indicator on Kanban cards shows sync status (green=pulsing, amber=paused, red=conflict/error)
+- Right-click any card to pause/resume live sync
+
+**Rate limiting:**
+- ClickUp: ~100 requests/minute
+- Linear: ~250 requests/minute
+- Built-in queuing prevents quota exhaustion
+
+**Conflict detection:**
+- Optional: fetches external content before sync to detect manual edits
+- Disabled by default (expensive — doubles API usage)
+- When conflict detected: choose to overwrite external, accept external, or pause and review
+
+**Termination conditions:**
+- Live sync stops when plan reaches `COMPLETED`
+- Pauses automatically after 30 minutes of no edits (agent idle detection)
+- User can pause/resume any time via card context menu
+
+Enable Live Sync from **Setup → ClickUp, Linear and Notion Integration → Live Sync Configuration**.
+
 ### Google Jules integration
 
 Running low on quota with a Google Pro subscription? Press a button in the AUTOBAN to start sending tasks to Jules — 100 free Gemini requests per day. Works well for low-priority backlog items. Enable `switchboard.jules.autoSync` to automatically run `git add/commit/push` before dispatching to Jules.

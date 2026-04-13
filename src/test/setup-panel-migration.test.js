@@ -9,11 +9,15 @@ function run() {
     const setupPath = path.join(process.cwd(), 'src', 'webview', 'setup.html');
     const providerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
     const setupProviderPath = path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts');
+    const extensionPath = path.join(process.cwd(), 'src', 'extension.ts');
+    const packagePath = path.join(process.cwd(), 'package.json');
 
     const implementationSource = fs.readFileSync(implementationPath, 'utf8');
     const setupSource = fs.readFileSync(setupPath, 'utf8');
     const providerSource = fs.readFileSync(providerPath, 'utf8');
     const setupProviderSource = fs.readFileSync(setupProviderPath, 'utf8');
+    const extensionSource = fs.readFileSync(extensionPath, 'utf8');
+    const packageSource = fs.readFileSync(packagePath, 'utf8');
 
     assert.ok(
         implementationSource.includes('id="terminal-operations-fields"') &&
@@ -21,133 +25,96 @@ function run() {
         'Expected the sidebar to keep terminal operations and expose an Open Setup button.'
     );
     assert.ok(
-        !implementationSource.includes('id="jules-auto-sync-toggle"') &&
-        implementationSource.includes('id="onboard-jules-auto-sync"'),
-        'Expected steady-state Jules autosync to leave Terminal Operations while onboarding keeps its own toggle.'
-    );
-    assert.ok(
         !implementationSource.includes('id="custom-agent-list"') &&
         !implementationSource.includes('id="startup-fields"') &&
-        !implementationSource.includes('id="db-sync-fields"') &&
-        !implementationSource.includes('id="custom-prompts-modal"') &&
-        !implementationSource.includes('id="custom-agent-modal"') &&
-        !implementationSource.includes('class="agent-visible-toggle"') &&
-        !implementationSource.includes('input type="text" data-role='),
-        'Expected the sidebar implementation view to remove migrated setup, database, and built-in agent configuration UI.'
+        !implementationSource.includes('id="db-sync-fields"'),
+        'Expected steady-state configuration UI to stay out of the sidebar implementation view.'
     );
 
     assert.ok(
-        setupSource.includes('id="custom-agent-list"') &&
-        setupSource.includes('id="startup-fields"') &&
-        setupSource.includes('id="agents-fields"') &&
-        setupSource.includes('id="db-sync-fields"') &&
         setupSource.includes('id="project-mgmt-fields"') &&
         setupSource.includes('id="clickup-token-input"') &&
-        setupSource.includes('id="linear-token-input"') &&
-        setupSource.includes('id="notion-token-input"') &&
-        setupSource.includes('class="agent-visible-toggle"') &&
-        setupSource.includes('id="default-prompt-override-summary"') &&
-        setupSource.includes('id="btn-customize-default-prompts"') &&
-        setupSource.includes('id="custom-prompts-modal"') &&
-        setupSource.includes('id="custom-agent-modal"'),
-        'Expected the central setup view to own the migrated configuration, agent controls, and integration UI.'
+        setupSource.includes('id="clickup-option-create-folder"') &&
+        setupSource.includes('id="clickup-option-create-lists"') &&
+        setupSource.includes('id="clickup-option-create-custom-fields"') &&
+        setupSource.includes('id="clickup-option-enable-realtime-sync"') &&
+        setupSource.includes('id="clickup-option-enable-auto-pull"') &&
+        setupSource.includes('id="btn-apply-clickup-config"') &&
+        setupSource.includes('id="clickup-option-summary"') &&
+        setupSource.includes('id="linear-option-map-columns"') &&
+        setupSource.includes('id="linear-option-create-label"') &&
+        setupSource.includes('id="linear-option-scope-project"') &&
+        setupSource.includes('id="linear-option-enable-realtime-sync"') &&
+        setupSource.includes('id="linear-option-enable-auto-pull"') &&
+        setupSource.includes('id="btn-apply-linear-config"') &&
+        setupSource.includes('id="linear-option-summary"') &&
+        setupSource.includes('id="notion-option-enable-design-doc"') &&
+        setupSource.includes('id="btn-apply-notion-config"') &&
+        setupSource.includes('id="notion-option-summary"') &&
+        setupSource.includes('id="clickup-mappings-section"') &&
+        setupSource.includes('id="clickup-automation-section"') &&
+        setupSource.includes('id="linear-automation-section"'),
+        'Expected the setup panel to own checkbox-based ClickUp, Linear, and Notion setup with the existing downstream editors intact.'
     );
     assert.ok(
-        setupSource.includes('id="jules-auto-sync-toggle"') &&
-        setupSource.includes('id="setup-save-status"'),
-        'Expected the setup panel to own the persistent Jules autosync toggle and passive autosave status line.'
+        !setupSource.includes('OPERATION MODE') &&
+        !setupSource.includes('btn-setup-coding-mode') &&
+        !setupSource.includes('btn-setup-board-mgmt-mode'),
+        'Expected the standalone operation-mode setup block to be removed from setup.html.'
     );
     assert.ok(
-        !setupSource.includes('id="prompt-overrides-toggle"') &&
-        setupSource.includes('ClickUp, Linear and Notion Integration'),
-        'Expected setup.html to fold prompt overrides into the Agents accordion and rename the integration section.'
-    );
-    assert.ok(
-        setupSource.includes("type: 'saveStartupCommands'") &&
-        setupSource.includes("type: 'saveDefaultPromptOverrides'") &&
-        setupSource.includes("type: 'setPresetDbPath'") &&
-        setupSource.includes("type: 'setupClickUp'") &&
-        setupSource.includes("type: 'setupLinear'") &&
-        setupSource.includes("type: 'setupNotion'") &&
-        setupSource.includes("type: 'getIntegrationSetupStates'"),
-        'Expected setup.html to wire migrated saves, database actions, and project-management setup actions through webview messages.'
+        setupSource.includes("type: 'applyClickUpConfig'") &&
+        setupSource.includes("type: 'applyLinearConfig'") &&
+        setupSource.includes("type: 'applyNotionConfig'") &&
+        setupSource.includes('clickupApplyResult') &&
+        setupSource.includes('linearApplyResult') &&
+        setupSource.includes('notionApplyResult') &&
+        !setupSource.includes("type: 'setupClickUp'") &&
+        !setupSource.includes("type: 'setupLinear'") &&
+        !setupSource.includes("type: 'setupNotion'") &&
+        !setupSource.includes('operationModeChanged'),
+        'Expected setup.html to send structured apply payloads and stop depending on the removed mode message.'
     );
 
     assert.match(
         providerSource,
-        /public async handleSaveStartupCommands\(data: any\): Promise<void> \{/,
-        'Expected TaskViewerProvider to expose a shared saveStartupCommands handler for both webviews.'
+        /type ClickUpSetupState = \{[\s\S]*folderReady: boolean;[\s\S]*listsReady: boolean;[\s\S]*customFieldsReady: boolean;[\s\S]*realTimeSyncEnabled: boolean;[\s\S]*autoPullEnabled: boolean;/m,
+        'Expected TaskViewerProvider to expose detailed ClickUp hydration state for the checkbox UI.'
     );
     assert.match(
         providerSource,
-        /state\.visibleAgents\s*=\s*\{\s*\.\.\.\(state\.visibleAgents \|\| \{\}\),\s*\.\.\.visibleAgentsPatch\s*\};/s,
-        'Expected shared startup-command saving to merge visibility patches instead of blindly replacing state.'
+        /type LinearSetupState = \{[\s\S]*mappingsReady: boolean;[\s\S]*labelReady: boolean;[\s\S]*projectScoped: boolean;[\s\S]*realTimeSyncEnabled: boolean;[\s\S]*autoPullEnabled: boolean;/m,
+        'Expected TaskViewerProvider to expose detailed Linear hydration state for the checkbox UI.'
     );
     assert.match(
         providerSource,
-        /await Promise\.all\(\[\s*this\._postSidebarConfigurationState\(activeWorkspaceRoot\),\s*this\.postSetupPanelState\(activeWorkspaceRoot\)\s*\]\);/s,
-        'Expected saveStartupCommands to rebroadcast updated startup and visibility state to both webviews.'
+        /type NotionSetupState = \{[\s\S]*setupComplete: boolean;[\s\S]*designDocEnabled: boolean;[\s\S]*designDocLink: string;/m,
+        'Expected TaskViewerProvider to expose a dedicated Notion setup state.'
     );
-    assert.match(
-        providerSource,
-        /public async postSetupPanelState\(workspaceRoot\?: string\): Promise<void> \{/,
-        'Expected TaskViewerProvider to expose a setup-panel state broadcaster.'
-    );
-    assert.match(
-        providerSource,
-        /postSetupPanelState\(workspaceRoot\?: string\): Promise<void> \{[\s\S]*type:\s*'julesAutoSyncSetting'/,
-        'Expected postSetupPanelState() to hydrate the setup-panel Jules autosync toggle.'
-    );
-    assert.match(
-        providerSource,
-        /public async getIntegrationSetupStates\(workspaceRoot\?: string\): Promise<\{[\s\S]*clickupSetupComplete: boolean;[\s\S]*linearSetupComplete: boolean;[\s\S]*notionSetupComplete: boolean;[\s\S]*\}> \{/m,
-        'Expected TaskViewerProvider to expose project-management integration status for the setup panel.'
-    );
-    assert.match(
-        providerSource,
-        /public async handleSetupClickUp\(token: string\): Promise<\{ success: boolean; error\?: string \}> \{[\s\S]*switchboard\.clickup\.apiToken[\s\S]*return await this\._getClickUpService\(resolvedRoot\)\.setup\(\);/m,
-        'Expected TaskViewerProvider to reuse the ClickUp service setup flow from the central setup panel.'
-    );
-    assert.match(
-        providerSource,
-        /public async handleSetupLinear\(token: string\): Promise<\{ success: boolean; error\?: string \}> \{[\s\S]*switchboard\.linear\.apiToken[\s\S]*this\._getLinearService\(resolvedRoot\)\.setup\(\);/m,
-        'Expected TaskViewerProvider to reuse the Linear service setup flow from the central setup panel.'
-    );
-    assert.match(
-        providerSource,
-        /public async handleSetupNotion\(token: string\): Promise<\{ success: boolean; error\?: string \}> \{[\s\S]*switchboard\.notion\.apiToken[\s\S]*Token validation failed\./m,
-        'Expected TaskViewerProvider to validate and persist Notion setup from the central setup panel.'
+    assert.ok(
+        providerSource.includes('handleApplyClickUpConfig') &&
+        providerSource.includes('handleApplyLinearConfig') &&
+        providerSource.includes('handleApplyNotionConfig') &&
+        !providerSource.includes('handleSetupClickUp') &&
+        !providerSource.includes('handleSetupLinear') &&
+        !providerSource.includes('handleSetupNotion') &&
+        !providerSource.includes("type: 'operationModeChanged'"),
+        'Expected TaskViewerProvider to route setup-panel applies through option-aware handlers without rebroadcasting operation mode or keeping unreleased setup wrappers.'
     );
 
-    assert.match(
-        setupProviderSource,
-        /class SetupPanelProvider implements vscode\.Disposable/,
-        'Expected a dedicated SetupPanelProvider webview panel class.'
+    assert.ok(
+        setupProviderSource.includes("case 'applyClickUpConfig'") &&
+        setupProviderSource.includes("case 'applyLinearConfig'") &&
+        setupProviderSource.includes("case 'applyNotionConfig'") &&
+        !setupProviderSource.includes("case 'switchOperationMode'"),
+        'Expected SetupPanelProvider to route the new apply messages and drop the legacy mode-switch case.'
     );
-    assert.match(
-        setupProviderSource,
-        /createWebviewPanel\(\s*'switchboard-setup',\s*'SETUP'/s,
-        'Expected SetupPanelProvider.open\(\) to create the central setup editor panel.'
-    );
-    assert.match(
-        setupProviderSource,
-        /public postMessage\(message: any\): void \{\s*this\._panel\?\.webview\.postMessage\(message\);/s,
-        'Expected SetupPanelProvider to support pushed state updates from TaskViewerProvider.'
-    );
-    assert.match(
-        setupProviderSource,
-        /public async open\(section\?: string\): Promise<void> \{[\s\S]*openSetupSection/s,
-        'Expected SetupPanelProvider.open() to support focusing the Project Management accordion.'
-    );
-    assert.match(
-        setupProviderSource,
-        /case 'getIntegrationSetupStates': \{[\s\S]*case 'setupClickUp': \{[\s\S]*case 'setupLinear': \{[\s\S]*case 'setupNotion': \{/s,
-        'Expected SetupPanelProvider to route project-management setup messages to TaskViewerProvider.'
-    );
-    assert.match(
-        setupProviderSource,
-        /this\._panel\.onDidDispose\(\(\) => \{\s*this\._panel = undefined;/s,
-        'Expected SetupPanelProvider to clear panel state when disposed.'
+    assert.ok(
+        !extensionSource.includes('switchboard.setupClickUp') &&
+        !extensionSource.includes('switchboard.setupLinear') &&
+        !packageSource.includes('switchboard.setupClickUp') &&
+        !packageSource.includes('switchboard.setupLinear'),
+        'Expected the unreleased ClickUp and Linear setup commands to be removed so the Setup panel is the only setup entry point.'
     );
 
     console.log('setup panel migration test passed');

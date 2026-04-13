@@ -1342,27 +1342,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setClickUpTokenDisposable);
 
-    const setupClickUpDisposable = vscode.commands.registerCommand('switchboard.setupClickUp', async () => {
-        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!wsRoot) {
-            vscode.window.showErrorMessage('No workspace open');
-            return;
-        }
-        const syncService = new ClickUpSyncService(wsRoot, context.secrets);
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Setting up ClickUp...', cancellable: false },
-            async () => {
-                const result = await syncService.setup();
-                if (result.success) {
-                    vscode.window.showInformationMessage('ClickUp integration setup complete!');
-                } else {
-                    vscode.window.showErrorMessage(`ClickUp setup failed: ${result.error}`);
-                }
-            }
-        );
-    });
-    context.subscriptions.push(setupClickUpDisposable);
-
     const importFromClickUpDisposable = vscode.commands.registerCommand('switchboard.importFromClickUp', async () => {
         const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (!workspaceRoot) {
@@ -1374,7 +1353,13 @@ export async function activate(context: vscode.ExtensionContext) {
         const config = await syncService.loadConfig();
 
         if (!config?.setupComplete) {
-            vscode.window.showWarningMessage('ClickUp is not set up. Run "Switchboard: Setup ClickUp Integration" first.');
+            const choice = await vscode.window.showWarningMessage(
+                'ClickUp is not configured. Open the Setup panel first.',
+                'Open Setup Panel'
+            );
+            if (choice === 'Open Setup Panel') {
+                await vscode.commands.executeCommand('switchboard.openSetupPanel', 'project-mgmt');
+            }
             return;
         }
 
@@ -1383,7 +1368,13 @@ export async function activate(context: vscode.ExtensionContext) {
             .map(([column, listId]) => ({ label: column, description: `List ID: ${listId}`, listId }));
 
         if (listOptions.length === 0) {
-            vscode.window.showErrorMessage('No ClickUp lists mapped. Re-run setup.');
+            const choice = await vscode.window.showErrorMessage(
+                'No ClickUp lists are mapped. Update ClickUp in the Setup panel first.',
+                'Open Setup Panel'
+            );
+            if (choice === 'Open Setup Panel') {
+                await vscode.commands.executeCommand('switchboard.openSetupPanel', 'project-mgmt');
+            }
             return;
         }
 
@@ -1431,27 +1422,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     });
     context.subscriptions.push(setLinearTokenDisposable);
-
-    const setupLinearDisposable = vscode.commands.registerCommand('switchboard.setupLinear', async () => {
-        const wsRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!wsRoot) {
-            vscode.window.showErrorMessage('No workspace open');
-            return;
-        }
-        const syncService = new LinearSyncService(wsRoot, context.secrets);
-        await vscode.window.withProgress(
-            { location: vscode.ProgressLocation.Notification, title: 'Setting up Linear...', cancellable: false },
-            async () => {
-                const success = await syncService.setup();
-                if (success) {
-                    vscode.window.showInformationMessage('Linear integration setup complete!');
-                } else {
-                    vscode.window.showErrorMessage('Linear setup failed. Check your API token and try again.');
-                }
-            }
-        );
-    });
-    context.subscriptions.push(setupLinearDisposable);
 
     const setNotionTokenDisposable = vscode.commands.registerCommand('switchboard.setNotionToken', async () => {
         const token = await vscode.window.showInputBox({
@@ -1512,7 +1482,13 @@ export async function activate(context: vscode.ExtensionContext) {
         const config = await service.loadConfig();
 
         if (!config?.setupComplete) {
-            vscode.window.showWarningMessage('Linear is not set up. Run "Switchboard: Setup Linear Integration" first.');
+            const choice = await vscode.window.showWarningMessage(
+                'Linear is not configured. Open the Setup panel first.',
+                'Open Setup Panel'
+            );
+            if (choice === 'Open Setup Panel') {
+                await vscode.commands.executeCommand('switchboard.openSetupPanel', 'project-mgmt');
+            }
             return;
         }
 
@@ -1634,6 +1610,13 @@ export async function activate(context: vscode.ExtensionContext) {
             if (state.focused) {
                 refreshMcpStatus().catch(() => { });
                 inboxWatcher?.triggerScan();
+                if (workspaceRoot) {
+                    void syncTerminalRegistryWithState(workspaceRoot).finally(() => {
+                        taskViewerProvider.refresh();
+                    });
+                } else {
+                    taskViewerProvider.refresh();
+                }
             }
         }));
 
@@ -1667,10 +1650,22 @@ export async function activate(context: vscode.ExtensionContext) {
      */
     let syncInFlight = false;
     let syncPending = false;
-    async function syncTerminalRegistryWithState(workspaceRoot: string) {
+    const syncCompletionWaiters: Array<() => void> = [];
+    function resolveSyncCompletionWaiters() {
+        if (syncInFlight || syncPending || syncCompletionWaiters.length === 0) {
+            return;
+        }
+        while (syncCompletionWaiters.length > 0) {
+            const resolve = syncCompletionWaiters.shift();
+            resolve?.();
+        }
+    }
+    async function syncTerminalRegistryWithState(workspaceRoot: string): Promise<void> {
         if (syncInFlight) {
             syncPending = true;
-            return;
+            return new Promise<void>((resolve) => {
+                syncCompletionWaiters.push(resolve);
+            });
         }
         syncInFlight = true;
         try {
@@ -1679,8 +1674,9 @@ export async function activate(context: vscode.ExtensionContext) {
             syncInFlight = false;
             if (syncPending) {
                 syncPending = false;
-                void syncTerminalRegistryWithState(workspaceRoot);
+                await syncTerminalRegistryWithState(workspaceRoot);
             }
+            resolveSyncCompletionWaiters();
         }
     }
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {

@@ -88,23 +88,59 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'integrationSetupStates', ...states });
                     break;
                 }
-                case 'setupClickUp': {
-                    const result = await this._taskViewerProvider.handleSetupClickUp(message.token);
-                    this._panel.webview.postMessage({ type: 'clickupSetupResult', ...result });
+                case 'applyClickUpConfig': {
+                    const result = await this._taskViewerProvider.handleApplyClickUpConfig(
+                        message.token,
+                        message.options ?? {}
+                    );
+                    this._panel.webview.postMessage({ type: 'clickupApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
-                case 'setupLinear': {
-                    const result = await this._taskViewerProvider.handleSetupLinear(message.token);
-                    this._panel.webview.postMessage({ type: 'linearSetupResult', ...result });
+                case 'saveClickUpMappings': {
+                    const result = await this._taskViewerProvider.handleSaveClickUpMappings(
+                        Array.isArray(message.mappings) ? message.mappings : []
+                    );
+                    this._panel.webview.postMessage({ type: 'clickupMappingsSaved', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
-                case 'setupNotion': {
-                    const result = await this._taskViewerProvider.handleSetupNotion(message.token);
-                    this._panel.webview.postMessage({ type: 'notionSetupResult', ...result });
+                case 'saveClickUpAutomation': {
+                    const result = await this._taskViewerProvider.handleSaveClickUpAutomation(
+                        Array.isArray(message.automationRules) ? message.automationRules : []
+                    );
+                    this._panel.webview.postMessage({ type: 'clickupAutomationSaved', ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'applyLinearConfig': {
+                    const result = await this._taskViewerProvider.handleApplyLinearConfig(
+                        message.token,
+                        message.options ?? {}
+                    );
+                    this._panel.webview.postMessage({ type: 'linearApplyResult', ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'saveLinearAutomation': {
+                    const result = await this._taskViewerProvider.handleSaveLinearAutomation(
+                        Array.isArray(message.automationRules) ? message.automationRules : []
+                    );
+                    this._panel.webview.postMessage({ type: 'linearAutomationSaved', ...result });
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'applyNotionConfig': {
+                    const result = await this._taskViewerProvider.handleApplyNotionConfig(
+                        message.token,
+                        message.options ?? {}
+                    );
+                    this._panel.webview.postMessage({ type: 'notionApplyResult', ...result });
                     await this._taskViewerProvider.postSetupPanelState();
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
@@ -201,8 +237,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSaveDefaultPromptOverrides(message);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'saveLiveSyncConfig':
+                    await this._taskViewerProvider.handleSaveLiveSyncConfig(message);
+                    break;
                 case 'updateKanbanStructure':
                     await this._taskViewerProvider.handleUpdateKanbanStructure(message.sequence);
+                    break;
+                case 'restoreKanbanDefaults':
+                    await this._taskViewerProvider.handleRestoreKanbanDefaults();
+                    await this._taskViewerProvider.postSetupPanelState();
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getDefaultPromptPreviews': {
                     const previews = await this._taskViewerProvider.handleGetDefaultPromptPreviews();

@@ -15,7 +15,6 @@ export class WorkspaceExcludeService {
         '!.switchboard/CLIENT_CONFIG.md',
         '!.switchboard/README.md',
         '!.switchboard/SWITCHBOARD_PROTOCOL.md',
-        '!.switchboard/workspace-id',
         '',
         '# ClickUp integration config (workspace-specific IDs)',
         '.switchboard/clickup-config.json',

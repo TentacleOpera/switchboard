@@ -20,12 +20,14 @@ export interface KanbanPlanRecord {
     createdAt: string;
     updatedAt: string;
     lastAction: string;
-    sourceType: 'local' | 'brain';
+    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation';
     brainSourcePath: string;
     mirrorPath: string;
     routedTo: string;        // agent role dispatched to: 'lead' | 'coder' | 'intern' | ''
     dispatchedAgent: string; // terminal/tool name: 'claude cli', 'copilot cli', etc.
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
+    clickupTaskId?: string;
+    linearIssueId?: string;
 }
 
 type SqlJsDatabase = {
@@ -64,7 +66,9 @@ CREATE TABLE IF NOT EXISTS plans (
     mirror_path       TEXT DEFAULT '',
     routed_to         TEXT DEFAULT '',
     dispatched_agent  TEXT DEFAULT '',
-    dispatched_ide    TEXT DEFAULT ''
+    dispatched_ide    TEXT DEFAULT '',
+    clickup_task_id   TEXT DEFAULT '',
+    linear_issue_id   TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
@@ -128,18 +132,37 @@ const MIGRATION_V7_SQL = [
     `ALTER TABLE plans ADD COLUMN dispatched_ide TEXT DEFAULT ''`,
 ];
 
+const MIGRATION_V9_SQL = [
+    `ALTER TABLE plans ADD COLUMN clickup_task_id TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)`,
+];
+
+const MIGRATION_V12_SQL = [
+    `ALTER TABLE plans ADD COLUMN linear_issue_id TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)`,
+];
+
+/**
+ * Generic plan upsert. On conflict, updates metadata fields and allows the
+ * narrow deleted -> active recovery needed when a live local plan file is
+ * re-imported after a false tombstone. Use updateStatus() and updateColumn()
+ * for explicit lifecycle or kanban transitions in all other cases.
+ */
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
     workspace_id, created_at, updated_at, last_action, source_type,
-    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+    clickup_task_id, linear_issue_id
+) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_id) DO UPDATE SET
     session_id = excluded.session_id,
     topic = excluded.topic,
     plan_file = excluded.plan_file,
-    kanban_column = excluded.kanban_column,
-    status = excluded.status,
+    status = CASE
+        WHEN status = 'deleted' AND excluded.status = 'active' THEN excluded.status
+        ELSE status
+    END,
     complexity = excluded.complexity,
     tags = excluded.tags,
     dependencies = excluded.dependencies,
@@ -151,14 +174,18 @@ ON CONFLICT(plan_id) DO UPDATE SET
     mirror_path = excluded.mirror_path,
     routed_to = excluded.routed_to,
     dispatched_agent = excluded.dispatched_agent,
-    dispatched_ide = excluded.dispatched_ide
+    dispatched_ide = excluded.dispatched_ide,
+    clickup_task_id = excluded.clickup_task_id,
+    linear_issue_id = excluded.linear_issue_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
+const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-                    workspace_id, created_at, updated_at, last_action, source_type,
-                    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide`;
+                      workspace_id, created_at, updated_at, last_action, source_type,
+                      brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                      clickup_task_id, linear_issue_id`;
 
 const runtimeRequire = createRequire(__filename);
 
@@ -170,6 +197,10 @@ const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
 
 // Allow built-in columns plus custom agent columns (alphanumeric, underscores, spaces)
 const SAFE_COLUMN_NAME_RE = /^[a-zA-Z0-9 _-]{1,128}$/;
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 export class KanbanDatabase {
     private static _instances = new Map<string, KanbanDatabase>();
@@ -542,7 +573,9 @@ export class KanbanDatabase {
                     this._normalizePath(record.mirrorPath), // 16
                     record.routedTo || '',       // 17
                     record.dispatchedAgent || '', // 18
-                    record.dispatchedIde || ''    // 19
+                    record.dispatchedIde || '',   // 19
+                    record.clickupTaskId || '',   // 20
+                    record.linearIssueId || ''    // 21
                 ]);
             }
             this._db.run('COMMIT');
@@ -697,6 +730,40 @@ export class KanbanDatabase {
         );
     }
 
+    public async reviveDeletedPlans(sessionIds: string[]): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        const uniqueSessionIds = [...new Set(
+            sessionIds
+                .map((sessionId) => String(sessionId || '').trim())
+                .filter((sessionId) => sessionId.length > 0)
+        )];
+        if (uniqueSessionIds.length === 0) return true;
+
+        const now = new Date().toISOString();
+        this._db.run('BEGIN');
+        try {
+            for (const sessionId of uniqueSessionIds) {
+                this._db.run(
+                    "UPDATE plans SET status = 'active', updated_at = ? WHERE session_id = ? AND status = 'deleted'",
+                    [now, sessionId]
+                );
+            }
+            this._db.run('COMMIT');
+        } catch (error) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Failed to revive deleted plans:', error);
+            return false;
+        }
+        return this._persist();
+    }
+
+    public async updateLastAction(sessionId: string, lastAction: string): Promise<boolean> {
+        return this._persistedUpdate(
+            'UPDATE plans SET last_action = ?, updated_at = ? WHERE session_id = ?',
+            [lastAction, new Date().toISOString(), sessionId]
+        );
+    }
+
     public async updateTopic(sessionId: string, topic: string): Promise<boolean> {
         return this._persistedUpdate(
             'UPDATE plans SET topic = ?, updated_at = ? WHERE session_id = ?',
@@ -763,6 +830,52 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    public async findPlanByClickUpTaskId(
+        workspaceId: string,
+        clickupTaskId: string
+    ): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const normalizedTaskId = String(clickupTaskId || '').trim();
+        if (!normalizedTaskId) {
+            return null;
+        }
+
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ?
+               AND clickup_task_id = ?
+               AND status != 'deleted'
+              ORDER BY updated_at DESC
+              LIMIT 1`,
+            [workspaceId, normalizedTaskId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
+    public async findPlanByLinearIssueId(
+        workspaceId: string,
+        linearIssueId: string
+    ): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const normalizedIssueId = String(linearIssueId || '').trim();
+        if (!normalizedIssueId) {
+            return null;
+        }
+
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ?
+               AND linear_issue_id = ?
+               AND status != 'deleted'
+             ORDER BY updated_at DESC
+             LIMIT 1`,
+            [workspaceId, normalizedIssueId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
     public async getPlanByPlanId(planId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         const stmt = this._db.prepare(
@@ -778,7 +891,17 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) return null;
         const normalized = this._normalizePath(planFile);
         const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans WHERE plan_file = ? AND workspace_id = ? LIMIT 1`,
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE plan_file = ? AND workspace_id = ?
+             ORDER BY CASE status
+                WHEN 'active' THEN 0
+                WHEN 'completed' THEN 1
+                WHEN 'archived' THEN 2
+                WHEN 'deleted' THEN 3
+                ELSE 4
+             END,
+             updated_at DESC
+             LIMIT 1`,
             [normalized, workspaceId]
         );
         const rows = this._readRows(stmt);
@@ -959,6 +1082,8 @@ export class KanbanDatabase {
     /**
      * Find active plans whose plan_file no longer exists on disk and tombstone them.
      * Only checks local-source plans (skips brain-source).
+     * Missing files must still be absent after a short confirmation delay so
+     * temporary editor save churn does not tombstone a live card.
      * Returns the number of plans tombstoned.
      */
     public async purgeOrphanedPlans(
@@ -978,19 +1103,40 @@ export class KanbanDatabase {
         }
         stmt.free();
 
-        let purged = 0;
-        const now = new Date().toISOString();
+        const missingCandidates: Array<{ session_id: string; plan_file: string; absPath: string }> = [];
         for (const row of rows) {
             if (row.source_type === 'brain') continue;
             const absPath = resolvePath(row.plan_file);
             try {
                 if (!fs.existsSync(absPath)) {
+                    missingCandidates.push({
+                        session_id: row.session_id,
+                        plan_file: row.plan_file,
+                        absPath
+                    });
+                }
+            } catch {
+                // If we can't check the file, skip it — don't tombstone on error
+            }
+        }
+
+        if (missingCandidates.length === 0) {
+            return 0;
+        }
+
+        await delay(ORPHAN_PURGE_CONFIRMATION_DELAY_MS);
+
+        let purged = 0;
+        const now = new Date().toISOString();
+        for (const candidate of missingCandidates) {
+            try {
+                if (!fs.existsSync(candidate.absPath)) {
                     this._db.run(
                         "UPDATE plans SET status = 'deleted', updated_at = ? WHERE session_id = ? AND workspace_id = ?",
-                        [now, row.session_id, workspaceId]
+                        [now, candidate.session_id, workspaceId]
                     );
                     purged++;
-                    console.log(`[KanbanDatabase] Tombstoned orphaned plan: ${row.session_id} (missing file: ${row.plan_file})`);
+                    console.log(`[KanbanDatabase] Tombstoned orphaned plan after confirmation delay: ${candidate.session_id} (missing file: ${candidate.plan_file})`);
                 }
             } catch {
                 // If we can't check the file, skip it — don't tombstone on error
@@ -1157,6 +1303,73 @@ export class KanbanDatabase {
             await this._persist();
         }
         return removed;
+    }
+
+    /**
+     * Remove duplicate active local plan rows for the same .switchboard/plans/*.md file.
+     * Keeps the most recently updated row and drops stale duplicate sess_* rows plus
+     * their event/activity history so SessionActionLog DB-first hydration stops
+     * reintroducing phantom cards on refresh.
+     */
+    public async cleanupDuplicateLocalPlans(workspaceId: string): Promise<number> {
+        if (!(await this.ensureReady()) || !this._db) return 0;
+
+        const dupStmt = this._db.prepare(
+            `SELECT plan_file, COUNT(*) as cnt FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND source_type = 'local'
+               AND plan_file IS NOT NULL AND plan_file != ''
+               AND plan_file LIKE '%.switchboard/plans/%.md'
+               AND session_id LIKE 'sess_%'
+             GROUP BY plan_file
+             HAVING cnt > 1`,
+            [workspaceId]
+        );
+        const duplicatePlanFiles: string[] = [];
+        try {
+            while (dupStmt.step()) {
+                duplicatePlanFiles.push(String((dupStmt.getAsObject() as any).plan_file));
+            }
+        } finally {
+            dupStmt.free();
+        }
+
+        let removed = 0;
+
+        for (const planFile of duplicatePlanFiles) {
+            const rowsStmt = this._db.prepare(
+                `SELECT session_id, updated_at, created_at FROM plans
+                 WHERE workspace_id = ? AND status = 'active' AND source_type = 'local'
+                   AND plan_file = ? AND session_id LIKE 'sess_%'
+                 ORDER BY updated_at DESC, created_at DESC, session_id DESC`,
+                [workspaceId, planFile]
+            );
+            const sessionIds: string[] = [];
+            try {
+                while (rowsStmt.step()) {
+                    sessionIds.push(String((rowsStmt.getAsObject() as any).session_id));
+                }
+            } finally {
+                rowsStmt.free();
+            }
+
+            if (sessionIds.length <= 1) {
+                continue;
+            }
+
+            const canonicalSessionId = sessionIds[0];
+            const staleSessionIds = sessionIds.slice(1);
+            for (const staleSessionId of staleSessionIds) {
+                this._db.run('DELETE FROM plan_events WHERE session_id = ?', [staleSessionId]);
+                this._db.run('DELETE FROM activity_log WHERE session_id = ?', [staleSessionId]);
+                this._db.run('DELETE FROM plans WHERE session_id = ? AND workspace_id = ?', [staleSessionId, workspaceId]);
+                removed += 1;
+                console.log(
+                    `[KanbanDatabase] Removed stale duplicate local plan session ${staleSessionId} for ${planFile}; kept ${canonicalSessionId}`
+                );
+            }
+        }
+
+        return removed > 0 ? (await this._persist(), removed) : 0;
     }
 
     /** Check if a plan ID is tombstoned. */
@@ -1329,7 +1542,17 @@ export class KanbanDatabase {
             return true;
         } catch (error) {
             this._db = null;
-            this._lastInitError = error instanceof Error ? error.message : String(error);
+            // Handle non-Error objects (SQL.js sometimes throws plain objects)
+            let errorMessage: string;
+            if (error instanceof Error) {
+                errorMessage = error.message;
+            } else if (typeof error === 'object' && error !== null) {
+                // SQL.js may throw { message: string } or other object shapes
+                errorMessage = (error as any).message || JSON.stringify(error);
+            } else {
+                errorMessage = String(error);
+            }
+            this._lastInitError = errorMessage;
             console.error('[KanbanDatabase] Initialization failed:', error);
             return false;
         }
@@ -1469,6 +1692,137 @@ export class KanbanDatabase {
             this._db.exec("UPDATE plans SET complexity = '8' WHERE LOWER(complexity) = 'high'");
         } catch (e) {
             console.error('[KanbanDatabase] V8 complexity migration failed:', e);
+        }
+
+        // V9: add ClickUp task tracking field and lookup index.
+        for (const sql of MIGRATION_V9_SQL) {
+            try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+
+        // V10: repair completed rows that were silently rewritten to archived.
+        try {
+            const repairStmt = this._db.prepare(
+                "SELECT COUNT(*) as cnt FROM plans WHERE status = 'archived' AND kanban_column = 'COMPLETED'"
+            );
+            let repairedCount = 0;
+            try {
+                if (repairStmt.step()) {
+                    repairedCount = Number(repairStmt.getAsObject().cnt || 0);
+                }
+            } finally {
+                repairStmt.free();
+            }
+            if (repairedCount > 0) {
+                this._db.exec(
+                    "UPDATE plans SET status = 'completed' WHERE status = 'archived' AND kanban_column = 'COMPLETED'"
+                );
+                console.log(`[KanbanDatabase] V10 migration: repaired ${repairedCount} completed-column status row(s)`);
+            }
+        } catch (e) {
+            console.error('[KanbanDatabase] V10 completed-status repair failed:', e);
+        }
+
+        // V11: remove abandoned internal ClickUp automation fields.
+        try {
+            this._dropLegacyClickUpAutomationColumns();
+        } catch (e) {
+            console.error('[KanbanDatabase] V11 ClickUp automation cleanup failed:', e);
+        }
+
+        // V12: add Linear issue tracking field and lookup index.
+        for (const sql of MIGRATION_V12_SQL) {
+            try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+    }
+
+    private _planTableHasColumn(columnName: string): boolean {
+        if (!this._db) return false;
+        const stmt = this._db.prepare("PRAGMA table_info(plans)");
+        try {
+            while (stmt.step()) {
+                if (String(stmt.getAsObject().name || '') === columnName) {
+                    return true;
+                }
+            }
+            return false;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    private _dropLegacyClickUpAutomationColumns(): void {
+        if (!this._db) return;
+
+        const hasPipelineId = this._planTableHasColumn('pipeline_id');
+        const hasIsInternal = this._planTableHasColumn('is_internal');
+        const hasLinearIssueId = this._planTableHasColumn('linear_issue_id');
+        if (!hasPipelineId && !hasIsInternal) {
+            try { this._db.exec('DROP INDEX IF EXISTS idx_plans_clickup_pipeline'); } catch { /* best effort */ }
+            try { this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)'); } catch { /* best effort */ }
+            if (hasLinearIssueId) {
+                try { this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)'); } catch { /* best effort */ }
+            }
+            return;
+        }
+
+        const linearIssueColumnSql = hasLinearIssueId
+            ? ",\n    linear_issue_id TEXT DEFAULT ''"
+            : '';
+        const linearIssueColumnList = hasLinearIssueId ? ', linear_issue_id' : '';
+
+        this._db.exec('BEGIN TRANSACTION');
+        try {
+            this._db.exec('DROP INDEX IF EXISTS idx_plans_clickup_pipeline');
+            this._db.exec(`
+CREATE TABLE plans_v11 (
+    plan_id TEXT PRIMARY KEY,
+    session_id TEXT UNIQUE NOT NULL,
+    topic TEXT NOT NULL,
+    plan_file TEXT,
+    kanban_column TEXT NOT NULL DEFAULT 'CREATED',
+    status TEXT NOT NULL DEFAULT 'active',
+    complexity TEXT DEFAULT 'Unknown',
+    tags TEXT DEFAULT '',
+    dependencies TEXT DEFAULT '',
+    workspace_id TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    last_action TEXT,
+    source_type TEXT DEFAULT 'local',
+    brain_source_path TEXT DEFAULT '',
+    mirror_path TEXT DEFAULT '',
+    routed_to TEXT DEFAULT '',
+    dispatched_agent TEXT DEFAULT '',
+    dispatched_ide TEXT DEFAULT '',
+    clickup_task_id TEXT DEFAULT ''${linearIssueColumnSql}
+);
+`);
+            this._db.exec(`
+INSERT INTO plans_v11 (
+    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+    workspace_id, created_at, updated_at, last_action, source_type,
+    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id${linearIssueColumnList}
+)
+SELECT
+    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+    workspace_id, created_at, updated_at, last_action, source_type,
+    brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide, clickup_task_id${linearIssueColumnList}
+FROM plans
+`);
+            this._db.exec('DROP TABLE plans');
+            this._db.exec('ALTER TABLE plans_v11 RENAME TO plans');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status)');
+            this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_clickup_task ON plans(workspace_id, clickup_task_id)');
+            if (hasLinearIssueId) {
+                this._db.exec('CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)');
+            }
+            this._db.exec('COMMIT');
+            console.log('[KanbanDatabase] V11 migration: removed legacy ClickUp automation columns pipeline_id and is_internal');
+        } catch (error) {
+            try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
+            throw error;
         }
     }
 
@@ -1744,12 +2098,19 @@ export class KanbanDatabase {
                     createdAt: String(row.created_at || ""),
                     updatedAt: String(row.updated_at || ""),
                     lastAction: String(row.last_action || ""),
-                    sourceType: (String(row.source_type || "local") === "brain" ? "brain" : "local"),
+                    sourceType: (() => {
+                        const st = String(row.source_type || 'local');
+                        return st === 'brain' || st === 'clickup-automation' || st === 'linear-automation'
+                            ? st
+                            : 'local';
+                    })(),
                     brainSourcePath: this._normalizePath(String(row.brain_source_path || "")),
                     mirrorPath: this._normalizePath(String(row.mirror_path || "")),
                     routedTo: String(row.routed_to || ""),
                     dispatchedAgent: String(row.dispatched_agent || ""),
-                    dispatchedIde: String(row.dispatched_ide || "")
+                    dispatchedIde: String(row.dispatched_ide || ""),
+                    clickupTaskId: String(row.clickup_task_id || ""),
+                    linearIssueId: String(row.linear_issue_id || "")
                 });
             }
         } finally {

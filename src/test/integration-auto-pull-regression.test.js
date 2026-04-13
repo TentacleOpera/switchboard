@@ -17,93 +17,84 @@ function run() {
 
     assert.match(
         clickupSource,
-        /export interface ClickUpConfig \{[\s\S]*autoPullEnabled: boolean;[\s\S]*pullIntervalMinutes: AutoPullIntervalMinutes;[\s\S]*\}/m,
-        'Expected ClickUpConfig to persist auto-pull enablement and interval settings.'
+        /export interface ClickUpConfig \{[\s\S]*realTimeSyncEnabled: boolean;[\s\S]*autoPullEnabled: boolean;[\s\S]*pullIntervalMinutes: AutoPullIntervalMinutes;[\s\S]*\}/m,
+        'Expected ClickUpConfig to persist realtime sync and auto-pull settings together.'
     );
     assert.match(
         clickupSource,
-        /private _normalizeConfig\(raw: Partial<ClickUpConfig> \| null\): ClickUpConfig \| null \{[\s\S]*autoPullEnabled: raw\.autoPullEnabled === true,[\s\S]*pullIntervalMinutes: normalizedInterval[\s\S]*\}/m,
-        'Expected ClickUp config loading to normalize legacy configs with safe auto-pull defaults.'
-    );
-    assert.match(
-        clickupSource,
-        /let config = await this\.loadConfig\(\);[\s\S]*autoPullEnabled: false,[\s\S]*pullIntervalMinutes: 60/m,
-        'Expected first-time ClickUp setup to seed disabled auto-pull settings.'
+        /realTimeSyncEnabled: raw\.realTimeSyncEnabled === undefined[\s\S]*raw\.setupComplete === true[\s\S]*raw\.realTimeSyncEnabled === true/m,
+        'Expected ClickUp config normalization to default legacy configured workspaces to realtime sync enabled.'
     );
 
     assert.match(
         linearSource,
-        /export interface LinearConfig \{[\s\S]*autoPullEnabled: boolean;[\s\S]*pullIntervalMinutes: AutoPullIntervalMinutes;[\s\S]*\}/m,
-        'Expected LinearConfig to persist auto-pull enablement and interval settings.'
+        /export interface LinearConfig \{[\s\S]*realTimeSyncEnabled: boolean;[\s\S]*autoPullEnabled: boolean;[\s\S]*pullIntervalMinutes: AutoPullIntervalMinutes;[\s\S]*automationRules: LinearAutomationRule\[\];[\s\S]*\}/m,
+        'Expected LinearConfig to persist realtime sync, auto-pull, and automation rules together.'
     );
     assert.match(
         linearSource,
-        /private _normalizeConfig\(raw: Partial<LinearConfig> \| null\): LinearConfig \| null \{[\s\S]*autoPullEnabled: raw\.autoPullEnabled === true,[\s\S]*pullIntervalMinutes: normalizedInterval[\s\S]*\}/m,
-        'Expected Linear config loading to normalize legacy configs with safe auto-pull defaults.'
-    );
-    assert.match(
-        linearSource,
-        /await this\.saveConfig\(\{[\s\S]*setupComplete: true,[\s\S]*lastSync: null,[\s\S]*autoPullEnabled: false,[\s\S]*pullIntervalMinutes: 60[\s\S]*\}\);/m,
-        'Expected first-time Linear setup to seed disabled auto-pull settings.'
+        /realTimeSyncEnabled: raw\.realTimeSyncEnabled === undefined[\s\S]*raw\.setupComplete === true[\s\S]*raw\.realTimeSyncEnabled === true/m,
+        'Expected Linear config normalization to default legacy configured workspaces to realtime sync enabled.'
     );
 
     assert.match(
         providerSource,
-        /private readonly _integrationAutoPull = new IntegrationAutoPullService\(\);[\s\S]*private async _getIntegrationImportDir\(workspaceRoot: string\): Promise<string> \{[\s\S]*this\._taskViewerProvider\?\.getPlanIngestionFolder\(workspaceRoot\);[\s\S]*return configured \|\| path\.join\(workspaceRoot, '\.switchboard', 'plans'\);/m,
-        'Expected KanbanProvider to own the auto-pull scheduler and share the manual import destination resolution path.'
+        /private _buildClickUpState\([\s\S]*realTimeSyncEnabled: config\?\.realTimeSyncEnabled \?\? false,[\s\S]*autoPullEnabled: config\?\.autoPullEnabled \?\? false,[\s\S]*pullIntervalMinutes: config\?\.pullIntervalMinutes \?\? 60/m,
+        'Expected ClickUp webview state payloads to include realtime sync and auto-pull flags.'
     );
     assert.match(
         providerSource,
-        /private _buildClickUpState\(config: ClickUpConfig \| null, syncError = false\) \{[\s\S]*autoPullEnabled: config\?\.autoPullEnabled \?\? false,[\s\S]*pullIntervalMinutes: config\?\.pullIntervalMinutes \?\? 60/m,
-        'Expected ClickUp webview state payloads to include auto-pull settings.'
+        /private _buildLinearState\(config: LinearConfig \| null, syncError = false\) \{[\s\S]*realTimeSyncEnabled: config\?\.realTimeSyncEnabled \?\? false,[\s\S]*autoPullEnabled: config\?\.autoPullEnabled \?\? false,[\s\S]*pullIntervalMinutes: config\?\.pullIntervalMinutes \?\? 60/m,
+        'Expected Linear webview state payloads to include realtime sync and auto-pull flags.'
     );
     assert.match(
         providerSource,
-        /private _buildLinearState\(config: LinearConfig \| null, syncError = false\) \{[\s\S]*autoPullEnabled: config\?\.autoPullEnabled \?\? false,[\s\S]*pullIntervalMinutes: config\?\.pullIntervalMinutes \?\? 60/m,
-        'Expected Linear webview state payloads to include auto-pull settings.'
+        /public async applyLiveSyncConfig\(workspaceRoot\?: string\): Promise<void> \{[\s\S]*liveSyncConfig\.enabled[\s\S]*clickUpConfig\?\.setupComplete === true && clickUpConfig\.realTimeSyncEnabled === true[\s\S]*linearConfig\?\.setupComplete === true && linearConfig\.realTimeSyncEnabled === true[\s\S]*this\._continuousSync\.start/s,
+        'Expected global live sync to start only when the global toggle is enabled and at least one integration has realtime sync enabled.'
     );
     assert.match(
         providerSource,
-        /public async initializeIntegrationAutoPull\(\): Promise<void> \{[\s\S]*await this\._configureClickUpAutoPull\(workspaceRoot\);[\s\S]*await this\._configureLinearAutoPull\(workspaceRoot\);/m,
-        'Expected KanbanProvider to initialize auto-pull scheduling for each workspace.'
+        /private async _configureClickUpAutomation\(workspaceRoot: string\): Promise<void> \{[\s\S]*config\.autoPullEnabled === true[\s\S]*automationRules\.some\(\(rule\) => rule\.enabled !== false\)/m,
+        'Expected ClickUp automation polling to key off auto-pull plus enabled automation rules rather than a global mode.'
     );
     assert.match(
         providerSource,
-        /case 'saveIntegrationAutoPullSettings': \{[\s\S]*integration !== 'clickup' && integration !== 'linear'[\s\S]*Auto-pull interval must be 5, 15, 30, or 60 minutes\.[\s\S]*await this\._configureClickUpAutoPull\(workspaceRoot\);[\s\S]*await this\._configureLinearAutoPull\(workspaceRoot\);/m,
-        'Expected KanbanProvider to validate and persist integration auto-pull settings through a single message handler.'
+        /private async _configureLinearAutomation\(workspaceRoot: string\): Promise<void> \{[\s\S]*config\.autoPullEnabled === true[\s\S]*automationRules\.some\(\(rule\) => rule\.enabled !== false\)/m,
+        'Expected Linear automation polling to key off auto-pull plus enabled automation rules rather than a global mode.'
+    );
+    assert.match(
+        providerSource,
+        /public async initializeIntegrationAutoPull\(\): Promise<void> \{[\s\S]*await this\._configureClickUpAutoPull\(workspaceRoot\);[\s\S]*await this\._configureClickUpAutomation\(workspaceRoot\);[\s\S]*await this\._configureLinearAutoPull\(workspaceRoot\);[\s\S]*await this\._configureLinearAutomation\(workspaceRoot\);/m,
+        'Expected KanbanProvider to keep initializing all four integration scheduler categories.'
+    );
+    assert.match(
+        providerSource,
+        /case 'saveIntegrationAutoPullSettings': \{[\s\S]*await this\._configureClickUpAutoPull\(workspaceRoot\);[\s\S]*await this\._configureClickUpAutomation\(workspaceRoot\);[\s\S]*await this\._configureLinearAutoPull\(workspaceRoot\);[\s\S]*await this\._configureLinearAutomation\(workspaceRoot\);/m,
+        'Expected saved auto-pull changes to re-run both import and automation scheduler configuration.'
     );
 
     assert.match(
         extensionSource,
         /void kanbanProvider\.initializeIntegrationAutoPull\(\);[\s\S]*vscode\.workspace\.onDidChangeWorkspaceFolders\(\(\) => \{[\s\S]*void kanbanProvider\.initializeIntegrationAutoPull\(\);[\s\S]*\}\)/m,
-        'Expected extension activation to start and reconfigure integration auto-pull timers.'
-    );
-    const sharedPlansDirLine = "const plansDir = await taskViewerProvider.getPlanIngestionFolder(workspaceRoot) || path.join(workspaceRoot, '.switchboard', 'plans');";
-    assert.strictEqual(
-        extensionSource.split(sharedPlansDirLine).length - 1,
-        2,
-        'Expected manual ClickUp and Linear imports to resolve the same ingestion folder as timed imports.'
+        'Expected extension activation to keep initializing integration schedulers on startup and workspace changes.'
     );
 
-    assert.match(
-        kanbanSource,
-        /id="integration-settings-modal"[\s\S]*id="integration-autopull-toggle"[\s\S]*id="integration-interval-select"[\s\S]*id="integration-settings-save"/m,
-        'Expected the Kanban webview to expose an integration auto-pull settings modal.'
+    assert.ok(
+        kanbanSource.includes('id="integration-settings-modal"') &&
+        kanbanSource.includes('id="integration-autopull-toggle"') &&
+        kanbanSource.includes('id="integration-interval-select"') &&
+        kanbanSource.includes('Realtime sync is configured in Setup.'),
+        'Expected the Kanban integration settings modal to clarify that realtime sync now lives in Setup.'
     );
     assert.match(
         kanbanSource,
-        /document\.getElementById\('clickup-setup-btn'\)\?\.addEventListener\('click', \(\) => \{[\s\S]*postKanbanMessage\(\{ type: 'openSetupPanel', section: 'project-mgmt' \}\);[\s\S]*\}\);[\s\S]*document\.getElementById\('linear-setup-btn'\)\?\.addEventListener\('click', \(\) => \{[\s\S]*postKanbanMessage\(\{ type: 'openSetupPanel', section: 'project-mgmt' \}\);/m,
-        'Expected ClickUp and Linear setup buttons to redirect into the central integration setup section.'
+        /case 'clickupState': \{[\s\S]*realTimeSyncEnabled: msg\.realTimeSyncEnabled === true,[\s\S]*autoPullEnabled: msg\.autoPullEnabled === true/m,
+        'Expected the Kanban ClickUp state handler to hydrate realtime sync and auto-pull flags.'
     );
     assert.match(
         kanbanSource,
-        /ClickUp sync error — open ClickUp, Linear and Notion Integration setup[\s\S]*Open ClickUp, Linear and Notion Integration setup[\s\S]*Linear sync error — open ClickUp, Linear and Notion Integration setup/m,
-        'Expected Kanban integration tooltips to use the renamed ClickUp, Linear and Notion Integration copy.'
-    );
-    assert.match(
-        kanbanSource,
-        /type: 'saveIntegrationAutoPullSettings',[\s\S]*integration: activeIntegration,[\s\S]*autoPullEnabled: !!toggle\.checked,[\s\S]*pullIntervalMinutes: Number\(select\.value \|\| 60\)/m,
-        'Expected the Kanban settings modal to save auto-pull settings through the provider message channel.'
+        /case 'linearState': \{[\s\S]*realTimeSyncEnabled: msg\.realTimeSyncEnabled === true,[\s\S]*autoPullEnabled: msg\.autoPullEnabled === true/m,
+        'Expected the Kanban Linear state handler to hydrate realtime sync and auto-pull flags.'
     );
 
     console.log('integration auto-pull regression test passed');

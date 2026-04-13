@@ -40,7 +40,7 @@ async function testHttpHeadersAndApiVersion() {
     });
 }
 
-async function testSetupFailureTriggersCleanup() {
+async function testApplyConfigFailureTriggersCleanup() {
     await withWorkspace('clickup-regression-cleanup', async ({ workspaceRoot }) => {
         const { service, vscodeState } = createContext(workspaceRoot);
         const http = installHttpsMock();
@@ -53,10 +53,17 @@ async function testSetupFailureTriggersCleanup() {
             http.queueJson(200, { spaces: [{ id: 'space-1', name: 'Engineering' }] }, (req) => req.path === '/api/v2/team/team-1/space?archived=false');
             http.queueJson(200, { folders: [] }, (req) => req.path === '/api/v2/space/space-1/folder?archived=false');
             http.queueJson(200, { id: 'folder-1' }, (req) => req.method === 'POST' && req.path === '/api/v2/space/space-1/folder');
+            http.queueJson(200, { lists: [] }, (req) => req.method === 'GET' && req.path === '/api/v2/folder/folder-1/list?archived=false');
             http.queueJson(500, { err: 'boom' }, (req) => req.method === 'POST' && req.path === '/api/v2/folder/folder-1/list');
             http.queueJson(200, { ok: true }, (req) => req.method === 'DELETE' && req.path === '/api/v2/folder/folder-1');
 
-            const result = await service.setup();
+            const result = await service.applyConfig({
+                createFolder: true,
+                createLists: true,
+                createCustomFields: true,
+                enableRealtimeSync: true,
+                enableAutoPull: false
+            });
             assert.strictEqual(result.success, false);
             assert.match(result.error, /Failed to create list/);
             assert.ok(http.requests.some((req) => req.method === 'DELETE' && req.path === '/api/v2/folder/folder-1'));
@@ -71,7 +78,7 @@ async function testSetupFailureTriggersCleanup() {
 
 async function run() {
     await testHttpHeadersAndApiVersion();
-    await testSetupFailureTriggersCleanup();
+    await testApplyConfigFailureTriggersCleanup();
     console.log('clickup regression test passed');
 }
 

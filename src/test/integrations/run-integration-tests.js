@@ -20,6 +20,7 @@ const suites = {
         'src/test/integrations/linear/linear-graphql-client.test.js',
         'src/test/integrations/linear/linear-sync-service.test.js',
         'src/test/integrations/linear/linear-import-flow.test.js',
+        'src/test/integrations/linear/linear-automation-service.test.js',
         'src/test/integrations/linear/linear-regression.test.js'
     ],
     shared: [

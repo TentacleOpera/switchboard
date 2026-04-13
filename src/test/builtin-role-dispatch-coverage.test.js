@@ -133,19 +133,19 @@ function run() {
         );
     });
 
-    test('_handleTriggerAgentActionInternal workflowMap includes intern and team-lead', () => {
+    test('_workflowNameForDispatchRole includes intern and team-lead', () => {
         assert.match(
-            dispatchMethodSource,
+            taskViewerSource,
             /'team-lead'\s*:\s*'handoff-lead'/,
             "Expected workflowMap to include 'team-lead': 'handoff-lead'"
         );
         assert.match(
-            dispatchMethodSource,
+            taskViewerSource,
             /'intern'\s*:\s*'handoff'/,
             "Expected workflowMap to include 'intern': 'handoff'"
         );
         assert.match(
-            dispatchMethodSource,
+            taskViewerSource,
             /'tester'\s*:\s*'tester-pass'/,
             "Expected workflowMap to include 'tester': 'tester-pass'"
         );

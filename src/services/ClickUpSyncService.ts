@@ -3,6 +3,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
+import {
+  matchesClickUpAutomationRule,
+  normalizeClickUpAutomationRules,
+  type ClickUpAutomationRule
+} from '../models/PipelineDefinition';
 
 export interface ClickUpConfig {
   workspaceId: string;
@@ -16,8 +21,10 @@ export interface ClickUpConfig {
   };
   setupComplete: boolean;
   lastSync: string | null;
+  realTimeSyncEnabled: boolean;
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
+  automationRules: ClickUpAutomationRule[];
 }
 
 export interface KanbanPlanRecord {
@@ -33,6 +40,55 @@ export interface KanbanPlanRecord {
   createdAt: string;
   updatedAt: string;
   lastAction: string;
+  clickupTaskId?: string;
+}
+
+export interface ClickUpListSummary {
+  id: string;
+  name: string;
+}
+
+export interface ClickUpColumnMappingState {
+  columnId: string;
+  listId: string;
+  listName: string;
+  status: 'mapped' | 'excluded' | 'unmapped';
+}
+
+export interface ClickUpMappingState {
+  availableLists: ClickUpListSummary[];
+  mappings: ClickUpColumnMappingState[];
+  mappedCount: number;
+  excludedCount: number;
+  unmappedCount: number;
+}
+
+export interface ClickUpMappingSelection {
+  columnId: string;
+  strategy: 'create' | 'existing' | 'exclude';
+  listId?: string;
+}
+
+export interface ClickUpApplyOptions {
+  createFolder: boolean;
+  createLists: boolean;
+  createCustomFields: boolean;
+  enableRealtimeSync: boolean;
+  enableAutoPull: boolean;
+  columns?: string[];
+}
+
+export type ClickUpWriteBackTarget = 'description' | 'comment';
+export type ClickUpWriteBackFormat = 'append' | 'prepend' | 'replace';
+
+export type ClickUpSyncSkipReason = 'unmapped-column' | 'excluded-column';
+
+export interface ClickUpSyncResult {
+  success: boolean;
+  taskId?: string;
+  error?: string;
+  warning?: string;
+  skippedReason?: ClickUpSyncSkipReason;
 }
 
 // Canonical Switchboard kanban columns (mirrors KanbanDatabase.ts VALID_KANBAN_COLUMNS)
@@ -62,6 +118,70 @@ export class ClickUpSyncService {
 
   // ── Config I/O ──────────────────────────────────────────────
 
+  private _normalizeStringRecord(raw: unknown): Record<string, string> {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+      return {};
+    }
+
+    return Object.fromEntries(
+      Object.entries(raw as Record<string, unknown>)
+        .map(([key, value]) => [String(key || '').trim(), String(value || '').trim()])
+        .filter(([key]) => key.length > 0)
+    );
+  }
+
+  private _normalizeColumns(columns: string[] | undefined, config: ClickUpConfig | null): string[] {
+    const normalized = (Array.isArray(columns) ? columns : [])
+      .map((column) => String(column || '').trim())
+      .filter(Boolean);
+    if (normalized.length > 0) {
+      return Array.from(new Set(normalized));
+    }
+
+    if (config) {
+      const configColumns = Object.keys(config.columnMappings || {})
+        .map((column) => String(column || '').trim())
+        .filter(Boolean);
+      if (configColumns.length > 0) {
+        return Array.from(new Set(configColumns));
+      }
+    }
+
+    return [...CANONICAL_COLUMNS];
+  }
+
+  private _hasExplicitColumnMapping(config: ClickUpConfig, column: string): boolean {
+    return Object.prototype.hasOwnProperty.call(config.columnMappings, column);
+  }
+
+  private _getCustomFieldState(raw: Partial<ClickUpConfig> | null): ClickUpConfig['customFields'] {
+    const customFields: Partial<ClickUpConfig['customFields']> = raw?.customFields && typeof raw.customFields === 'object'
+      ? raw.customFields
+      : {};
+
+    return {
+      sessionId: String(customFields.sessionId || '').trim(),
+      planId: String(customFields.planId || '').trim(),
+      syncTimestamp: String(customFields.syncTimestamp || '').trim()
+    };
+  }
+
+  private _createEmptyConfig(): ClickUpConfig {
+    return {
+      workspaceId: '',
+      folderId: '',
+      spaceId: '',
+      columnMappings: {},
+      customFields: { sessionId: '', planId: '', syncTimestamp: '' },
+      setupComplete: false,
+      lastSync: null,
+      realTimeSyncEnabled: false,
+      autoPullEnabled: false,
+      pullIntervalMinutes: 60,
+      automationRules: []
+    };
+  }
+
   private _normalizeConfig(raw: Partial<ClickUpConfig> | null): ClickUpConfig | null {
     if (!raw) {
       return null;
@@ -75,13 +195,204 @@ export class ClickUpSyncService {
       workspaceId: raw.workspaceId || '',
       folderId: raw.folderId || '',
       spaceId: raw.spaceId || '',
-      columnMappings: raw.columnMappings || Object.fromEntries(CANONICAL_COLUMNS.map(c => [c, ''])),
-      customFields: raw.customFields || { sessionId: '', planId: '', syncTimestamp: '' },
+      columnMappings: (() => {
+        const normalizedMappings = this._normalizeStringRecord(raw.columnMappings);
+        return Object.keys(normalizedMappings).length > 0
+          ? normalizedMappings
+          : Object.fromEntries(CANONICAL_COLUMNS.map(c => [c, '']));
+      })(),
+      customFields: this._getCustomFieldState(raw),
       setupComplete: raw.setupComplete === true,
       lastSync: raw.lastSync || null,
+      realTimeSyncEnabled: raw.realTimeSyncEnabled === undefined
+        ? raw.setupComplete === true
+        : raw.realTimeSyncEnabled === true,
       autoPullEnabled: raw.autoPullEnabled === true,
-      pullIntervalMinutes: normalizedInterval
+      pullIntervalMinutes: normalizedInterval,
+      automationRules: normalizeClickUpAutomationRules(raw.automationRules)
     };
+  }
+
+  private _hasMappedLists(config: ClickUpConfig): boolean {
+    return Object.values(config.columnMappings || {}).some(
+      (listId) => typeof listId === 'string' && listId.trim().length > 0
+    );
+  }
+
+  private async _loadWorkspaceId(): Promise<string> {
+    const teamResult = await this.httpRequest('GET', '/team');
+    if (teamResult.status !== 200) {
+      throw new Error('Failed to fetch workspace. Check your API token.');
+    }
+    const teams = Array.isArray(teamResult.data?.teams) ? teamResult.data.teams : [];
+    const workspaceId = String(teams[0]?.id || '').trim();
+    if (!workspaceId) {
+      throw new Error('No ClickUp workspaces found.');
+    }
+    return workspaceId;
+  }
+
+  private async _ensureWorkspaceAndSpace(config: ClickUpConfig): Promise<void> {
+    if (!config.workspaceId) {
+      config.workspaceId = await this._loadWorkspaceId();
+    }
+    if (config.spaceId) {
+      return;
+    }
+
+    const spacesResult = await this.httpRequest('GET', `/team/${config.workspaceId}/space?archived=false`);
+    if (spacesResult.status !== 200) {
+      throw new Error('Failed to fetch ClickUp spaces.');
+    }
+    const spaces = Array.isArray(spacesResult.data?.spaces) ? spacesResult.data.spaces : [];
+    if (spaces.length === 0) {
+      throw new Error('No spaces found in workspace.');
+    }
+
+    const spaceItems: Array<{ label: string; id: string }> = spaces.map((space: any) => ({
+      label: String(space?.name || '').trim(),
+      id: String(space?.id || '').trim()
+    })).filter((space: { label: string; id: string }) => space.label.length > 0 && space.id.length > 0);
+    const selectedSpace = await vscode.window.showQuickPick(
+      spaceItems.map((space) => space.label),
+      { placeHolder: 'Select a ClickUp space for the AI Agents folder' }
+    );
+    if (!selectedSpace) {
+      throw new Error('No ClickUp space selected.');
+    }
+
+    const resolvedSpaceId = spaceItems.find((space) => space.label === selectedSpace)?.id || '';
+    if (!resolvedSpaceId) {
+      throw new Error('No ClickUp space selected.');
+    }
+    config.spaceId = resolvedSpaceId;
+  }
+
+  private async _findAiAgentsFolder(spaceId: string): Promise<{ id: string; name: string } | null> {
+    const foldersResult = await this.httpRequest('GET', `/space/${spaceId}/folder?archived=false`);
+    if (foldersResult.status !== 200) {
+      throw new Error('Failed to load ClickUp folders.');
+    }
+
+    const existingFolder = (foldersResult.data?.folders || []).find(
+      (folder: any) => String(folder?.name || '').trim() === 'AI Agents'
+    );
+    const folderId = String(existingFolder?.id || '').trim();
+    return folderId
+      ? { id: folderId, name: 'AI Agents' }
+      : null;
+  }
+
+  private async _ensureFolder(
+    config: ClickUpConfig,
+    allowCreate: boolean
+  ): Promise<{ created: boolean }> {
+    if (config.folderId) {
+      return { created: false };
+    }
+
+    if (!config.spaceId) {
+      await this._ensureWorkspaceAndSpace(config);
+    }
+
+    const existingFolder = await this._findAiAgentsFolder(config.spaceId);
+    if (existingFolder?.id) {
+      config.folderId = existingFolder.id;
+      return { created: false };
+    }
+
+    if (!allowCreate) {
+      throw new Error('ClickUp needs an existing "AI Agents" folder. Enable folder creation or reuse an existing folder first.');
+    }
+
+    const folderResult = await this.retry(() =>
+      this.httpRequest('POST', `/space/${config.spaceId}/folder`, { name: 'AI Agents' })
+    );
+    if (folderResult.status !== 200) {
+      throw new Error(`Failed to create folder: ${JSON.stringify(folderResult.data)}`);
+    }
+    const folderId = String(folderResult.data?.id || '').trim();
+    if (!folderId) {
+      throw new Error('ClickUp returned an invalid folder id.');
+    }
+    config.folderId = folderId;
+    return { created: true };
+  }
+
+  private async _ensureColumnMappings(config: ClickUpConfig, columns: string[]): Promise<void> {
+    if (!config.folderId) {
+      throw new Error('ClickUp list setup requires an existing folder.');
+    }
+
+    const existingLists = await this.listFolderLists(config.folderId);
+    for (const column of columns) {
+      const hasExplicitMapping = this._hasExplicitColumnMapping(config, column);
+      const currentListId = String(config.columnMappings[column] || '').trim();
+      if (hasExplicitMapping && !currentListId) {
+        config.columnMappings[column] = '';
+        continue;
+      }
+
+      let targetList = currentListId
+        ? existingLists.find((list) => list.id === currentListId)
+        : undefined;
+      if (!targetList) {
+        targetList = existingLists.find((list) => list.name.toLowerCase() === column.toLowerCase());
+      }
+
+      if (!targetList) {
+        const listResult = await this.retry(() =>
+          this.httpRequest('POST', `/folder/${config.folderId}/list`, { name: column })
+        );
+        if (listResult.status !== 200) {
+          throw new Error(`Failed to create list for column: ${column}`);
+        }
+        targetList = {
+          id: String(listResult.data?.id || '').trim(),
+          name: column
+        };
+        if (!targetList.id) {
+          throw new Error(`ClickUp returned an invalid list for column: ${column}`);
+        }
+        existingLists.push(targetList);
+      }
+
+      config.columnMappings[column] = targetList.id;
+      await this.delay(200);
+    }
+  }
+
+  private async _ensureCustomFields(config: ClickUpConfig): Promise<void> {
+    const firstListId = Object.values(config.columnMappings)
+      .map((value) => String(value || '').trim())
+      .find(Boolean);
+    if (!firstListId) {
+      throw new Error('ClickUp custom fields require at least one mapped list.');
+    }
+
+    const fieldDefs = [
+      { name: 'switchboard_session_id', type: 'text', configKey: 'sessionId' as const },
+      { name: 'switchboard_plan_id', type: 'text', configKey: 'planId' as const },
+      { name: 'sync_timestamp', type: 'date', configKey: 'syncTimestamp' as const }
+    ];
+    for (const field of fieldDefs) {
+      if (config.customFields[field.configKey]) {
+        continue;
+      }
+      try {
+        const fieldResult = await this.retry(() =>
+          this.httpRequest('POST', `/list/${firstListId}/field`, {
+            name: field.name,
+            type: field.type
+          })
+        );
+        if (fieldResult.status === 200) {
+          config.customFields[field.configKey] = fieldResult.data.id;
+        }
+      } catch {
+        console.warn(`[ClickUpSync] Custom field '${field.name}' creation failed — using description fallback.`);
+      }
+    }
   }
 
   async loadConfig(): Promise<ClickUpConfig | null> {
@@ -104,6 +415,259 @@ export class ClickUpSyncService {
     await fs.promises.mkdir(dir, { recursive: true });
     await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
     this._config = normalized;
+  }
+
+  async listFolderLists(folderId?: string): Promise<ClickUpListSummary[]> {
+    const config = await this.loadConfig();
+    const resolvedFolderId = String(folderId || config?.folderId || '').trim();
+    if (!resolvedFolderId) {
+      return [];
+    }
+
+    const result = await this.httpRequest('GET', `/folder/${resolvedFolderId}/list?archived=false`);
+    if (result.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp lists for folder ${resolvedFolderId}`);
+    }
+
+    return (result.data?.lists || [])
+      .map((list: any) => ({
+        id: String(list?.id || '').trim(),
+        name: String(list?.name || '').trim()
+      }))
+      .filter((list: ClickUpListSummary) => list.id.length > 0);
+  }
+
+  async getColumnMappingState(columns: string[]): Promise<ClickUpMappingState> {
+    const config = await this.loadConfig();
+    const normalizedColumns = this._normalizeColumns(columns, config);
+    const availableLists = config?.folderId ? await this.listFolderLists(config.folderId) : [];
+    const listNameById = new Map(availableLists.map((list) => [list.id, list.name]));
+
+    const mappings = normalizedColumns.map((columnId) => {
+      if (!config || !this._hasExplicitColumnMapping(config, columnId)) {
+        return {
+          columnId,
+          listId: '',
+          listName: '',
+          status: 'unmapped' as const
+        };
+      }
+
+      const listId = String(config.columnMappings[columnId] || '').trim();
+      if (!listId) {
+        return {
+          columnId,
+          listId: '',
+          listName: '',
+          status: 'excluded' as const
+        };
+      }
+
+      return {
+        columnId,
+        listId,
+        listName: listNameById.get(listId) || '',
+        status: 'mapped' as const
+      };
+    });
+
+    return {
+      availableLists,
+      mappings,
+      mappedCount: mappings.filter((mapping) => mapping.status === 'mapped').length,
+      excludedCount: mappings.filter((mapping) => mapping.status === 'excluded').length,
+      unmappedCount: mappings.filter((mapping) => mapping.status === 'unmapped').length
+    };
+  }
+
+  async saveColumnMappings(
+    selections: ClickUpMappingSelection[],
+    columns?: string[]
+  ): Promise<ClickUpMappingState> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.folderId) {
+      throw new Error('ClickUp must be set up before updating column mappings.');
+    }
+
+    const normalizedColumns = this._normalizeColumns(columns, config);
+    const selectionByColumn = new Map(
+      selections
+        .map((selection) => ({
+          columnId: String(selection.columnId || '').trim(),
+          strategy: selection.strategy,
+          listId: String(selection.listId || '').trim()
+        }))
+        .filter((selection) => selection.columnId.length > 0)
+        .map((selection) => [selection.columnId, selection])
+    );
+    const availableLists = await this.listFolderLists(config.folderId);
+    const listById = new Map(availableLists.map((list) => [list.id, list]));
+    const nextMappings = {
+      ...config.columnMappings
+    };
+
+    for (const columnId of normalizedColumns) {
+      const selection = selectionByColumn.get(columnId);
+      if (!selection) {
+        if (!this._hasExplicitColumnMapping(config, columnId)) {
+          nextMappings[columnId] = '';
+        }
+        continue;
+      }
+
+      if (selection.strategy === 'exclude') {
+        nextMappings[columnId] = '';
+        continue;
+      }
+
+      if (selection.strategy === 'existing') {
+        if (!selection.listId || !listById.has(selection.listId)) {
+          throw new Error(`Select an existing ClickUp list for column '${columnId}'.`);
+        }
+        nextMappings[columnId] = selection.listId;
+        continue;
+      }
+
+      const currentListId = String(config.columnMappings[columnId] || '').trim();
+      let targetList = currentListId ? listById.get(currentListId) : undefined;
+      if (!targetList) {
+        targetList = availableLists.find((list) => list.name.toLowerCase() === columnId.toLowerCase());
+      }
+
+      if (!targetList) {
+        const listResult = await this.retry(() =>
+          this.httpRequest('POST', `/folder/${config.folderId}/list`, { name: columnId })
+        );
+        if (listResult.status !== 200) {
+          throw new Error(`Failed to create ClickUp list for column '${columnId}'.`);
+        }
+        targetList = {
+          id: String(listResult.data?.id || '').trim(),
+          name: columnId
+        };
+        if (!targetList.id) {
+          throw new Error(`ClickUp created an invalid list for column '${columnId}'.`);
+        }
+        availableLists.push(targetList);
+        listById.set(targetList.id, targetList);
+      }
+
+      nextMappings[columnId] = targetList.id;
+    }
+
+    await this.saveConfig({
+      ...config,
+      columnMappings: nextMappings
+    });
+    return this.getColumnMappingState(normalizedColumns);
+  }
+
+  async saveAutomationSettings(
+    automationRules: ClickUpAutomationRule[]
+  ): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp must be set up before saving automation settings.');
+    }
+
+    await this.saveConfig({
+      ...config,
+      automationRules: normalizeClickUpAutomationRules(automationRules)
+    });
+  }
+
+  async listTasksFromClickUp(listId: string): Promise<any[]> {
+    const tasks: any[] = [];
+    let page = 0;
+
+    while (true) {
+      const result = await this.httpRequest('GET', `/list/${listId}/task?page=${page}&subtasks=true&include_closed=false`);
+      if (result.status !== 200) {
+        throw new Error(`Failed to fetch ClickUp tasks for list ${listId}: ${result.status}`);
+      }
+
+      const pageTasks: any[] = result.data?.tasks || [];
+      tasks.push(...pageTasks);
+      if (pageTasks.length < 100) {
+        break;
+      }
+      page++;
+      await this.delay(200);
+    }
+
+    return tasks;
+  }
+
+  private _mergeWriteBackContent(existing: string, content: string, format: ClickUpWriteBackFormat): string {
+    const normalizedExisting = String(existing || '').trim();
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedExisting) {
+      return normalizedContent;
+    }
+    if (!normalizedContent) {
+      return normalizedExisting;
+    }
+
+    switch (format) {
+      case 'prepend':
+        return `${normalizedContent}\n\n${normalizedExisting}`;
+      case 'replace':
+        return normalizedContent;
+      case 'append':
+      default:
+        return `${normalizedExisting}\n\n${normalizedContent}`;
+    }
+  }
+
+  async writeBackAutomationResult(
+    taskId: string,
+    content: string,
+    target: ClickUpWriteBackTarget,
+    format: ClickUpWriteBackFormat
+  ): Promise<void> {
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      throw new Error('ClickUp write-back requires a task ID.');
+    }
+
+    const normalizedContent = String(content || '').trim();
+    if (!normalizedContent) {
+      throw new Error('ClickUp write-back requires non-empty content.');
+    }
+
+    if (target === 'comment') {
+      const commentResult = await this.retry(() =>
+        this.httpRequest('POST', `/task/${normalizedTaskId}/comment`, {
+          comment_text: normalizedContent,
+          notify_all: false
+        })
+      );
+      if (commentResult.status !== 200) {
+        throw new Error(`Failed to comment on ClickUp task ${normalizedTaskId}.`);
+      }
+      return;
+    }
+
+    const taskResult = await this.retry(() =>
+      this.httpRequest('GET', `/task/${normalizedTaskId}`)
+    );
+    if (taskResult.status !== 200) {
+      throw new Error(`Failed to load ClickUp task ${normalizedTaskId} for write-back.`);
+    }
+
+    const existingDescription = String(
+      taskResult.data?.description
+      ?? taskResult.data?.markdown_description
+      ?? ''
+    );
+    const updateResult = await this.retry(() =>
+      this.httpRequest('PUT', `/task/${normalizedTaskId}`, {
+        description: this._mergeWriteBackContent(existingDescription, normalizedContent, format)
+      })
+    );
+    if (updateResult.status !== 200) {
+      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}.`);
+    }
   }
 
   // ── Token Management ────────────────────────────────────────
@@ -241,15 +805,17 @@ export class ClickUpSyncService {
 
   // ── Setup Flow ──────────────────────────────────────────────
 
-  /**
-   * Setup ClickUp integration: create folder, lists, and custom fields.
-   * Transactional — cleans up partial resources on failure.
-   */
-  async setup(): Promise<{ success: boolean; error?: string }> {
+  async applyConfig(options: ClickUpApplyOptions): Promise<{ success: boolean; error?: string }> {
     if (this.setupInProgress) {
       return { success: false, error: 'Setup already in progress' };
     }
     this.setupInProgress = true;
+
+    const previousConfig = await this.loadConfig();
+    const config = previousConfig
+      ? JSON.parse(JSON.stringify(previousConfig)) as ClickUpConfig
+      : this._createEmptyConfig();
+    let folderWasCreated = false;
 
     try {
       let token = await this.getApiToken();
@@ -261,116 +827,69 @@ export class ClickUpSyncService {
         await this._secretStorage.store('switchboard.clickup.apiToken', token);
       }
 
-      let config = await this.loadConfig();
-      if (!config) {
-        config = {
-          workspaceId: '',
-          folderId: '',
-          spaceId: '',
-          columnMappings: Object.fromEntries(CANONICAL_COLUMNS.map(c => [c, ''])),
-          customFields: { sessionId: '', planId: '', syncTimestamp: '' },
-          setupComplete: false,
-          lastSync: null,
-          autoPullEnabled: false,
-          pullIntervalMinutes: 60
+      const requestedColumns = this._normalizeColumns(options.columns, config);
+      const wantsProvisioning = options.createFolder || options.createLists || options.createCustomFields || options.enableRealtimeSync;
+      const hasExistingSetup = !!config.folderId || this._hasMappedLists(config) || Object.values(config.customFields).some(Boolean) || config.setupComplete;
+      if (!hasExistingSetup && !wantsProvisioning && !options.enableAutoPull) {
+        return { success: false, error: 'Select at least one ClickUp option to apply.' };
+      }
+
+      if (!config.workspaceId) {
+        config.workspaceId = await this._loadWorkspaceId();
+      }
+
+      const needsFolder = options.createFolder || options.createLists || options.createCustomFields || options.enableRealtimeSync;
+      if (needsFolder && !config.folderId && !config.spaceId) {
+        await this._ensureWorkspaceAndSpace(config);
+      }
+
+      if (needsFolder) {
+        const folderResult = await this._ensureFolder(config, options.createFolder);
+        folderWasCreated = folderResult.created;
+      }
+
+      if (!options.createFolder && !config.folderId && (options.createLists || options.createCustomFields || options.enableRealtimeSync)) {
+        return {
+          success: false,
+          error: 'ClickUp needs an existing "AI Agents" folder. Enable folder creation or reuse an existing folder first.'
         };
       }
 
-      // Step 1: Get workspace
-      const teamResult = await this.httpRequest('GET', '/team');
-      if (teamResult.status !== 200) {
-        return { success: false, error: 'Failed to fetch workspace. Check your API token.' };
-      }
-      const teams = teamResult.data?.teams || [];
-      if (teams.length === 0) {
-        return { success: false, error: 'No ClickUp workspaces found.' };
-      }
-      config.workspaceId = teams[0].id;
-
-      // Step 2: Get spaces and prompt user to select one
-      const spacesResult = await this.httpRequest('GET', `/team/${config.workspaceId}/space?archived=false`);
-      const spaces = spacesResult.data?.spaces || [];
-      if (spaces.length === 0) {
-        return { success: false, error: 'No spaces found in workspace.' };
+      if (options.createLists) {
+        await this._ensureColumnMappings(config, requestedColumns);
       }
 
-      const spaceItems: { label: string; id: string }[] = spaces.map((s: any) => ({
-        label: s.name, id: s.id
-      }));
-      const selectedSpace = await vscode.window.showQuickPick(
-        spaceItems.map(s => s.label),
-        { placeHolder: 'Select a ClickUp space for the AI Agents folder' }
-      );
-      if (!selectedSpace) {
-        return { success: false, error: 'No space selected' };
-      }
-      config.spaceId = spaceItems.find(s => s.label === selectedSpace)?.id || '';
-
-      // Step 3: Check for existing "AI Agents" folder
-      const foldersResult = await this.httpRequest('GET', `/space/${config.spaceId}/folder?archived=false`);
-      const existingFolder = (foldersResult.data?.folders || []).find((f: any) => f.name === 'AI Agents');
-      let folderWasCreated = false;
-      if (existingFolder) {
-        const reuse = await vscode.window.showQuickPick(
-          ['Reuse existing folder', 'Cancel setup'],
-          { placeHolder: '"AI Agents" folder already exists in this space' }
-        );
-        if (reuse !== 'Reuse existing folder') {
-          return { success: false, error: 'Setup cancelled — folder already exists' };
+      if (options.createCustomFields) {
+        if (!this._hasMappedLists(config)) {
+          throw new Error('Create custom fields requires at least one mapped ClickUp list.');
         }
-        config.folderId = existingFolder.id;
-      } else {
-        const folderResult = await this.retry(() =>
-          this.httpRequest('POST', `/space/${config.spaceId}/folder`, { name: 'AI Agents' })
-        );
-        if (folderResult.status !== 200) {
-          return { success: false, error: `Failed to create folder: ${JSON.stringify(folderResult.data)}` };
-        }
-        config.folderId = folderResult.data.id;
-        folderWasCreated = true;
+        await this._ensureCustomFields(config);
       }
 
-      // Step 4: Create lists for each canonical column
-      for (const column of CANONICAL_COLUMNS) {
-        const listResult = await this.retry(() =>
-          this.httpRequest('POST', `/folder/${config.folderId}/list`, { name: column })
-        );
-        if (listResult.status !== 200) {
-          if (folderWasCreated) { await this._cleanup(config); }
-          return { success: false, error: `Failed to create list for column: ${column}` };
+      if (options.enableRealtimeSync) {
+        if (!config.folderId) {
+          throw new Error('Realtime sync requires an existing ClickUp folder.');
         }
-        config.columnMappings[column] = listResult.data.id;
-        await this.delay(200); // Light pacing to stay under rate limits
-      }
-
-      // Step 5: Create custom fields on the first list (CREATED)
-      const firstListId = config.columnMappings['CREATED'];
-      const fieldDefs = [
-        { name: 'switchboard_session_id', type: 'text', configKey: 'sessionId' as const },
-        { name: 'switchboard_plan_id', type: 'text', configKey: 'planId' as const },
-        { name: 'sync_timestamp', type: 'date', configKey: 'syncTimestamp' as const }
-      ];
-      for (const field of fieldDefs) {
-        try {
-          const fieldResult = await this.retry(() =>
-            this.httpRequest('POST', `/list/${firstListId}/field`, {
-              name: field.name, type: field.type
-            })
-          );
-          if (fieldResult.status === 200) {
-            config.customFields[field.configKey] = fieldResult.data.id;
-          }
-        } catch {
-          // Non-fatal: metadata will be embedded in task descriptions instead
-          console.warn(`[ClickUpSync] Custom field '${field.name}' creation failed — using description fallback.`);
+        if (!this._hasMappedLists(config)) {
+          throw new Error('Realtime sync requires at least one mapped ClickUp list.');
         }
       }
 
+      if (options.enableAutoPull && !this._hasMappedLists(config)) {
+        throw new Error('Auto-pull requires at least one mapped ClickUp list.');
+      }
+
+      config.realTimeSyncEnabled = options.enableRealtimeSync === true;
+      config.autoPullEnabled = options.enableAutoPull === true;
       config.setupComplete = true;
       await this.saveConfig(config);
       return { success: true };
     } catch (error) {
-      return { success: false, error: `Setup failed: ${error}` };
+      if (folderWasCreated) {
+        await this._cleanup(config, previousConfig);
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      return { success: false, error: message };
     } finally {
       this.setupInProgress = false;
     }
@@ -380,14 +899,19 @@ export class ClickUpSyncService {
    * Clean up ClickUp resources on setup failure.
    * Deleting the folder cascades to child lists.
    */
-  private async _cleanup(config: ClickUpConfig): Promise<void> {
+  private async _cleanup(config: ClickUpConfig, previousConfig?: ClickUpConfig | null): Promise<void> {
     if (config.folderId) {
       try {
         await this.httpRequest('DELETE', `/folder/${config.folderId}`);
       } catch { /* best-effort */ }
     }
+    if (previousConfig) {
+      await this.saveConfig(previousConfig);
+      return;
+    }
     try {
       await fs.promises.unlink(this.configPath);
+      this._config = null;
     } catch { /* ignore */ }
   }
 
@@ -397,7 +921,7 @@ export class ClickUpSyncService {
    * Sync a single plan to ClickUp (Switchboard → ClickUp only).
    * Guarded by _isSyncInProgress to prevent circular loops.
    */
-  async syncPlan(plan: KanbanPlanRecord): Promise<{ success: boolean; taskId?: string; error?: string }> {
+  async syncPlan(plan: KanbanPlanRecord): Promise<ClickUpSyncResult> {
     if (this.isSyncInProgress) {
       return { success: false, error: 'Sync already in progress (loop guard)' };
     }
@@ -411,13 +935,24 @@ export class ClickUpSyncService {
 
       const listId = config.columnMappings[plan.kanbanColumn];
       if (!listId) {
-        // Column has no ClickUp list (e.g., custom agent column) — skip silently
-        console.log(`[ClickUpSync] No list mapping for column '${plan.kanbanColumn}' — skipping sync.`);
-        return { success: true }; // Not an error, just unmapped
+        const skippedReason: ClickUpSyncSkipReason = this._hasExplicitColumnMapping(config, plan.kanbanColumn)
+          ? 'excluded-column'
+          : 'unmapped-column';
+        const warning = skippedReason === 'excluded-column'
+          ? `ClickUp sync is excluded for column '${plan.kanbanColumn}'.`
+          : `ClickUp column '${plan.kanbanColumn}' is not mapped to any ClickUp list.`;
+        console.warn(`[ClickUpSync] ${warning}`);
+        return {
+          success: true,
+          warning,
+          skippedReason
+        };
       }
 
       const planContent = await this._readPlanContent(plan.planFile);
-      const existingTaskId = await this._findTaskByPlanId(plan.planId, config);
+      const existingTaskId =
+        String(plan.clickupTaskId || '').trim()
+        || await this._findTaskByPlanId(plan.planId, config);
 
       if (existingTaskId) {
         await this._updateTask(existingTaskId, plan, config, planContent);
@@ -433,6 +968,34 @@ export class ClickUpSyncService {
       return { success: false, error: `Sync failed: ${error}` };
     } finally {
       this.isSyncInProgress = false;
+    }
+  }
+
+  /**
+   * Sync plan markdown content to ClickUp task description.
+   * Used by ContinuousSyncService for live updates.
+   * Does NOT change task status, list, or custom fields.
+   */
+  async syncPlanContent(taskId: string, markdownContent: string): Promise<{ success: boolean; error?: string }> {
+    try {
+      const config = await this.loadConfig();
+      if (!config?.setupComplete) {
+        return { success: false, error: 'ClickUp not set up' };
+      }
+
+      // Convert markdown to ClickUp description format (if needed)
+      // ClickUp API accepts markdown directly in description field
+      const response = await this.httpRequest('PUT', `/task/${taskId}`, {
+        description: markdownContent
+      });
+
+      if (response.status === 200) {
+        return { success: true };
+      } else {
+        return { success: false, error: `ClickUp API error: ${response.status}` };
+      }
+    } catch (error) {
+      return { success: false, error: `Sync failed: ${error}` };
     }
   }
 
@@ -510,9 +1073,14 @@ export class ClickUpSyncService {
   private async _updateTask(taskId: string, plan: KanbanPlanRecord, config: ClickUpConfig, planContent: string): Promise<void> {
     const body: Record<string, unknown> = {
       name: plan.topic || `Plan ${plan.planId}`,
-      custom_fields: config.customFields.syncTimestamp
-        ? [{ id: config.customFields.syncTimestamp, value: Date.now() }]
-        : []
+      custom_fields: [
+        ...(config.customFields.sessionId
+          ? [{ id: config.customFields.sessionId, value: plan.sessionId }] : []),
+        ...(config.customFields.planId
+          ? [{ id: config.customFields.planId, value: plan.planId }] : []),
+        ...(config.customFields.syncTimestamp
+          ? [{ id: config.customFields.syncTimestamp, value: Date.now() }] : [])
+      ]
     };
 
     if (planContent) {
@@ -579,12 +1147,17 @@ export class ClickUpSyncService {
    * Debounced sync for move events.
    * Rapid moves within 500ms are coalesced — only the final position syncs.
    */
-  debouncedSync(sessionId: string, plan: KanbanPlanRecord): void {
+  debouncedSync(
+    sessionId: string,
+    plan: KanbanPlanRecord,
+    onComplete?: (result: ClickUpSyncResult) => void
+  ): void {
     const existing = this.debounceTimers.get(sessionId);
     if (existing) { clearTimeout(existing); }
 
     const timer = setTimeout(async () => {
-      await this.syncPlan(plan);
+      const result = await this.syncPlan(plan);
+      onComplete?.(result);
       this.debounceTimers.delete(sessionId);
     }, 500);
 
@@ -606,21 +1179,7 @@ export class ClickUpSyncService {
     }
 
     try {
-      const tasks: any[] = [];
-      let page = 0;
-
-      // subtasks=true returns subtasks inline in the same flat array, each with a `parent` field
-      while (true) {
-        const result = await this.httpRequest('GET', `/list/${listId}/task?page=${page}&subtasks=true&include_closed=false`);
-        if (result.status !== 200) {
-          return { success: false, imported: 0, skipped: 0, error: `Failed to fetch tasks: ${result.status}` };
-        }
-        const pageTasks: any[] = result.data?.tasks || [];
-        tasks.push(...pageTasks);
-        if (pageTasks.length < 100) { break; }
-        page++;
-        await this.delay(200);
-      }
+      const tasks = await this.listTasksFromClickUp(listId);
 
       await fs.promises.mkdir(plansDir, { recursive: true });
 
@@ -642,6 +1201,11 @@ export class ClickUpSyncService {
         // Skip tasks already owned by Switchboard
         const hasSwitchboardTag = (task.tags || []).some((t: any) => t.name?.toLowerCase().startsWith('switchboard:'));
         if (hasSwitchboardTag) { skipped++; continue; }
+
+        const handledByAutomation = config.automationRules.some((rule) =>
+          matchesClickUpAutomationRule(task, listId, rule)
+        );
+        if (handledByAutomation) { skipped++; continue; }
 
         const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
 
@@ -666,6 +1230,7 @@ export class ClickUpSyncService {
         // Metadata block (top of file)
         const metaLines = [
           `> Imported from ClickUp task \`${task.id}\``,
+          `> **ClickUp Task ID:** ${task.id}`,
           task.url   ? `> **URL:** ${task.url}`                       : '',
           parentName ? `> **Parent Task:** ${parentName}`             : '',
           priority   ? `> **Priority:** ${priority}`                  : '',

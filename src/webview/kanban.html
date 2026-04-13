@@ -164,6 +164,23 @@
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
+        .mode-toggle-btn {
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 0.5px;
+            transition: all 0.2s ease;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            color: color-mix(in srgb, var(--accent-teal) 90%, var(--text-secondary));
+        }
+
+        .mode-toggle-btn:hover:not(:disabled) {
+            filter: brightness(1.15);
+        }
+
         .btn-add-plan {
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
             border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
@@ -581,6 +598,41 @@
                         inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
+        /* Live sync indicators */
+        .live-sync-indicator {
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            display: inline-block;
+            margin-right: 6px;
+        }
+
+        .live-sync-indicator.active {
+            background: #4ade80;  /* Green */
+            animation: pulse 2s infinite;
+        }
+
+        .live-sync-indicator.paused {
+            background: #fbbf24;  /* Amber */
+        }
+
+        .live-sync-indicator.error,
+        .live-sync-indicator.conflict {
+            background: #f87171;  /* Red */
+        }
+
+        @keyframes pulse {
+            0%, 100% { opacity: 1; }
+            50% { opacity: 0.5; }
+        }
+
+        .card-context-menu .menu-item[data-action="pauseLiveSync"],
+        .card-context-menu .menu-item[data-action="resumeLiveSync"] {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
         /* Column button area */
         .column-button-area {
             display: flex;
@@ -607,7 +659,7 @@
             font-size: 9px;
             letter-spacing: 0.5px;
             color: var(--text-secondary, #888888);
-            padding: 3px 8px !important;
+            padding: 3px;
         }
         .recover-selected-btn:hover,
         .recover-all-btn:hover {
@@ -1147,8 +1199,9 @@
     </div>
     <div class="controls-strip">
         <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
-        <button class="strip-btn" id="clickup-setup-btn" data-tooltip="Setup ClickUp Integration">Setup ClickUp</button>
-        <button class="strip-btn" id="linear-setup-btn" data-tooltip="Setup Linear Integration">Setup Linear</button>
+        <button class="strip-btn mode-toggle-btn" id="mode-toggle-btn" data-tooltip="Open ClickUp, Linear and Notion Integration setup">
+            <span id="mode-label">Integrations</span>
+        </button>
         <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
         <span class="controls-spacer"></span>
         <span class="triggers-off-badge" id="triggers-off-badge" hidden>⚠ TRIGGERS OFF</span>
@@ -1246,6 +1299,9 @@
                 <button class="modal-close-btn" id="integration-settings-close">&times;</button>
             </div>
             <div class="modal-body">
+                <div style="font-size:11px; color:var(--text-secondary); line-height:1.5; margin-bottom:12px;">
+                    Realtime sync is configured in Setup. These controls only adjust background auto-pull and automation polling.
+                </div>
                 <label class="cli-toggle-inline" style="margin: 0 0 12px 0;">
                     <label class="toggle-switch">
                         <input type="checkbox" id="integration-autopull-toggle">
@@ -1371,8 +1427,8 @@
         let workspaceItems = [];
         let columnDragDropModes = {};
         const integrationState = {
-            clickup: { setupComplete: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false },
-            linear: { setupComplete: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false }
+            clickup: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false, mappingWarning: '', unmappedColumnCount: 0 },
+            linear: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false }
         };
         let activeIntegration = null;
         const selectedCards = new Set();
@@ -1381,7 +1437,6 @@
         // Routing map state
         let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
         let routingMapDraggedCard = null;
-
         // Column abbreviations for inline timers
         const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
 
@@ -1482,6 +1537,15 @@
             return ids;
         }
 
+        /** Get selected session IDs from the dragged card's rendered column container. */
+        function getSelectedInRenderedContainer(cardEl) {
+            const container = cardEl ? cardEl.closest('.column-body') : null;
+            if (!container) return [];
+            return Array.from(container.querySelectorAll('.kanban-card.selected'))
+                .map(el => el.dataset.session)
+                .filter(Boolean);
+        }
+
         /** Get all session IDs within a specific column. */
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
@@ -1511,7 +1575,7 @@
             if (!modal || !title || !toggle || !select || !state) return;
 
             activeIntegration = kind;
-            title.textContent = kind === 'clickup' ? 'ClickUp Auto-Pull Settings' : 'Linear Auto-Pull Settings';
+            title.textContent = kind === 'clickup' ? 'ClickUp Auto-Pull & Automation Settings' : 'Linear Auto-Pull & Automation Settings';
             toggle.checked = !!state.autoPullEnabled;
             select.value = String(state.pullIntervalMinutes || 60);
             updateIntegrationIntervalState();
@@ -1620,7 +1684,7 @@
                 if (coderDefs.length > 0) {
                     const syntheticCol = {
                         id: 'CODED_AUTO',
-                        label: 'Coded (auto-routed)',
+                        label: 'AUTOCODE',
                         role: null,
                         order: coderDefs[0].order || 180,
                         kind: 'coded',
@@ -1660,7 +1724,7 @@
                     : '';
 
                 const backlogToggleBtn = isCreated
-                    ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'VIEW NEW' : 'VIEW BACKLOG'}</button>`
+                    ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'NEW' : 'BACKLOG'}</button>`
                     : '';
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
@@ -1767,13 +1831,16 @@
                 postKanbanMessage({ type: 'toggleBacklogView' });
             });
 
-            document.getElementById('clickup-setup-btn')?.addEventListener('click', () => {
-                postKanbanMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
-            });
+            // Integration setup shortcut in the header strip
+            const modeToggleBtn = document.getElementById('mode-toggle-btn');
+            if (modeToggleBtn) {
+                const newBtn = modeToggleBtn.cloneNode(true);
+                modeToggleBtn.parentNode.replaceChild(newBtn, modeToggleBtn);
 
-            document.getElementById('linear-setup-btn')?.addEventListener('click', () => {
-                postKanbanMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
-            });
+                newBtn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
+                });
+            }
 
             document.getElementById('btn-add-plan')?.addEventListener('click', () => {
                 postKanbanMessage({ type: 'createPlan' });
@@ -1970,7 +2037,6 @@
             if (autoRouteEl) {
                 autoRouteEl.textContent = 'Dynamic routing';
                 autoRouteEl.style.color = '';
-                autoRouteEl.style.fontStyle = 'italic';
             }
         }
 
@@ -2127,6 +2193,13 @@
                 });
             });
 
+            document.querySelectorAll('.card-btn.live-sync-toggle').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const action = btn.dataset.liveSyncAction === 'resume' ? 'resumeLiveSync' : 'pauseLiveSync';
+                    postKanbanMessage({ type: action, sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                });
+            });
+
             document.querySelectorAll('.pair-program-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const sessionId = btn.dataset.session;
@@ -2174,6 +2247,20 @@
             const isCompleted = card.column === 'COMPLETED';
             const completedClass = isCompleted ? ' completed' : '';
 
+            // Live sync indicator
+            const liveSyncState = window.liveSyncStates?.[card.sessionId];
+            const showIndicator = liveSyncState && ['active', 'syncing', 'paused', 'error', 'conflict'].includes(liveSyncState.status);
+            const indicatorHtml = showIndicator
+                ? `<span class="live-sync-indicator ${liveSyncState.status}" title="Live Sync: ${liveSyncState.status}"></span>`
+                : '';
+            const liveSyncActionBtn = !isCompleted && liveSyncState
+                ? (['active', 'syncing'].includes(liveSyncState.status)
+                    ? `<button class="card-btn icon-btn live-sync-toggle" data-live-sync-action="pause" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Pause live sync">⏸</button>`
+                    : (['paused', 'error'].includes(liveSyncState.status)
+                        ? `<button class="card-btn icon-btn live-sync-toggle" data-live-sync-action="resume" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Resume live sync">▶</button>`
+                        : ''))
+                : '';
+
             // For completed cards, show a Recover button instead of Copy Prompt
             let primaryActionBtn;
             if (isCompleted) {
@@ -2207,7 +2294,7 @@
                    </button>`;
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
-                    <div class="card-topic">${escapeHtml(shortTopic)}</div>
+                    <div class="card-topic">${indicatorHtml}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
@@ -2216,6 +2303,7 @@
                             ${backlogActionBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
+                            ${liveSyncActionBtn}
                             <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>
@@ -2283,20 +2371,22 @@
         let draggedSessionId = null;
 
         function handleDragStart(e) {
-            const draggedId = e.target.dataset.session;
+            const draggedCardEl =
+                (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
+                    ? e.currentTarget
+                    : e.target.closest('.kanban-card');
+            const draggedId = draggedCardEl?.dataset.session;
+            if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
-            e.target.classList.add('dragging');
+            draggedCardEl.classList.add('dragging');
             e.dataTransfer.effectAllowed = 'move';
 
             // Check if the dragged card is part of a multi-selection
             let idsToTransfer = [draggedId];
             if (selectedCards.has(draggedId) && selectedCards.size > 1) {
-                const card = currentCards.find(c => c.sessionId === draggedId);
-                if (card) {
-                    const selectedInColumn = getSelectedInColumn(card.column);
-                    if (selectedInColumn.length > 1) {
-                        idsToTransfer = selectedInColumn;
-                    }
+                const selectedInRenderedContainer = getSelectedInRenderedContainer(draggedCardEl);
+                if (selectedInRenderedContainer.length > 1 && selectedInRenderedContainer.includes(draggedId)) {
+                    idsToTransfer = selectedInRenderedContainer;
                 }
             }
 
@@ -2308,7 +2398,7 @@
 
             e.dataTransfer.setData('application/json', JSON.stringify(idsToTransfer));
             e.dataTransfer.setData('text/plain', draggedId);
-            e.dataTransfer.setData('application/switchboard-workspace-root', e.target.dataset.workspaceRoot || getActiveWorkspaceRoot());
+            e.dataTransfer.setData('application/switchboard-workspace-root', draggedCardEl.dataset.workspaceRoot || getActiveWorkspaceRoot());
         }
 
         function handleDragEnd(e) {
@@ -2381,12 +2471,35 @@
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 const targetBody = document.getElementById('col-CODED_AUTO');
+                const dispatchGroups = new Map();
 
                 sessionIds.forEach(id => {
                     const card = currentCards.find(c => c.sessionId === id);
                     if (!card) return;
                     const resolvedTarget = resolveCodedAutoTarget(card);
                     if (card.column === resolvedTarget) return;
+
+                    const prevCol = card.column;
+                    const srcIdx = prevCol === 'BACKLOG' ? 0 : columns.indexOf(prevCol);
+                    const tgtIdx = columns.indexOf(resolvedTarget);
+                    if (tgtIdx === srcIdx) return;
+
+                    const sourceColumnForPrompt = prevCol;
+                    const dropMode = columnDragDropModes[resolvedTarget] || 'cli';
+                    const dispatchType = tgtIdx < srcIdx
+                        ? 'backward'
+                        : (!cliTriggersEnabled ? 'move' : (dropMode === 'prompt' ? 'prompt' : 'cli'));
+                    const groupKey = dispatchType === 'prompt'
+                        ? `${dispatchType}::${resolvedTarget}::${sourceColumnForPrompt}`
+                        : `${dispatchType}::${resolvedTarget}`;
+                    const group = dispatchGroups.get(groupKey) || {
+                        dispatchType,
+                        targetColumn: resolvedTarget,
+                        sourceColumn: sourceColumnForPrompt,
+                        sessionIds: []
+                    };
+                    group.sessionIds.push(id);
+                    dispatchGroups.set(groupKey, group);
 
                     // DOM optimistic update
                     const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
@@ -2413,25 +2526,45 @@
                         cardEl.addEventListener('animationend', () => cardEl.classList.remove('card-dropped'), { once: true });
                     }
 
-                    const prevCol = card.column;
                     card.column = resolvedTarget;
-
-                    setTimeout(() => {
-                        const srcIdx = prevCol === 'BACKLOG' ? 0 : columns.indexOf(prevCol);
-                        const tgtIdx = columns.indexOf(resolvedTarget);
-                        if (tgtIdx > srcIdx) {
-                            // Forward move
-                            if (cliTriggersEnabled && isColumnAgentAvailable(resolvedTarget)) {
-                                postKanbanMessage({ type: 'triggerAction', sessionId: id, targetColumn: resolvedTarget, workspaceRoot });
-                            } else if (!cliTriggersEnabled) {
-                                postKanbanMessage({ type: 'moveCardForward', sessionIds: [id], targetColumn: resolvedTarget, workspaceRoot });
-                            }
-                        } else if (tgtIdx < srcIdx) {
-                            // Backward move
-                            postKanbanMessage({ type: 'moveCardBackwards', sessionIds: [id], targetColumn: resolvedTarget, workspaceRoot });
-                        }
-                    }, 350);
                 });
+
+                if (dispatchGroups.size === 0) return;
+
+                setTimeout(() => {
+                    dispatchGroups.forEach(group => {
+                        const groupedIds = group.sessionIds;
+                        if (groupedIds.length === 0) return;
+
+                        if (group.dispatchType === 'backward') {
+                            postKanbanMessage({ type: 'moveCardBackwards', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
+                            return;
+                        }
+
+                        if (group.dispatchType === 'move') {
+                            postKanbanMessage({ type: 'moveCardForward', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
+                            return;
+                        }
+
+                        if (group.dispatchType === 'prompt') {
+                            postKanbanMessage({
+                                type: 'promptOnDrop',
+                                sessionIds: groupedIds,
+                                sourceColumn: group.sourceColumn,
+                                targetColumn: group.targetColumn,
+                                workspaceRoot
+                            });
+                            return;
+                        }
+
+                        if (!isColumnAgentAvailable(group.targetColumn)) return;
+                        if (groupedIds.length === 1) {
+                            postKanbanMessage({ type: 'triggerAction', sessionId: groupedIds[0], targetColumn: group.targetColumn, workspaceRoot });
+                        } else {
+                            postKanbanMessage({ type: 'triggerBatchAction', sessionIds: groupedIds, targetColumn: group.targetColumn, workspaceRoot });
+                        }
+                    });
+                }, 350);
                 return;
             }
 
@@ -2661,54 +2794,69 @@
                     allowUnknownComplexityAutoMove = msg.enabled !== false;
                     updateUnknownComplexityToggleUi();
                     break;
+                case 'liveSyncUpdate': {
+                    window.liveSyncStates = window.liveSyncStates || {};
+                    window.liveSyncStates[msg.sessionId] = {
+                        status: msg.status,
+                        lastSyncAt: msg.lastSyncAt,
+                        reason: msg.reason
+                    };
+                    // Re-render affected card
+                    const cardEl = document.querySelector(`.kanban-card[data-session="${msg.sessionId}"]`);
+                    if (cardEl) {
+                        const card = currentCards.find(c => c.sessionId === msg.sessionId);
+                        if (card) {
+                            cardEl.outerHTML = createCardHtml(card);
+                            // Re-attach event listeners to the new card element
+                            const newCardEl = document.querySelector(`.kanban-card[data-session="${msg.sessionId}"]`);
+                            if (newCardEl) {
+                                newCardEl.addEventListener('dragstart', handleDragStart);
+                                newCardEl.addEventListener('dragend', handleDragEnd);
+                                newCardEl.addEventListener('click', (e) => {
+                                    if (!e.target.closest('.card-btn')) {
+                                        newCardEl.classList.toggle('selected');
+                                        if (newCardEl.classList.contains('selected')) {
+                                            selectedCards.add(card.sessionId);
+                                        } else {
+                                            selectedCards.delete(card.sessionId);
+                                        }
+                                        updateSelectAllCheckbox();
+                                    }
+                                });
+                            }
+                        }
+                    }
+                    break;
+                }
+                case 'liveSyncStates': {
+                    // Bulk update on board refresh
+                    window.liveSyncStates = {};
+                    for (const state of msg.states) {
+                        window.liveSyncStates[state.sessionId] = state;
+                    }
+                    renderBoard(currentCards);  // Full re-render to show all indicators
+                    break;
+                }
                 case 'clickupState': {
                     integrationState.clickup = {
                         setupComplete: msg.setupComplete === true,
+                        realTimeSyncEnabled: msg.realTimeSyncEnabled === true,
                         autoPullEnabled: msg.autoPullEnabled === true,
                         pullIntervalMinutes: Number(msg.pullIntervalMinutes || 60),
-                        syncError: msg.syncError === true
+                        syncError: msg.syncError === true,
+                        mappingWarning: String(msg.mappingWarning || ''),
+                        unmappedColumnCount: Number(msg.unmappedColumnCount || 0)
                     };
-                    const btn = document.getElementById('clickup-setup-btn');
-                    if (!btn) break;
-                    
-                    if (msg.syncError) {
-                        btn.textContent = 'ClickUp Error';
-                        btn.dataset.tooltip = 'ClickUp sync error — open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    } else if (msg.setupComplete) {
-                        btn.textContent = 'ClickUp Synced';
-                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    } else {
-                        btn.textContent = 'Setup ClickUp';
-                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    }
                     break;
                 }
                 case 'linearState': {
                     integrationState.linear = {
                         setupComplete: msg.setupComplete === true,
+                        realTimeSyncEnabled: msg.realTimeSyncEnabled === true,
                         autoPullEnabled: msg.autoPullEnabled === true,
                         pullIntervalMinutes: Number(msg.pullIntervalMinutes || 60),
                         syncError: msg.syncError === true
                     };
-                    const btn = document.getElementById('linear-setup-btn');
-                    if (!btn) break;
-                    
-                    if (msg.syncError) {
-                        btn.textContent = 'Linear Error';
-                        btn.dataset.tooltip = 'Linear sync error — open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    } else if (msg.setupComplete) {
-                        btn.textContent = 'Linear Synced';
-                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    } else {
-                        btn.textContent = 'Setup Linear';
-                        btn.dataset.tooltip = 'Open ClickUp, Linear and Notion Integration setup';
-                        btn.disabled = false;
-                    }
                     break;
                 }
                 case 'visibleAgents':

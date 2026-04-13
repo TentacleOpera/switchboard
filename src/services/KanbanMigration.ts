@@ -13,7 +13,7 @@ export type LegacyKanbanSnapshotRow = {
     createdAt: string;
     updatedAt: string;
     lastAction: string;
-    sourceType: 'local' | 'brain';
+    sourceType: 'local' | 'brain' | 'clickup-automation' | 'linear-automation';
 };
 
 export class KanbanMigration {
@@ -97,11 +97,12 @@ export class KanbanMigration {
 
     /**
      * Sync snapshot rows into the DB. New plans are inserted with their derived
-     * column; existing plans only get metadata updates (topic, plan_file, complexity) —
-     * kanban_column and status are NEVER overwritten for existing records.
+     * column; existing plans only get metadata updates (topic, plan_file, complexity).
+     * kanban_column is never overwritten for existing rows. Status is only revived
+     * from deleted -> active when a live snapshot row reappears for the same session.
      *
      * Uses batch operations: one `upsertPlans` for new plans, one `updateMetadataBatch`
-     * for existing plans — 2 persists max instead of N*3.
+     * for existing plans, and one optional deleted-row revival batch.
      */
     public static async syncPlansMetadata(
         db: KanbanDatabase,
@@ -125,11 +126,16 @@ export class KanbanMigration {
                 tags?: string;
                 dependencies?: string;
             }> = [];
+            const deletedRowsToRevive = new Set<string>();
 
             for (const row of snapshotRows) {
                 if (!existingIds.has(row.sessionId)) {
                     newRows.push(row);
                 } else {
+                    const existingRow = await db.getPlanBySessionId(row.sessionId);
+                    if (existingRow?.status === 'deleted') {
+                        deletedRowsToRevive.add(row.sessionId);
+                    }
                     let resolvedComplexity: string | undefined;
                     if (row.complexity && row.complexity !== 'Unknown') {
                         resolvedComplexity = row.complexity;
@@ -170,6 +176,11 @@ export class KanbanMigration {
             if (metadataUpdates.length > 0) {
                 const updated = await db.updateMetadataBatch(metadataUpdates, { preserveTimestamps: true });
                 if (!updated) return false;
+            }
+
+            if (deletedRowsToRevive.size > 0) {
+                const revived = await db.reviveDeletedPlans([...deletedRowsToRevive]);
+                if (!revived) return false;
             }
         }
 

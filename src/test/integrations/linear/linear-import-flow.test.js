@@ -29,7 +29,6 @@ async function run() {
         await service.saveConfig({
             teamId: 'team-1',
             teamName: 'Engineering',
-            projectId: 'project-1',
             columnToStateId: {
                 CREATED: 'state-created',
                 BACKLOG: 'state-backlog',
@@ -46,6 +45,8 @@ async function run() {
             autoPullEnabled: false,
             pullIntervalMinutes: 60
         });
+        const normalizedConfig = await service.loadConfig();
+        assert.deepStrictEqual(normalizedConfig.automationRules, []);
         await service.saveSyncMap({ 'session-synced': 'issue-synced' });
 
         const sampleIssue = loadFixtureJson('linear', 'issue-sample.json');
@@ -102,6 +103,23 @@ async function run() {
             const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
             const result = await service.importIssuesFromLinear(plansDir);
             assert.deepStrictEqual(result, { success: true, imported: 3, skipped: 2 });
+
+            const issuesRequest = http.requests.find((req) =>
+                req.method === 'POST'
+                && req.path === '/graphql'
+                && String(req.jsonBody?.query || '').includes('issues(')
+            );
+            assert.ok(issuesRequest, 'Expected Linear import flow to query issues.');
+            assert.doesNotMatch(
+                String(issuesRequest.jsonBody?.query || ''),
+                /\$projectId/,
+                'Expected team-wide Linear import flow not to declare an unused $projectId variable.'
+            );
+            assert.strictEqual(
+                Object.prototype.hasOwnProperty.call(issuesRequest.jsonBody?.variables || {}, 'projectId'),
+                false,
+                'Expected team-wide Linear import flow not to send a projectId variable.'
+            );
 
             const parentContent = readText(path.join(plansDir, 'linear_import_issue-parent.md'));
             const childContent = readText(path.join(plansDir, 'linear_import_issue-child.md'));

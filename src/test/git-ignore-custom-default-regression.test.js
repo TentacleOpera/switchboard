@@ -10,6 +10,7 @@ function readSource(...segments) {
 
 function run() {
     const packageJson = JSON.parse(readSource('package.json'));
+    const gitignoreSource = readSource('.gitignore');
     const setupSource = readSource('src', 'webview', 'setup.html');
     const providerSource = readSource('src', 'services', 'TaskViewerProvider.ts');
     const excludeServiceSource = readSource('src', 'services', 'WorkspaceExcludeService.ts');
@@ -61,6 +62,14 @@ function run() {
         excludeServiceSource,
         /config\.get\('ignoreRules', WorkspaceExcludeService\.DEFAULT_RULES\)/,
         'Expected WorkspaceExcludeService.apply() to continue sourcing editable rules from DEFAULT_RULES.'
+    );
+    assert.ok(
+        !gitignoreSource.includes('!.switchboard/workspace-id'),
+        'Expected .gitignore not to re-include the machine-local .switchboard/workspace-id file.'
+    );
+    assert.ok(
+        !excludeServiceSource.includes("'!.switchboard/workspace-id'"),
+        'Expected targeted managed gitignore rules not to re-add .switchboard/workspace-id.'
     );
 
     assert.ok(

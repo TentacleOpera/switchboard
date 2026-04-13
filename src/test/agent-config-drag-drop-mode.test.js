@@ -1,5 +1,6 @@
 const assert = require('assert');
-const { parseCustomAgents, buildKanbanColumns, reweightSequence } = require('../services/agentConfig');
+const path = require('path');
+const { parseCustomAgents, parseCustomKanbanColumns, buildKanbanColumns, reweightSequence } = require(path.join(process.cwd(), 'out', 'services', 'agentConfig.js'));
 
 describe('agentConfig — dragDropMode', () => {
     describe('parseCustomAgents()', () => {
@@ -60,7 +61,7 @@ describe('agentConfig — dragDropMode', () => {
                 dragDropMode: 'prompt'
             }]);
             const columns = buildKanbanColumns(agents);
-            const customCol = columns.find(c => c.kind === 'custom');
+            const customCol = columns.find(c => c.kind === 'custom-agent');
             assert.ok(customCol, 'Custom column should exist');
             assert.strictEqual(customCol.dragDropMode, 'prompt');
         });
@@ -74,9 +75,26 @@ describe('agentConfig — dragDropMode', () => {
                 kanbanOrder: 400
             }]);
             const columns = buildKanbanColumns(agents);
-            const customCol = columns.find(c => c.kind === 'custom');
+            const customCol = columns.find(c => c.kind === 'custom-agent');
             assert.ok(customCol, 'Custom column should exist');
             assert.strictEqual(customCol.dragDropMode, 'cli');
+        });
+
+        it('propagates persisted user-authored kanban columns with prompt metadata', () => {
+            const userColumns = parseCustomKanbanColumns([{
+                id: 'design_review',
+                label: 'Design Review',
+                role: 'reviewer',
+                triggerPrompt: 'Review architecture decisions before implementation.',
+                order: 275,
+                dragDropMode: 'prompt'
+            }]);
+            const columns = buildKanbanColumns([], userColumns);
+            const customCol = columns.find(c => c.kind === 'custom-user');
+            assert.ok(customCol, 'User-authored column should exist');
+            assert.strictEqual(customCol.source, 'custom-user');
+            assert.strictEqual(customCol.dragDropMode, 'prompt');
+            assert.strictEqual(customCol.triggerPrompt, 'Review architecture decisions before implementation.');
         });
 
         it('applies persisted built-in order overrides', () => {

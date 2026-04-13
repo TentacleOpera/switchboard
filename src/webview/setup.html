@@ -229,7 +229,6 @@
             color: color-mix(in srgb, var(--accent-teal) 80%, var(--text-secondary));
             padding: 9px;
             font-size: 11px;
-            font-weight: 600;
         }
 
         .action-btn:hover:not(:disabled) {
@@ -341,7 +340,6 @@
             text-align: center;
             transition: all 0.2s ease;
             text-transform: uppercase;
-            font-weight: 600;
         }
 
         .db-action-btn:hover {
@@ -480,35 +478,6 @@
 
                 <div class="db-subsection">
                     <div class="subsection-header">
-                        <span>Prompt Controls</span>
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Append Design Doc to planner prompts</span>
-                    </label>
-                    <div id="design-doc-status-line" style="font-size:10px; color:var(--text-secondary); margin-top:4px; font-family:var(--font-mono);">
-                        Not configured — configure in Planning tab
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Accurate coding mode for Coder prompts</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Inline challenge step for Lead Coder prompts</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="advanced-reviewer-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Advanced reviewer mode (deep regression analysis — high token usage)</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="aggressive-pair-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Aggressive pair programming (shift more tasks to Coder)</span>
-                    </label>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
                         <span>Agent Visibility &amp; CLI Commands</span>
                     </div>
                     <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
@@ -570,6 +539,35 @@
 
                 <div class="db-subsection">
                     <div class="subsection-header">
+                        <span>Prompt Controls</span>
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Append Design Doc to planner prompts</span>
+                    </label>
+                    <div id="design-doc-status-line" style="font-size:10px; color:var(--text-secondary); margin-top:4px; font-family:var(--font-mono);">
+                        Not configured — configure in Planning tab
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Accurate coding mode for Coder prompts</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Inline challenge step for Lead Coder prompts</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="advanced-reviewer-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Advanced reviewer mode (deep regression analysis — high token usage)</span>
+                    </label>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="aggressive-pair-toggle" type="checkbox" style="width:auto; margin:0;">
+                        <span>Aggressive pair programming (shift more tasks to Coder)</span>
+                    </label>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
                         <span>Default Prompt Overrides</span>
                     </div>
                     <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
@@ -598,6 +596,10 @@
                 <span class="chevron" id="kanban-structure-chevron">▶</span>
             </div>
             <div class="startup-fields" id="kanban-structure-fields" data-accordion="true">
+                <div class="flex gap-2" style="margin-bottom:8px;">
+                    <button id="btn-add-kanban-column" class="secondary-btn w-full">ADD COLUMN</button>
+                    <button id="btn-restore-kanban-defaults" class="secondary-btn w-full">RESTORE DEFAULTS</button>
+                </div>
                 <div id="kanban-structure-list" class="kanban-structure-list"></div>
                 <div class="hint-text">
                     Drag active middle columns to change board order. New and Completed stay fixed.
@@ -707,6 +709,42 @@
                 <span class="chevron" id="project-mgmt-chevron">▶</span>
             </div>
             <div class="startup-fields" id="project-mgmt-fields" data-accordion="true">
+
+                <!-- Live Sync Configuration Section -->
+                <div class="db-subsection" style="background:var(--panel-bg2); padding:12px; border-radius:4px; border:1px solid var(--border-dim);">
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom:10px; font-family: var(--font-mono); letter-spacing: 1px;">
+                        LIVE SYNC CONFIGURATION
+                    </div>
+
+                    <div class="field-row">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="live-sync-enabled" />
+                            <span class="toggle-slider"></span>
+                            Enable Live Sync (continuous updates for integrations with realtime sync enabled below)
+                        </label>
+                    </div>
+
+                    <div class="field-row" id="live-sync-options" style="display: none;">
+                        <label style="display:block; margin-bottom:4px; font-size:10px; color:var(--text-secondary);">Sync Interval (seconds)</label>
+                        <select id="live-sync-interval" class="modal-input" style="width:100%;">
+                            <option value="10">10s (fast)</option>
+                            <option value="30" selected>30s (default)</option>
+                            <option value="60">60s (conservative)</option>
+                            <option value="300">5min (minimal)</option>
+                        </select>
+
+                        <label class="toggle-switch" style="margin-top:8px;">
+                            <input type="checkbox" id="live-sync-conflict-check" />
+                            <span class="toggle-slider"></span>
+                            Auto-check for external edits (doubles API usage)
+                        </label>
+
+                        <div style="font-size:9px; color:var(--text-secondary); line-height:1.4; margin-top:6px;">
+                            Continuous sync only runs for integrations whose realtime sync option is enabled below. Conflict detection checks external task content before each sync to avoid overwriting manual edits.
+                        </div>
+                    </div>
+                </div>
+
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
                 </div>
@@ -723,8 +761,59 @@
                         <span style="display:block; margin-bottom:4px;">API Token</span>
                         <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
                     </label>
-                    <button id="btn-setup-clickup" class="action-btn w-full" style="margin-top: 8px;">SETUP CLICKUP</button>
+                    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Create or reuse the AI Agents folder</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Create or reuse mapped lists for visible Kanban columns</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Create Switchboard custom fields on the first mapped list</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Enable realtime ClickUp push sync for mapped plans</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Enable ClickUp auto-pull and automation polling</span>
+                        </label>
+                    </div>
+                    <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
+                    <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="clickup-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                    <div id="clickup-mapping-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                    <div id="clickup-mappings-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>Column Mappings</span>
+                        </div>
+                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Map current Switchboard columns to ClickUp lists, create missing lists, or exclude columns from sync.
+                        </div>
+                        <div class="flex gap-2" style="margin-bottom:8px;">
+                            <button id="btn-clickup-create-unmapped" class="secondary-btn w-full">CREATE LISTS FOR UNMAPPED</button>
+                            <button id="btn-clickup-save-mappings" class="action-btn w-full">SAVE MAPPINGS</button>
+                        </div>
+                        <div id="clickup-mappings-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    </div>
+                    <div id="clickup-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>ClickUp Automation Rules</span>
+                        </div>
+                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Create a normal Switchboard plan when a ClickUp task matches a tag, then write the result back when that plan reaches the configured final column.
+                        </div>
+                        <div class="flex gap-2" style="margin-bottom:8px;">
+                            <button id="btn-clickup-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                            <button id="btn-clickup-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                        </div>
+                        <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                        <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    </div>
                 </div>
 
                 <div class="db-subsection">
@@ -739,8 +828,45 @@
                         <span style="display:block; margin-bottom:4px;">API Token</span>
                         <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
                     </label>
-                    <button id="btn-setup-linear" class="action-btn w-full" style="margin-top: 8px;">SETUP LINEAR</button>
+                    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Map visible Kanban columns to Linear workflow states</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Create or reuse the Switchboard label</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="linear-option-scope-project" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Prompt for project scope instead of syncing the full team</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Enable realtime Linear push sync for mapped plans</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                            <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                            <span>Enable Linear auto-pull and automation polling</span>
+                        </label>
+                    </div>
+                    <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
+                    <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                    <div id="linear-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
+                        <div class="subsection-header" style="margin-bottom:6px;">
+                            <span>Linear Automation Rules</span>
+                        </div>
+                        <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
+                            Create a normal Switchboard plan when a Linear issue matches a label and state, then write the result back when that plan reaches the configured final column.
+                        </div>
+                        <div class="flex gap-2" style="margin-bottom:8px;">
+                            <button id="btn-linear-add-rule" class="secondary-btn w-full">ADD RULE</button>
+                            <button id="btn-linear-save-automation" class="action-btn w-full">SAVE AUTOMATION</button>
+                        </div>
+                        <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
+                        <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                    </div>
                 </div>
 
                 <div class="db-subsection">
@@ -755,7 +881,12 @@
                         <span style="display:block; margin-bottom:4px;">Integration Token</span>
                         <input id="notion-token-input" type="password" placeholder="Enter Notion integration token (secret_... or ntn_...)" style="width:100%;">
                     </label>
-                    <button id="btn-setup-notion" class="action-btn w-full" style="margin-top: 8px;">SAVE NOTION TOKEN</button>
+                    <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:8px;">
+                        <input id="notion-option-enable-design-doc" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                        <span>Use the existing planner design-doc setting for Notion-backed design document fetching</span>
+                    </label>
+                    <button id="btn-apply-notion-config" class="action-btn w-full" style="margin-top: 8px;">APPLY NOTION SETTINGS</button>
+                    <div id="notion-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                 </div>
             </div>
@@ -784,6 +915,28 @@
             <div class="flex gap-2" style="margin-top: 10px;">
                 <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
                 <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
+            </div>
+        </div>
+    </div>
+
+    <div id="kanban-column-modal" class="modal-overlay hidden">
+        <div class="modal-card" style="max-width: 520px;">
+            <div class="modal-title">Kanban Column</div>
+            <label class="modal-label" for="kanban-column-label">Column label</label>
+            <input id="kanban-column-label" class="modal-input" type="text" placeholder="e.g. Design Review">
+            <label class="modal-label" for="kanban-column-assigned-agent">Assigned agent</label>
+            <select id="kanban-column-assigned-agent" class="modal-input"></select>
+            <label class="modal-label" for="kanban-column-trigger-prompt">Trigger prompt</label>
+            <textarea id="kanban-column-trigger-prompt" class="modal-textarea" placeholder="What should the agent do when a card is dropped here?"></textarea>
+            <label class="modal-label" for="kanban-column-dragdrop">Drag &amp; Drop Mode</label>
+            <select id="kanban-column-dragdrop" class="modal-input">
+                <option value="cli">CLI Agent (trigger terminal action)</option>
+                <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
+            </select>
+            <div id="kanban-column-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+                <button id="btn-save-kanban-column" class="action-btn w-full">SAVE COLUMN</button>
+                <button id="btn-cancel-kanban-column" class="secondary-btn w-full">CANCEL</button>
             </div>
         </div>
     </div>
@@ -834,6 +987,12 @@
         const customAgentDragDropModeInput = document.getElementById('custom-agent-dragdrop');
         const customAgentKanbanInput = document.getElementById('custom-agent-kanban');
         const customAgentError = document.getElementById('custom-agent-error');
+        const kanbanColumnModal = document.getElementById('kanban-column-modal');
+        const kanbanColumnLabelInput = document.getElementById('kanban-column-label');
+        const kanbanColumnAssignedAgentInput = document.getElementById('kanban-column-assigned-agent');
+        const kanbanColumnTriggerPromptInput = document.getElementById('kanban-column-trigger-prompt');
+        const kanbanColumnDragDropModeInput = document.getElementById('kanban-column-dragdrop');
+        const kanbanColumnError = document.getElementById('kanban-column-error');
         const kanbanStructureList = document.getElementById('kanban-structure-list');
         const customPromptsModal = document.getElementById('custom-prompts-modal');
         const promptRoleTabs = document.getElementById('prompt-role-tabs');
@@ -850,9 +1009,11 @@
         const teamLeadComplexityCutoffLabel = document.getElementById('team-lead-complexity-cutoff-label');
 
         let editingCustomAgentId = null;
+        let editingKanbanColumnId = null;
         let lastStartupCommands = {};
         let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true };
         let lastCustomAgents = [];
+        let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
         let lastPromptOverrides = {};
         let lastPromptPreviews = {};
@@ -871,6 +1032,9 @@
         let lastSentSetupSignature = '';
         let lastAckedSetupSignature = '';
         let draggedKanbanStructureId = null;
+        let lastClickupSetupState = null;
+        let lastLinearSetupState = null;
+        let lastNotionSetupState = null;
 
         const PROMPT_ROLES = [
             { key: 'planner', label: 'Planner' },
@@ -881,6 +1045,17 @@
             { key: 'intern', label: 'Intern' },
             { key: 'analyst', label: 'Analyst' },
             { key: 'team-lead', label: 'Team Lead' },
+        ];
+
+        const BUILT_IN_KANBAN_ASSIGNABLE_AGENTS = [
+            { role: 'planner', label: 'Planner' },
+            { role: 'lead', label: 'Lead Coder' },
+            { role: 'coder', label: 'Coder' },
+            { role: 'reviewer', label: 'Reviewer' },
+            { role: 'tester', label: 'Acceptance Tester' },
+            { role: 'intern', label: 'Intern' },
+            { role: 'analyst', label: 'Analyst' },
+            { role: 'team-lead', label: 'Team Lead' }
         ];
 
         function collapseAllAccordions(exceptFieldsId) {
@@ -936,6 +1111,69 @@
             return `custom_agent_${sanitizeCustomAgentId(id)}`;
         }
 
+        function sanitizeKanbanColumnId(value) {
+            const normalized = String(value || '')
+                .toLowerCase()
+                .replace(/[^a-z0-9]+/g, '_')
+                .replace(/^_+|_+$/g, '')
+                .slice(0, 48);
+            const base = normalized || `column_${Date.now().toString(36)}`;
+            return base.startsWith('custom_column_') ? base : `custom_column_${base}`;
+        }
+
+        function getKanbanAssignedAgentOptions() {
+            const customOptions = lastCustomAgents
+                .map(agent => ({ role: agent.role, label: agent.name }))
+                .sort((left, right) => left.label.localeCompare(right.label));
+            return [...BUILT_IN_KANBAN_ASSIGNABLE_AGENTS, ...customOptions];
+        }
+
+        function renderKanbanAssignedAgentOptions(selectedRole) {
+            if (!kanbanColumnAssignedAgentInput) return;
+            kanbanColumnAssignedAgentInput.innerHTML = '';
+            const options = getKanbanAssignedAgentOptions();
+            options.forEach((option) => {
+                const node = document.createElement('option');
+                node.value = option.role;
+                node.textContent = option.label;
+                node.selected = option.role === selectedRole;
+                kanbanColumnAssignedAgentInput.appendChild(node);
+            });
+            if (!options.some(option => option.role === kanbanColumnAssignedAgentInput.value) && options[0]) {
+                kanbanColumnAssignedAgentInput.value = options[0].role;
+            }
+        }
+
+        function syncDerivedKanbanOrdersFromStructure() {
+            const orderById = new Map(
+                (Array.isArray(lastKanbanStructure) ? lastKanbanStructure : [])
+                    .map(item => [item.id, Number(item.order) || 0])
+            );
+            lastCustomAgents = lastCustomAgents.map(agent => ({
+                ...agent,
+                kanbanOrder: orderById.get(agent.role) ?? agent.kanbanOrder
+            }));
+            lastCustomKanbanColumns = lastCustomKanbanColumns.map(column => ({
+                ...column,
+                order: orderById.get(column.id) ?? column.order
+            }));
+        }
+
+        function getPersistedCustomKanbanColumns() {
+            syncDerivedKanbanOrdersFromStructure();
+            return [...lastCustomKanbanColumns]
+                .map(column => ({
+                    id: column.id,
+                    label: String(column.label || '').trim(),
+                    role: String(column.role || '').trim(),
+                    triggerPrompt: String(column.triggerPrompt || '').trim(),
+                    order: Number(column.order) || 0,
+                    dragDropMode: column.dragDropMode === 'prompt' ? 'prompt' : 'cli'
+                }))
+                .filter(column => column.label && column.role)
+                .sort((left, right) => (left.order - right.order) || left.label.localeCompare(right.label));
+        }
+
         function openCustomAgentModal(agent) {
             editingCustomAgentId = agent ? agent.id : null;
             customAgentNameInput.value = agent?.name || '';
@@ -952,6 +1190,70 @@
             editingCustomAgentId = null;
             customAgentModal.classList.add('hidden');
             customAgentError.textContent = '';
+        }
+
+        function openKanbanColumnModal(column) {
+            editingKanbanColumnId = column ? column.id : null;
+            renderKanbanAssignedAgentOptions(column?.role || column?.assignedAgent || 'coder');
+            kanbanColumnLabelInput.value = column?.label || '';
+            kanbanColumnTriggerPromptInput.value = column?.triggerPrompt || '';
+            kanbanColumnDragDropModeInput.value = column?.dragDropMode || 'cli';
+            kanbanColumnError.textContent = '';
+            kanbanColumnModal.classList.remove('hidden');
+            setTimeout(() => kanbanColumnLabelInput.focus(), 0);
+        }
+
+        function closeKanbanColumnModal() {
+            editingKanbanColumnId = null;
+            kanbanColumnModal.classList.add('hidden');
+            kanbanColumnError.textContent = '';
+        }
+
+        function saveKanbanColumnDraft() {
+            const label = kanbanColumnLabelInput.value.trim();
+            const role = kanbanColumnAssignedAgentInput.value.trim();
+            if (!label || !role) {
+                kanbanColumnError.textContent = 'Column label and assigned agent are required.';
+                return;
+            }
+
+            const existingId = editingKanbanColumnId || sanitizeKanbanColumnId(label);
+            const duplicate = lastCustomKanbanColumns.find(column =>
+                column.id !== existingId &&
+                column.label.toLowerCase() === label.toLowerCase()
+            );
+            if (duplicate) {
+                kanbanColumnError.textContent = 'Column labels must be unique.';
+                return;
+            }
+
+            const previous = lastCustomKanbanColumns.find(column => column.id === existingId);
+            const nextColumn = {
+                id: existingId,
+                label,
+                role,
+                triggerPrompt: kanbanColumnTriggerPromptInput.value.trim(),
+                order: previous?.order || 0,
+                dragDropMode: kanbanColumnDragDropModeInput.value === 'prompt' ? 'prompt' : 'cli'
+            };
+
+            if (!nextColumn.order) {
+                const maxOrder = getRenderableKanbanStructure().reduce((highest, item) => {
+                    if (item.fixed || item.id === nextColumn.id || item.visible === false) {
+                        return highest;
+                    }
+                    return Math.max(highest, Number(item.order) || 0);
+                }, 300);
+                nextColumn.order = maxOrder + 100;
+            }
+
+            lastCustomKanbanColumns = lastCustomKanbanColumns.filter(column => column.id !== nextColumn.id);
+            lastCustomKanbanColumns.push(nextColumn);
+            lastCustomKanbanColumns.sort((left, right) => (left.order - right.order) || left.label.localeCompare(right.label));
+            syncLocalKanbanStructureWithCustomAgents();
+            renderKanbanStructureList();
+            closeKanbanColumnModal();
+            queueSetupAutosave(`kanban-column-save:${nextColumn.id}`, true);
         }
 
         function saveCustomAgentDraft() {
@@ -1020,7 +1322,7 @@
 
             const itemMap = new Map(
                 lastKanbanStructure
-                    .filter(item => item.kind !== 'custom')
+                    .filter(item => item.source === 'built-in')
                     .map(item => [item.id, { ...item }])
             );
 
@@ -1032,18 +1334,45 @@
                         id: agent.role,
                         label: agent.name,
                         role: agent.role,
-                        kind: 'custom',
+                        kind: 'custom-agent',
+                        source: 'custom-agent',
                         fixed: false,
                         reorderable: true,
-                        visible: lastVisibleAgents[agent.role] !== false,
-                        order: existing?.order ?? agent.kanbanOrder
+                        visible: true,
+                        order: existing?.order ?? agent.kanbanOrder,
+                        assignedAgent: agent.role,
+                        triggerPrompt: '',
+                        dragDropMode: agent.dragDropMode || 'cli',
+                        editable: false,
+                        deletable: true
                     });
                 });
+
+            lastCustomKanbanColumns.forEach(column => {
+                const existing = lastKanbanStructure.find(item => item.id === column.id);
+                itemMap.set(column.id, {
+                    id: column.id,
+                    label: column.label,
+                    role: column.role,
+                    kind: 'custom-user',
+                    source: 'custom-user',
+                    fixed: false,
+                    reorderable: true,
+                    visible: true,
+                    order: existing?.order ?? column.order,
+                    assignedAgent: column.role,
+                    triggerPrompt: column.triggerPrompt || '',
+                    dragDropMode: column.dragDropMode || 'cli',
+                    editable: true,
+                    deletable: true
+                });
+            });
 
             lastKanbanStructure = Array.from(itemMap.values()).sort((left, right) => {
                 const orderDelta = (Number(left.order) || 0) - (Number(right.order) || 0);
                 return orderDelta || String(left.label || '').localeCompare(String(right.label || ''));
             });
+            syncDerivedKanbanOrdersFromStructure();
         }
 
         function getRenderableKanbanStructure() {
@@ -1060,18 +1389,27 @@
 
             return lastKanbanStructure.map(item => {
                 const currentCustom = lastCustomAgents.find(agent => agent.role === item.id);
+                const currentCustomColumn = lastCustomKanbanColumns.find(column => column.id === item.id);
                 const visible = item.fixed
                     ? true
-                    : item.kind === 'custom'
-                        ? activeCustomRoles.has(item.id) && lastVisibleAgents[item.id] !== false
-                        : !item.role || lastVisibleAgents[item.role] !== false;
+                    : item.source === 'built-in'
+                        ? (!item.role || lastVisibleAgents[item.role] !== false)
+                        : item.source === 'custom-agent'
+                            ? activeCustomRoles.has(item.id)
+                            : true;
 
                 return {
                     ...item,
-                    label: currentCustom?.name || item.label,
+                    label: currentCustom?.name || currentCustomColumn?.label || item.label,
+                    role: currentCustomColumn?.role || item.role,
+                    assignedAgent: currentCustomColumn?.role || item.assignedAgent || item.role,
+                    triggerPrompt: currentCustomColumn?.triggerPrompt || item.triggerPrompt || '',
+                    dragDropMode: currentCustomColumn?.dragDropMode || currentCustom?.dragDropMode || item.dragDropMode || 'cli',
+                    editable: item.source === 'custom-user',
+                    deletable: !item.fixed,
                     visible
                 };
-            });
+            }).filter(item => item.source !== 'custom-agent' || item.visible !== false);
         }
 
         function reorderVisibleKanbanStructure(draggedId, targetId) {
@@ -1105,6 +1443,7 @@
                     order: visibleWeightSlots[sequenceIndex - 1]
                 };
             });
+            syncDerivedKanbanOrdersFromStructure();
 
             renderKanbanStructureList();
             setSetupSaveStatus('SAVING...');
@@ -1125,15 +1464,18 @@
                 return;
             }
 
-            const fixedStart = structure.find(item => item.id === 'CREATED');
-            const fixedEnd = structure.find(item => item.id === 'COMPLETED');
-            const middle = structure.filter(item => !item.fixed && item.visible !== false);
-            const rows = [fixedStart, ...middle, fixedEnd].filter(Boolean);
+            const rows = [...structure].sort((left, right) => {
+                const orderDelta = (Number(left.order) || 0) - (Number(right.order) || 0);
+                return orderDelta || String(left.label || '').localeCompare(String(right.label || ''));
+            });
 
             rows.forEach(item => {
                 const row = document.createElement('div');
                 row.className = `kanban-structure-item${item.fixed ? ' is-fixed' : ''}`;
                 row.dataset.id = item.id;
+                if (item.visible === false) {
+                    row.style.opacity = '0.6';
+                }
 
                 const handle = document.createElement('div');
                 handle.className = item.fixed ? 'kanban-structure-lock' : 'kanban-structure-handle';
@@ -1145,9 +1487,17 @@
 
                 const kind = document.createElement('div');
                 kind.className = 'kanban-structure-item-kind';
-                kind.textContent = item.fixed ? 'Fixed' : 'Active';
+                if (item.fixed) {
+                    kind.textContent = 'Fixed';
+                } else if (item.source === 'built-in') {
+                    kind.textContent = item.visible === false ? 'Hidden' : 'Built-in';
+                } else if (item.source === 'custom-agent') {
+                    kind.textContent = item.dragDropMode === 'prompt' ? 'Custom Agent • Prompt' : 'Custom Agent • CLI';
+                } else {
+                    kind.textContent = item.dragDropMode === 'prompt' ? 'Custom Column • Prompt' : 'Custom Column • CLI';
+                }
 
-                if (!item.fixed) {
+                if (!item.fixed && item.visible !== false) {
                     row.draggable = true;
                     row.addEventListener('dragstart', () => {
                         draggedKanbanStructureId = item.id;
@@ -1175,9 +1525,67 @@
                     });
                 }
 
+                const actions = document.createElement('div');
+                actions.style.cssText = 'display:flex; align-items:center; gap:6px; margin-left:8px;';
+
+                if (!item.fixed) {
+                    if (item.source === 'built-in') {
+                        const toggleBtn = document.createElement('button');
+                        toggleBtn.className = 'secondary-btn';
+                        toggleBtn.style.cssText = 'width:auto; min-width:64px;';
+                        toggleBtn.textContent = item.visible === false ? 'SHOW' : 'HIDE';
+                        toggleBtn.onclick = () => {
+                            if (item.role) {
+                                lastVisibleAgents[item.role] = item.visible === false;
+                                renderKanbanStructureList();
+                                queueSetupAutosave(`kanban-built-in-visibility:${item.role}`, true);
+                            }
+                        };
+                        actions.appendChild(toggleBtn);
+                    } else if (item.source === 'custom-agent') {
+                        const removeBtn = document.createElement('button');
+                        removeBtn.className = 'secondary-btn';
+                        removeBtn.style.cssText = 'width:auto; min-width:72px;';
+                        removeBtn.textContent = 'REMOVE';
+                        removeBtn.onclick = () => {
+                            lastCustomAgents = lastCustomAgents.map(agent => (
+                                agent.role === item.id
+                                    ? { ...agent, includeInKanban: false }
+                                    : agent
+                            ));
+                            syncLocalKanbanStructureWithCustomAgents();
+                            renderCustomAgentConfigList();
+                            renderKanbanStructureList();
+                            queueSetupAutosave(`kanban-custom-agent-remove:${item.id}`, true);
+                        };
+                        actions.appendChild(removeBtn);
+                    } else if (item.source === 'custom-user') {
+                        const editBtn = document.createElement('button');
+                        editBtn.className = 'secondary-btn';
+                        editBtn.style.cssText = 'width:auto; min-width:64px;';
+                        editBtn.textContent = 'EDIT';
+                        editBtn.onclick = () => openKanbanColumnModal(item);
+
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.className = 'secondary-btn';
+                        deleteBtn.style.cssText = 'width:auto; min-width:72px;';
+                        deleteBtn.textContent = 'DELETE';
+                        deleteBtn.onclick = () => {
+                            lastCustomKanbanColumns = lastCustomKanbanColumns.filter(column => column.id !== item.id);
+                            syncLocalKanbanStructureWithCustomAgents();
+                            renderKanbanStructureList();
+                            queueSetupAutosave(`kanban-custom-column-delete:${item.id}`, true);
+                        };
+
+                        actions.appendChild(editBtn);
+                        actions.appendChild(deleteBtn);
+                    }
+                }
+
                 row.appendChild(handle);
                 row.appendChild(label);
                 row.appendChild(kind);
+                row.appendChild(actions);
                 kanbanStructureList.appendChild(row);
             });
         }
@@ -1374,6 +1782,7 @@
         }
 
         function collectSetupSavePayload() {
+            syncDerivedKanbanOrdersFromStructure();
             const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
             const advancedReviewerEnabled = !!document.getElementById('advanced-reviewer-toggle')?.checked;
             const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
@@ -1419,6 +1828,7 @@
                 designDocLink: lastDesignDocLink,
                 planIngestionFolder,
                 customAgents: lastCustomAgents,
+                customKanbanColumns: getPersistedCustomKanbanColumns(),
                 commands,
                 visibleAgents,
                 teamLeadComplexityCutoff: Number(teamLeadComplexityCutoffInput?.value || 0),
@@ -1514,6 +1924,672 @@
             }
         }
 
+        function cloneClickupSetupState(state) {
+            return state ? JSON.parse(JSON.stringify(state)) : null;
+        }
+
+        function cloneLinearSetupState(state) {
+            return state ? JSON.parse(JSON.stringify(state)) : null;
+        }
+
+        function cloneNotionSetupState(state) {
+            return state ? JSON.parse(JSON.stringify(state)) : null;
+        }
+
+        function setClickupSetupMessage(message, isError = false) {
+            const errorEl = document.getElementById('clickup-setup-error');
+            if (!errorEl) return;
+            errorEl.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)';
+            errorEl.textContent = message || '';
+        }
+
+        function setLinearSetupMessage(message, isError = false) {
+            const errorEl = document.getElementById('linear-setup-error');
+            if (!errorEl) return;
+            errorEl.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)';
+            errorEl.textContent = message || '';
+        }
+
+        function setApplyButtonBusy(kind, busy) {
+            const buttonId = kind === 'clickup'
+                ? 'btn-apply-clickup-config'
+                : kind === 'linear'
+                    ? 'btn-apply-linear-config'
+                    : 'btn-apply-notion-config';
+            const button = document.getElementById(buttonId);
+            if (button) {
+                button.disabled = !!busy;
+            }
+        }
+
+        function setCheckboxState(id, checked) {
+            const checkbox = document.getElementById(id);
+            if (checkbox) {
+                checkbox.checked = !!checked;
+            }
+        }
+
+        function collectClickupApplyOptions() {
+            return {
+                createFolder: document.getElementById('clickup-option-create-folder')?.checked === true,
+                createLists: document.getElementById('clickup-option-create-lists')?.checked === true,
+                createCustomFields: document.getElementById('clickup-option-create-custom-fields')?.checked === true,
+                enableRealtimeSync: document.getElementById('clickup-option-enable-realtime-sync')?.checked === true,
+                enableAutoPull: document.getElementById('clickup-option-enable-auto-pull')?.checked === true
+            };
+        }
+
+        function collectLinearApplyOptions() {
+            return {
+                mapColumns: document.getElementById('linear-option-map-columns')?.checked === true,
+                createLabel: document.getElementById('linear-option-create-label')?.checked === true,
+                scopeProject: document.getElementById('linear-option-scope-project')?.checked === true,
+                enableRealtimeSync: document.getElementById('linear-option-enable-realtime-sync')?.checked === true,
+                enableAutoPull: document.getElementById('linear-option-enable-auto-pull')?.checked === true
+            };
+        }
+
+        function collectNotionApplyOptions() {
+            return {
+                enableDesignDocFetching: document.getElementById('notion-option-enable-design-doc')?.checked === true
+            };
+        }
+
+        function renderClickupOptionSummary(state) {
+            const summaryEl = document.getElementById('clickup-option-summary');
+            if (!summaryEl) return;
+
+            if (!state) {
+                summaryEl.style.display = 'none';
+                summaryEl.textContent = '';
+                return;
+            }
+
+            setCheckboxState('clickup-option-create-folder', state.folderReady);
+            setCheckboxState('clickup-option-create-lists', state.listsReady);
+            setCheckboxState('clickup-option-create-custom-fields', state.customFieldsReady);
+            setCheckboxState('clickup-option-enable-realtime-sync', state.realTimeSyncEnabled);
+            setCheckboxState('clickup-option-enable-auto-pull', state.autoPullEnabled);
+
+            const parts = [
+                `Folder: ${state.folderReady ? 'ready' : 'not ready'}`,
+                `Lists: ${state.mappedCount || 0} mapped`,
+                `Custom fields: ${state.customFieldsReady ? 'ready' : 'not ready'}`,
+                `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
+                `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`
+            ];
+            summaryEl.style.display = 'block';
+            summaryEl.textContent = parts.join(' · ');
+        }
+
+        function renderLinearOptionSummary(state) {
+            const summaryEl = document.getElementById('linear-option-summary');
+            if (!summaryEl) return;
+
+            if (!state) {
+                summaryEl.style.display = 'none';
+                summaryEl.textContent = '';
+                return;
+            }
+
+            setCheckboxState('linear-option-map-columns', state.mappingsReady);
+            setCheckboxState('linear-option-create-label', state.labelReady);
+            setCheckboxState('linear-option-scope-project', state.projectScoped);
+            setCheckboxState('linear-option-enable-realtime-sync', state.realTimeSyncEnabled);
+            setCheckboxState('linear-option-enable-auto-pull', state.autoPullEnabled);
+
+            const parts = [
+                `Mappings: ${state.mappingsReady ? 'ready' : 'not ready'}`,
+                `Label: ${state.labelReady ? 'ready' : 'not ready'}`,
+                `Project scope: ${state.projectScoped ? 'enabled' : 'team-wide'}`,
+                `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
+                `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`
+            ];
+            summaryEl.style.display = 'block';
+            summaryEl.textContent = parts.join(' · ');
+        }
+
+        function renderNotionOptionSummary(state) {
+            const summaryEl = document.getElementById('notion-option-summary');
+            if (!summaryEl) return;
+
+            setCheckboxState('notion-option-enable-design-doc', state?.designDocEnabled);
+            if (!state) {
+                summaryEl.style.display = 'none';
+                summaryEl.textContent = '';
+                return;
+            }
+
+            summaryEl.style.display = 'block';
+            summaryEl.textContent = state.designDocLink
+                ? `Planner design doc: ${state.designDocEnabled ? 'enabled' : 'disabled'} · Source: ${state.designDocLink}`
+                : `Planner design doc: ${state.designDocEnabled ? 'enabled' : 'disabled'} · No design document link configured yet.`;
+        }
+
+        function appendSelectOption(select, value, label) {
+            const option = document.createElement('option');
+            option.value = value;
+            option.textContent = label;
+            select.appendChild(option);
+        }
+
+        function updateLiveSyncOptionsVisibility() {
+            const enabled = document.getElementById('live-sync-enabled')?.checked;
+            const optionsDiv = document.getElementById('live-sync-options');
+            if (optionsDiv) {
+                optionsDiv.style.display = enabled ? 'block' : 'none';
+            }
+        }
+
+        function appendClickupColumnOptions(select, columns, currentValue, placeholder) {
+            const seen = new Set();
+            appendSelectOption(select, '', placeholder);
+            (Array.isArray(columns) ? columns : []).forEach(column => {
+                const columnId = String(column?.columnId || '').trim();
+                if (!columnId || seen.has(columnId)) return;
+                seen.add(columnId);
+                appendSelectOption(select, columnId, String(column?.label || columnId));
+            });
+            if (currentValue && !seen.has(currentValue)) {
+                appendSelectOption(select, currentValue, currentValue);
+            }
+            select.value = currentValue || '';
+        }
+
+        function appendLinearLabelOptions(select, labels, currentValue) {
+            const seen = new Set();
+            appendSelectOption(select, '', 'Select label');
+            (Array.isArray(labels) ? labels : []).forEach(label => {
+                const labelName = String(label?.name || '').trim();
+                if (!labelName || seen.has(labelName)) return;
+                seen.add(labelName);
+                appendSelectOption(select, labelName, labelName);
+            });
+            if (currentValue && !seen.has(currentValue)) {
+                appendSelectOption(select, currentValue, currentValue);
+            }
+            select.value = currentValue || '';
+        }
+
+        function appendLinearStateOptions(select, states, currentValues) {
+            const selectedValues = Array.isArray(currentValues)
+                ? currentValues.map(value => String(value || '').trim()).filter(Boolean)
+                : [];
+            const seen = new Set();
+            (Array.isArray(states) ? states : []).forEach(state => {
+                const stateId = String(state?.id || '').trim();
+                if (!stateId || seen.has(stateId)) return;
+                seen.add(stateId);
+                const option = document.createElement('option');
+                option.value = stateId;
+                option.textContent = state?.type ? `${state.name} (${state.type})` : String(state?.name || stateId);
+                option.selected = selectedValues.includes(stateId);
+                select.appendChild(option);
+            });
+            selectedValues.forEach((stateId) => {
+                if (seen.has(stateId)) return;
+                const option = document.createElement('option');
+                option.value = stateId;
+                option.textContent = stateId;
+                option.selected = true;
+                select.appendChild(option);
+            });
+        }
+
+        function createCompactField(labelText, control) {
+            const wrapper = document.createElement('div');
+            wrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
+            const label = document.createElement('div');
+            label.style.cssText = 'font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary);';
+            label.textContent = labelText;
+            wrapper.appendChild(label);
+            wrapper.appendChild(control);
+            return wrapper;
+        }
+
+        function renderClickupMappings(state) {
+            const summaryEl = document.getElementById('clickup-mapping-summary');
+            const sectionEl = document.getElementById('clickup-mappings-section');
+            const listEl = document.getElementById('clickup-mappings-list');
+            if (!summaryEl || !sectionEl || !listEl) return;
+
+            const visible = !!state && state.setupComplete === true;
+            summaryEl.style.display = visible ? 'block' : 'none';
+            summaryEl.textContent = visible
+                ? `${state.mappedCount} mapped · ${state.excludedCount} excluded · ${state.unmappedCount} unmapped`
+                : '';
+            sectionEl.classList.toggle('hidden', !visible);
+            if (!visible) {
+                listEl.innerHTML = '';
+                return;
+            }
+
+            listEl.innerHTML = '';
+            const availableLists = Array.isArray(state.availableLists) ? state.availableLists : [];
+            state.columns.forEach((column) => {
+                const row = document.createElement('div');
+                row.style.cssText = 'border:1px solid var(--border); border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;';
+
+                const labelRow = document.createElement('div');
+                labelRow.style.cssText = 'display:flex; align-items:center; gap:8px;';
+
+                const label = document.createElement('div');
+                label.style.cssText = 'font-size:10px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-primary); flex:1;';
+                label.textContent = column.label || column.columnId;
+
+                const status = document.createElement('div');
+                status.style.cssText = 'font-size:9px; color:var(--text-secondary);';
+                status.textContent = column.status === 'mapped'
+                    ? `Mapped to ${column.listName || column.listId}`
+                    : column.status === 'excluded'
+                        ? 'Excluded from sync'
+                        : 'Unmapped';
+
+                const select = document.createElement('select');
+                select.dataset.clickupMappingSelect = 'true';
+                select.dataset.columnId = column.columnId;
+                select.dataset.mappingStatus = column.status;
+                select.className = 'modal-input';
+                select.style.width = '100%';
+
+                const createOption = document.createElement('option');
+                createOption.value = '__create__';
+                createOption.textContent = `Create new list (${column.label || column.columnId})`;
+                select.appendChild(createOption);
+
+                const excludeOption = document.createElement('option');
+                excludeOption.value = '__exclude__';
+                excludeOption.textContent = 'Exclude from sync';
+                select.appendChild(excludeOption);
+
+                availableLists.forEach((list) => {
+                    const option = document.createElement('option');
+                    option.value = list.id;
+                    option.textContent = list.name;
+                    select.appendChild(option);
+                });
+
+                if (column.status === 'mapped' && column.listId) {
+                    if (!availableLists.some((list) => list.id === column.listId)) {
+                        const missingOption = document.createElement('option');
+                        missingOption.value = column.listId;
+                        missingOption.textContent = `${column.listName || column.listId} (current mapping)`;
+                        select.appendChild(missingOption);
+                    }
+                    select.value = column.listId;
+                } else if (column.status === 'excluded') {
+                    select.value = '__exclude__';
+                } else {
+                    select.value = '__create__';
+                }
+
+                labelRow.appendChild(label);
+                labelRow.appendChild(status);
+                row.appendChild(labelRow);
+                row.appendChild(select);
+                listEl.appendChild(row);
+            });
+        }
+
+        function renderClickupAutomation(state) {
+            const sectionEl = document.getElementById('clickup-automation-section');
+            const rulesEl = document.getElementById('clickup-automation-rules-list');
+            if (!sectionEl || !rulesEl) return;
+
+            const configured = !!state && state.setupComplete === true;
+            sectionEl.dataset.configured = configured ? 'true' : 'false';
+            const visible = configured;
+            sectionEl.classList.toggle('hidden', !visible);
+            if (!configured) {
+                rulesEl.innerHTML = '';
+                return;
+            }
+
+            const availableLists = Array.isArray(state.availableLists) ? state.availableLists : [];
+            const availableColumns = Array.isArray(state.columns) ? state.columns : [];
+
+            rulesEl.innerHTML = '';
+            (Array.isArray(state.automationRules) ? state.automationRules : []).forEach((rule) => {
+                const card = document.createElement('div');
+                card.dataset.clickupRuleCard = 'true';
+                card.style.cssText = 'border:1px solid var(--border); border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;';
+
+                const nameInput = document.createElement('input');
+                nameInput.dataset.clickupRuleName = 'true';
+                nameInput.className = 'modal-input';
+                nameInput.placeholder = 'Rule name';
+                nameInput.value = rule.name || '';
+
+                const tagInput = document.createElement('input');
+                tagInput.dataset.clickupRuleTag = 'true';
+                tagInput.className = 'modal-input';
+                tagInput.placeholder = 'Trigger tag (e.g. bug)';
+                tagInput.value = rule.triggerTag || '';
+
+                const listSelect = document.createElement('select');
+                listSelect.dataset.clickupRuleLists = 'true';
+                listSelect.className = 'modal-input';
+                listSelect.multiple = true;
+                listSelect.size = Math.min(4, Math.max(2, availableLists.length || 2));
+                availableLists.forEach((list) => {
+                    const option = document.createElement('option');
+                    option.value = list.id;
+                    option.textContent = list.name;
+                    option.selected = Array.isArray(rule.triggerLists) && rule.triggerLists.includes(list.id);
+                    listSelect.appendChild(option);
+                });
+
+                const targetSelect = document.createElement('select');
+                targetSelect.dataset.clickupRuleTargetColumn = 'true';
+                targetSelect.className = 'modal-input';
+                appendClickupColumnOptions(targetSelect, availableColumns, rule.targetColumn || '', 'Select start column');
+
+                const finalSelect = document.createElement('select');
+                finalSelect.dataset.clickupRuleFinalColumn = 'true';
+                finalSelect.className = 'modal-input';
+                appendClickupColumnOptions(finalSelect, availableColumns, rule.finalColumn || '', 'Select final column');
+
+                const columnsRow = document.createElement('div');
+                columnsRow.style.cssText = 'display:flex; gap:8px;';
+
+                const targetField = createCompactField('Start column', targetSelect);
+                targetField.style.flex = '1';
+                const finalField = createCompactField('Final column', finalSelect);
+                finalField.style.flex = '1';
+                columnsRow.appendChild(targetField);
+                columnsRow.appendChild(finalField);
+
+                const writeBackLabel = document.createElement('label');
+                writeBackLabel.className = 'startup-row';
+                writeBackLabel.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const writeBackToggle = document.createElement('input');
+                writeBackToggle.type = 'checkbox';
+                writeBackToggle.dataset.clickupRuleWritebackEnabled = 'true';
+                writeBackToggle.checked = rule.writeBackOnComplete === true;
+                const writeBackText = document.createElement('span');
+                writeBackText.textContent = 'Write back when this plan reaches the final column';
+                writeBackLabel.appendChild(writeBackToggle);
+                writeBackLabel.appendChild(writeBackText);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'secondary-btn';
+                removeBtn.textContent = 'REMOVE RULE';
+                removeBtn.addEventListener('click', () => {
+                    card.remove();
+                });
+
+                card.appendChild(createCompactField('Rule name', nameInput));
+                card.appendChild(createCompactField('Trigger tag', tagInput));
+                card.appendChild(createCompactField('Optional ClickUp lists', listSelect));
+                card.appendChild(columnsRow);
+                card.appendChild(writeBackLabel);
+                card.appendChild(removeBtn);
+                rulesEl.appendChild(card);
+            });
+        }
+
+        function renderClickupSetupState() {
+            renderClickupOptionSummary(lastClickupSetupState);
+            renderClickupMappings(lastClickupSetupState);
+            renderClickupAutomation(lastClickupSetupState);
+            setApplyButtonBusy('clickup', false);
+            if (lastClickupSetupState?.error) {
+                setClickupSetupMessage(lastClickupSetupState.error, true);
+            } else if (!lastClickupSetupState) {
+                setClickupSetupMessage('');
+            }
+        }
+
+        function renderLinearAutomation(state) {
+            const sectionEl = document.getElementById('linear-automation-section');
+            const rulesEl = document.getElementById('linear-automation-rules-list');
+            if (!sectionEl || !rulesEl) return;
+
+            const configured = !!state && state.setupComplete === true;
+            sectionEl.dataset.configured = configured ? 'true' : 'false';
+            const visible = configured;
+            sectionEl.classList.toggle('hidden', !visible);
+            if (!configured) {
+                rulesEl.innerHTML = '';
+                return;
+            }
+
+            const availableColumns = Array.isArray(state.columns) ? state.columns : [];
+            const availableLabels = Array.isArray(state.availableLabels) ? state.availableLabels : [];
+            const availableStates = Array.isArray(state.availableStates) ? state.availableStates : [];
+
+            rulesEl.innerHTML = '';
+            (Array.isArray(state.automationRules) ? state.automationRules : []).forEach((rule) => {
+                const card = document.createElement('div');
+                card.dataset.linearRuleCard = 'true';
+                card.style.cssText = 'border:1px solid var(--border); border-radius:6px; padding:8px; display:flex; flex-direction:column; gap:6px;';
+
+                const nameInput = document.createElement('input');
+                nameInput.dataset.linearRuleName = 'true';
+                nameInput.className = 'modal-input';
+                nameInput.placeholder = 'Rule name';
+                nameInput.value = rule.name || '';
+
+                const enabledLabel = document.createElement('label');
+                enabledLabel.className = 'startup-row';
+                enabledLabel.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const enabledToggle = document.createElement('input');
+                enabledToggle.type = 'checkbox';
+                enabledToggle.dataset.linearRuleEnabled = 'true';
+                enabledToggle.checked = rule.enabled !== false;
+                const enabledText = document.createElement('span');
+                enabledText.textContent = 'Rule enabled';
+                enabledLabel.appendChild(enabledToggle);
+                enabledLabel.appendChild(enabledText);
+
+                const labelSelect = document.createElement('select');
+                labelSelect.dataset.linearRuleTriggerLabel = 'true';
+                labelSelect.className = 'modal-input';
+                appendLinearLabelOptions(labelSelect, availableLabels, rule.triggerLabel || '');
+
+                const stateSelect = document.createElement('select');
+                stateSelect.dataset.linearRuleTriggerStates = 'true';
+                stateSelect.className = 'modal-input';
+                stateSelect.multiple = true;
+                stateSelect.size = Math.min(5, Math.max(2, availableStates.length || 2));
+                appendLinearStateOptions(stateSelect, availableStates, rule.triggerStates);
+
+                const targetSelect = document.createElement('select');
+                targetSelect.dataset.linearRuleTargetColumn = 'true';
+                targetSelect.className = 'modal-input';
+                appendClickupColumnOptions(targetSelect, availableColumns, rule.targetColumn || '', 'Select start column');
+
+                const finalSelect = document.createElement('select');
+                finalSelect.dataset.linearRuleFinalColumn = 'true';
+                finalSelect.className = 'modal-input';
+                appendClickupColumnOptions(finalSelect, availableColumns, rule.finalColumn || '', 'Select final column');
+
+                const columnsRow = document.createElement('div');
+                columnsRow.style.cssText = 'display:flex; gap:8px;';
+
+                const targetField = createCompactField('Start column', targetSelect);
+                targetField.style.flex = '1';
+                const finalField = createCompactField('Final column', finalSelect);
+                finalField.style.flex = '1';
+                columnsRow.appendChild(targetField);
+                columnsRow.appendChild(finalField);
+
+                const writeBackLabel = document.createElement('label');
+                writeBackLabel.className = 'startup-row';
+                writeBackLabel.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                const writeBackToggle = document.createElement('input');
+                writeBackToggle.type = 'checkbox';
+                writeBackToggle.dataset.linearRuleWritebackEnabled = 'true';
+                writeBackToggle.checked = rule.writeBackOnComplete === true;
+                const writeBackText = document.createElement('span');
+                writeBackText.textContent = 'Write back when this plan reaches the final column';
+                writeBackLabel.appendChild(writeBackToggle);
+                writeBackLabel.appendChild(writeBackText);
+
+                const removeBtn = document.createElement('button');
+                removeBtn.className = 'secondary-btn';
+                removeBtn.textContent = 'REMOVE RULE';
+                removeBtn.addEventListener('click', () => {
+                    card.remove();
+                });
+
+                card.appendChild(createCompactField('Rule name', nameInput));
+                card.appendChild(enabledLabel);
+                card.appendChild(createCompactField('Trigger label', labelSelect));
+                card.appendChild(createCompactField('Trigger states', stateSelect));
+                card.appendChild(columnsRow);
+                card.appendChild(writeBackLabel);
+                card.appendChild(removeBtn);
+                rulesEl.appendChild(card);
+            });
+        }
+
+        function renderLinearSetupState() {
+            renderLinearOptionSummary(lastLinearSetupState);
+            renderLinearAutomation(lastLinearSetupState);
+            setApplyButtonBusy('linear', false);
+            if (lastLinearSetupState?.error) {
+                setLinearSetupMessage(lastLinearSetupState.error, true);
+            } else if (!lastLinearSetupState) {
+                setLinearSetupMessage('');
+            }
+        }
+
+        function renderNotionSetupState() {
+            renderNotionOptionSummary(lastNotionSetupState);
+            setApplyButtonBusy('notion', false);
+        }
+
+        function collectClickupMappings() {
+            return Array.from(document.querySelectorAll('[data-clickup-mapping-select="true"]')).map(select => {
+                const value = select.value || '__create__';
+                if (value === '__exclude__') {
+                    return {
+                        columnId: select.dataset.columnId || '',
+                        strategy: 'exclude'
+                    };
+                }
+                if (value === '__create__') {
+                    return {
+                        columnId: select.dataset.columnId || '',
+                        strategy: 'create'
+                    };
+                }
+                return {
+                    columnId: select.dataset.columnId || '',
+                    strategy: 'existing',
+                    listId: value
+                };
+            });
+        }
+
+        function collectClickupAutomationPayload() {
+            const automationRules = [];
+            document.querySelectorAll('[data-clickup-rule-card="true"]').forEach(card => {
+                const name = card.querySelector('[data-clickup-rule-name="true"]')?.value.trim() || '';
+                const triggerTag = card.querySelector('[data-clickup-rule-tag="true"]')?.value.trim() || '';
+                const triggerLists = Array.from(card.querySelector('[data-clickup-rule-lists="true"]')?.selectedOptions || []).map(option => option.value);
+                const targetColumn = card.querySelector('[data-clickup-rule-target-column="true"]')?.value.trim() || '';
+                const finalColumn = card.querySelector('[data-clickup-rule-final-column="true"]')?.value.trim() || '';
+                const writeBackOnComplete = card.querySelector('[data-clickup-rule-writeback-enabled="true"]')?.checked === true;
+                if (!name || !triggerTag || !targetColumn || !finalColumn) {
+                    return;
+                }
+                automationRules.push({
+                    name,
+                    triggerTag,
+                    triggerLists,
+                    targetColumn,
+                    finalColumn,
+                    writeBackOnComplete,
+                    enabled: true
+                });
+            });
+
+            return { automationRules };
+        }
+
+        function addClickupRuleCard() {
+            if (!lastClickupSetupState) return;
+            const columns = Array.isArray(lastClickupSetupState.columns) ? lastClickupSetupState.columns : [];
+            const defaultTargetColumn = columns[0]?.columnId || '';
+            const defaultFinalColumn = columns.find(column => String(column?.columnId || '').trim().toUpperCase() === 'COMPLETED')?.columnId
+                || columns[columns.length - 1]?.columnId
+                || defaultTargetColumn;
+            lastClickupSetupState.automationRules = Array.isArray(lastClickupSetupState.automationRules)
+                ? lastClickupSetupState.automationRules
+                : [];
+            lastClickupSetupState.automationRules.push({
+                name: `Rule ${lastClickupSetupState.automationRules.length + 1}`,
+                triggerTag: '',
+                triggerLists: [],
+                targetColumn: defaultTargetColumn,
+                finalColumn: defaultFinalColumn,
+                writeBackOnComplete: true,
+                enabled: true
+            });
+            renderClickupAutomation(lastClickupSetupState);
+        }
+
+        function collectLinearAutomationPayload() {
+            const automationRules = [];
+            document.querySelectorAll('[data-linear-rule-card="true"]').forEach(card => {
+                const name = card.querySelector('[data-linear-rule-name="true"]')?.value.trim() || '';
+                const enabled = card.querySelector('[data-linear-rule-enabled="true"]')?.checked !== false;
+                const triggerLabel = card.querySelector('[data-linear-rule-trigger-label="true"]')?.value.trim() || '';
+                const triggerStates = Array.from(card.querySelector('[data-linear-rule-trigger-states="true"]')?.selectedOptions || [])
+                    .map(option => option.value.trim())
+                    .filter(Boolean);
+                const targetColumn = card.querySelector('[data-linear-rule-target-column="true"]')?.value.trim() || '';
+                const finalColumn = card.querySelector('[data-linear-rule-final-column="true"]')?.value.trim() || '';
+                const writeBackOnComplete = card.querySelector('[data-linear-rule-writeback-enabled="true"]')?.checked === true;
+                if (!name || !triggerLabel || triggerStates.length === 0 || !targetColumn || !finalColumn) {
+                    return;
+                }
+                automationRules.push({
+                    name,
+                    enabled,
+                    triggerLabel,
+                    triggerStates,
+                    targetColumn,
+                    finalColumn,
+                    writeBackOnComplete
+                });
+            });
+
+            return { automationRules };
+        }
+
+        function addLinearRuleCard() {
+            if (!lastLinearSetupState) return;
+            const columns = Array.isArray(lastLinearSetupState.columns) ? lastLinearSetupState.columns : [];
+            const defaultTargetColumn = columns[0]?.columnId || '';
+            const defaultFinalColumn = columns.find(column => String(column?.columnId || '').trim().toUpperCase() === 'COMPLETED')?.columnId
+                || columns[columns.length - 1]?.columnId
+                || defaultTargetColumn;
+            lastLinearSetupState.automationRules = Array.isArray(lastLinearSetupState.automationRules)
+                ? lastLinearSetupState.automationRules
+                : [];
+            lastLinearSetupState.automationRules.push({
+                name: `Rule ${lastLinearSetupState.automationRules.length + 1}`,
+                enabled: true,
+                triggerLabel: '',
+                triggerStates: [],
+                targetColumn: defaultTargetColumn,
+                finalColumn: defaultFinalColumn,
+                writeBackOnComplete: true
+            });
+            renderLinearAutomation(lastLinearSetupState);
+        }
+
+        function markClickupUnmappedForCreation() {
+            document.querySelectorAll('[data-clickup-mapping-select="true"]').forEach(select => {
+                if ((select.dataset.mappingStatus || '') === 'unmapped') {
+                    select.value = '__create__';
+                }
+            });
+        }
+
         function getProposedPath(location) {
             if (!workspaceRoot) return '...';
             const baseName = 'kanban.db';
@@ -1540,6 +2616,17 @@
         document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
         document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
         document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
+        document.getElementById('btn-add-kanban-column')?.addEventListener('click', () => openKanbanColumnModal());
+        document.getElementById('btn-save-kanban-column')?.addEventListener('click', saveKanbanColumnDraft);
+        document.getElementById('btn-cancel-kanban-column')?.addEventListener('click', closeKanbanColumnModal);
+        document.getElementById('btn-restore-kanban-defaults')?.addEventListener('click', () => {
+            const confirmed = window.confirm('Restore the default Kanban structure? This removes custom columns and takes agent-derived lanes off the board.');
+            if (!confirmed) {
+                return;
+            }
+            setSetupSaveStatus('SAVING...');
+            vscode.postMessage({ type: 'restoreKanbanDefaults' });
+        });
         document.getElementById('btn-customize-default-prompts')?.addEventListener('click', openCustomPromptsModal);
         document.getElementById('btn-cancel-prompt-overrides')?.addEventListener('click', closeCustomPromptsModal);
         document.getElementById('btn-clear-prompt-override')?.addEventListener('click', () => {
@@ -1600,40 +2687,89 @@
                 renderKanbanStructureList();
             });
         });
-        document.getElementById('btn-setup-clickup')?.addEventListener('click', () => {
+        document.getElementById('btn-apply-clickup-config')?.addEventListener('click', () => {
             const token = document.getElementById('clickup-token-input')?.value.trim() || '';
-            if (!token) {
-                setIntegrationStatus('clickup', 'failed', 'Token is required.');
-                return;
-            }
             setIntegrationStatus('clickup', 'working');
-            vscode.postMessage({ type: 'setupClickUp', token });
+            setApplyButtonBusy('clickup', true);
+            vscode.postMessage({
+                type: 'applyClickUpConfig',
+                token,
+                options: collectClickupApplyOptions()
+            });
         });
-        document.getElementById('btn-setup-linear')?.addEventListener('click', () => {
+        document.getElementById('btn-clickup-save-mappings')?.addEventListener('click', () => {
+            vscode.postMessage({
+                type: 'saveClickUpMappings',
+                mappings: collectClickupMappings()
+            });
+        });
+        document.getElementById('btn-clickup-create-unmapped')?.addEventListener('click', () => {
+            markClickupUnmappedForCreation();
+        });
+        document.getElementById('btn-clickup-add-rule')?.addEventListener('click', () => {
+            addClickupRuleCard();
+        });
+        document.getElementById('btn-clickup-save-automation')?.addEventListener('click', () => {
+            const payload = collectClickupAutomationPayload();
+            vscode.postMessage({
+                type: 'saveClickUpAutomation',
+                automationRules: payload.automationRules
+            });
+        });
+        document.getElementById('btn-apply-linear-config')?.addEventListener('click', () => {
             const token = document.getElementById('linear-token-input')?.value.trim() || '';
-            if (!token) {
-                setIntegrationStatus('linear', 'failed', 'Token is required.');
-                return;
-            }
             setIntegrationStatus('linear', 'working');
-            vscode.postMessage({ type: 'setupLinear', token });
+            setApplyButtonBusy('linear', true);
+            vscode.postMessage({
+                type: 'applyLinearConfig',
+                token,
+                options: collectLinearApplyOptions()
+            });
         });
-        document.getElementById('btn-setup-notion')?.addEventListener('click', () => {
+
+        // Live sync configuration event listeners
+        document.getElementById('live-sync-enabled')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveLiveSyncConfig', enabled: e.target.checked });
+            updateLiveSyncOptionsVisibility();
+        });
+
+        document.getElementById('live-sync-interval')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveLiveSyncConfig', syncIntervalMs: parseInt(e.target.value) * 1000 });
+        });
+
+        document.getElementById('live-sync-conflict-check')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveLiveSyncConfig', conflictCheckEnabled: e.target.checked });
+        });
+        document.getElementById('btn-linear-add-rule')?.addEventListener('click', () => {
+            addLinearRuleCard();
+        });
+        document.getElementById('btn-linear-save-automation')?.addEventListener('click', () => {
+            const payload = collectLinearAutomationPayload();
+            vscode.postMessage({
+                type: 'saveLinearAutomation',
+                automationRules: payload.automationRules
+            });
+        });
+        document.getElementById('btn-apply-notion-config')?.addEventListener('click', () => {
             const token = document.getElementById('notion-token-input')?.value.trim() || '';
-            if (!token) {
-                setIntegrationStatus('notion', 'failed', 'Token is required.');
-                return;
-            }
-            if (!token.startsWith('secret_') && !token.startsWith('ntn_')) {
+            if (token && !token.startsWith('secret_') && !token.startsWith('ntn_')) {
                 setIntegrationStatus('notion', 'failed', 'Token must start with "secret_" or "ntn_".');
                 return;
             }
             setIntegrationStatus('notion', 'working');
-            vscode.postMessage({ type: 'setupNotion', token });
+            setApplyButtonBusy('notion', true);
+            vscode.postMessage({
+                type: 'applyNotionConfig',
+                token,
+                options: collectNotionApplyOptions()
+            });
         });
 
         customAgentModal.addEventListener('click', (event) => {
             if (event.target === customAgentModal) closeCustomAgentModal();
+        });
+        kanbanColumnModal.addEventListener('click', (event) => {
+            if (event.target === kanbanColumnModal) closeKanbanColumnModal();
         });
         customPromptsModal.addEventListener('click', (event) => {
             if (event.target === customPromptsModal) closeCustomPromptsModal();
@@ -1641,6 +2777,7 @@
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
                 closeCustomAgentModal();
+                closeKanbanColumnModal();
                 closeCustomPromptsModal();
             }
         });
@@ -1779,6 +2916,9 @@
                     if (Array.isArray(message.customAgents)) {
                         runSetupHydration(() => {
                             lastCustomAgents = message.customAgents;
+                            if (editingKanbanColumnId !== null) {
+                                renderKanbanAssignedAgentOptions(kanbanColumnAssignedAgentInput.value);
+                            }
                             syncLocalKanbanStructureWithCustomAgents();
                             renderCustomAgentConfigList();
                             renderKanbanStructureList();
@@ -1789,6 +2929,16 @@
                     if (Array.isArray(message.items)) {
                         runSetupHydration(() => {
                             lastKanbanStructure = message.items;
+                            lastCustomKanbanColumns = message.items
+                                .filter(item => item?.source === 'custom-user')
+                                .map(item => ({
+                                    id: item.id,
+                                    label: item.label,
+                                    role: item.assignedAgent || item.role || '',
+                                    triggerPrompt: item.triggerPrompt || '',
+                                    order: Number(item.order) || 0,
+                                    dragDropMode: item.dragDropMode === 'prompt' ? 'prompt' : 'cli'
+                                }));
                             syncLocalKanbanStructureWithCustomAgents();
                             renderKanbanStructureList();
                         });
@@ -1852,6 +3002,12 @@
                                 ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
                                 : 'Not configured — configure in Planning tab';
                         }
+                        lastNotionSetupState = {
+                            ...(lastNotionSetupState || { setupComplete: false }),
+                            designDocEnabled: !!message.enabled,
+                            designDocLink: message.link || ''
+                        };
+                        renderNotionSetupState();
                     });
                     break;
                 }
@@ -1880,6 +3036,20 @@
                         if (toggle) {
                             toggle.checked = message.enabled === true;
                         }
+                    });
+                    break;
+                }
+                case 'liveSyncConfig': {
+                    runSetupHydration(() => {
+                        const enabledToggle = document.getElementById('live-sync-enabled');
+                        const intervalSelect = document.getElementById('live-sync-interval');
+                        const conflictCheckToggle = document.getElementById('live-sync-conflict-check');
+                        
+                        if (enabledToggle) enabledToggle.checked = message.enabled === true;
+                        if (intervalSelect) intervalSelect.value = String(Math.round((message.syncIntervalMs || 30000) / 1000));
+                        if (conflictCheckToggle) conflictCheckToggle.checked = message.conflictCheckEnabled === true;
+                        
+                        updateLiveSyncOptionsVisibility();
                     });
                     break;
                 }
@@ -1922,14 +3092,40 @@
                     setIntegrationStatus('clickup', message.clickupSetupComplete ? 'configured' : 'idle');
                     setIntegrationStatus('linear', message.linearSetupComplete ? 'configured' : 'idle');
                     setIntegrationStatus('notion', message.notionSetupComplete ? 'configured' : 'idle');
+                    runSetupHydration(() => {
+                        lastClickupSetupState = cloneClickupSetupState(message.clickupState);
+                        lastLinearSetupState = cloneLinearSetupState(message.linearState);
+                        lastNotionSetupState = cloneNotionSetupState(message.notionState);
+                        renderClickupSetupState();
+                        renderLinearSetupState();
+                        renderNotionSetupState();
+                    });
                     break;
-                case 'clickupSetupResult':
+                case 'clickupApplyResult':
+                    setApplyButtonBusy('clickup', false);
                     setIntegrationStatus('clickup', message.success ? 'configured' : 'failed', message.error || '');
+                    if (message.success) {
+                        setClickupSetupMessage('ClickUp settings applied. Review mappings and automation below.');
+                    }
                     break;
-                case 'linearSetupResult':
+                case 'clickupMappingsSaved':
+                    setClickupSetupMessage(message.success === false ? (message.error || 'Failed to save ClickUp mappings.') : 'ClickUp mappings saved.', message.success === false);
+                    break;
+                case 'clickupAutomationSaved':
+                    setClickupSetupMessage(message.success === false ? (message.error || 'Failed to save ClickUp automation.') : 'ClickUp automation saved.', message.success === false);
+                    break;
+                case 'linearApplyResult':
+                    setApplyButtonBusy('linear', false);
                     setIntegrationStatus('linear', message.success ? 'configured' : 'failed', message.error || '');
+                    if (message.success) {
+                        setLinearSetupMessage('Linear settings applied. Review automation rules below.');
+                    }
                     break;
-                case 'notionSetupResult':
+                case 'linearAutomationSaved':
+                    setLinearSetupMessage(message.success === false ? (message.error || 'Failed to save Linear automation.') : 'Linear automation saved.', message.success === false);
+                    break;
+                case 'notionApplyResult':
+                    setApplyButtonBusy('notion', false);
                     setIntegrationStatus('notion', message.success ? 'configured' : 'failed', message.error || '');
                     break;
                 case 'openSetupSection':
