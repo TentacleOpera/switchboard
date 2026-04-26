@@ -57,6 +57,7 @@ async function runFunctionalChecks() {
                 complexity TEXT DEFAULT 'Unknown',
                 tags TEXT DEFAULT '',
                 dependencies TEXT DEFAULT '',
+                repo_scope TEXT DEFAULT '',
                 workspace_id TEXT NOT NULL,
                 created_at TEXT NOT NULL,
                 updated_at TEXT NOT NULL,
@@ -82,6 +83,7 @@ async function runFunctionalChecks() {
             complexity: 'Unknown',
             tags: '',
             dependencies: '',
+            repoScope: '',
             workspaceId,
             createdAt: damagedUpdatedAt,
             updatedAt: damagedUpdatedAt,
@@ -106,6 +108,7 @@ async function runFunctionalChecks() {
             complexity: 'Unknown',
             tags: '',
             dependencies: '',
+            repoScope: '',
             workspaceId,
             createdAt: lifecycleCreatedAt,
             updatedAt: lifecycleCreatedAt,
@@ -136,6 +139,7 @@ async function runFunctionalChecks() {
             complexity: '8',
             tags: 'backend',
             dependencies: 'dep-1',
+            repoScope: '',
             workspaceId,
             createdAt: lifecycleCreatedAt,
             updatedAt: lifecycleUpdatedAt,
@@ -199,6 +203,7 @@ function upsertRecord(db, record) {
         record.complexity,
         record.tags,
         record.dependencies,
+        record.repoScope,
         record.workspaceId,
         record.createdAt,
         record.updatedAt,
@@ -300,6 +305,7 @@ async function run() {
     });
 
     await test('generic upsert no longer overwrites lifecycle fields on conflicts', async () => {
+        assert.ok(UPSERT_PLAN_SQL.includes('repo_scope'), 'Expected upsert SQL to include repo_scope.');
         assert.ok(!UPSERT_PLAN_SQL.includes('kanban_column = excluded.kanban_column'), 'Expected upsert conflict clause not to overwrite kanban_column.');
         assert.ok(!UPSERT_PLAN_SQL.includes('status = excluded.status'), 'Expected upsert conflict clause not to overwrite status.');
     });

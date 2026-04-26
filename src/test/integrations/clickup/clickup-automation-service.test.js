@@ -178,8 +178,8 @@ async function run() {
             assert.strictEqual(firstPoll.writeBacks, 0);
             assert.strictEqual(firstPoll.errors.length, 0);
 
-            const importedCount = await importPlanFiles(workspaceRoot);
-            assert.strictEqual(importedCount, 1, 'Expected the generated ClickUp automation plan file to import cleanly.');
+            const importResult = await importPlanFiles(workspaceRoot);
+            assert.strictEqual(importResult.count, 1, 'Expected the generated ClickUp automation plan file to import cleanly.');
 
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();

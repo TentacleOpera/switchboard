@@ -62,6 +62,11 @@ const extensionConfig = {
                     to: 'webview/[name][ext]'
                 },
                 {
+                    from: 'src/webview/*.js',
+                    to: 'webview/[name][ext]',
+                    noErrorOnMissing: true
+                },
+                {
                     from: path.resolve(__dirname, 'node_modules', 'sql.js', 'dist', 'sql-wasm.js'),
                     to: 'sql-wasm.js'
                 },
@@ -90,7 +95,8 @@ const mcpServerConfig = {
     // Do NOT exclude node_modules here - we want to bundle them!
     // But we must exclude vscode as it's not available in the MCP process
     externals: {
-        vscode: 'commonjs vscode'
+        vscode: 'commonjs vscode',
+        typescript: 'commonjs typescript'
     },
     module: {
         rules: [

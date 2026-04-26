@@ -55,6 +55,48 @@
             width: 100%;
         }
 
+        .setup-mode-switch {
+            display: flex;
+            gap: 8px;
+            margin: 10px 0 14px;
+        }
+
+        .setup-mode-btn.is-active {
+            border-color: color-mix(in srgb, var(--accent-teal) 45%, transparent);
+            color: var(--accent-teal);
+            box-shadow: 0 0 0 1px color-mix(in srgb, var(--accent-teal) 18%, transparent);
+        }
+
+        .control-plane-status-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+            gap: 8px;
+            margin: 10px 0;
+        }
+
+        .control-plane-status-card {
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+            padding: 8px;
+        }
+
+        .control-plane-status-label {
+            font-size: 9px;
+            color: var(--text-secondary);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 4px;
+        }
+
+        .ollama-status-line {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-top: 6px;
+            line-height: 1.4;
+        }
+
         .setup-shell {
             max-width: 980px;
             margin: 0 auto;
@@ -467,119 +509,6 @@
         </div>
 
         <div class="startup-section">
-            <div class="startup-toggle" id="agents-toggle">
-                <div class="section-label">Agents</div>
-                <span class="chevron" id="agents-chevron">▶</span>
-            </div>
-            <div class="startup-fields" id="agents-fields" data-accordion="true">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    Configure agent behavior, built-in agent visibility, and default prompts.
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Agent Visibility &amp; CLI Commands</span>
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="planner" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Planner</label><input type="text" data-role="planner"
-                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="lead" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead"
-                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="coder" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Coder</label><input type="text" data-role="coder"
-                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="intern" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Intern</label><input type="text" data-role="intern"
-                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="reviewer" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer"
-                            placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="tester"
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester"
-                            placeholder="e.g. copilot --allow-all-tools" style="flex:1;">
-                    </div>
-                    <div style="font-size: 9px; color: var(--text-secondary); margin-top: 6px; line-height: 1.3; font-style: italic;">
-                        Note: You must use the attached PRD or Notion integration. This compares the implementation against the overall spec to prevent scope drift.
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="analyst" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst"
-                            placeholder="e.g. qwen" style="flex:1;">
-                    </div>
-                    <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                        <input type="checkbox" class="agent-visible-toggle" data-role="jules" checked
-                            style="width:auto; margin:0; flex-shrink:0;">
-                        <label style="min-width:70px;">Jules</label>
-                        <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility only</span>
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="jules-auto-sync-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Auto-sync repo before sending to Jules</span>
-                    </label>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Prompt Controls</span>
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="design-doc-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Append Design Doc to planner prompts</span>
-                    </label>
-                    <div id="design-doc-status-line" style="font-size:10px; color:var(--text-secondary); margin-top:4px; font-family:var(--font-mono);">
-                        Not configured — configure in Planning tab
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="accurate-coding-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Accurate coding mode for Coder prompts</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="lead-challenge-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Inline challenge step for Lead Coder prompts</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="advanced-reviewer-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Advanced reviewer mode (deep regression analysis — high token usage)</span>
-                    </label>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                        <input id="aggressive-pair-toggle" type="checkbox" style="width:auto; margin:0;">
-                        <span>Aggressive pair programming (shift more tasks to Coder)</span>
-                    </label>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Default Prompt Overrides</span>
-                    </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Customize the default system prompts used by agents. These overrides apply globally unless specific agents have their own custom prompts configured.
-                    </div>
-                    <div id="default-prompt-override-summary" style="font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); min-height:14px;"></div>
-                    <button id="btn-customize-default-prompts" class="secondary-btn w-full">CUSTOMIZE DEFAULT PROMPTS</button>
-                </div>
-            </div>
-        </div>
-
-        <div class="startup-section">
             <div class="startup-toggle" id="custom-agents-toggle">
                 <div class="section-label">Custom Agents</div>
                 <span class="chevron" id="custom-agents-chevron">▶</span>
@@ -587,6 +516,44 @@
             <div class="startup-fields" id="custom-agents-fields" data-accordion="true">
                 <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
                 <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="ollama-toggle">
+                <div class="section-label">Ollama via Claude Code</div>
+                <span class="chevron" id="ollama-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="ollama-fields" data-accordion="true">
+                <div id="ollama-setup-message" style="font-size:10px; color:var(--text-secondary); min-height:14px;"></div>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Workspace Status</span>
+                    </div>
+                    <div class="hint-text">
+                        Use Ollama cloud models or a local daemon-backed model to drive the intern and launch Claude Code.
+                    </div>
+                    <div id="ollama-install-status" class="ollama-status-line">CLI: Checking...</div>
+                    <div id="ollama-daemon-status" class="ollama-status-line">Daemon: Checking...</div>
+                    <div id="ollama-auth-status" class="ollama-status-line">Cloud auth: Unknown</div>
+                    <div id="ollama-intern-config" class="ollama-status-line">Intern: Not configured</div>
+                    <div class="flex gap-2" style="margin-top:8px;">
+                        <button id="btn-ollama-install" class="secondary-btn w-full">OPEN OLLAMA DOWNLOAD PAGE</button>
+                        <button id="btn-ollama-signin" class="secondary-btn w-full">SIGN IN TO OLLAMA</button>
+                    </div>
+                </div>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Intern Configuration</span>
+                    </div>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin:0 0 8px;">
+                        <input id="ollama-use-gemma-cloud" type="checkbox" style="width:auto; margin:0;">
+                        <span>Use Gemma 4 31B Cloud for intern</span>
+                    </label>
+                    <div id="ollama-effective-command" class="ollama-status-line" style="margin-top:8px; padding:6px 8px; background:var(--panel-bg2); border-radius:4px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);">
+                        No active configuration
+                    </div>
+                </div>
             </div>
         </div>
 
@@ -710,45 +677,26 @@
             </div>
             <div class="startup-fields" id="project-mgmt-fields" data-accordion="true">
 
-                <!-- Live Sync Configuration Section -->
-                <div class="db-subsection" style="background:var(--panel-bg2); padding:12px; border-radius:4px; border:1px solid var(--border-dim);">
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom:10px; font-family: var(--font-mono); letter-spacing: 1px;">
-                        LIVE SYNC CONFIGURATION
-                    </div>
-
-                    <div class="field-row">
-                        <label class="toggle-switch">
-                            <input type="checkbox" id="live-sync-enabled" />
-                            <span class="toggle-slider"></span>
-                            Enable Live Sync (continuous updates for integrations with realtime sync enabled below)
-                        </label>
-                    </div>
-
-                    <div class="field-row" id="live-sync-options" style="display: none;">
-                        <label style="display:block; margin-bottom:4px; font-size:10px; color:var(--text-secondary);">Sync Interval (seconds)</label>
-                        <select id="live-sync-interval" class="modal-input" style="width:100%;">
-                            <option value="10">10s (fast)</option>
-                            <option value="30" selected>30s (default)</option>
-                            <option value="60">60s (conservative)</option>
-                            <option value="300">5min (minimal)</option>
-                        </select>
-
-                        <label class="toggle-switch" style="margin-top:8px;">
-                            <input type="checkbox" id="live-sync-conflict-check" />
-                            <span class="toggle-slider"></span>
-                            Auto-check for external edits (doubles API usage)
-                        </label>
-
-                        <div style="font-size:9px; color:var(--text-secondary); line-height:1.4; margin-top:6px;">
-                            Continuous sync only runs for integrations whose realtime sync option is enabled below. Conflict detection checks external task content before each sync to avoid overwriting manual edits.
-                        </div>
-                    </div>
-                </div>
-
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
                 </div>
 
+                <div style="margin-bottom: 16px; padding-bottom: 12px; border-bottom: 1px solid var(--border-dim);">
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size:11px; color:var(--text-secondary);">
+                            Project Management Provider
+                        </span>
+                        <select id="integration-provider-selector" style="width:100%; box-sizing:border-box; font-family:var(--font-mono); font-size:11px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; border-radius:4px;">
+                            <option value="linear" selected>Linear</option>
+                            <option value="clickup">ClickUp</option>
+                        </select>
+                    </label>
+                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                        Select your primary project management integration. Notion design document fetching is available regardless of this selection.
+                    </div>
+                </div>
+
+                <div id="clickup-config-section" class="hidden">
                 <div class="db-subsection">
                     <div class="subsection-header">
                         <span>ClickUp</span>
@@ -761,27 +709,43 @@
                         <span style="display:block; margin-bottom:4px;">API Token</span>
                         <input id="clickup-token-input" type="password" placeholder="Enter ClickUp API token" style="width:100%;">
                     </label>
-                    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Create or reuse the AI Agents folder</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Create or reuse mapped lists for visible Kanban columns</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Create Switchboard custom fields on the first mapped list</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Enable realtime ClickUp push sync for mapped plans</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Enable ClickUp auto-pull and automation polling</span>
-                        </label>
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-create-folder" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Create or reuse the AI Agents folder</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Create a folder in ClickUp to organize your Switchboard lists
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-create-lists" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Create or reuse mapped lists for visible Kanban columns</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Create ClickUp lists for each Kanban column (e.g., "In Progress" list) to sync plans to tasks
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-create-custom-fields" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Create Switchboard custom fields on the first mapped list</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Add custom fields to track plan metadata like complexity, session ID, and file path
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Enable realtime ClickUp push sync for mapped plans</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Automatically push plan changes to ClickUp as you move cards between columns
+                            </div>
+                        </div>
                     </div>
                     <button id="btn-apply-clickup-config" class="action-btn w-full" style="margin-top: 8px;">APPLY CLICKUP SETTINGS</button>
                     <div id="clickup-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
@@ -802,7 +766,16 @@
                     </div>
                     <div id="clickup-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>ClickUp Automation Rules</span>
+                            <span>ClickUp Automation</span>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Enable ClickUp auto-pull and automation polling</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Periodically pull ClickUp task updates and run automation rules to create plans from tasks
+                            </div>
                         </div>
                         <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
                             Create a normal Switchboard plan when a ClickUp task matches a tag, then write the result back when that plan reaches the configured final column.
@@ -815,7 +788,9 @@
                         <div id="clickup-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
                 </div>
+                </div>
 
+                <div id="linear-config-section">
                 <div class="db-subsection">
                     <div class="subsection-header">
                         <span>Linear</span>
@@ -828,34 +803,101 @@
                         <span style="display:block; margin-bottom:4px;">API Token</span>
                         <input id="linear-token-input" type="password" placeholder="Enter Linear API token" style="width:100%;">
                     </label>
-                    <div style="display:flex; flex-direction:column; gap:6px; margin-top:8px;">
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Map visible Kanban columns to Linear workflow states</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Create or reuse the Switchboard label</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="linear-option-scope-project" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Prompt for project scope instead of syncing the full team</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Enable realtime Linear push sync for mapped plans</span>
-                        </label>
-                        <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
-                            <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                            <span>Enable Linear auto-pull and automation polling</span>
-                        </label>
+                    <div style="display:flex; flex-direction:column; gap:10px; margin-top:8px;">
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-map-columns" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Map visible Kanban columns to Linear workflow states</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Link your Kanban columns (e.g., "In Progress") to Linear states so plan movements sync to Linear issues
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-create-label" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Create or reuse the Switchboard label</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Add a "switchboard" label to Linear issues created by Switchboard for easy filtering
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-enable-realtime-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Enable realtime Linear push sync for mapped plans</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Automatically push plan changes to Linear as you move cards between columns
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-enable-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Sync completed status to Linear</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When enabled, marking a plan as complete in Switchboard will move the Linear issue to your mapped completed state
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Archive Linear issues when plans are deleted in Switchboard</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When enabled, deleting a plan in Switchboard will archive the corresponding issue in Linear
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-exclude-backlog" type="checkbox" checked style="width:auto; margin:0; margin-top:2px;">
+                                <span>Exclude backlog issues from sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Keep the plugin sync lightweight by excluding backlog issues. Only active and planned issues will be imported.
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <span>Include projects (comma-separated names)</span>
+                            </label>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="linear-option-include-projects" type="text" placeholder="e.g., Frontend, Backend" style="flex:1; background: #0a0a0a;">
+                                <button id="linear-browse-include-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Only sync issues from these projects. Leave empty to sync all projects in the team.
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <span>Exclude projects (comma-separated names)</span>
+                            </label>
+                            <div style="display:flex; gap:8px; margin-top:4px;">
+                                <input id="linear-option-exclude-projects" type="text" placeholder="e.g., Archived, Internal" style="flex:1; background: #0a0a0a;">
+                                <button id="linear-browse-exclude-projects" class="secondary-btn" type="button" style="padding:4px 12px; font-size:11px;">BROWSE</button>
+                            </div>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Exclude these projects from sync even if they match the include filter.
+                            </div>
+                        </div>
                     </div>
                     <button id="btn-apply-linear-config" class="action-btn w-full" style="margin-top: 8px;">APPLY LINEAR SETTINGS</button>
                     <div id="linear-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="linear-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                     <div id="linear-automation-section" class="hidden" style="margin-top:10px; border-top:1px solid var(--border); padding-top:10px;">
                         <div class="subsection-header" style="margin-bottom:6px;">
-                            <span>Linear Automation Rules</span>
+                            <span>Linear Automation</span>
+                        </div>
+                        <div style="margin-bottom:12px;">
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="linear-option-enable-auto-pull" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Enable Linear auto-pull and automation polling</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Periodically pull Linear issue updates and run automation rules to create plans from issues
+                            </div>
                         </div>
                         <div style="font-size:10px; color:var(--text-secondary); line-height:1.5; margin-bottom:8px;">
                             Create a normal Switchboard plan when a Linear issue matches a label and state, then write the result back when that plan reaches the configured final column.
@@ -867,6 +909,7 @@
                         <div style="font-size:9px; font-family:var(--font-mono); letter-spacing:1px; color:var(--text-secondary); margin:8px 0 4px;">RULES</div>
                         <div id="linear-automation-rules-list" style="display:flex; flex-direction:column; gap:8px;"></div>
                     </div>
+                </div>
                 </div>
 
                 <div class="db-subsection">
@@ -888,6 +931,211 @@
                     <button id="btn-apply-notion-config" class="action-btn w-full" style="margin-top: 8px;">APPLY NOTION SETTINGS</button>
                     <div id="notion-option-summary" style="display:none; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
                     <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="planning-sources-toggle">
+                <div class="section-label">Planning Sources</div>
+                <span class="chevron" id="planning-sources-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="planning-sources-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Select which research sources to show in the Planning panel.
+                </div>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Enabled Sources</span>
+                    </div>
+                    <div style="display:flex; flex-direction:column; gap:8px; margin-top:8px;">
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
+                            <input id="planning-source-clickup" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>ClickUp Docs</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
+                            <input id="planning-source-linear" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Linear Docs</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
+                            <input id="planning-source-notion" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Notion</span>
+                        </label>
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px;">
+                            <input id="planning-source-local-folder" type="checkbox" checked style="width:auto; margin:0;">
+                            <span>Local Folder</span>
+                        </label>
+                    </div>
+                    <button id="btn-save-planning-sources" class="action-btn w-full" style="margin-top: 12px;">SAVE SOURCE SELECTIONS</button>
+                    <div id="planning-sources-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="control-plane-toggle">
+                <div class="section-label">Control Plane Setup</div>
+                <span class="chevron" id="control-plane-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="control-plane-fields" data-accordion="true">
+                <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                    Use <strong>Migrate Existing</strong> when your repos already contain local Switchboard state. Use <strong>Fresh Setup</strong> when you want a new parent Control Plane root, either in-place or by scaffolding and cloning multiple repos into sibling folders.
+                </div>
+                <div class="setup-mode-switch">
+                    <button id="btn-control-plane-mode-migrate" type="button" class="secondary-btn w-full setup-mode-btn is-active">MIGRATE EXISTING</button>
+                    <button id="btn-control-plane-mode-fresh" type="button" class="secondary-btn w-full setup-mode-btn">FRESH SETUP</button>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Detection &amp; Status</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Move Switchboard into your shared parent projects folder so <code>.switchboard/</code>, <code>.agent/</code>, and <code>AGENTS.md</code> live outside each repo. You can also pin an explicit Control Plane root or clear remembered auto-detect decisions.
+                    </div>
+                    <div class="control-plane-status-grid">
+                        <div class="control-plane-status-card">
+                            <div class="control-plane-status-label">Effective root</div>
+                            <div id="control-plane-effective-root" style="font-size:11px; line-height:1.4;">Auto-detect</div>
+                        </div>
+                        <div class="control-plane-status-card">
+                            <div class="control-plane-status-label">Source</div>
+                            <div id="control-plane-mode-status" style="font-size:11px; line-height:1.4;">Auto-detect</div>
+                        </div>
+                        <div class="control-plane-status-card">
+                            <div class="control-plane-status-label">Selected workspace</div>
+                            <div id="control-plane-selected-workspace" style="font-size:11px; line-height:1.4;">Waiting for status…</div>
+                        </div>
+                        <div class="control-plane-status-card">
+                            <div class="control-plane-status-label">Repo filter</div>
+                            <div id="control-plane-repo-filter-status" style="font-size:11px; line-height:1.4;">None</div>
+                        </div>
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">Explicit Control Plane folder override</span>
+                        <input id="control-plane-explicit-root-input" type="text" placeholder="Path to a folder containing .switchboard/kanban.db" style="width:100%;">
+                    </label>
+                    <div class="flex gap-2" style="margin-top:8px;">
+                        <button id="btn-set-control-plane-root" type="button" class="secondary-btn w-full">SAVE EXPLICIT ROOT</button>
+                        <button id="btn-reset-control-plane-root" type="button" class="secondary-btn w-full">RESET TO AUTO-DETECT</button>
+                    </div>
+                    <button id="btn-clear-control-plane-cache" type="button" class="secondary-btn w-full" style="margin-top:8px;">CLEAR CONTROL PLANE CACHE</button>
+                    <label class="startup-row" style="display:block; margin-top:10px;">
+                        <span style="display:block; margin-bottom:4px;">Parent folder</span>
+                        <input id="control-plane-parent-input" type="text" placeholder="Detected parent folder" style="width:100%;">
+                    </label>
+                    <button id="btn-detect-control-plane" class="secondary-btn w-full">DETECT CONTROL PLANE</button>
+                    <div id="control-plane-status-result" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
+                    <div id="control-plane-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
+                    <div id="control-plane-warning" style="font-size:10px; margin-top:8px; line-height:1.5;"></div>
+                </div>
+
+                <div id="control-plane-migrate-pane">
+                    <div class="db-subsection">
+                        <div class="subsection-header">
+                            <span>Migrate Existing</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Preview existing child repos before merging databases, copying local plan files into <code>plans/&lt;repoName&gt;/</code>, and promoting shared agent config.
+                        </div>
+                        <button id="btn-preview-control-plane" class="secondary-btn w-full">PREVIEW MIGRATION</button>
+                        <div id="control-plane-cleanup-options" style="display:flex; flex-direction:column; gap:6px; margin-top:10px;"></div>
+                        <button id="btn-execute-control-plane" class="secondary-btn w-full">EXECUTE MIGRATION</button>
+                        <div id="control-plane-preview" style="font-size:10px; color:var(--text-secondary); margin-top:10px; line-height:1.5;"></div>
+                    </div>
+                </div>
+
+                <div id="control-plane-fresh-pane" class="hidden">
+                    <div class="db-subsection">
+                        <div class="subsection-header">
+                            <span>Fresh Setup</span>
+                        </div>
+                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                            Initialize a new control-plane workspace in the selected parent folder without migrating existing sub-repo databases.
+                        </div>
+                        <button id="btn-fresh-control-plane" class="secondary-btn w-full">SET UP FRESH CONTROL PLANE</button>
+                    </div>
+
+                    <div class="db-subsection">
+                        <div class="subsection-header">
+                            <span>Scaffold &amp; Clone Repositories</span>
+                        </div>
+                        <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                            Create a parent Control Plane root, clone each HTTPS repository into sibling folders, and generate a workspace file that keeps the parent root first. The PAT field is transient only and is cleared after every scaffold result.
+                        </div>
+                        <label class="startup-row" style="display:block; margin-top:6px;">
+                            <span style="display:block; margin-bottom:4px;">Control Plane parent directory</span>
+                            <input id="multi-repo-parent-dir" type="text" placeholder="e.g. /Users/you/Documents/GitHub" style="width:100%;">
+                        </label>
+                        <label class="startup-row" style="display:block; margin-top:8px;">
+                            <span style="display:block; margin-bottom:4px;">Workspace file name</span>
+                            <input id="multi-repo-workspace-name" type="text" placeholder="e.g. switchboard-control-plane" style="width:100%;">
+                        </label>
+                        <label class="startup-row" style="display:block; margin-top:8px;">
+                            <span style="display:block; margin-bottom:4px;">Repository clone URLs (one HTTPS URL per line)</span>
+                            <textarea id="multi-repo-repo-urls" rows="6" placeholder="https://github.com/org/service-a.git&#10;https://github.com/org/service-b.git" style="width:100%; resize:vertical;"></textarea>
+                        </label>
+                        <label class="startup-row" style="display:block; margin-top:8px;">
+                            <span style="display:block; margin-bottom:4px;">Personal Access Token</span>
+                            <input id="multi-repo-pat" type="password" placeholder="Transient PAT used only while cloning" style="width:100%;">
+                        </label>
+                        <button id="btn-scaffold-multi-repo" class="action-btn w-full" style="margin-top: 8px;">SCAFFOLD MULTI-REPO CONTROL PLANE</button>
+                        <div id="multi-repo-scaffold-status" style="min-height:16px; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="startup-section">
+            <div class="startup-toggle" id="planning-panel-toggle">
+                <div class="section-label">PLANNING PANEL SYNC</div>
+                <span class="chevron" id="planning-panel-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="planning-panel-fields" data-accordion="true">
+                <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
+                    Choose how Planning Panel documents are cached locally for AI collaboration.
+                </div>
+                
+                <!-- Sync mode options -->
+                <div class="setup-option-group" style="display: flex; flex-direction: column; gap: 8px;">
+                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="planning-sync-mode" value="no-sync" checked>
+                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">No Sync (Manual Only)</span>
+                        </div>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Only documents you view in Planning Panel are cached. Minimal disk usage.</span>
+                    </label>
+                    
+                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="planning-sync-mode" value="auto-sync-all">
+                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">Auto Sync All Documents</span>
+                        </div>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Automatically fetch and cache all documents from Notion, ClickUp, Linear. "Just works" access to any doc.</span>
+                    </label>
+                    
+                    <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
+                        <div style="display: flex; align-items: center; gap: 8px;">
+                            <input type="radio" name="planning-sync-mode" value="sync-selected">
+                            <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">Sync Selected Containers</span>
+                        </div>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Choose specific folders/projects to cache. Balanced approach.</span>
+                    </label>
+                </div>
+                
+                <!-- Selected containers UI (hidden by default) -->
+                <div id="planning-sync-selected-containers" style="display: none; margin-top: 12px;">
+                    <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
+                        Select which sources and containers to sync:
+                    </div>
+                    <div id="planning-containers-list">
+                        <!-- Populated by JavaScript with checkboxes for each source/container -->
+                    </div>
+                </div>
+                
+                <!-- Sync status -->
+                <div id="planning-sync-status" style="margin-top: 12px; font-size: 11px; color: var(--text-secondary);">
+                    Status: <span id="planning-sync-status-text">Not configured</span>
                 </div>
             </div>
         </div>
@@ -1007,11 +1255,25 @@
         const teamLeadCommandInput = document.getElementById('team-lead-command-input');
         const teamLeadComplexityCutoffInput = document.getElementById('team-lead-complexity-cutoff');
         const teamLeadComplexityCutoffLabel = document.getElementById('team-lead-complexity-cutoff-label');
+        const controlPlaneExplicitRootInput = document.getElementById('control-plane-explicit-root-input');
+        const controlPlaneModeMigrateButton = document.getElementById('btn-control-plane-mode-migrate');
+        const controlPlaneModeFreshButton = document.getElementById('btn-control-plane-mode-fresh');
+        const multiRepoParentDirInput = document.getElementById('multi-repo-parent-dir');
+        const multiRepoWorkspaceNameInput = document.getElementById('multi-repo-workspace-name');
+        const multiRepoRepoUrlsInput = document.getElementById('multi-repo-repo-urls');
+        const multiRepoPatInput = document.getElementById('multi-repo-pat');
+        const multiRepoScaffoldButton = document.getElementById('btn-scaffold-multi-repo');
+        const multiRepoScaffoldStatus = document.getElementById('multi-repo-scaffold-status');
+        const ollamaSetupMessage = document.getElementById('ollama-setup-message');
+        const ollamaInstallStatus = document.getElementById('ollama-install-status');
+        const ollamaDaemonStatus = document.getElementById('ollama-daemon-status');
+        const ollamaAuthStatus = document.getElementById('ollama-auth-status');
+        const ollamaInternConfig = document.getElementById('ollama-intern-config');
 
         let editingCustomAgentId = null;
         let editingKanbanColumnId = null;
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true, gatherer: false };
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
@@ -1035,6 +1297,14 @@
         let lastClickupSetupState = null;
         let lastLinearSetupState = null;
         let lastNotionSetupState = null;
+        let selectedIntegrationProvider = 'linear';
+        let lastOllamaSetupState = null;
+        let lastControlPlaneCandidate = null;
+        let lastControlPlaneStatus = null;
+        let lastControlPlanePreview = null;
+        let controlPlaneBusy = false;
+        let controlPlaneSetupMode = 'migrate-existing';
+        let multiRepoBusy = false;
 
         const PROMPT_ROLES = [
             { key: 'planner', label: 'Planner' },
@@ -1096,6 +1366,364 @@
             if (!wasOpen && typeof onOpen === 'function') {
                 onOpen();
             }
+        }
+
+        function escapeHtml(value) {
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;');
+        }
+
+        function getControlPlaneParentDir() {
+            const input = document.getElementById('control-plane-parent-input');
+            return input ? input.value.trim() : '';
+        }
+
+        function setControlPlaneSetupMode(mode) {
+            controlPlaneSetupMode = mode === 'fresh-setup' ? 'fresh-setup' : 'migrate-existing';
+            document.getElementById('control-plane-migrate-pane')?.classList.toggle('hidden', controlPlaneSetupMode !== 'migrate-existing');
+            document.getElementById('control-plane-fresh-pane')?.classList.toggle('hidden', controlPlaneSetupMode !== 'fresh-setup');
+            controlPlaneModeMigrateButton?.classList.toggle('is-active', controlPlaneSetupMode === 'migrate-existing');
+            controlPlaneModeFreshButton?.classList.toggle('is-active', controlPlaneSetupMode === 'fresh-setup');
+        }
+
+        function setControlPlaneBusy(isBusy) {
+            controlPlaneBusy = isBusy;
+            [
+                'btn-detect-control-plane',
+                'btn-preview-control-plane',
+                'btn-execute-control-plane',
+                'btn-fresh-control-plane',
+                'btn-set-control-plane-root',
+                'btn-reset-control-plane-root',
+                'btn-clear-control-plane-cache'
+            ].forEach((id) => {
+                const button = document.getElementById(id);
+                if (!button) return;
+                if (id === 'btn-execute-control-plane' && !isBusy && (!lastControlPlanePreview || !(lastControlPlanePreview.sources || []).length)) {
+                    button.disabled = true;
+                    return;
+                }
+                button.disabled = isBusy;
+            });
+        }
+
+        function requestControlPlaneStatus() {
+            vscode.postMessage({ type: 'getControlPlaneStatus' });
+            vscode.postMessage({ type: 'detectControlPlaneCandidate' });
+        }
+
+        function describeControlPlaneMode(mode) {
+            switch (String(mode || '')) {
+                case 'explicit':
+                    return 'Explicit override';
+                case 'manual':
+                    return 'Manual AUTOBAN selection';
+                case 'auto':
+                    return 'Trusted auto-detect';
+                case 'none':
+                    return 'Local workspace only';
+                default:
+                    return 'Auto-detect';
+            }
+        }
+
+        function renderControlPlaneSelectionStatus(message) {
+            lastControlPlaneStatus = { ...(lastControlPlaneStatus || {}), ...(message || {}) };
+            workspaceRoot = lastControlPlaneStatus.workspaceRoot || workspaceRoot;
+
+            const explicitRoot = pathValueOrEmpty(
+                lastControlPlaneStatus.explicitControlPlaneRoot || lastControlPlaneStatus.configuredControlPlaneRoot
+            );
+            const effectiveRoot = pathValueOrEmpty(
+                lastControlPlaneStatus.effectiveControlPlaneRoot || lastControlPlaneStatus.controlPlaneRoot
+            );
+            const selectedWorkspace = pathValueOrEmpty(
+                lastControlPlaneStatus.selectedWorkspaceRoot || lastControlPlaneStatus.workspaceRoot
+            );
+            const repoFilter = pathValueOrEmpty(
+                lastControlPlaneStatus.repoFilter || lastControlPlaneStatus.activeFilter
+            );
+            const mode = String(lastControlPlaneStatus.mode || (explicitRoot ? 'explicit' : 'auto') || 'auto');
+
+            if (controlPlaneExplicitRootInput && document.activeElement !== controlPlaneExplicitRootInput) {
+                controlPlaneExplicitRootInput.value = explicitRoot;
+            }
+
+            const effectiveRootEl = document.getElementById('control-plane-effective-root');
+            if (effectiveRootEl) {
+                effectiveRootEl.textContent = effectiveRoot || 'Auto-detect / local workspace';
+            }
+            const modeEl = document.getElementById('control-plane-mode-status');
+            if (modeEl) {
+                modeEl.textContent = describeControlPlaneMode(mode);
+            }
+            const selectedWorkspaceEl = document.getElementById('control-plane-selected-workspace');
+            if (selectedWorkspaceEl) {
+                selectedWorkspaceEl.textContent = selectedWorkspace || workspaceRoot || 'Waiting for status…';
+            }
+            const repoFilterEl = document.getElementById('control-plane-repo-filter-status');
+            if (repoFilterEl) {
+                repoFilterEl.textContent = repoFilter || 'None';
+            }
+        }
+
+        function renderControlPlaneCandidate(message) {
+            lastControlPlaneCandidate = message;
+            workspaceRoot = message.workspaceRoot || workspaceRoot;
+
+            const parentInput = document.getElementById('control-plane-parent-input');
+            if (parentInput && message.suggestedParentDir) {
+                if (!parentInput.value || parentInput.value === workspaceRoot || parentInput.value === pathValueOrEmpty(lastControlPlaneCandidate?.suggestedParentDir)) {
+                    parentInput.value = message.suggestedParentDir;
+                } else if (!parentInput.value.trim()) {
+                    parentInput.value = message.suggestedParentDir;
+                }
+            }
+
+            const statusEl = document.getElementById('control-plane-status');
+            const warningEl = document.getElementById('control-plane-warning');
+            const gitRepoCount = Array.isArray(message.discoveredRepos)
+                ? message.discoveredRepos.filter(repo => repo && repo.hasGit).length
+                : 0;
+
+            if (statusEl) {
+                const gitignoreBenefit = message.parentIsGitRepo
+                    ? 'Your selected parent folder is a git repository, so you may still need .gitignore entries for .switchboard/ here.'
+                    : 'Gitignore benefit: .switchboard/, .agent/, and AGENTS.md stay outside your repos, so no per-repo .gitignore entries are needed.';
+                const statusParts = [
+                    message.suggestedParentDir
+                        ? `Suggested parent: ${message.suggestedParentDir}`
+                        : 'No safe parent folder was detected automatically.',
+                    `Discovered ${gitRepoCount} child git repo${gitRepoCount === 1 ? '' : 's'}.`,
+                    gitignoreBenefit
+                ];
+                if (message.alreadyControlPlane) {
+                    statusParts.push('A control-plane database already exists in this parent folder.');
+                }
+                statusEl.textContent = statusParts.join(' ');
+            }
+
+            if (warningEl) {
+                const warnings = Array.isArray(message.warnings) ? message.warnings : [];
+                if (warnings.length === 0) {
+                    warningEl.style.color = 'var(--text-secondary)';
+                    warningEl.textContent = '';
+                } else {
+                    warningEl.style.color = 'var(--vscode-inputValidation-warningForeground, #f0ad4e)';
+                warningEl.innerHTML = warnings.map((warning) => `• ${escapeHtml(warning)}`).join('<br>');
+            }
+        }
+
+        function renderControlPlaneOverrideResult(message) {
+            setControlPlaneBusy(false);
+            renderControlPlaneSelectionStatus(message);
+            const resultEl = document.getElementById('control-plane-status-result');
+            if (resultEl) {
+                const isError = message.success === false;
+                resultEl.style.color = isError
+                    ? 'var(--vscode-errorForeground, #ff6b6b)'
+                    : 'var(--text-secondary)';
+                resultEl.textContent = isError
+                    ? (message.error || 'Control Plane action failed.')
+                    : (message.message || 'Control Plane action completed.');
+            }
+            if (message.success !== false) {
+                requestControlPlaneStatus();
+            }
+        }
+        }
+
+        function renderControlPlanePreview(message) {
+            lastControlPlanePreview = message;
+            const previewEl = document.getElementById('control-plane-preview');
+            const cleanupEl = document.getElementById('control-plane-cleanup-options');
+            const executeButton = document.getElementById('btn-execute-control-plane');
+            const sources = Array.isArray(message.sources) ? message.sources : [];
+            const warnings = Array.isArray(message.warnings) ? message.warnings : [];
+
+            if (cleanupEl) {
+                const cleanupSources = sources.filter(source => source && source.cleanupEligible);
+                cleanupEl.innerHTML = cleanupSources.length
+                    ? cleanupSources.map((source) => `
+                        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin:0;">
+                            <input type="checkbox" class="control-plane-cleanup-checkbox" value="${escapeHtml(source.repoName)}" style="width:auto; margin:0;">
+                            <span>Archive ${escapeHtml(source.repoName)}/.switchboard after migration</span>
+                        </label>
+                    `).join('')
+                    : '<div style="font-size:10px; color:var(--text-secondary);">No per-repo cleanup options detected.</div>';
+            }
+
+            if (previewEl) {
+                const warningsMarkup = warnings.length
+                    ? `<div style="margin-bottom:8px; color:var(--vscode-inputValidation-warningForeground, #f0ad4e);">${warnings.map((warning) => `• ${escapeHtml(warning)}`).join('<br>')}</div>`
+                    : '';
+                const rowsMarkup = sources.length
+                    ? `
+                        <table style="width:100%; border-collapse:collapse; font-size:10px;">
+                            <thead>
+                                <tr>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Repo</th>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Switchboard</th>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Plan Count</th>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">DB Merge</th>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Plans Copy</th>
+                                    <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">.agent Summary</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${sources.map((source) => `
+                                    <tr>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(source.repoName)}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${source.hasSwitchboard ? 'Yes' : 'No'}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(source.planCount)}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${source.dbWillMerge ? 'Merge' : 'Skip'}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(source.plansWillCopy)}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(source.agentConflictSummary || 'None')}</td>
+                                    </tr>
+                                `).join('')}
+                            </tbody>
+                        </table>
+                    `
+                    : '<div style="color:var(--text-secondary);">No child repos are ready for migration yet.</div>';
+                previewEl.innerHTML = `${warningsMarkup}${rowsMarkup}`;
+            }
+
+            if (executeButton) {
+                executeButton.disabled = controlPlaneBusy || sources.length === 0;
+            }
+        }
+
+        function renderControlPlaneExecutionResult(message, modeLabel) {
+            const previewEl = document.getElementById('control-plane-preview');
+            const statusEl = document.getElementById('control-plane-status');
+            const warningEl = document.getElementById('control-plane-warning');
+            const warnings = Array.isArray(message.warnings) ? message.warnings : [];
+
+            if (statusEl) {
+                statusEl.textContent = message.success === false
+                    ? `${modeLabel} failed.`
+                    : `${modeLabel} complete. VS Code should reopen into the generated Control Plane workspace.`;
+            }
+            if (warningEl) {
+                warningEl.style.color = message.success === false
+                    ? 'var(--vscode-errorForeground, #ff6b6b)'
+                    : 'var(--text-secondary)';
+                warningEl.innerHTML = [
+                    message.error ? escapeHtml(message.error) : '',
+                    ...warnings.map((warning) => escapeHtml(warning))
+                ].filter(Boolean).join('<br>');
+            }
+            if (previewEl) {
+                const migratedRepos = Array.isArray(message.migratedRepos) ? message.migratedRepos : [];
+                previewEl.innerHTML = `
+                    <div><strong>Workspace file:</strong> ${escapeHtml(message.workspaceFilePath || 'Not generated')}</div>
+                    <div><strong>Migration report:</strong> ${escapeHtml(message.reportPath || 'Not written')}</div>
+                    ${migratedRepos.length ? `
+                        <div style="margin-top:8px;"><strong>Per-repo results</strong></div>
+                        <ul style="margin:6px 0 0 16px; padding:0;">
+                            ${migratedRepos.map((repo) => `
+                                <li>${escapeHtml(repo.repoName)} — merged ${escapeHtml(repo.mergedPlanRows)} DB row(s), copied ${escapeHtml(repo.copiedPlanFiles)} plan file(s), cleanup ${escapeHtml(repo.cleanupAction)}</li>
+                            `).join('')}
+                        </ul>
+                    ` : ''}
+                `;
+            }
+        }
+
+        function setMultiRepoBusy(busy) {
+            multiRepoBusy = !!busy;
+            if (multiRepoScaffoldButton) {
+                multiRepoScaffoldButton.disabled = multiRepoBusy;
+                multiRepoScaffoldButton.textContent = multiRepoBusy
+                    ? 'SCAFFOLDING...'
+                    : 'SCAFFOLD MULTI-REPO CONTROL PLANE';
+            }
+        }
+
+        function renderMultiRepoScaffoldResult(result) {
+            const safeResult = result || {};
+            const repos = Array.isArray(safeResult.repos) ? safeResult.repos : [];
+            const warnings = Array.isArray(safeResult.warnings) ? safeResult.warnings : [];
+            const clonedCount = repos.filter((repo) => repo?.status === 'cloned').length;
+            const skippedCount = repos.filter((repo) => repo?.status === 'skipped').length;
+            const failedCount = repos.filter((repo) => repo?.status === 'failed').length;
+
+            if (multiRepoPatInput) {
+                multiRepoPatInput.value = '';
+            }
+            if (!multiRepoScaffoldStatus) {
+                return;
+            }
+
+            const summary = safeResult.success === false
+                ? 'Scaffolding stopped before VS Code could reopen into the generated Control Plane workspace.'
+                : `Scaffolding complete. ${clonedCount} cloned, ${skippedCount} skipped, ${failedCount} failed.`;
+
+            const workspaceMarkup = safeResult.workspaceFilePath
+                ? `<div style="margin-top:8px;"><strong>Workspace file:</strong> ${escapeHtml(safeResult.workspaceFilePath)}</div>`
+                : '';
+            const warningMarkup = [
+                safeResult.error
+                    ? `<div style="margin-top:8px; color:var(--accent-red);">${escapeHtml(safeResult.error)}</div>`
+                    : '',
+                ...warnings.map((warning) => (
+                    `<div style="margin-top:6px; color:var(--vscode-inputValidation-warningForeground, #f0ad4e);">${escapeHtml(warning)}</div>`
+                ))
+            ].filter(Boolean).join('');
+            const rowsMarkup = repos.length
+                ? `
+                    <table style="width:100%; border-collapse:collapse; font-size:10px; margin-top:8px;">
+                        <thead>
+                            <tr>
+                                <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Repository URL</th>
+                                <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Folder</th>
+                                <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Status</th>
+                                <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Cleanup</th>
+                                <th style="text-align:left; padding:4px; border-bottom:1px solid var(--border-color);">Notes</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            ${repos.map((repo) => {
+                                const cleanupNote = repo.cleanupAction === 'deleted'
+                                    ? 'sub-repo kanban.db deleted'
+                                    : repo.cleanupAction === 'kept'
+                                        ? 'sub-repo kanban.db kept with warning'
+                                        : '';
+                                return `
+                                    <tr>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(repo.url || '')}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(repo.dir || '')}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(repo.status || '')}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(cleanupNote)}</td>
+                                        <td style="padding:4px; border-bottom:1px solid var(--border-dim);">${escapeHtml(repo.error || '')}</td>
+                                    </tr>
+                                `;
+                            }).join('')}
+                        </tbody>
+                    </table>
+                `
+                : '<div style="margin-top:8px; color:var(--text-secondary);">No repositories were processed.</div>';
+
+            multiRepoScaffoldStatus.innerHTML = `
+                <div style="font-weight:600;">${escapeHtml(summary)}</div>
+                ${workspaceMarkup}
+                ${warningMarkup}
+                ${rowsMarkup}
+            `;
+        }
+
+        function pathValueOrEmpty(value) {
+            return typeof value === 'string' ? value : '';
+        }
+
+        function openControlPlaneSetup(mode) {
+            setControlPlaneSetupMode(mode);
+            openAccordion('control-plane-fields', 'control-plane-chevron');
+            requestControlPlaneStatus();
         }
 
         function sanitizeCustomAgentId(value) {
@@ -1783,36 +2411,24 @@
 
         function collectSetupSavePayload() {
             syncDerivedKanbanOrdersFromStructure();
-            const accurateCodingEnabled = !!document.getElementById('accurate-coding-toggle')?.checked;
-            const advancedReviewerEnabled = !!document.getElementById('advanced-reviewer-toggle')?.checked;
-            const leadChallengeEnabled = !!document.getElementById('lead-challenge-toggle')?.checked;
-            const aggressivePairProgramming = !!document.getElementById('aggressive-pair-toggle')?.checked;
-            const designDocEnabled = !!document.getElementById('design-doc-toggle')?.checked;
             const planIngestionFolder = document.getElementById('plan-ingestion-folder-input')?.value.trim() || '';
             const gitIgnoreStrategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
             const gitIgnoreRules = gitIgnoreStrategy === 'custom'
                 ? sanitizeGitIgnoreRules(document.getElementById('git-ignore-rules')?.value || '')
                 : [...lastGitIgnoreConfig.rules];
+            // Agent CLI commands and visibility now managed in Terminals tab
+            // Preserve existing settings from cached state
             const commands = {
                 ...lastStartupCommands,
                 'team-lead': teamLeadCommandInput?.value.trim() || ''
             };
-            document.querySelectorAll('#agents-fields input[type="text"][data-role]').forEach(input => {
-                const role = input.dataset.role;
-                if (role) {
-                    commands[role] = input.value.trim();
-                }
-            });
             const visibleAgents = {
                 ...getCustomVisibleAgentsPatch(),
-                'team-lead': !!teamLeadVisibleToggle?.checked
+                'team-lead': !!teamLeadVisibleToggle?.checked,
+                // gatherer is a built-in column toggled via the Kanban structure list,
+                // not a custom agent — include it explicitly so the server persists the user's preference.
+                gatherer: lastVisibleAgents['gatherer'] !== false
             };
-            document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(toggle => {
-                const role = toggle.dataset.role;
-                if (role) {
-                    visibleAgents[role] = toggle.checked;
-                }
-            });
             lastGitIgnoreConfig = {
                 ...lastGitIgnoreConfig,
                 strategy: gitIgnoreStrategy,
@@ -1820,11 +2436,6 @@
             };
             return {
                 type: 'saveStartupCommands',
-                accurateCodingEnabled,
-                advancedReviewerEnabled,
-                leadChallengeEnabled,
-                aggressivePairProgramming,
-                designDocEnabled,
                 designDocLink: lastDesignDocLink,
                 planIngestionFolder,
                 customAgents: lastCustomAgents,
@@ -1832,7 +2443,6 @@
                 commands,
                 visibleAgents,
                 teamLeadComplexityCutoff: Number(teamLeadComplexityCutoffInput?.value || 0),
-                julesAutoSyncEnabled: !!document.getElementById('jules-auto-sync-toggle')?.checked,
                 gitIgnoreStrategy,
                 gitIgnoreRules
             };
@@ -1913,14 +2523,27 @@
                     statusEl.style.color = 'var(--accent-red)';
                 } else {
                     statusEl.textContent = 'Not configured';
-                    statusEl.style.color = 'var(--text-secondary)';
                 }
             }
             if (errorEl) {
-                errorEl.textContent = errorText || '';
+                errorEl.textContent = errorText;
             }
-            if (state === 'configured' && tokenInput) {
-                tokenInput.value = '';
+            if (tokenInput && state === 'working') {
+                tokenInput.disabled = true;
+            } else if (tokenInput) {
+                tokenInput.disabled = false;
+            }
+        }
+
+        function updateIntegrationProviderVisibility() {
+            const clickupSection = document.getElementById('clickup-config-section');
+            const linearSection = document.getElementById('linear-config-section');
+
+            if (clickupSection) {
+                clickupSection.classList.toggle('hidden', selectedIntegrationProvider !== 'clickup');
+            }
+            if (linearSection) {
+                linearSection.classList.toggle('hidden', selectedIntegrationProvider !== 'linear');
             }
         }
 
@@ -1934,6 +2557,85 @@
 
         function cloneNotionSetupState(state) {
             return state ? JSON.parse(JSON.stringify(state)) : null;
+        }
+
+        function cloneOllamaSetupState(state) {
+            return state ? JSON.parse(JSON.stringify(state)) : null;
+        }
+
+        function setOllamaSetupMessage(message, isError = false, source = 'action') {
+            if (!ollamaSetupMessage) return;
+            ollamaSetupMessage.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)';
+            ollamaSetupMessage.textContent = message || '';
+            ollamaSetupMessage.dataset.source = message ? source : '';
+        }
+
+        function getOllamaSavedIntern() {
+            return lastOllamaSetupState?.intern || {
+                enabled: false,
+                mode: 'cloud',
+                model: 'gemma4:31b-cloud',
+                baseUrl: 'https://ollama.com/api'
+            };
+        }
+
+        function updateOllamaCommandPreview() {
+            const el = document.getElementById('ollama-effective-command');
+            if (!el) return;
+            const useGemma = document.getElementById('ollama-use-gemma-cloud')?.checked;
+            if (!useGemma) {
+                el.textContent = 'No active configuration';
+            } else {
+                // Always use Claude Code launch — ollama run cannot write files
+                const model = (lastOllamaSetupState?.intern?.model) || 'gemma4:31b-cloud';
+                el.textContent = `ollama launch claude --model ${model}`;
+            }
+        }
+
+
+
+        function renderOllamaSetupState() {
+            const state = lastOllamaSetupState;
+            if (!state) return;
+
+            if (ollamaInstallStatus) {
+                ollamaInstallStatus.textContent = state.installed
+                    ? `CLI: ${state.version || 'Installed'}`
+                    : 'CLI: Not installed';
+                ollamaInstallStatus.style.color = state.installed ? 'var(--accent-green)' : 'var(--accent-orange)';
+            }
+            if (ollamaDaemonStatus) {
+                ollamaDaemonStatus.textContent = state.daemonReachable
+                    ? 'Daemon: Running locally'
+                    : 'Daemon: Not reachable';
+                ollamaDaemonStatus.style.color = state.daemonReachable ? 'var(--accent-green)' : 'var(--text-secondary)';
+            }
+            if (ollamaAuthStatus) {
+                const authText = state.authState === 'signed-in'
+                    ? 'Cloud auth: Signed in'
+                    : state.authState === 'signed-out'
+                        ? 'Cloud auth: Signed out'
+                        : 'Cloud auth: Unknown';
+                ollamaAuthStatus.textContent = authText;
+                ollamaAuthStatus.style.color = state.authState === 'signed-in' ? 'var(--accent-green)' : 'var(--text-secondary)';
+            }
+            if (ollamaInternConfig) {
+                const saved = state.intern || {};
+                ollamaInternConfig.textContent = saved.enabled
+                    ? `Intern: ${saved.mode} / ${saved.model} / ${saved.baseUrl}`
+                    : 'Intern: disabled';
+            }
+
+            const useGemmaCheckbox = document.getElementById('ollama-use-gemma-cloud');
+            if (useGemmaCheckbox) {
+                useGemmaCheckbox.checked = !!state.intern?.enabled && state.intern?.model === 'gemma4:31b-cloud';
+            }
+
+            updateOllamaCommandPreview();
+
+            if (state.error && ollamaSetupMessage) {
+                setOllamaSetupMessage(state.error, true, 'state');
+            }
         }
 
         function setClickupSetupMessage(message, isError = false) {
@@ -1980,12 +2682,22 @@
         }
 
         function collectLinearApplyOptions() {
+            const parseProjectNames = (value) => {
+                if (!value) return undefined;
+                const names = value.split(',').map(s => s.trim()).filter(s => s.length > 0);
+                return names.length > 0 ? names : undefined;
+            };
+
             return {
                 mapColumns: document.getElementById('linear-option-map-columns')?.checked === true,
                 createLabel: document.getElementById('linear-option-create-label')?.checked === true,
-                scopeProject: document.getElementById('linear-option-scope-project')?.checked === true,
+                includeProjectNames: parseProjectNames(document.getElementById('linear-option-include-projects')?.value),
+                excludeProjectNames: parseProjectNames(document.getElementById('linear-option-exclude-projects')?.value),
                 enableRealtimeSync: document.getElementById('linear-option-enable-realtime-sync')?.checked === true,
-                enableAutoPull: document.getElementById('linear-option-enable-auto-pull')?.checked === true
+                enableAutoPull: document.getElementById('linear-option-enable-auto-pull')?.checked === true,
+                deleteSyncEnabled: document.getElementById('linear-option-delete-sync')?.checked === true,
+                enableCompleteSync: document.getElementById('linear-option-enable-complete-sync')?.checked === true,
+                excludeBacklog: document.getElementById('linear-option-exclude-backlog')?.checked === true
             };
         }
 
@@ -2034,16 +2746,31 @@
 
             setCheckboxState('linear-option-map-columns', state.mappingsReady);
             setCheckboxState('linear-option-create-label', state.labelReady);
-            setCheckboxState('linear-option-scope-project', state.projectScoped);
+            const includeInput = document.getElementById('linear-option-include-projects');
+            if (includeInput) {
+                includeInput.value = Array.isArray(state.includeProjectNames) ? state.includeProjectNames.join(', ') : '';
+            }
+            const excludeInput = document.getElementById('linear-option-exclude-projects');
+            if (excludeInput) {
+                excludeInput.value = Array.isArray(state.excludeProjectNames) ? state.excludeProjectNames.join(', ') : '';
+            }
             setCheckboxState('linear-option-enable-realtime-sync', state.realTimeSyncEnabled);
             setCheckboxState('linear-option-enable-auto-pull', state.autoPullEnabled);
+            setCheckboxState('linear-option-enable-complete-sync', state.completeSyncEnabled !== false);
+            setCheckboxState('linear-option-delete-sync', state.deleteSyncEnabled !== false);
+            setCheckboxState('linear-option-exclude-backlog', state.excludeBacklog !== false);
 
+            const includeCount = Array.isArray(state.includeProjectNames) ? state.includeProjectNames.length : 0;
+            const excludeCount = Array.isArray(state.excludeProjectNames) ? state.excludeProjectNames.length : 0;
             const parts = [
                 `Mappings: ${state.mappingsReady ? 'ready' : 'not ready'}`,
                 `Label: ${state.labelReady ? 'ready' : 'not ready'}`,
-                `Project scope: ${state.projectScoped ? 'enabled' : 'team-wide'}`,
+                `Include projects: ${includeCount > 0 ? includeCount : 'all'}`,
+                `Exclude projects: ${excludeCount > 0 ? excludeCount : 'none'}`,
                 `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
-                `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`
+                `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`,
+                `Complete sync: ${state.completeSyncEnabled !== false ? 'enabled' : 'disabled'}`,
+                `Delete sync: ${state.deleteSyncEnabled !== false ? 'enabled' : 'disabled'}`
             ];
             summaryEl.style.display = 'block';
             summaryEl.textContent = parts.join(' · ');
@@ -2071,14 +2798,6 @@
             option.value = value;
             option.textContent = label;
             select.appendChild(option);
-        }
-
-        function updateLiveSyncOptionsVisibility() {
-            const enabled = document.getElementById('live-sync-enabled')?.checked;
-            const optionsDiv = document.getElementById('live-sync-options');
-            if (optionsDiv) {
-                optionsDiv.style.display = enabled ? 'block' : 'none';
-            }
         }
 
         function appendClickupColumnOptions(select, columns, currentValue, placeholder) {
@@ -2613,6 +3332,69 @@
         document.getElementById('btn-connect-mcp')?.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
         document.getElementById('btn-copy-mcp-config')?.addEventListener('click', () => vscode.postMessage({ type: 'copyMcpConfig' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
+        controlPlaneModeMigrateButton?.addEventListener('click', () => setControlPlaneSetupMode('migrate-existing'));
+        controlPlaneModeFreshButton?.addEventListener('click', () => setControlPlaneSetupMode('fresh-setup'));
+        document.getElementById('btn-detect-control-plane')?.addEventListener('click', () => {
+            setControlPlaneBusy(true);
+            requestControlPlaneStatus();
+        });
+        document.getElementById('btn-set-control-plane-root')?.addEventListener('click', () => {
+            setControlPlaneBusy(true);
+            vscode.postMessage({
+                type: 'setExplicitControlPlaneRoot',
+                controlPlaneRoot: controlPlaneExplicitRootInput?.value.trim() || ''
+            });
+        });
+        document.getElementById('btn-reset-control-plane-root')?.addEventListener('click', () => {
+            setControlPlaneBusy(true);
+            vscode.postMessage({ type: 'resetExplicitControlPlaneRoot' });
+        });
+        document.getElementById('btn-clear-control-plane-cache')?.addEventListener('click', () => {
+            setControlPlaneBusy(true);
+            vscode.postMessage({ type: 'clearControlPlaneCache' });
+        });
+        document.getElementById('btn-preview-control-plane')?.addEventListener('click', () => {
+            const parentDir = getControlPlaneParentDir();
+            if (!parentDir) return;
+            setControlPlaneBusy(true);
+            vscode.postMessage({ type: 'previewControlPlaneMigration', parentDir });
+        });
+        document.getElementById('btn-execute-control-plane')?.addEventListener('click', () => {
+            const parentDir = getControlPlaneParentDir();
+            if (!parentDir) return;
+            const cleanupConfirmed = Array.from(document.querySelectorAll('.control-plane-cleanup-checkbox:checked'))
+                .map((checkbox) => checkbox.value);
+            setControlPlaneBusy(true);
+            vscode.postMessage({
+                type: 'executeControlPlaneMigration',
+                parentDir,
+                generateWorkspaceFile: true,
+                cleanupConfirmed
+            });
+        });
+        document.getElementById('btn-fresh-control-plane')?.addEventListener('click', () => {
+            const parentDir = getControlPlaneParentDir();
+            if (!parentDir) return;
+            setControlPlaneBusy(true);
+            vscode.postMessage({
+                type: 'executeControlPlaneFreshSetup',
+                parentDir,
+                generateWorkspaceFile: true
+            });
+        });
+        document.getElementById('btn-scaffold-multi-repo')?.addEventListener('click', () => {
+            setMultiRepoBusy(true);
+            vscode.postMessage({
+                type: 'scaffoldMultiRepo',
+                parentDir: multiRepoParentDirInput?.value.trim() || '',
+                workspaceName: multiRepoWorkspaceNameInput?.value.trim() || '',
+                repoUrls: (multiRepoRepoUrlsInput?.value || '')
+                    .split('\n')
+                    .map((value) => value.trim())
+                    .filter(Boolean),
+                pat: multiRepoPatInput?.value || ''
+            });
+        });
         document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
         document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
         document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
@@ -2655,19 +3437,11 @@
         });
         const instantAutosaveSelectors = [
             '#git-ignore-strategy',
-            '#design-doc-toggle',
-            '#accurate-coding-toggle',
-            '#lead-challenge-toggle',
-            '#advanced-reviewer-toggle',
-            '#aggressive-pair-toggle',
-            '#jules-auto-sync-toggle',
-            '#agents-fields .agent-visible-toggle',
             '#team-lead-visible-toggle',
             '#team-lead-complexity-cutoff'
         ];
         const textAutosaveSelectors = [
             '#git-ignore-rules',
-            '#agents-fields input[type="text"][data-role]',
             '#team-lead-command-input',
             '#plan-ingestion-folder-input'
         ];
@@ -2682,13 +3456,39 @@
                 node.addEventListener('blur', () => queueSetupAutosave(`${selector}:blur`, true));
             });
         });
-        document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(node => {
-            node.addEventListener('change', () => {
-                renderKanbanStructureList();
+        // Token input masking: clear mask on focus, restore on blur if unchanged
+        function setupTokenMasking(inputId) {
+            const input = document.getElementById(inputId);
+            if (!input) return;
+
+            input.addEventListener('focus', () => {
+                if (input.dataset.hasToken === 'true' && input.value === '**********') {
+                    input.value = '';
+                    input.dataset.hasToken = 'false';
+                    input.style.borderLeft = '';
+                }
             });
-        });
+
+            input.addEventListener('blur', () => {
+                // Restore mask if user left the field empty and a token was originally present
+                if (input.value.trim() === '' && input.dataset.originalHasToken === 'true') {
+                    input.value = '**********';
+                    input.dataset.hasToken = 'true';
+                    input.style.borderLeft = '3px solid var(--accent-green)';
+                }
+            });
+        }
+
+        setupTokenMasking('clickup-token-input');
+        setupTokenMasking('linear-token-input');
+        setupTokenMasking('notion-token-input');
+
         document.getElementById('btn-apply-clickup-config')?.addEventListener('click', () => {
-            const token = document.getElementById('clickup-token-input')?.value.trim() || '';
+            let token = document.getElementById('clickup-token-input')?.value.trim() || '';
+            // If the value is the masked placeholder, don't send it (keep existing token)
+            if (token === '**********') {
+                token = '';
+            }
             setIntegrationStatus('clickup', 'working');
             setApplyButtonBusy('clickup', true);
             vscode.postMessage({
@@ -2717,7 +3517,10 @@
             });
         });
         document.getElementById('btn-apply-linear-config')?.addEventListener('click', () => {
-            const token = document.getElementById('linear-token-input')?.value.trim() || '';
+            let token = document.getElementById('linear-token-input')?.value.trim() || '';
+            if (token === '**********') {
+                token = '';
+            }
             setIntegrationStatus('linear', 'working');
             setApplyButtonBusy('linear', true);
             vscode.postMessage({
@@ -2725,20 +3528,6 @@
                 token,
                 options: collectLinearApplyOptions()
             });
-        });
-
-        // Live sync configuration event listeners
-        document.getElementById('live-sync-enabled')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'saveLiveSyncConfig', enabled: e.target.checked });
-            updateLiveSyncOptionsVisibility();
-        });
-
-        document.getElementById('live-sync-interval')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'saveLiveSyncConfig', syncIntervalMs: parseInt(e.target.value) * 1000 });
-        });
-
-        document.getElementById('live-sync-conflict-check')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'saveLiveSyncConfig', conflictCheckEnabled: e.target.checked });
         });
         document.getElementById('btn-linear-add-rule')?.addEventListener('click', () => {
             addLinearRuleCard();
@@ -2750,8 +3539,17 @@
                 automationRules: payload.automationRules
             });
         });
+        document.getElementById('linear-browse-include-projects')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'linearBrowseProjects', target: 'include' });
+        });
+        document.getElementById('linear-browse-exclude-projects')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'linearBrowseProjects', target: 'exclude' });
+        });
         document.getElementById('btn-apply-notion-config')?.addEventListener('click', () => {
-            const token = document.getElementById('notion-token-input')?.value.trim() || '';
+            let token = document.getElementById('notion-token-input')?.value.trim() || '';
+            if (token === '**********') {
+                token = '';
+            }
             if (token && !token.startsWith('secret_') && !token.startsWith('ntn_')) {
                 setIntegrationStatus('notion', 'failed', 'Token must start with "secret_" or "ntn_".');
                 return;
@@ -2762,6 +3560,21 @@
                 type: 'applyNotionConfig',
                 token,
                 options: collectNotionApplyOptions()
+            });
+        });
+
+        document.getElementById('btn-save-planning-sources')?.addEventListener('click', () => {
+            const clickup = document.getElementById('planning-source-clickup')?.checked === true;
+            const linear = document.getElementById('planning-source-linear')?.checked === true;
+            const notion = document.getElementById('planning-source-notion')?.checked === true;
+            const localFolder = document.getElementById('planning-source-local-folder')?.checked === true;
+
+            vscode.postMessage({
+                type: 'savePlanningSources',
+                clickup,
+                linear,
+                notion,
+                localFolder
             });
         });
 
@@ -2829,19 +3642,15 @@
         bindAccordion('setup-toggle', 'startup-fields', 'setup-chevron', () => {
             vscode.postMessage({ type: 'getGitIgnoreConfig' });
         });
-        bindAccordion('agents-toggle', 'agents-fields', 'agents-chevron', () => {
-            vscode.postMessage({ type: 'getAccurateCodingSetting' });
-            vscode.postMessage({ type: 'getAdvancedReviewerSetting' });
-            vscode.postMessage({ type: 'getLeadChallengeSetting' });
-            vscode.postMessage({ type: 'getAggressivePairSetting' });
-            vscode.postMessage({ type: 'getDesignDocSetting' });
-            vscode.postMessage({ type: 'getStartupCommands' });
-            vscode.postMessage({ type: 'getVisibleAgents' });
-            vscode.postMessage({ type: 'getDefaultPromptOverrides' });
+        bindAccordion('control-plane-toggle', 'control-plane-fields', 'control-plane-chevron', () => {
+            requestControlPlaneStatus();
         });
         bindAccordion('custom-agents-toggle', 'custom-agents-fields', 'custom-agents-chevron', () => {
             vscode.postMessage({ type: 'getCustomAgents' });
             vscode.postMessage({ type: 'getVisibleAgents' });
+        });
+        bindAccordion('ollama-toggle', 'ollama-fields', 'ollama-chevron', () => {
+            vscode.postMessage({ type: 'getOllamaStatus' });
         });
         bindAccordion('kanban-structure-toggle', 'kanban-structure-fields', 'kanban-structure-chevron', () => {
             vscode.postMessage({ type: 'getVisibleAgents' });
@@ -2860,6 +3669,74 @@
         bindAccordion('project-mgmt-toggle', 'project-mgmt-fields', 'project-mgmt-chevron', () => {
             requestIntegrationSetupStates();
         });
+        bindAccordion('planning-panel-toggle', 'planning-panel-fields', 'planning-panel-chevron', () => {
+            vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+        });
+
+        const providerSelector = document.getElementById('integration-provider-selector');
+        if (providerSelector) {
+            providerSelector.addEventListener('change', (e) => {
+                if (isHydratingSetupState) return; // Don't persist during hydration
+                selectedIntegrationProvider = e.target.value;
+                updateIntegrationProviderVisibility();
+                vscode.postMessage({
+                    type: 'saveIntegrationProviderPreference',
+                    provider: selectedIntegrationProvider
+                });
+            });
+        }
+        setControlPlaneSetupMode(controlPlaneSetupMode);
+
+        document.getElementById('btn-ollama-install')?.addEventListener('click', () => {
+            setOllamaSetupMessage('Opening the Ollama download page...');
+            vscode.postMessage({ type: 'openOllamaInstall' });
+        });
+
+        document.getElementById('btn-ollama-signin')?.addEventListener('click', () => {
+            setOllamaSetupMessage('Sign-in opened in your browser — complete the flow there.');
+            vscode.postMessage({ type: 'ollamaSignIn' });
+        });
+        let pendingOllamaSaveTimer = null;
+        document.getElementById('ollama-use-gemma-cloud')?.addEventListener('change', () => {
+            const useGemma = document.getElementById('ollama-use-gemma-cloud')?.checked;
+            if (pendingOllamaSaveTimer) {
+                clearTimeout(pendingOllamaSaveTimer);
+            }
+            pendingOllamaSaveTimer = setTimeout(() => {
+                vscode.postMessage({
+                    type: 'setOllamaInternModel',
+                    enabled: !!useGemma,
+                    mode: 'cloud',
+                    model: 'gemma4:31b-cloud'
+                });
+            }, 200);
+            updateOllamaCommandPreview();
+        });
+
+        // Planning Panel sync mode selection
+        const syncModeRadios = document.querySelectorAll('input[name="planning-sync-mode"]');
+        const selectedContainersDiv = document.getElementById('planning-sync-selected-containers');
+
+        syncModeRadios.forEach(radio => {
+            radio.addEventListener('change', () => {
+                const mode = radio.value;
+                
+                // Show/hide selected containers UI
+                selectedContainersDiv.style.display = mode === 'sync-selected' ? 'block' : 'none';
+                
+                // Post message to setup provider
+                vscode.postMessage({
+                    type: 'setPlanningPanelSyncMode',
+                    mode: mode
+                });
+                
+                // If switching to sync-selected, load available containers
+                if (mode === 'sync-selected') {
+                    vscode.postMessage({ type: 'fetchAvailableSyncContainers' });
+                }
+            });
+        });
+
 
         window.addEventListener('message', (event) => {
             const message = event.data;
@@ -2875,12 +3752,6 @@
                         if (teamLeadCommandInput) {
                             teamLeadCommandInput.value = lastStartupCommands['team-lead'] || '';
                         }
-                        document.querySelectorAll('#agents-fields input[type="text"][data-role]').forEach(input => {
-                            const role = input.dataset.role;
-                            if (role) {
-                                input.value = lastStartupCommands[role] || '';
-                            }
-                        });
                     });
                     break;
                 }
@@ -2891,14 +3762,23 @@
                             if (teamLeadVisibleToggle) {
                                 teamLeadVisibleToggle.checked = lastVisibleAgents['team-lead'] !== false;
                             }
-                            document.querySelectorAll('#agents-fields .agent-visible-toggle').forEach(toggle => {
-                                const role = toggle.dataset.role;
-                                if (role) {
-                                    toggle.checked = lastVisibleAgents[role] !== false;
-                                }
-                            });
                             renderCustomAgentConfigList();
                             renderKanbanStructureList();
+                        });
+                    }
+                    break;
+                case 'planningSources':
+                    if (message.sources) {
+                        runSetupHydration(() => {
+                            const clickupCheckbox = document.getElementById('planning-source-clickup');
+                            const linearCheckbox = document.getElementById('planning-source-linear');
+                            const notionCheckbox = document.getElementById('planning-source-notion');
+                            const localFolderCheckbox = document.getElementById('planning-source-local-folder');
+
+                            if (clickupCheckbox) clickupCheckbox.checked = message.sources.clickup !== false;
+                            if (linearCheckbox) linearCheckbox.checked = message.sources.linear !== false;
+                            if (notionCheckbox) notionCheckbox.checked = message.sources.notion !== false;
+                            if (localFolderCheckbox) localFolderCheckbox.checked = message.sources['local-folder'] !== false;
                         });
                     }
                     break;
@@ -3039,20 +3919,6 @@
                     });
                     break;
                 }
-                case 'liveSyncConfig': {
-                    runSetupHydration(() => {
-                        const enabledToggle = document.getElementById('live-sync-enabled');
-                        const intervalSelect = document.getElementById('live-sync-interval');
-                        const conflictCheckToggle = document.getElementById('live-sync-conflict-check');
-                        
-                        if (enabledToggle) enabledToggle.checked = message.enabled === true;
-                        if (intervalSelect) intervalSelect.value = String(Math.round((message.syncIntervalMs || 30000) / 1000));
-                        if (conflictCheckToggle) conflictCheckToggle.checked = message.conflictCheckEnabled === true;
-                        
-                        updateLiveSyncOptionsVisibility();
-                    });
-                    break;
-                }
                 case 'dbPathUpdated': {
                     if (dbPathDisplay) {
                         dbPathDisplay.textContent = message.path || '.switchboard/kanban.db';
@@ -3079,8 +3945,36 @@
                     if (radioToSelect) {
                         radioToSelect.checked = true;
                     }
+                    renderControlPlaneSelectionStatus(message);
                     break;
                 }
+                case 'controlPlaneStatusResult':
+                    setControlPlaneBusy(false);
+                    renderControlPlaneSelectionStatus(message);
+                    break;
+                case 'controlPlaneOverrideResult':
+                    renderControlPlaneOverrideResult(message);
+                    break;
+                case 'controlPlaneCandidateResult':
+                    setControlPlaneBusy(false);
+                    renderControlPlaneCandidate(message);
+                    break;
+                case 'controlPlaneMigrationPreview':
+                    setControlPlaneBusy(false);
+                    renderControlPlanePreview(message);
+                    break;
+                case 'controlPlaneMigrationResult':
+                    setControlPlaneBusy(false);
+                    renderControlPlaneExecutionResult(message, 'Control Plane migration');
+                    break;
+                case 'controlPlaneFreshSetupResult':
+                    setControlPlaneBusy(false);
+                    renderControlPlaneExecutionResult(message, 'Fresh Control Plane setup');
+                    break;
+                case 'multiRepoScaffoldResult':
+                    setMultiRepoBusy(false);
+                    renderMultiRepoScaffoldResult(message.result);
+                    break;
                 case 'dbConnectionResult':
                     if (dbPathDisplay) {
                         dbPathDisplay.style.borderLeft = message.success ? '3px solid #28a745' : '3px solid #dc3545';
@@ -3092,6 +3986,27 @@
                     setIntegrationStatus('clickup', message.clickupSetupComplete ? 'configured' : 'idle');
                     setIntegrationStatus('linear', message.linearSetupComplete ? 'configured' : 'idle');
                     setIntegrationStatus('notion', message.notionSetupComplete ? 'configured' : 'idle');
+
+                    // Populate masked tokens if they exist
+                    const tokenFieldMap = [
+                        { flag: message.clickupHasToken, id: 'clickup-token-input' },
+                        { flag: message.linearHasToken, id: 'linear-token-input' },
+                        { flag: message.notionHasToken, id: 'notion-token-input' }
+                    ];
+                    tokenFieldMap.forEach(({ flag, id }) => {
+                        const input = document.getElementById(id);
+                        if (flag && input) {
+                            input.value = '**********';
+                            input.dataset.hasToken = 'true';
+                            input.dataset.originalHasToken = 'true';
+                            input.style.borderLeft = '3px solid var(--accent-green)';
+                        } else if (input) {
+                            input.dataset.hasToken = 'false';
+                            input.dataset.originalHasToken = 'false';
+                            input.style.borderLeft = '';
+                        }
+                    });
+
                     runSetupHydration(() => {
                         lastClickupSetupState = cloneClickupSetupState(message.clickupState);
                         lastLinearSetupState = cloneLinearSetupState(message.linearState);
@@ -3100,6 +4015,51 @@
                         renderLinearSetupState();
                         renderNotionSetupState();
                     });
+                    // Hydrate provider selector from persisted preference
+                    if (message.preferredProvider) {
+                        selectedIntegrationProvider = message.preferredProvider;
+                        const providerSelectorEl = document.getElementById('integration-provider-selector');
+                        if (providerSelectorEl) {
+                            providerSelectorEl.value = selectedIntegrationProvider;
+                        }
+                        updateIntegrationProviderVisibility();
+                    }
+                    break;
+                case 'ollamaSetupState':
+                    runSetupHydration(() => {
+                        lastOllamaSetupState = cloneOllamaSetupState(message.state);
+                        renderOllamaSetupState();
+                    });
+                    break;
+                case 'ollamaActionResult':
+                    setOllamaSetupMessage(
+                        message.success === false
+                            ? (message.error || 'Ollama action failed.')
+                            : (message.message || 'Ollama action completed.'),
+                        message.success === false
+                    );
+                    break;
+                case 'ollamaInternModelSaved':
+                    if (message.success === false) {
+                        setOllamaSetupMessage(message.error || 'Failed to save the Ollama intern model.', true);
+                        break;
+                    }
+                    if (message.intern) {
+                        if (!lastOllamaSetupState) {
+                            lastOllamaSetupState = cloneOllamaSetupState({
+                                installed: false,
+                                daemonReachable: false,
+                                authState: 'unknown',
+                                cloudModels: [],
+                                localModels: [],
+                                intern: message.intern
+                            });
+                        } else {
+                            lastOllamaSetupState.intern = message.intern;
+                        }
+                    }
+                    renderOllamaSetupState();
+                    setOllamaSetupMessage(message.message || 'Saved the Ollama intern model.');
                     break;
                 case 'clickupApplyResult':
                     setApplyButtonBusy('clickup', false);
@@ -3121,8 +4081,25 @@
                         setLinearSetupMessage('Linear settings applied. Review automation rules below.');
                     }
                     break;
+                case 'linearBrowseProjectsResult':
+                    if (message.success && Array.isArray(message.projects)) {
+                        const targetInput = message.target === 'include'
+                            ? document.getElementById('linear-option-include-projects')
+                            : document.getElementById('linear-option-exclude-projects');
+                        if (targetInput) {
+                            targetInput.value = message.projects.join(', ');
+                        }
+                    }
+                    break;
                 case 'linearAutomationSaved':
                     setLinearSetupMessage(message.success === false ? (message.error || 'Failed to save Linear automation.') : 'Linear automation saved.', message.success === false);
+                    break;
+                case 'planningSourcesSaved':
+                    const statusEl = document.getElementById('planning-sources-status');
+                    if (statusEl) {
+                        statusEl.textContent = message.success ? 'Source selections saved.' : 'Failed to save source selections.';
+                        setTimeout(() => { statusEl.textContent = ''; }, 3000);
+                    }
                     break;
                 case 'notionApplyResult':
                     setApplyButtonBusy('notion', false);
@@ -3132,13 +4109,98 @@
                     if (message.section === 'project-mgmt') {
                         openAccordion('project-mgmt-fields', 'project-mgmt-chevron', requestIntegrationSetupStates);
                     }
+                    if (message.section === 'control-plane' || message.section === 'control-plane:migrate-existing') {
+                        openControlPlaneSetup('migrate-existing');
+                    }
+                    if (message.section === 'control-plane:fresh-setup' || message.section === 'multi-repo-control-plane') {
+                        openControlPlaneSetup('fresh-setup');
+                    }
                     break;
+                case 'availableSyncContainersReady': {
+                    const containersList = document.getElementById('planning-containers-list');
+                    containersList.innerHTML = '';
+                    
+                    // Group by source
+                    const bySource = {};
+                    (message.containers || []).forEach(c => {
+                        if (!bySource[c.sourceId]) bySource[c.sourceId] = [];
+                        bySource[c.sourceId].push(c);
+                    });
+                    
+                    // Render checkboxes per source
+                    Object.entries(bySource).forEach(([sourceId, containers]) => {
+                        const sourceDiv = document.createElement('div');
+                        sourceDiv.style.marginBottom = '12px';
+                        
+                        const sourceTitle = document.createElement('div');
+                        sourceTitle.style.fontSize = '10px';
+                        sourceTitle.style.fontWeight = 'bold';
+                        sourceTitle.style.color = 'var(--accent-teal)';
+                        sourceTitle.style.marginBottom = '6px';
+                        sourceTitle.textContent = sourceId.toUpperCase();
+                        sourceDiv.appendChild(sourceTitle);
+                        
+                        containers.forEach(container => {
+                            const label = document.createElement('label');
+                            label.className = 'setup-checkbox-option';
+                            label.style.marginBottom = '4px';
+                            label.style.display = 'flex';
+                            label.style.alignItems = 'center';
+                            label.style.gap = '8px';
+                            label.style.fontSize = '11px';
+                            label.style.color = 'var(--text-primary)';
+                            
+                            const checkbox = document.createElement('input');
+                            checkbox.type = 'checkbox';
+                            checkbox.value = `${sourceId}:${container.id}`;
+                            checkbox.checked = (message.selectedContainers || []).includes(`${sourceId}:${container.id}`);
+                            
+                            checkbox.addEventListener('change', () => {
+                                vscode.postMessage({
+                                    type: 'setPlanningPanelSelectedContainers',
+                                    containers: Array.from(
+                                        document.querySelectorAll('#planning-containers-list input[type="checkbox"]:checked')
+                                    ).map(el => el.value)
+                                });
+                            });
+                            
+                            const text = document.createElement('span');
+                            text.textContent = container.name;
+                            
+                            label.appendChild(checkbox);
+                            label.appendChild(text);
+                            sourceDiv.appendChild(label);
+                        });
+                        
+                        containersList.appendChild(sourceDiv);
+                    });
+                    break;
+                }
+                case 'planningPanelSyncModeReady': {
+                    // Restore radio button state from config
+                    const radio = document.querySelector(`input[name="planning-sync-mode"][value="${message.mode}"]`);
+                    if (radio) { radio.checked = true; }
+                    selectedContainersDiv.style.display = message.mode === 'sync-selected' ? 'block' : 'none';
+                    
+                    // Update status text
+                    const statusText = document.getElementById('planning-sync-status-text');
+                    if (statusText) {
+                        const modeLabels = { 'no-sync': 'Manual only', 'auto-sync-all': 'Auto sync all', 'sync-selected': 'Selected containers' };
+                        statusText.textContent = modeLabels[message.mode] || message.mode;
+                    }
+                    break;
+                }
                 default:
                     break;
             }
         });
 
+        setControlPlaneBusy(false);
+        setMultiRepoBusy(false);
         vscode.postMessage({ type: 'ready' });
+
+        // Load initial Planning Panel sync mode state
+        vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
     </script>
 </body>
 

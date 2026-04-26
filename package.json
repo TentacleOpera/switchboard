@@ -10,7 +10,7 @@
     "mcp",
     "multi-agent"
   ],
-  "version": "1.5.6",
+  "version": "1.5.8",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {
@@ -84,6 +84,19 @@
         "title": "Switchboard: Open Setup"
       },
       {
+        "command": "switchboard.scaffoldMultiRepo",
+        "title": "Multi-Repo: Scaffold Control Plane",
+        "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.setupControlPlane",
+        "title": "Switchboard: Set Up Control Plane"
+      },
+      {
+        "command": "switchboard.clearControlPlaneCache",
+        "title": "Switchboard: Clear Control Plane Cache"
+      },
+      {
         "command": "switchboard.reviewPlan",
         "title": "Switchboard: Review Plan"
       },
@@ -136,6 +149,11 @@
         "command": "switchboard.fetchNotionDesignDoc",
         "title": "Fetch Notion Design Doc",
         "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.openResearchPanel",
+        "title": "Switchboard: Open Research Panel",
+        "category": "Switchboard"
       }
     ],
     "configuration": {
@@ -149,6 +167,11 @@
           ],
           "default": "action",
           "description": "Default mode for switchboard commands"
+        },
+        "switchboard.controlPlane.onboardingDismissed": {
+          "type": "boolean",
+          "default": false,
+          "description": "Suppress the one-time Control Plane onboarding offer for the current workspace after it has been dismissed."
         },
         "switchboard.cli.command": {
           "type": "string",
@@ -229,6 +252,19 @@
           "default": "",
           "description": "URL or path to the Design Doc / PRD to append to planner prompts. Only used when designDocEnabled is true."
         },
+        "switchboard.integrations.preferredProvider": {
+          "type": "string",
+          "enum": [
+            "linear",
+            "clickup"
+          ],
+          "default": "linear",
+          "description": "Primary project management integration provider. Controls which configuration section is visible in the Setup panel.",
+          "enumDescriptions": [
+            "Show Linear configuration section in the Setup panel",
+            "Show ClickUp configuration section in the Setup panel"
+          ]
+        },
         "switchboard.team.strictPrompts": {
           "type": "boolean",
           "default": false,
@@ -267,10 +303,44 @@
           "description": "(Dev only) Allow MCP server to run from mutable workspace copy instead of immutable extension bundle.",
           "scope": "application"
         },
+        "switchboard.ollama.intern.enabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable the Ollama-backed intern launch target for this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.mode": {
+          "type": "string",
+          "enum": [
+            "cloud",
+            "local"
+          ],
+          "default": "cloud",
+          "description": "Preferred Ollama runtime for the intern profile in this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.model": {
+          "type": "string",
+          "default": "gemma4:31b-cloud",
+          "description": "Saved Ollama model for the intern profile in this workspace.",
+          "scope": "resource"
+        },
+        "switchboard.ollama.intern.baseUrl": {
+          "type": "string",
+          "default": "https://ollama.com/api",
+          "description": "Resolved Ollama API base URL for the saved intern profile.",
+          "scope": "resource"
+        },
         "mcpServers": {
           "type": "object",
           "default": {},
           "description": "Configuration for Model Context Protocol (MCP) servers",
+          "scope": "resource"
+        },
+        "switchboard.research.localFolderPath": {
+          "type": "string",
+          "default": "",
+          "description": "Path to the local folder containing research files (.md, .txt, .markdown, .rst, .adoc). Used by the Research panel's Cowork/local source.",
           "scope": "resource"
         },
         "switchboard.kanban.completedLimit": {
@@ -285,6 +355,12 @@
           "type": "string",
           "default": "",
           "description": "Custom file path for the Kanban database (e.g., ~/Google Drive/Switchboard/kanban.db). If empty, uses the default .switchboard/kanban.db in the workspace root. Use this to store the DB in a cloud-synced folder for multi-machine handover.",
+          "scope": "resource"
+        },
+        "switchboard.kanban.controlPlaneRoot": {
+          "type": "string",
+          "default": "",
+          "description": "Explicit Control Plane folder override. Must point to a folder containing .switchboard/kanban.db. Leave empty to use auto-detect.",
           "scope": "resource"
         },
         "switchboard.workspace.ignoreStrategy": {
@@ -342,7 +418,12 @@
     "test:integration:notion": "node src/test/integrations/run-integration-tests.js notion",
     "test:integration:clickup": "node src/test/integrations/run-integration-tests.js clickup",
     "test:integration:linear": "node src/test/integrations/run-integration-tests.js linear",
-    "test:integration:all": "node src/test/integrations/run-integration-tests.js all",
+    "test:regression:plan-sync": "node src/test/plan-creation-integration-sync-regression.test.js",
+    "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
+    "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
+    "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
+    "test:regression:token-env": "node src/test/build-switchboard-mcp-env.test.js",
+    "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
   },
   "devDependencies": {
@@ -371,6 +452,7 @@
     "docx": "^9.6.0",
     "dompurify": "^3.3.1",
     "jsdom": "^28.0.0",
+    "mermaid": "^11.14.0",
     "proper-lockfile": "^4.1.2",
     "sql.js": "^1.14.1",
     "uuid": "^9.0.1",

@@ -25,6 +25,8 @@ export interface ClickUpConfig {
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
   automationRules: ClickUpAutomationRule[];
+  selectedListId: string;
+  selectedListName: string;
 }
 
 export interface KanbanPlanRecord {
@@ -46,6 +48,34 @@ export interface KanbanPlanRecord {
 export interface ClickUpListSummary {
   id: string;
   name: string;
+}
+
+export interface ClickUpList {
+  id: string;
+  name: string;
+  archived: boolean;
+  folder: { id: string; name: string } | null;
+  space: { id: string; name: string } | null;
+  taskCount: number | null;
+}
+
+export interface ClickUpTask {
+  id: string;
+  name: string;
+  description: string;
+  markdownDescription: string;
+  textContent: string;
+  url: string;
+  parentId: string | null;
+  archived: boolean;
+  status: { status: string; color: string; type: string; orderindex: string } | null;
+  priority: { id: string; priority: string; color: string; orderindex: string } | null;
+  list: { id: string; name: string } | null;
+  creator: { id: string; username: string; email: string } | null;
+  assignees: Array<{ id: string; username: string; email: string }>;
+  tags: Array<{ name: string; tagFg: string; tagBg: string }>;
+  dateCreated: string;
+  dateUpdated: string;
 }
 
 export interface ClickUpColumnMappingState {
@@ -93,7 +123,7 @@ export interface ClickUpSyncResult {
 
 // Canonical Switchboard kanban columns (mirrors KanbanDatabase.ts VALID_KANBAN_COLUMNS)
 export const CANONICAL_COLUMNS = [
-  'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODED',
+  'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'CONTEXT GATHERER', 'LEAD CODED',
   'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ];
 
@@ -109,6 +139,18 @@ export class ClickUpSyncService {
   private _setupInProgress: boolean = false;
   private _isSyncInProgress: boolean = false;
   private _consecutiveFailures: number = 0;
+
+  /**
+   * Sessions whose _createTask HTTP request is currently in flight.
+   * Used by importTasksFromClickUp to skip tasks that were just created by us
+   * but whose taskId has not yet been persisted to the plan record.
+   * Not persisted — extension restart is self-healing because the HTTP call dies too.
+   */
+  private _pendingCreateSessions: Set<string> = new Set();
+
+  public isCreating(sessionId: string): boolean {
+    return this._pendingCreateSessions.has(sessionId);
+  }
 
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
@@ -178,7 +220,9 @@ export class ClickUpSyncService {
       realTimeSyncEnabled: false,
       autoPullEnabled: false,
       pullIntervalMinutes: 60,
-      automationRules: []
+      automationRules: [],
+      selectedListId: '',
+      selectedListName: ''
     };
   }
 
@@ -209,7 +253,9 @@ export class ClickUpSyncService {
         : raw.realTimeSyncEnabled === true,
       autoPullEnabled: raw.autoPullEnabled === true,
       pullIntervalMinutes: normalizedInterval,
-      automationRules: normalizeClickUpAutomationRules(raw.automationRules)
+      automationRules: normalizeClickUpAutomationRules(raw.automationRules),
+      selectedListId: raw.selectedListId || '',
+      selectedListName: raw.selectedListName || ''
     };
   }
 
@@ -229,6 +275,24 @@ export class ClickUpSyncService {
     if (!workspaceId) {
       throw new Error('No ClickUp workspaces found.');
     }
+    return workspaceId;
+  }
+
+  /**
+   * Public wrapper for _loadWorkspaceId(). Returns cached workspaceId
+   * from config if available, otherwise fetches from the ClickUp API.
+   * Used by ClickUpDocsAdapter to auto-load workspace ID on first browse.
+   */
+  public async loadWorkspaceIdIfNeeded(): Promise<string> {
+    const config = await this.loadConfig();
+    if (config?.workspaceId) {
+      return config.workspaceId;
+    }
+    const workspaceId = await this._loadWorkspaceId();
+    // Persist the loaded workspace ID so future calls skip the API round-trip
+    const existingConfig = config || this._createEmptyConfig();
+    existingConfig.workspaceId = workspaceId;
+    await this.saveConfig(existingConfig);
     return workspaceId;
   }
 
@@ -411,8 +475,7 @@ export class ClickUpSyncService {
     if (!normalized) {
       throw new Error('ClickUp config normalization failed');
     }
-    const dir = path.dirname(this._configPath);
-    await fs.promises.mkdir(dir, { recursive: true });
+    await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
     await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
     this._config = normalized;
   }
@@ -576,6 +639,643 @@ export class ClickUpSyncService {
     });
   }
 
+  private _normalizeClickUpList(raw: any, defaults?: Partial<ClickUpList>): ClickUpList {
+    return {
+      id: String(raw?.id || defaults?.id || '').trim(),
+      name: String(raw?.name || defaults?.name || '').trim(),
+      archived: raw?.archived === true,
+      folder: (() => {
+        const id = String(raw?.folder?.id || defaults?.folder?.id || '').trim();
+        const name = String(raw?.folder?.name || defaults?.folder?.name || '').trim();
+        return id || name ? { id, name } : null;
+      })(),
+      space: (() => {
+        const id = String(raw?.space?.id || defaults?.space?.id || '').trim();
+        const name = String(raw?.space?.name || defaults?.space?.name || '').trim();
+        return id || name ? { id, name } : null;
+      })(),
+      taskCount: raw?.task_count === undefined || raw?.task_count === null
+        ? (defaults?.taskCount ?? null)
+        : Number(raw.task_count)
+    };
+  }
+
+  private _normalizeClickUpTask(raw: any): ClickUpTask {
+    return {
+      id: String(raw?.id || '').trim(),
+      name: String(raw?.name || '').trim(),
+      description: String(raw?.description || ''),
+      markdownDescription: String(raw?.markdown_description || raw?.description || ''),
+      textContent: String(raw?.text_content || ''),
+      url: String(raw?.url || '').trim(),
+      parentId: (() => {
+        const parentId = String(raw?.parent || '').trim();
+        return parentId || null;
+      })(),
+      archived: raw?.archived === true,
+      status: raw?.status
+        ? {
+          status: String(raw.status.status || '').trim(),
+          color: String(raw.status.color || '').trim(),
+          type: String(raw.status.type || '').trim(),
+          orderindex: String(raw.status.orderindex || '').trim()
+        }
+        : null,
+      priority: raw?.priority
+        ? {
+          id: String(raw.priority.id || '').trim(),
+          priority: String(raw.priority.priority || '').trim(),
+          color: String(raw.priority.color || '').trim(),
+          orderindex: String(raw.priority.orderindex || '').trim()
+        }
+        : null,
+      list: raw?.list
+        ? {
+          id: String(raw.list.id || '').trim(),
+          name: String(raw.list.name || '').trim()
+        }
+        : null,
+      creator: raw?.creator
+        ? {
+          id: String(raw.creator.id || '').trim(),
+          username: String(raw.creator.username || '').trim(),
+          email: String(raw.creator.email || '').trim()
+        }
+        : null,
+      assignees: Array.isArray(raw?.assignees)
+        ? raw.assignees.map((assignee: any) => ({
+          id: String(assignee?.id || '').trim(),
+          username: String(assignee?.username || '').trim(),
+          email: String(assignee?.email || '').trim()
+        }))
+        : [],
+      tags: Array.isArray(raw?.tags)
+        ? raw.tags.map((tag: any) => ({
+          name: String(tag?.name || '').trim(),
+          tagFg: String(tag?.tag_fg || '').trim(),
+          tagBg: String(tag?.tag_bg || '').trim()
+        }))
+        : [],
+      dateCreated: String(raw?.date_created || '').trim(),
+      dateUpdated: String(raw?.date_updated || '').trim()
+    };
+  }
+
+  private _dedupeLists(lists: ClickUpList[]): ClickUpList[] {
+    const byId = new Map<string, ClickUpList>();
+    for (const list of lists) {
+      if (!list.id) {
+        continue;
+      }
+      if (!byId.has(list.id)) {
+        byId.set(list.id, list);
+      }
+    }
+    return [...byId.values()];
+  }
+
+  private _dedupeTasks(tasks: ClickUpTask[]): ClickUpTask[] {
+    const byId = new Map<string, ClickUpTask>();
+    for (const task of tasks) {
+      if (!task.id) {
+        continue;
+      }
+      if (!byId.has(task.id)) {
+        byId.set(task.id, task);
+      }
+    }
+    return [...byId.values()];
+  }
+
+  private async _listTasksForQuery(listId: string): Promise<ClickUpTask[]> {
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedListId) {
+      throw new Error('ClickUp list queries require a list ID.');
+    }
+
+    const tasks: ClickUpTask[] = [];
+    let page = 0;
+    while (true) {
+      const result = await this.httpRequest(
+        'GET',
+        `/list/${normalizedListId}/task?page=${page}&subtasks=true&include_closed=true&include_markdown_description=true`
+      );
+      if (result.status !== 200) {
+        throw new Error(`Failed to fetch ClickUp tasks for list ${normalizedListId}: ${result.status}`);
+      }
+
+      const pageTasks = Array.isArray(result.data?.tasks)
+        ? result.data.tasks.map((task: any) => this._normalizeClickUpTask(task))
+        : [];
+      tasks.push(...pageTasks);
+      if (pageTasks.length < 100) {
+        break;
+      }
+      page++;
+      await this.delay(200);
+    }
+
+    return tasks;
+  }
+
+  public async findList(listName: string): Promise<ClickUpList[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedListName = String(listName || '').trim().toLowerCase();
+    if (!normalizedListName) {
+      throw new Error('ClickUp list search requires a list name.');
+    }
+
+    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
+    const spacesResult = await this.httpRequest('GET', `/team/${workspaceId}/space?archived=false`);
+    if (spacesResult.status !== 200) {
+      throw new Error('Failed to fetch ClickUp spaces.');
+    }
+
+    const spaces = Array.isArray(spacesResult.data?.spaces) ? spacesResult.data.spaces : [];
+    const foundLists: ClickUpList[] = [];
+
+    for (const space of spaces) {
+      const spaceId = String(space?.id || '').trim();
+      const spaceName = String(space?.name || '').trim();
+      if (!spaceId) {
+        continue;
+      }
+
+      const listsResult = await this.httpRequest('GET', `/space/${spaceId}/list?archived=false`);
+      if (listsResult.status !== 200) {
+        throw new Error(`Failed to fetch ClickUp lists for space ${spaceId}.`);
+      }
+      const spaceLists = Array.isArray(listsResult.data?.lists) ? listsResult.data.lists : [];
+      for (const list of spaceLists) {
+        const normalizedList = this._normalizeClickUpList(list, {
+          space: { id: spaceId, name: spaceName }
+        });
+        if (normalizedList.name.toLowerCase().includes(normalizedListName)) {
+          foundLists.push(normalizedList);
+        }
+      }
+
+      const foldersResult = await this.httpRequest('GET', `/space/${spaceId}/folder?archived=false`);
+      if (foldersResult.status !== 200) {
+        throw new Error(`Failed to fetch ClickUp folders for space ${spaceId}.`);
+      }
+      const folders = Array.isArray(foldersResult.data?.folders) ? foldersResult.data.folders : [];
+      for (const folder of folders) {
+        const folderId = String(folder?.id || '').trim();
+        const folderName = String(folder?.name || '').trim();
+        const folderLists = Array.isArray(folder?.lists)
+          ? folder.lists
+          : (() => undefined)();
+        let resolvedFolderLists = folderLists;
+        if (!resolvedFolderLists && folderId) {
+          const folderListsResult = await this.httpRequest('GET', `/folder/${folderId}/list?archived=false`);
+          if (folderListsResult.status !== 200) {
+            throw new Error(`Failed to fetch ClickUp lists for folder ${folderId}.`);
+          }
+          resolvedFolderLists = Array.isArray(folderListsResult.data?.lists) ? folderListsResult.data.lists : [];
+        }
+
+        for (const list of resolvedFolderLists || []) {
+          const normalizedList = this._normalizeClickUpList(list, {
+            folder: folderId || folderName ? { id: folderId, name: folderName } : null,
+            space: { id: spaceId, name: spaceName }
+          });
+          if (normalizedList.name.toLowerCase().includes(normalizedListName)) {
+            foundLists.push(normalizedList);
+          }
+        }
+      }
+    }
+
+    return this._dedupeLists(foundLists);
+  }
+
+  public async findTask(listId: string, taskName: string): Promise<ClickUpTask[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskName = String(taskName || '').trim().toLowerCase();
+    if (!normalizedTaskName) {
+      throw new Error('ClickUp task search requires a task name.');
+    }
+
+    const tasks = await this._listTasksForQuery(listId);
+    return tasks.filter((task) => task.name.toLowerCase().includes(normalizedTaskName));
+  }
+
+  public async searchTasks(query: string, listId?: string): Promise<ClickUpTask[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedQuery = String(query || '').trim();
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedQuery && normalizedListId) {
+      return this._listTasksForQuery(normalizedListId);
+    }
+
+    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
+    const tasks: ClickUpTask[] = [];
+    let page = 0;
+    while (true) {
+      let apiPath = `/team/${workspaceId}/task?subtasks=true&include_closed=true&include_markdown_description=true&page=${page}`;
+      if (normalizedQuery) {
+        apiPath += `&search=${encodeURIComponent(normalizedQuery)}`;
+      }
+      if (normalizedListId) {
+        apiPath += `&list_ids[]=${encodeURIComponent(normalizedListId)}`;
+      }
+
+      const result = await this.httpRequest('GET', apiPath);
+      if (result.status !== 200) {
+        throw new Error(`Failed to search ClickUp tasks: ${result.status}`);
+      }
+
+      const pageTasks = Array.isArray(result.data?.tasks)
+        ? result.data.tasks.map((task: any) => this._normalizeClickUpTask(task))
+        : [];
+      tasks.push(...pageTasks);
+      if (pageTasks.length < 100) {
+        break;
+      }
+      page++;
+      await this.delay(200);
+    }
+
+    return this._dedupeTasks(tasks);
+  }
+
+  public async getSubtasks(parentId: string): Promise<ClickUpTask[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedParentId = String(parentId || '').trim();
+    if (!normalizedParentId) {
+      throw new Error('ClickUp subtask lookup requires a parent task ID.');
+    }
+
+    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
+    const result = await this.httpRequest(
+      'GET',
+      `/team/${workspaceId}/task?parent=${encodeURIComponent(normalizedParentId)}&subtasks=true&include_markdown_description=true`
+    );
+    if (result.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp subtasks for ${normalizedParentId}: ${result.status}`);
+    }
+
+    const tasks = Array.isArray(result.data?.tasks)
+      ? result.data.tasks.map((task: any) => this._normalizeClickUpTask(task))
+      : [];
+    return this._dedupeTasks(tasks);
+  }
+
+  // ── Sidebar Project Methods ─────────────────────────────────────
+
+  public async getSpaces(): Promise<Array<{ id: string; name: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
+    const result = await this.httpRequest('GET', `/team/${workspaceId}/space?archived=false`);
+    if (result.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp spaces: ${result.status}`);
+    }
+
+    return (result.data?.spaces || [])
+      .map((space: any) => ({
+        id: String(space?.id || '').trim(),
+        name: String(space?.name || '').trim()
+      }))
+      .filter((space: { id: string; name: string }) => space.id.length > 0 && space.name.length > 0);
+  }
+
+  public async getFolders(spaceId: string): Promise<Array<{ id: string; name: string }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedSpaceId = String(spaceId || '').trim();
+    if (!normalizedSpaceId) {
+      throw new Error('ClickUp folder lookup requires a space ID.');
+    }
+
+    const result = await this.httpRequest('GET', `/space/${normalizedSpaceId}/folder?archived=false`);
+    if (result.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp folders for space ${normalizedSpaceId}: ${result.status}`);
+    }
+
+    return (result.data?.folders || [])
+      .map((folder: any) => ({
+        id: String(folder?.id || '').trim(),
+        name: String(folder?.name || '').trim()
+      }))
+      .filter((folder: { id: string; name: string }) => folder.id.length > 0 && folder.name.length > 0);
+  }
+
+  public async getLists(spaceId: string, folderId?: string): Promise<Array<{
+    id: string;
+    name: string;
+    taskCount?: number;
+  }>> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedSpaceId = String(spaceId || '').trim();
+    if (!normalizedSpaceId) {
+      throw new Error('ClickUp list lookup requires a space ID.');
+    }
+
+    let result;
+    if (folderId) {
+      const normalizedFolderId = String(folderId || '').trim();
+      result = await this.httpRequest('GET', `/folder/${normalizedFolderId}/list?archived=false`);
+    } else {
+      result = await this.httpRequest('GET', `/space/${normalizedSpaceId}/list?archived=false`);
+    }
+
+    if (result.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp lists: ${result.status}`);
+    }
+
+    return (result.data?.lists || [])
+      .map((list: any) => ({
+        id: String(list?.id || '').trim(),
+        name: String(list?.name || '').trim(),
+        taskCount: list?.task_count !== undefined ? Number(list.task_count) : undefined
+      }))
+      .filter((list: { id: string; name: string }) => list.id.length > 0 && list.name.length > 0);
+  }
+
+  public async getListTasks(
+    listId: string,
+    options: {
+      status?: string[];
+      assignee?: string;
+      archived?: boolean;
+      includeClosed?: boolean;
+    } = {}
+  ): Promise<ClickUpTask[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedListId) {
+      throw new Error('ClickUp task lookup requires a list ID.');
+    }
+
+    const includeClosed = options.includeClosed !== false;
+    const tasks: ClickUpTask[] = [];
+    let page = 0;
+
+    while (true) {
+      const result = await this.httpRequest(
+        'GET',
+        `/list/${normalizedListId}/task?page=${page}&subtasks=true&include_closed=${includeClosed}&include_markdown_description=true`
+      );
+      if (result.status !== 200) {
+        throw new Error(`Failed to fetch ClickUp tasks for list ${normalizedListId}: ${result.status}`);
+      }
+
+      const pageTasks = Array.isArray(result.data?.tasks)
+        ? result.data.tasks.map((task: any) => this._normalizeClickUpTask(task))
+        : [];
+      tasks.push(...pageTasks);
+
+      if (pageTasks.length < 100) {
+        break;
+      }
+      page++;
+      await this.delay(200);
+    }
+
+    return this._dedupeTasks(tasks);
+  }
+
+  public async getTaskDetails(taskId: string): Promise<{
+    task: ClickUpTask;
+    subtasks: ClickUpTask[];
+    comments: Array<{ id: string; comment_text: string; user: { username: string; email: string }; date: string }>;
+    attachments: Array<{ id: string; url: string; title: string; filename: string }>;
+  }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      throw new Error('ClickUp task detail lookup requires a task ID.');
+    }
+
+    const taskResult = await this.httpRequest(
+      'GET',
+      `/task/${normalizedTaskId}?subtasks=true&include_markdown_description=true`
+    );
+    if (taskResult.status !== 200) {
+      throw new Error(`Failed to fetch ClickUp task ${normalizedTaskId}: ${taskResult.status}`);
+    }
+
+    const task = this._normalizeClickUpTask(taskResult.data);
+
+    // Extract subtasks from the task response (returned when subtasks=true param is used)
+    const subtasks = Array.isArray(taskResult.data?.subtasks)
+      ? taskResult.data.subtasks.map((subtask: any) => this._normalizeClickUpTask(subtask))
+      : [];
+
+    // Extract attachments from the task response
+    const attachments = Array.isArray(taskResult.data?.attachments)
+      ? taskResult.data.attachments.map((att: any) => ({
+          id: String(att?.id || '').trim(),
+          url: String(att?.url || att?.thumbnail_url || '').trim(),
+          title: String(att?.title || '').trim(),
+          filename: String(att?.filename || '').trim()
+        }))
+      : [];
+
+    const commentsResult = await this.httpRequest('GET', `/task/${normalizedTaskId}/comment`);
+    const comments = Array.isArray(commentsResult.data?.comments)
+      ? commentsResult.data.comments.map((comment: any) => ({
+          id: String(comment?.id || '').trim(),
+          comment_text: String(comment?.comment_text || comment?.text_content || '').trim(),
+          user: {
+            username: String(comment?.user?.username || '').trim(),
+            email: String(comment?.user?.email || '').trim()
+          },
+          date: String(comment?.date || '').trim()
+        }))
+      : [];
+
+    return {
+      task,
+      subtasks,
+      comments,
+      attachments
+    };
+  }
+
+  public async createTask(
+    listId: string,
+    name: string,
+    options?: {
+      description?: string;
+      status?: string;
+      parentId?: string;
+      priority?: number;
+    }
+  ): Promise<ClickUpTask | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedListId = String(listId || '').trim();
+    if (!normalizedListId) {
+      throw new Error('ClickUp task creation requires a list ID.');
+    }
+
+    const normalizedName = String(name || '').trim();
+    if (!normalizedName) {
+      throw new Error('ClickUp task creation requires a task name.');
+    }
+
+    const body: Record<string, unknown> = { name: normalizedName };
+    const description = String(options?.description || '').trim();
+    const status = String(options?.status || '').trim();
+    const parentId = String(options?.parentId || '').trim();
+    if (description) {
+      body.description = description;
+    }
+    if (status) {
+      body.status = status;
+    }
+    if (parentId) {
+      body.parent = parentId;
+    }
+    if (typeof options?.priority === 'number' && Number.isFinite(options.priority)) {
+      body.priority = options.priority;
+    }
+
+    const createResult = await this.retry(() =>
+      this.httpRequest('POST', `/list/${normalizedListId}/task`, body)
+    );
+    if (createResult.status !== 200 && createResult.status !== 201) {
+      throw new Error(`Failed to create ClickUp task in list ${normalizedListId}.`);
+    }
+
+    const taskId = String(createResult.data?.id || '').trim();
+    if (!taskId) {
+      return createResult.data ? this._normalizeClickUpTask(createResult.data) : null;
+    }
+
+    try {
+      const taskResult = await this.retry(() =>
+        this.httpRequest('GET', `/task/${taskId}`)
+      );
+      if (taskResult.status === 200) {
+        return this._normalizeClickUpTask(taskResult.data);
+      }
+      console.warn(
+        `[ClickUpSync] Created task ${taskId}, but follow-up read returned HTTP ${taskResult.status}; returning POST payload.`
+      );
+    } catch (error) {
+      console.warn(`[ClickUpSync] Created task ${taskId}, but follow-up read failed; returning POST payload.`, error);
+    }
+    return this._normalizeClickUpTask({
+      id: taskId,
+      name: normalizedName,
+      description,
+      parent: parentId,
+      list: { id: normalizedListId, name: '' },
+      ...createResult.data
+    });
+  }
+
+  public async updateTask(
+    taskId: string,
+    options: {
+      name?: string;
+      description?: string;
+      status?: string;
+    }
+  ): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      throw new Error('ClickUp task updates require a task ID.');
+    }
+
+    const body: Record<string, unknown> = {};
+    const name = String(options?.name || '').trim();
+    const description = String(options?.description || '').trim();
+    const status = String(options?.status || '').trim();
+    if (name) {
+      body.name = name;
+    }
+    if (description) {
+      body.description = description;
+    }
+    if (status) {
+      body.status = status;
+    }
+    if (Object.keys(body).length === 0) {
+      throw new Error('ClickUp task updates require at least one changed field.');
+    }
+
+    const updateResult = await this.retry(() =>
+      this.httpRequest('PUT', `/task/${normalizedTaskId}`, body)
+    );
+    if (updateResult.status !== 200) {
+      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}.`);
+    }
+  }
+
+  public async addTaskComment(taskId: string, comment: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      throw new Error('ClickUp comments require a task ID.');
+    }
+
+    const normalizedComment = String(comment || '').trim();
+    if (!normalizedComment) {
+      throw new Error('ClickUp comments require non-empty text.');
+    }
+
+    const commentResult = await this.retry(() =>
+      this.httpRequest('POST', `/task/${normalizedTaskId}/comment`, {
+        comment_text: normalizedComment,
+        notify_all: false
+      })
+    );
+    if (commentResult.status !== 200) {
+      throw new Error(`Failed to comment on ClickUp task ${normalizedTaskId}.`);
+    }
+  }
+
   async listTasksFromClickUp(listId: string): Promise<any[]> {
     const tasks: any[] = [];
     let page = 0;
@@ -711,12 +1411,25 @@ export class ClickUpSyncService {
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
     apiPath: string,
     body?: Record<string, unknown>,
-    timeoutMs: number = 10000
+    timeoutMs: number = 10000,
+    signal?: AbortSignal
   ): Promise<{ status: number; data: any }> {
     const token = await this.getApiToken();
     if (!token) { throw new Error('ClickUp API token not configured'); }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (value: { status: number; data: any }) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const safeReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       const payload = body ? JSON.stringify(body) : undefined;
       const req = https.request({
         hostname: 'api.clickup.com',
@@ -730,17 +1443,107 @@ export class ClickUpSyncService {
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
+        res.on('error', (err) => safeReject(new Error(`ClickUp response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error('ClickUp response aborted by server')));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           try {
-            resolve({ status: res.statusCode || 0, data: JSON.parse(raw) });
+            safeResolve({ status: res.statusCode || 0, data: JSON.parse(raw) });
           } catch {
-            resolve({ status: res.statusCode || 0, data: raw });
+            safeResolve({ status: res.statusCode || 0, data: raw });
           }
         });
       });
-      req.on('timeout', () => { req.destroy(); reject(new Error('Request timed out')); });
-      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); safeReject(new Error('Request timed out')); });
+      req.on('error', (err) => safeReject(err));
+
+      // Wire up AbortController cancellation
+      if (signal) {
+        if (signal.aborted) {
+          req.destroy(new Error('AbortError'));
+          return safeReject(new Error('AbortError'));
+        }
+        const abortHandler = () => {
+          req.destroy(new Error('AbortError'));
+          safeReject(new Error('AbortError'));
+        };
+        signal.addEventListener('abort', abortHandler);
+        req.on('close', () => signal.removeEventListener('abort', abortHandler));
+      }
+
+      if (payload) { req.write(payload); }
+      req.end();
+    });
+  }
+
+  /**
+   * Authenticated HTTPS request to ClickUp REST API v3.
+   * Used for document operations (docs, pages, etc.).
+   * Never logs the Authorization header.
+   */
+  async httpRequestV3(
+    method: 'GET' | 'POST' | 'PUT' | 'DELETE',
+    apiPath: string,
+    body?: Record<string, unknown>,
+    timeoutMs: number = 10000,
+    signal?: AbortSignal
+  ): Promise<{ status: number; data: any }> {
+    const token = await this.getApiToken();
+    if (!token) { throw new Error('ClickUp API token not configured'); }
+
+    return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (value: { status: number; data: any }) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const safeReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
+      const payload = body ? JSON.stringify(body) : undefined;
+      const req = https.request({
+        hostname: 'api.clickup.com',
+        path: `/api/v3${apiPath}`,
+        method,
+        headers: {
+          'Authorization': token,
+          'Content-Type': 'application/json',
+          ...(payload ? { 'Content-Length': Buffer.byteLength(payload) } : {})
+        },
+        timeout: timeoutMs
+      }, (res) => {
+        let raw = '';
+        res.on('error', (err) => safeReject(new Error(`ClickUp v3 response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error('ClickUp v3 response aborted by server')));
+        res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
+        res.on('end', () => {
+          try {
+            safeResolve({ status: res.statusCode || 0, data: JSON.parse(raw) });
+          } catch {
+            safeResolve({ status: res.statusCode || 0, data: raw });
+          }
+        });
+      });
+      req.on('timeout', () => { req.destroy(); safeReject(new Error('Request timed out')); });
+      req.on('error', (err) => safeReject(err));
+
+      if (signal) {
+        if (signal.aborted) {
+          req.destroy(new Error('AbortError'));
+          return safeReject(new Error('AbortError'));
+        }
+        const abortHandler = () => {
+          req.destroy(new Error('AbortError'));
+          safeReject(new Error('AbortError'));
+        };
+        signal.addEventListener('abort', abortHandler);
+        req.on('close', () => signal.removeEventListener('abort', abortHandler));
+      }
+
       if (payload) { req.write(payload); }
       req.end();
     });
@@ -830,9 +1633,6 @@ export class ClickUpSyncService {
       const requestedColumns = this._normalizeColumns(options.columns, config);
       const wantsProvisioning = options.createFolder || options.createLists || options.createCustomFields || options.enableRealtimeSync;
       const hasExistingSetup = !!config.folderId || this._hasMappedLists(config) || Object.values(config.customFields).some(Boolean) || config.setupComplete;
-      if (!hasExistingSetup && !wantsProvisioning && !options.enableAutoPull) {
-        return { success: false, error: 'Select at least one ClickUp option to apply.' };
-      }
 
       if (!config.workspaceId) {
         config.workspaceId = await this._loadWorkspaceId();
@@ -976,7 +1776,7 @@ export class ClickUpSyncService {
    * Used by ContinuousSyncService for live updates.
    * Does NOT change task status, list, or custom fields.
    */
-  async syncPlanContent(taskId: string, markdownContent: string): Promise<{ success: boolean; error?: string }> {
+  async syncPlanContent(taskId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string }> {
     try {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
@@ -987,7 +1787,7 @@ export class ClickUpSyncService {
       // ClickUp API accepts markdown directly in description field
       const response = await this.httpRequest('PUT', `/task/${taskId}`, {
         description: markdownContent
-      });
+      }, 10000, signal);
 
       if (response.status === 200) {
         return { success: true };
@@ -1060,10 +1860,17 @@ export class ClickUpSyncService {
       ]
     };
 
-    const result = await this.retry(() =>
-      this.httpRequest('POST', `/list/${listId}/task`, body)
-    );
-    return result.status === 200 ? result.data.id : null;
+    this._pendingCreateSessions.add(plan.sessionId);
+    try {
+      const result = await this.retry(() =>
+        this.httpRequest('POST', `/list/${listId}/task`, body)
+      );
+      return result.status === 200 ? result.data.id : null;
+    } finally {
+      // Always clear, even on throw. The autopull reads this set and must see
+      // a consistent view once the HTTP path has resolved one way or the other.
+      this._pendingCreateSessions.delete(plan.sessionId);
+    }
   }
 
   /**
@@ -1183,6 +1990,32 @@ export class ClickUpSyncService {
 
       await fs.promises.mkdir(plansDir, { recursive: true });
 
+      // Dedup: skip tasks that correspond to a local session with an
+      // in-flight _createTask HTTP call. ClickUp has no local sync map, so we
+      // use the in-memory _pendingCreateSessions set.
+      //
+      // IMPORTANT: the dynamic import path must NOT carry a `.js` suffix.
+      // Webpack (module: Node16) cannot resolve `./KanbanDatabase.js` against
+      // the TS source tree and emits "Module not found"; at runtime the
+      // import rejects, which would take down the entire auto-pull path if
+      // left unguarded. We also wrap the preamble in try/catch so a DB
+      // bootstrap hiccup degrades to "skip dedup" rather than aborting the
+      // import.
+      let db: import('./KanbanDatabase').KanbanDatabase | null = null;
+      let dbReady = false;
+      let workspaceId = '';
+      try {
+        const kdbModule = await import('./KanbanDatabase');
+        const resolved = kdbModule.KanbanDatabase.forWorkspace(this._workspaceRoot);
+        const ready = await resolved.ensureReady();
+        db = resolved;
+        dbReady = ready;
+        workspaceId = ready ? (await resolved.getWorkspaceId()) || '' : '';
+      } catch (dedupInitErr) {
+        console.warn('[ClickUpSync] Dedup preamble failed; continuing without dedup:', dedupInitErr);
+      }
+      const planIdCustomFieldId = config.customFields.planId;
+
       // Build lookup maps from the flat task list
       const taskNameById = new Map<string, string>(tasks.map((t: any) => [t.id, t.name]));
       const subtasksByParentId = new Map<string, any[]>();
@@ -1198,7 +2031,46 @@ export class ClickUpSyncService {
       let skipped = 0;
 
       for (const task of tasks) {
-        // Skip tasks already owned by Switchboard
+        // Extract planId from custom field or switchboard:<planId> tag.
+        let taskPlanId: string | null = null;
+        if (planIdCustomFieldId) {
+          const cf = (task.custom_fields || []).find((f: any) => f?.id === planIdCustomFieldId);
+          const cfVal = cf && (cf.value ?? null);
+          if (typeof cfVal === 'string' && cfVal.length > 0) { taskPlanId = cfVal; }
+        }
+        if (!taskPlanId) {
+          const swTag = (task.tags || []).find((t: any) => typeof t?.name === 'string' && t.name.toLowerCase().startsWith('switchboard:'));
+          if (swTag) { taskPlanId = String(swTag.name).slice('switchboard:'.length) || null; }
+        }
+
+        // If this task was just created by us and the taskId hasn't landed in
+        // the plan record yet, the _pendingCreateSessions set will contain its
+        // sessionId. Skip.
+        //
+        // Only run the lookup when db resolved successfully. `getPlanByPlanId`
+        // is a real public method on KanbanDatabase; prefer it directly over a
+        // non-existent planFile path guess.
+        if (taskPlanId && dbReady && db) {
+          try {
+            const localPlan = await db.getPlanByPlanId(taskPlanId);
+            if (localPlan && this._pendingCreateSessions.has(localPlan.sessionId)) {
+              skipped++;
+              continue;
+            }
+          } catch { /* fall through — dedup is best-effort */ }
+        }
+
+        // Title-fallback for the narrow window where planId custom field hasn't
+        // been set yet (ClickUp eventually-consistent custom field propagation).
+        if (!taskPlanId && this._pendingCreateSessions.size > 0 && dbReady && db && workspaceId) {
+          const localPlan = await db.getPlanByTopic(task.name || '', workspaceId);
+          if (localPlan && this._pendingCreateSessions.has(localPlan.sessionId)) {
+            skipped++;
+            continue;
+          }
+        }
+
+        // Skip tasks already owned by Switchboard (existing behavior)
         const hasSwitchboardTag = (task.tags || []).some((t: any) => t.name?.toLowerCase().startsWith('switchboard:'));
         if (hasSwitchboardTag) { skipped++; continue; }
 
@@ -1272,8 +2144,8 @@ export class ClickUpSyncService {
           ...(customFieldLines.length > 0 ? ['', '**Custom Fields:**', ...customFieldLines] : []),
         ].filter(s => s !== '').join('\n');
 
-        // Embed kanban column for PlanFileImporter (must match extractKanbanState() bold-markdown format)
-        const switchboardState = `## Switchboard State\n\n**Kanban Column:** ${kanbanColumn}\n**Status:** active\n`;
+        // Embedded kanban column for PlanFileImporter is NO LONGER REQUIRED.
+        // We rely on the database default (CREATED) during discovery.
 
         const stub = [
           `# ${task.name || `ClickUp Task ${task.id}`}`,
@@ -1289,8 +2161,7 @@ export class ClickUpSyncService {
           'TODO',
           '',
           notesLines,
-          '',
-          switchboardState,
+          '' // Removed switchboardState inclusion here
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

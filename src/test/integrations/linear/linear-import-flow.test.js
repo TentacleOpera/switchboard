@@ -1,6 +1,7 @@
 'use strict';
 
 const assert = require('assert');
+const fs = require('fs');
 const path = require('path');
 const {
     withWorkspace,
@@ -110,15 +111,23 @@ async function run() {
                 && String(req.jsonBody?.query || '').includes('issues(')
             );
             assert.ok(issuesRequest, 'Expected Linear import flow to query issues.');
+            assert.match(
+                String(issuesRequest.jsonBody?.query || ''),
+                /query\(\$filter: IssueFilter!, \$after: String\)/,
+                'Expected team-wide Linear import flow to use a single IssueFilter GraphQL variable.'
+            );
             assert.doesNotMatch(
                 String(issuesRequest.jsonBody?.query || ''),
-                /\$projectId/,
-                'Expected team-wide Linear import flow not to declare an unused $projectId variable.'
+                /\$teamId|\$projectId/,
+                'Expected team-wide Linear import flow not to declare separate teamId/projectId variables.'
             );
+            assert.deepStrictEqual(issuesRequest.jsonBody?.variables?.filter, {
+                team: { id: { eq: 'team-1' } }
+            });
             assert.strictEqual(
-                Object.prototype.hasOwnProperty.call(issuesRequest.jsonBody?.variables || {}, 'projectId'),
+                Object.prototype.hasOwnProperty.call(issuesRequest.jsonBody?.variables?.filter || {}, 'project'),
                 false,
-                'Expected team-wide Linear import flow not to send a projectId variable.'
+                'Expected team-wide Linear import flow not to send a project filter.'
             );
 
             const parentContent = readText(path.join(plansDir, 'linear_import_issue-parent.md'));
@@ -138,6 +147,105 @@ async function run() {
             http.restore();
         }
     });
+
+    await withWorkspace('linear-import-project-scoped', async ({ workspaceRoot }) => {
+        const { service } = createContext(workspaceRoot, {
+            'switchboard.linear.apiToken': 'lin_api_import_project'
+        });
+        await service.saveConfig({
+            teamId: 'team-1',
+            teamName: 'Engineering',
+            projectId: 'project-1',
+            columnToStateId: {
+                CREATED: 'state-created',
+                BACKLOG: 'state-backlog',
+                'PLAN REVIEWED': '',
+                'LEAD CODED': '',
+                'CODER CODED': '',
+                'CODE REVIEWED': '',
+                CODED: '',
+                COMPLETED: ''
+            },
+            switchboardLabelId: 'label-switchboard',
+            setupComplete: true,
+            lastSync: null,
+            autoPullEnabled: false,
+            pullIntervalMinutes: 60
+        });
+
+        const scopedIssue = {
+            ...loadFixtureJson('linear', 'issue-sample.json'),
+            children: { nodes: [] },
+            comments: { nodes: [] },
+            attachments: { nodes: [] }
+        };
+
+        const http = installHttpsMock();
+        try {
+            service.delay = async () => {};
+            http.queueJson(200, {
+                data: {
+                    issues: {
+                        nodes: [scopedIssue],
+                        pageInfo: { hasNextPage: false, endCursor: null }
+                    }
+                }
+            });
+
+            const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+            const result = await service.importIssuesFromLinear(plansDir);
+            assert.strictEqual(result.success, true);
+            assert.strictEqual(result.imported, 1);
+
+            const issuesRequest = http.requests.find((req) =>
+                req.method === 'POST'
+                && req.path === '/graphql'
+                && String(req.jsonBody?.query || '').includes('issues(')
+            );
+            assert.ok(issuesRequest, 'Expected project-scoped Linear import flow to query issues.');
+            assert.match(
+                String(issuesRequest.jsonBody?.query || ''),
+                /query\(\$filter: IssueFilter!, \$after: String\)/,
+                'Expected project-scoped Linear import flow to use a single IssueFilter GraphQL variable.'
+            );
+            assert.doesNotMatch(
+                String(issuesRequest.jsonBody?.query || ''),
+                /\$teamId|\$projectId/,
+                'Expected project-scoped Linear import flow not to declare separate teamId/projectId variables.'
+            );
+            assert.deepStrictEqual(issuesRequest.jsonBody?.variables?.filter, {
+                team: { id: { eq: 'team-1' } },
+                project: { id: { eq: 'project-1' } }
+            });
+        } finally {
+            http.restore();
+        }
+    });
+
+    const providerSource = fs.readFileSync(
+        path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'),
+        'utf8'
+    );
+    assert.match(
+        providerSource,
+        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;\s*\} = \{\}\s*\)/s,
+        'Expected _createInitiatedPlan() to support suppressIntegrationSync for imported Linear tasks.'
+    );
+    assert.match(
+        providerSource,
+        /await this\._createInitiatedPlan\(\s*node\.issue\.title \|\| this\._describeLinearIssue\(node\.issue\),[\s\S]*suppressIntegrationSync: true[\s\S]*await linearService\.setIssueIdForPlan\(sessionId, node\.issue\.id\);[\s\S]*await db\.updateLinearIssueId\(sessionId, node\.issue\.id\);/s,
+        'Expected imported Linear plans to link both the sync map and DB before follow-up sync runs.'
+    );
+    assert.match(
+        providerSource,
+        /if \(parentSessionId\) \{[\s\S]*await db\.updateDependencies\(sessionId, parentSessionId\);[\s\S]*\}/s,
+        'Expected imported Linear subtasks to link back to their parent session through existing dependency metadata.'
+    );
+    assert.match(
+        providerSource,
+        /for \(const sessionId of importedSessionIds\) \{[\s\S]*queueIntegrationSyncForSession\(effectiveRoot, sessionId, 'CREATED'\);[\s\S]*\}/s,
+        'Expected Linear imports to defer outbound sync until every imported session is linked locally.'
+    );
 
     console.log('linear import flow test passed');
 }

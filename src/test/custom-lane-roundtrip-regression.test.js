@@ -63,6 +63,10 @@ async function run() {
             'utf8'
         );
 
+        // File-based state writes are DISABLED — writePlanStateToFile is a no-op.
+        // Use applyKanbanStateToPlanContent to embed state directly into the file content
+        // so that the importer (which also has file-state disabled) will still default
+        // to CREATED. We verify the no-op behavior instead.
         const configuredPlanPath = path.join(plansDir, 'custom-lane-roundtrip.md');
         await fs.promises.writeFile(
             configuredPlanPath,
@@ -71,10 +75,11 @@ async function run() {
         );
         await writePlanStateToFile(configuredPlanPath, workspaceRoot, 'custom_column_docs_ready', 'active');
 
+        // writePlanStateToFile is now a no-op — file content should be UNCHANGED
         const configuredContent = await fs.promises.readFile(configuredPlanPath, 'utf8');
         assert.ok(
-            configuredContent.includes('**Kanban Column:** custom_column_docs_ready'),
-            'Expected footer writer to persist the exact custom column id.'
+            !configuredContent.includes('**Kanban Column:** custom_column_docs_ready'),
+            'Expected writePlanStateToFile no-op to NOT modify the file (file-based state disabled).'
         );
 
         const missingPlanPath = path.join(plansDir, 'missing-custom-lane.md');
@@ -93,7 +98,7 @@ async function run() {
         );
 
         const imported = await importPlanFiles(workspaceRoot);
-        assert.strictEqual(imported, 2, 'Expected importPlanFiles to ingest both custom-lane fixtures.');
+        assert.strictEqual(imported.count, 2, 'Expected importPlanFiles to ingest both custom-lane fixtures.');
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const ready = await db.ensureReady();
@@ -101,10 +106,11 @@ async function run() {
 
         const configuredPlan = await db.getPlanBySessionId('custom-lane-roundtrip');
         assert.ok(configuredPlan, 'Expected configured custom-lane fixture to be imported.');
+        // File-based state is DISABLED — importer defaults to CREATED since inspectKanbanState returns null.
         assert.strictEqual(
             configuredPlan?.kanbanColumn,
-            'custom_column_docs_ready',
-            'Expected configured custom column ids to survive reset/import round-tripping.'
+            'CREATED',
+            'Expected importer to default to CREATED since file-based state inspection is disabled.'
         );
 
         const missingPlan = await db.getPlanBySessionId('missing-custom-lane');

@@ -42,6 +42,13 @@ Produce a complete, copy-paste-ready implementation spec. You must maximize your
 ## Goal
 [1-2 sentences summarizing the objective]
 
+## Metadata
+**Tags:** [comma-separated list chosen ONLY from: frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics]
+**Complexity:** [integer 1-10]
+**Repo:** [bare sub-repo folder name matching a workspace root, e.g. 'be'. Omit if not applicable.]
+
+*(Scoring guide: 1-2: Very Low — trivial config/copy changes. 3-4: Low — routine single-file changes. 5-6: Medium — multi-file changes, moderate logic. 7-8: High — new patterns, complex state, security-sensitive. 9-10: Very High — architectural changes, new framework integrations)*
+
 ## User Review Required
 > [!NOTE]
 > [Any user-facing warnings, breaking changes, or manual steps required]
@@ -56,7 +63,17 @@ Produce a complete, copy-paste-ready implementation spec. You must maximize your
 - **Race Conditions:** [Analysis]
 - **Security:** [Analysis]
 - **Side Effects:** [Analysis]
-- **Dependencies & Conflicts:** [Identify if this plan relies on or conflicts with other pending Kanban plans]
+- **Dependencies & Conflicts:** [Human-readable prose: explain WHY each dependency or conflict matters. Reference plans by their session IDs (sess_XXXXXXXXXXXXX) so the machine parser can link them. Use the `get_kanban_state` MCP tool to retrieve active session IDs.]
+
+## Dependencies
+> [!IMPORTANT]
+> **Machine-readable.** One dependency per line. Format: `sess_XXXXXXXXXXXXX — <topic>`. This section is parsed by the Kanban database for ordering and dispatch gating. If this plan has no cross-plan dependencies, write a single line: `None`.
+
+Example:
+```
+sess_1776554943477 — Refactor Research Modal Sync State and Implicit Imports
+sess_1776555843399 — Notion Page Hierarchy Filtering for Research Modal
+```
 
 ## Adversarial Synthesis
 ### Grumpy Critique
@@ -78,6 +95,33 @@ Produce a complete, copy-paste-ready implementation spec. You must maximize your
 
 ### [Target File or Component 2]
 ...
+
+---
+
+### Formatting Multiple Plans (Clipboard Import / NotebookLM)
+When generating multiple plans in a single response, you MUST use plan markers to delimit each plan so they can be automatically split and imported into the Kanban board.
+
+- Before each plan, add an exact marker line: `### PLAN N START` (H3, where N is the plan number). The importer matches the regex `^###\s*PLAN\s*\d+\s*START\s*$`, so the three hashes, the word `PLAN`, the integer, and `START` must all be present on their own line.
+- The plan's H1 title (`# Title`) must immediately follow the marker. The importer extracts the title with `^#\s+(.+)$` (first H1 match, multiline).
+- Do not indent the marker or title, and do not wrap them in a code fence inside the actual response — fences here are used only so this documentation renders the literal syntax.
+
+**Example (literal syntax — do not copy the surrounding fence):**
+
+~~~markdown
+### PLAN 1 START
+# First Plan Title
+[Full plan content following the template above]
+
+### PLAN 2 START
+# Second Plan Title
+[Full plan content following the template above]
+~~~
+
+When Switchboard imports this content, it slugifies each H1 title (lowercase, non-alphanumeric runs collapsed to `_`) and writes one file per plan into `.switchboard/plans/` using the pattern `feature_plan_<YYYYMMDD_HHMMSS>_<slug>.md`. For the example above the outputs look like:
+- `feature_plan_20260417_101500_first_plan_title.md`
+- `feature_plan_20260417_101501_second_plan_title.md`
+
+(Timestamps reflect the moment of import, so exact values will differ.)
 
 ## Verification Plan
 ### Automated Tests

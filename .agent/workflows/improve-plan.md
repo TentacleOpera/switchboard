@@ -22,6 +22,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
      - **Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns** — these are already implemented (or in final review) and irrelevant for dependency/conflict analysis.
      - Document any cross-plan conflicts with the active plan set only.
      - **If the database query fails:** Do not fall back to unfiltered file scanning. Instead, note the uncertainty in the `## Edge-Case & Dependency Audit` section under `Dependencies & Conflicts`.
+   - **After identifying dependencies**, emit them in the plan's `## Dependencies` section as one `sess_XXXXXXXXXXXXX — <topic>` line per dependency. If none, write `None`. This section is parsed by the Kanban database; the bullet inside `## Edge-Case & Dependency Audit` remains for human rationale only.
 
 2. **Improve the plan**
    - Fill in underspecified sections.
@@ -60,6 +61,14 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    - Preserve all existing implementation steps, code blocks, and goal statements.
    - Mark completed checklist items when appropriate.
 
-5. **Complete the workflow**
+5. **[Optional] Generate Architectural Diagram**
+   - If the plan involves service boundary changes or new services:
+     - Invoke `skill: "architectural_diagrams"`
+     - Generate flowchart diagram for affected services
+     - Render to image and upload to associated ClickUp/Linear ticket
+     - Include attachment URL in plan metadata for reference
+   - Skip this step if the plan does not involve architectural changes.
+
+6. **Complete the workflow**
    - Call `complete_workflow_phase` with `workflow: "improve-plan"`, `phase: 1`, and the updated plan as the artifact.
    - End by recommending whether the plan should go to the Coder agent or the Lead Coder.

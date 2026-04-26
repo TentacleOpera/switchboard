@@ -16,8 +16,8 @@ function createContext(workspaceRoot, secretSeed = {}) {
     const installed = installVsCodeMock();
     const { LinearSyncService } = loadOutModule('services/LinearSyncService.js', ['services/ClickUpSyncService.js']);
     const { LinearAutomationService } = loadOutModule('services/LinearAutomationService.js', ['services/LinearSyncService.js', 'services/KanbanDatabase.js', 'services/PlanFileImporter.js']);
-    const { KanbanDatabase } = loadOutModule('services/KanbanDatabase.js');
-    const { importPlanFiles } = loadOutModule('services/PlanFileImporter.js');
+    const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
+    const { importPlanFiles } = require(path.join(process.cwd(), 'out', 'services', 'PlanFileImporter.js'));
     installed.restore();
 
     const service = new LinearSyncService(workspaceRoot, new SecretStorageMock(secretSeed));
@@ -143,16 +143,87 @@ async function testTeamWidePollingOmitsProjectVariable() {
                 && String(req.jsonBody?.query || '').includes('issues(')
             );
             assert.ok(issuesRequest, 'Expected Linear automation polling to issue an issues query.');
+            assert.match(
+                String(issuesRequest.jsonBody?.query || ''),
+                /query\(\$filter: IssueFilter!, \$after: String\)/,
+                'Expected team-wide Linear automation polling to use a single IssueFilter GraphQL variable.'
+            );
             assert.doesNotMatch(
                 String(issuesRequest.jsonBody?.query || ''),
-                /\$projectId/,
-                'Expected team-wide Linear automation polling not to declare an unused $projectId variable.'
+                /\$teamId|\$projectId/,
+                'Expected team-wide Linear automation polling not to declare separate teamId/projectId variables.'
             );
+            assert.deepStrictEqual(issuesRequest.jsonBody?.variables?.filter, {
+                team: { id: { eq: 'team-1' } }
+            });
             assert.strictEqual(
-                Object.prototype.hasOwnProperty.call(issuesRequest.jsonBody?.variables || {}, 'projectId'),
+                Object.prototype.hasOwnProperty.call(issuesRequest.jsonBody?.variables?.filter || {}, 'project'),
                 false,
-                'Expected team-wide Linear automation polling not to send a projectId variable.'
+                'Expected team-wide Linear automation polling not to send a project filter.'
             );
+        } finally {
+            http.restore();
+        }
+    });
+}
+
+async function testProjectScopedPollingUsesFilterVariable() {
+    await withWorkspace('linear-automation-project-scoped', async ({ workspaceRoot }) => {
+        const { service, automation } = createContext(workspaceRoot, {
+            'switchboard.linear.apiToken': 'lin_api_project_scoped'
+        });
+        service.delay = async () => {};
+
+        await service.saveConfig({
+            teamId: 'team-1',
+            teamName: 'Engineering',
+            projectId: 'project-1',
+            columnToStateId: {
+                CREATED: 'state-created',
+                BACKLOG: 'state-backlog',
+                'PLAN REVIEWED': '',
+                'LEAD CODED': '',
+                'CODER CODED': '',
+                'CODE REVIEWED': '',
+                CODED: '',
+                COMPLETED: 'state-completed'
+            },
+            switchboardLabelId: 'label-switchboard',
+            setupComplete: true,
+            lastSync: null,
+            autoPullEnabled: false,
+            pullIntervalMinutes: 60,
+            automationRules: [createRule('Bug Summary', 'bug', ['state-started'], 'CREATED', 'COMPLETED', true)]
+        });
+
+        const http = installHttpsMock();
+        try {
+            queueIssuesPage(http, [createIssue({ id: 'issue-project-scoped', identifier: 'ENG-398' })]);
+
+            const pollResult = await automation.poll();
+            assert.strictEqual(pollResult.created, 1);
+            assert.strictEqual(pollResult.errors.length, 0);
+
+            const issuesRequest = http.requests.find((req) =>
+                req.method === 'POST'
+                && req.path === '/graphql'
+                && String(req.jsonBody?.query || '').includes('issues(')
+            );
+            assert.ok(issuesRequest, 'Expected project-scoped Linear automation polling to issue an issues query.');
+            assert.match(
+                String(issuesRequest.jsonBody?.query || ''),
+                /query\(\$filter: IssueFilter!, \$after: String\)/,
+                'Expected project-scoped Linear automation polling to use a single IssueFilter GraphQL variable.'
+            );
+            assert.doesNotMatch(
+                String(issuesRequest.jsonBody?.query || ''),
+                /\$teamId|\$projectId/,
+                'Expected project-scoped Linear automation polling not to declare separate teamId/projectId variables.'
+            );
+            assert.deepStrictEqual(issuesRequest.jsonBody?.variables?.filter, {
+                team: { id: { eq: 'team-1' } },
+                project: { id: { eq: 'project-1' } }
+            });
         } finally {
             http.restore();
         }
@@ -187,7 +258,7 @@ async function testMixedProviderMetadataImportsAsLocalWithoutDedupeIds() {
         ].join('\n'), 'utf8');
 
         const imported = await importPlanFiles(workspaceRoot);
-        assert.strictEqual(imported, 1);
+        assert.strictEqual(imported.count, 1);
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         await db.ensureReady();
@@ -199,9 +270,147 @@ async function testMixedProviderMetadataImportsAsLocalWithoutDedupeIds() {
     });
 }
 
+async function testDbLinkedSyncedIssuesSkipAutomationWithoutSwitchboardLabel() {
+    await withWorkspace('linear-automation-db-dedupe', async ({ workspaceRoot }) => {
+        const { service, automation, KanbanDatabase } = createContext(workspaceRoot, {
+            'switchboard.linear.apiToken': 'lin_api_db_dedupe'
+        });
+        service.delay = async () => {};
+
+        await service.saveConfig({
+            teamId: 'team-1',
+            teamName: 'Engineering',
+            projectId: 'project-1',
+            columnToStateId: {
+                CREATED: 'state-created',
+                BACKLOG: 'state-backlog',
+                'PLAN REVIEWED': '',
+                'LEAD CODED': '',
+                'CODER CODED': '',
+                'CODE REVIEWED': '',
+                CODED: '',
+                COMPLETED: 'state-completed'
+            },
+            switchboardLabelId: '',
+            setupComplete: true,
+            lastSync: null,
+            autoPullEnabled: false,
+            pullIntervalMinutes: 60,
+            automationRules: [createRule('Bug Summary', 'bug', ['state-started'], 'CREATED', 'COMPLETED', true)]
+        });
+
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.ensureReady();
+        await db.setWorkspaceId('workspace-1');
+
+        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        fs.mkdirSync(plansDir, { recursive: true });
+        const existingPlanFile = path.join(plansDir, 'synced-local-plan.md');
+        fs.writeFileSync(existingPlanFile, '# Synced local plan\n', 'utf8');
+
+        await db.upsertPlans([{
+            planId: 'synced-local-plan',
+            sessionId: 'synced-local-session',
+            topic: 'Synced local issue',
+            planFile: existingPlanFile,
+            kanbanColumn: 'CREATED',
+            status: 'active',
+            complexity: '5',
+            tags: '',
+            dependencies: '',
+            repoScope: '',
+            workspaceId: 'workspace-1',
+            createdAt: '2026-04-01T00:00:00.000Z',
+            updatedAt: '2026-04-01T00:00:00.000Z',
+            lastAction: 'created',
+            sourceType: 'local',
+            brainSourcePath: '',
+            mirrorPath: '',
+            routedTo: '',
+            dispatchedAgent: '',
+            dispatchedIde: '',
+            clickupTaskId: '',
+            linearIssueId: ''
+        }]);
+
+        const http = installHttpsMock();
+        try {
+            http.queueJson(200, {
+                data: {
+                    issueCreate: {
+                        success: true,
+                        issue: {
+                            id: 'issue-synced-db',
+                            identifier: 'ENG-350'
+                        }
+                    }
+                }
+            }, (req) => req.method === 'POST'
+                && req.path === '/graphql'
+                && String(req.jsonBody?.query || '').includes('issueCreate')
+                && req.jsonBody?.variables?.input?.title === 'Synced local issue');
+            await service.syncPlan({
+                sessionId: 'synced-local-session',
+                topic: 'Synced local issue',
+                planFile: existingPlanFile,
+                complexity: '5'
+            }, 'CREATED');
+            assert.strictEqual(
+                await service.getIssueIdForPlan('synced-local-session'),
+                'issue-synced-db',
+                'Expected outbound Linear sync to persist the real issue ID in the sync map.'
+            );
+            const refreshedDb = loadOutModule('services/KanbanDatabase.js').KanbanDatabase.forWorkspace(workspaceRoot);
+            await refreshedDb.ensureReady();
+            const syncedPlan = await refreshedDb.getPlanBySessionId('synced-local-session');
+            assert.ok(syncedPlan, 'Expected the pre-existing local plan row to remain present after sync.');
+            assert.strictEqual(
+                syncedPlan.linearIssueId,
+                'issue-synced-db',
+                'Expected outbound Linear sync to persist the real issue ID to the local plan row.'
+            );
+            const linkedPlan = await refreshedDb.findPlanByLinearIssueId('workspace-1', 'issue-synced-db');
+            assert.ok(linkedPlan, 'Expected the synced Linear issue to resolve back to the original local session.');
+            assert.strictEqual(
+                linkedPlan.sessionId,
+                'synced-local-session',
+                'Expected DB-backed Linear dedupe to keep the original local session linked to the synced issue.'
+            );
+
+            queueIssuesPage(http, [createIssue({
+                id: 'issue-synced-db',
+                identifier: 'ENG-350',
+                title: 'Synced local issue',
+                labels: { nodes: [{ id: 'label-bug', name: 'bug' }] }
+            })]);
+
+            const pollResult = await automation.poll();
+            assert.strictEqual(pollResult.created, 0);
+            assert.strictEqual(pollResult.skipped, 1);
+            assert.strictEqual(pollResult.errors.length, 0);
+
+            const generatedPlans = fs.readdirSync(plansDir).filter((file) => file.endsWith('.md'));
+            assert.deepStrictEqual(
+                generatedPlans,
+                ['synced-local-plan.md'],
+                'Expected DB-linked synced issues to be skipped without generating duplicate automation plans.'
+            );
+            assert.strictEqual(
+                (await refreshedDb.getBoard('workspace-1')).length,
+                1,
+                'Expected automation polling to leave the original local plan row untouched instead of creating a duplicate DB record.'
+            );
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function run() {
     await testTeamWidePollingOmitsProjectVariable();
+    await testProjectScopedPollingUsesFilterVariable();
     await testMixedProviderMetadataImportsAsLocalWithoutDedupeIds();
+    await testDbLinkedSyncedIssuesSkipAutomationWithoutSwitchboardLabel();
     await withWorkspace('linear-automation', async ({ workspaceRoot }) => {
         const { service, automation, KanbanDatabase, importPlanFiles } = createContext(workspaceRoot, {
             'switchboard.linear.apiToken': 'lin_api_automation'
@@ -305,8 +514,8 @@ async function run() {
                 'Expected only one Linear automation plan file for the matching issue.'
             );
 
-            const importedCount = await importPlanFiles(workspaceRoot);
-            assert.strictEqual(importedCount, 1, 'Expected the generated Linear automation plan to import cleanly.');
+            const importResult = await importPlanFiles(workspaceRoot);
+            assert.strictEqual(importResult.count, 1, 'Expected the generated Linear automation plan to import cleanly.');
 
             const createdPlan = await db.findPlanByLinearIssueId('workspace-1', 'issue-bug');
             assert.ok(createdPlan, 'Expected the Linear automation-created plan to be persisted.');

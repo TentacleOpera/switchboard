@@ -800,7 +800,7 @@
             if (state.openPlans.length === 0) {
                 const empty = document.createElement('div');
                 empty.className = 'empty-state';
-                empty.textContent = 'No other open plans available.';
+                empty.textContent = 'No plans in New or Planned columns available as dependencies.';
                 depsListEl.appendChild(empty);
                 return;
             }
@@ -809,7 +809,10 @@
             const matchedDeps = new Set();
 
             state.openPlans.forEach((plan) => {
-                const dependencyValue = String(plan.topic || plan.sessionId || '').trim();
+                const sessionId = String(plan.sessionId || '').trim();
+                const topic = String(plan.topic || '').trim();
+                // Canonical stored form is sessionId. Topic is fallback only if sessionId is absent.
+                const dependencyValue = sessionId || topic;
                 const wrapper = document.createElement('label');
                 wrapper.className = 'deps-item';
 
@@ -817,15 +820,15 @@
                 checkbox.type = 'checkbox';
                 checkbox.value = dependencyValue;
 
-                const normalizedValue = dependencyValue.toLowerCase();
-                const normalizedSessionId = String(plan.sessionId || '').trim().toLowerCase();
-                const isChecked = normalizedDeps.includes(normalizedValue)
-                    || (normalizedSessionId && normalizedDeps.includes(normalizedSessionId));
+                const normalizedSessionId = sessionId.toLowerCase();
+                const normalizedTopic = topic.toLowerCase();
+                // Backward compatibility: detect legacy topic-form values in state.dependencies.
+                const isChecked = normalizedDeps.includes(normalizedSessionId)
+                    || (normalizedTopic && normalizedDeps.includes(normalizedTopic));
                 checkbox.checked = isChecked;
                 if (isChecked) {
-                    // Track which stored dependencies matched
                     normalizedDeps.forEach(nd => {
-                        if (nd === normalizedValue || nd === normalizedSessionId) {
+                        if (nd === normalizedSessionId || nd === normalizedTopic) {
                             matchedDeps.add(nd);
                         }
                     });

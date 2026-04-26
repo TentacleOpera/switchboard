@@ -288,6 +288,14 @@ function getWorkspaceRoot() {
     return process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
 }
 
+function resolveStateRoot(workspaceRoot = getWorkspaceRoot()) {
+    return process.env.SWITCHBOARD_STATE_ROOT || workspaceRoot || process.cwd();
+}
+
+function getStateRoot() {
+    return resolveStateRoot(getWorkspaceRoot());
+}
+
 /**
  * Resolve the archive DB path from .vscode/settings.json.
  * Returns the absolute path or null if not configured.
@@ -321,6 +329,7 @@ let sqlJsInitPromise = null;
 const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
     { id: 'CREATED', label: 'New', order: 0 },
     { id: 'PLAN REVIEWED', label: 'Planned', order: 100 },
+    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', order: 150 },
     { id: 'INTERN CODED', label: 'Intern', order: 180 },
     { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
     { id: 'CODER CODED', label: 'Coder', order: 200 },
@@ -400,7 +409,7 @@ function parseKanbanCustomColumnDefinitions(raw) {
 
 function getKanbanColumnDefinitions(workspaceRoot) {
     const definitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS.map((definition) => ({ ...definition }));
-    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+    const statePath = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'state.json');
     if (!fs.existsSync(statePath)) {
         return definitions;
     }
@@ -556,7 +565,7 @@ async function getSqlJs(workspaceRoot) {
 }
 
 async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId = null, columnDefinitions = BUILTIN_KANBAN_COLUMN_DEFINITIONS, complexityFilter = null, tagFilter = null) {
-    const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    const dbPath = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'kanban.db');
     if (!fs.existsSync(dbPath)) return null;
 
     try {
@@ -600,7 +609,7 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumn
             params.push(`%,${tagFilter.toLowerCase()},%`);
         }
         const stmt = db.prepare(
-            `SELECT topic, session_id, created_at, kanban_column, complexity, tags
+            `SELECT topic, session_id, created_at, kanban_column, complexity, tags, dependencies
              FROM plans
              WHERE ${whereClauses.join(' AND ')}
              ORDER BY updated_at DESC`,
@@ -617,7 +626,8 @@ async function readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumn
                 createdAt: row.created_at || '',
                 complexity: rawComplexity,
                 complexityCategory: mcpScoreToCategory(rawComplexity),
-                tags: row.tags || ''
+                tags: row.tags || '',
+                dependencies: row.dependencies || ''
             });
         }
         stmt.free();
@@ -701,7 +711,7 @@ function sanitizeAuditPayload(value, key = 'root') {
 
 async function appendWorkflowAuditEvent(type, payload, workspaceRoot = getWorkspaceRoot()) {
     try {
-        const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+        const dbPath = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'kanban.db');
         if (!fs.existsSync(dbPath)) return;
         const sanitized = sanitizeAuditPayload(payload || {});
         const timestamp = new Date().toISOString();
@@ -734,7 +744,7 @@ async function appendWorkflowAuditEvent(type, payload, workspaceRoot = getWorksp
 
 async function appendRunSheetEvent(sessionId, eventPayload, workspaceRoot = getWorkspaceRoot()) {
     if (!sessionId) return;
-    const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    const dbPath = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'kanban.db');
     if (!fs.existsSync(dbPath)) return;
     try {
         const SQL = await getSqlJs(workspaceRoot);
@@ -779,7 +789,7 @@ async function appendRunSheetEvent(sessionId, eventPayload, workspaceRoot = getW
  * Returns an object with at least { sessionId }, or null if none found.
  */
 async function findMostRecentActiveRunSheet(workspaceRoot = getWorkspaceRoot()) {
-    const dbPath = path.join(workspaceRoot, '.switchboard', 'kanban.db');
+    const dbPath = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'kanban.db');
     if (!fs.existsSync(dbPath)) return null;
     try {
         const SQL = await getSqlJs(workspaceRoot);
@@ -1038,7 +1048,7 @@ function sanitizeIsoTimestamp(value) {
 function archiveSwitchboardFileSync(workspaceRoot, filePath) {
     try {
         if (!fs.existsSync(filePath)) return null;
-        const switchboardRoot = path.join(workspaceRoot, '.switchboard');
+        const switchboardRoot = path.join(resolveStateRoot(workspaceRoot), '.switchboard');
         const relative = path.relative(switchboardRoot, filePath);
         if (relative.startsWith('..')) return null;
 
@@ -1065,7 +1075,7 @@ function archiveSwitchboardFileSync(workspaceRoot, filePath) {
 
 function supersedePendingDelegateTasks(workspaceRoot, recipient, senderName, replacementMessageId, replacementCreatedAt) {
     if (!isValidAgentName(recipient)) return [];
-    const inboxRoot = path.join(workspaceRoot, '.switchboard', 'inbox');
+    const inboxRoot = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'inbox');
     const inboxDir = path.resolve(path.join(inboxRoot, recipient));
     if (!isPathWithinRoot(inboxDir, inboxRoot)) return [];
     if (!fs.existsSync(inboxDir)) return [];
@@ -1444,7 +1454,7 @@ const SENDER_COOLDOWN_SECONDS = 30;
  * Uses atomic lock files per sender-recipient-action triplet
  */
 function checkDispatchCooldown(workspaceRoot, sender, recipient, action) {
-    const cooldownDir = path.join(workspaceRoot, '.switchboard', 'cooldowns');
+    const cooldownDir = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'cooldowns');
     if (!fs.existsSync(cooldownDir)) {
         fs.mkdirSync(cooldownDir, { recursive: true });
     }
@@ -1486,7 +1496,7 @@ function checkDispatchCooldown(workspaceRoot, sender, recipient, action) {
  */
 function cleanupOldCooldowns(workspaceRoot) {
     try {
-        const cooldownDir = path.join(workspaceRoot, '.switchboard', 'cooldowns');
+        const cooldownDir = path.join(resolveStateRoot(workspaceRoot), '.switchboard', 'cooldowns');
         if (!fs.existsSync(cooldownDir)) return;
 
         const now = Date.now();
@@ -1809,6 +1819,417 @@ async function handleInternalRegistration(args) {
     return true;
 }
 
+// --- API State Tracking Helpers ---
+// Stores recently used IDs (team_id, space_id, list_id, project_id) so agents
+// don't have to navigate the hierarchy on every call.
+
+const API_STATE_FILE = () => path.join(resolveStateRoot(), 'api_state.json');
+
+function readApiState() {
+    try {
+        if (fs.existsSync(API_STATE_FILE())) {
+            return JSON.parse(fs.readFileSync(API_STATE_FILE(), 'utf8'));
+        }
+    } catch { /* ignore */ }
+    return { linear: {}, clickup: {} };
+}
+
+function writeApiState(state) {
+    try {
+        // Atomic write: write to temp file then rename
+        const stateFilePath = API_STATE_FILE();
+        const tmpPath = stateFilePath + '.tmp';
+        fs.writeFileSync(tmpPath, JSON.stringify(state, null, 2));
+        fs.renameSync(tmpPath, stateFilePath);
+    } catch { /* ignore write failures — state tracking is best-effort */ }
+}
+
+function cacheLinearState(data) {
+    if (!data) return;
+    const state = readApiState();
+    // GraphQL responses wrap in data.data
+    const payload = data.data || data;
+    // Extract team key from issues query
+    const issues = payload.issues?.nodes || payload.team?.issues?.nodes || [];
+    if (issues.length > 0 && issues[0].team?.key) {
+        state.linear.teamKey = issues[0].team.key;
+    }
+    // Extract from single issue
+    if (payload.issue?.team?.key) {
+        state.linear.teamKey = payload.issue.team.key;
+    }
+    if (payload.issue?.project?.id) {
+        state.linear.projectId = payload.issue.project.id;
+    }
+    // REST single-issue responses (no data.data wrapper)
+    if (data.team?.key) {
+        state.linear.teamKey = data.team.key;
+    }
+    if (data.project?.id) {
+        state.linear.projectId = data.project.id;
+    }
+    writeApiState(state);
+}
+
+// TTL for cache entries used by resolveClickUpIdByName / enhanceClickUpError.
+// Declared above the helpers that reference them so runtime TDZ is not
+// dependent on module-load ordering.
+const CLICKUP_NAME_CACHE_TTL_LIST_DOC_MS = 60 * 60 * 1000;       // 1 hour for lists/docs/tasks
+const CLICKUP_NAME_CACHE_TTL_TEAM_SPACE_MS = 24 * 60 * 60 * 1000; // 24 hours for teams/spaces/folders
+
+function cacheClickUpState(data) {
+    if (!data) return;
+    const state = readApiState();
+    if (!state.clickup) state.clickup = {};
+    // Initialize byName structure if not present
+    if (!state.clickup.byName) {
+        state.clickup.byName = { lists: {}, spaces: {}, folders: {}, docs: {}, tasks: {} };
+    }
+    const byName = state.clickup.byName;
+    const now = Date.now();
+
+    // Extract from task responses
+    const tasks = Array.isArray(data.tasks) ? data.tasks : (data.id ? [data] : []);
+    if (tasks.length > 0) {
+        if (tasks[0].list?.id) state.clickup.listId = tasks[0].list.id;
+        if (tasks[0].space?.id) state.clickup.spaceId = tasks[0].space.id;
+        // Cache task names
+        for (const task of tasks) {
+            if (task.id && task.name) {
+                byName.tasks[task.name.toLowerCase()] = { id: task.id, cachedAt: now };
+            }
+        }
+    }
+    // Extract from team/space/list hierarchy responses
+    if (data.id && !data.tasks) {
+        // Could be a team, space, folder, or list object
+        if (data.lists) {
+            state.clickup.listId = data.id;   // folder with lists
+            // Cache folder name
+            if (data.name) {
+                byName.folders[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+            }
+            // Cache nested lists
+            if (Array.isArray(data.lists)) {
+                for (const list of data.lists) {
+                    if (list.id && list.name) {
+                        byName.lists[list.name.toLowerCase()] = { id: list.id, cachedAt: now };
+                    }
+                }
+            }
+        }
+        if (data.spaces) {
+            state.clickup.spaceId = data.id;  // team with spaces
+            // Cache team name
+            if (data.name) {
+                byName.spaces[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+            }
+            // Cache nested spaces
+            if (Array.isArray(data.spaces)) {
+                for (const space of data.spaces) {
+                    if (space.id && space.name) {
+                        byName.spaces[space.name.toLowerCase()] = { id: space.id, cachedAt: now };
+                    }
+                }
+            }
+        }
+        // Single list
+        if (data.id && data.name && data.statuses) {
+            byName.lists[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+        }
+        // Single space
+        if (data.id && data.name && data.spaces) {
+            byName.spaces[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+        }
+        // Single folder
+        if (data.id && data.name && data.lists) {
+            byName.folders[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+        }
+        // Doc
+        if (data.id && data.name && data.workspace_id) {
+            byName.docs[data.name.toLowerCase()] = { id: data.id, cachedAt: now };
+        }
+    }
+    writeApiState(state);
+}
+
+function isCacheEntryFresh(entry, kind) {
+    if (!entry || !entry.cachedAt) return false;
+    const ttl = (kind === 'spaces' || kind === 'folders')
+        ? CLICKUP_NAME_CACHE_TTL_TEAM_SPACE_MS
+        : CLICKUP_NAME_CACHE_TTL_LIST_DOC_MS;
+    return (Date.now() - entry.cachedAt) < ttl;
+}
+
+function levenshtein(a, b) {
+    if (!a || !b) return Infinity;
+    a = a.toLowerCase();
+    b = b.toLowerCase();
+    const lenA = a.length;
+    const lenB = b.length;
+    if (Math.abs(lenA - lenB) > 2) return Infinity; // Early exit if too different
+    if (lenA === 0) return lenB;
+    if (lenB === 0) return lenA;
+    const matrix = [];
+    for (let i = 0; i <= lenB; i++) {
+        matrix[i] = [i];
+    }
+    for (let j = 0; j <= lenA; j++) {
+        matrix[0][j] = j;
+    }
+    for (let i = 1; i <= lenB; i++) {
+        for (let j = 1; j <= lenA; j++) {
+            const cost = a[j - 1] === b[i - 1] ? 0 : 1;
+            matrix[i][j] = Math.min(
+                matrix[i - 1][j] + 1,
+                matrix[i][j - 1] + 1,
+                matrix[i - 1][j - 1] + cost
+            );
+        }
+    }
+    return matrix[lenB][lenA];
+}
+
+function resolveClickUpIdByName(kind, name) {
+    // kind: 'lists' | 'spaces' | 'folders' | 'docs' | 'tasks'
+    const state = readApiState();
+    const byName = state.clickup?.byName;
+    if (!byName || !byName[kind]) {
+        return { source: 'miss', candidates: [] };
+    }
+    const lookup = byName[kind];
+    const lowerName = name.toLowerCase();
+
+    // Exact match
+    if (lookup[lowerName] && isCacheEntryFresh(lookup[lowerName], kind)) {
+        return { source: 'cache-exact', id: lookup[lowerName].id };
+    }
+
+    // Fuzzy match: substring or Levenshtein ≤ 2
+    const candidates = [];
+    for (const [cachedName, entry] of Object.entries(lookup)) {
+        if (!isCacheEntryFresh(entry, kind)) continue;
+        const distance = levenshtein(lowerName, cachedName);
+        const isSubstring = cachedName.includes(lowerName) || lowerName.includes(cachedName);
+        if (distance <= 2 || isSubstring) {
+            candidates.push({ name: cachedName, id: entry.id, distance, isSubstring });
+        }
+    }
+    // Sort: substring matches first, then by distance ascending
+    candidates.sort((a, b) => {
+        if (a.isSubstring && !b.isSubstring) return -1;
+        if (!a.isSubstring && b.isSubstring) return 1;
+        return a.distance - b.distance;
+    });
+    const topCandidates = candidates.slice(0, 3).map(c => ({ name: c.name, id: c.id }));
+    if (topCandidates.length > 0) {
+        return { source: 'cache-fuzzy', id: topCandidates[0].id, candidates: topCandidates };
+    }
+    return { source: 'miss', candidates: [] };
+}
+
+function enhanceClickUpError({ status, body, attemptedName, kind }) {
+    const state = readApiState();
+    let message = body || '';
+    // 404 with name resolution suggestion
+    if (status === 404 && attemptedName && kind) {
+        const byName = state.clickup?.byName;
+        if (byName && byName[kind]) {
+            const candidates = Object.entries(byName[kind])
+                .filter(([_, entry]) => isCacheEntryFresh(entry, kind))
+                .slice(0, 3)
+                .map(([name, entry]) => `${name} (id: ${entry.id})`);
+            if (candidates.length > 0) {
+                message += `\nDid you mean: ${candidates.join(', ')}?`;
+            }
+        }
+    }
+    // 400 with valid_statuses suggestion
+    if (status === 400 && body && body.includes('valid_statuses')) {
+        // Extract statuses from error body if present
+        const match = body.match(/valid_statuses[:\s]*([^\n]+)/);
+        if (match) {
+            message += `\nValid statuses: ${match[1].trim()}`;
+        }
+    }
+    // 401 with token recovery instruction
+    if (status === 401) {
+        message += `\nToken expired or invalid. Run "Switchboard: Set ClickUp Token" command, then reload the window.`;
+    }
+    // Escape regex metacharacters in attemptedName before building the
+    // replacement regex — otherwise names containing `.`, `[`, `(`, etc.
+    // either throw or match unintended characters in the error body.
+    if (attemptedName) {
+        const escaped = attemptedName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+        message = message.replace(new RegExp(escaped, 'g'), JSON.stringify(attemptedName));
+    }
+    return message;
+}
+
+function validateAttachmentPath(filePath) {
+    const workspaceRoot = process.env.SWITCHBOARD_WORKSPACE_ROOT;
+    if (!workspaceRoot) throw new Error('workspace_root_unset');
+    // Resolve symlinks on BOTH the workspace root and the file path so the
+    // comparison is apples-to-apples. On macOS, `/tmp/foo` realpaths to
+    // `/private/tmp/foo`; without realpath'ing the workspace, a valid file
+    // under the workspace would be rejected as `symlink_rejected`.
+    const workspaceReal = fs.realpathSync(workspaceRoot);
+    const resolved = path.resolve(workspaceReal, filePath);
+    let real;
+    try {
+        real = fs.realpathSync(resolved);
+    } catch {
+        throw new Error('file_not_found');
+    }
+    if (real !== resolved) throw new Error('symlink_rejected');
+    if (!real.startsWith(workspaceReal + path.sep)) throw new Error('path_outside_workspace');
+    const stat = fs.statSync(real);
+    if (!stat.isFile()) throw new Error('not_a_file');
+    if (stat.size > 10 * 1024 * 1024) throw new Error('file_too_large');
+    return real;
+}
+
+// --- Compact Output Helpers ---
+
+const MAX_DESCRIPTION_LEN = 500;
+
+function truncateDescription(text) {
+    if (!text || typeof text !== 'string') return text;
+    if (text.length <= MAX_DESCRIPTION_LEN) return text;
+    return text.slice(0, MAX_DESCRIPTION_LEN) + '... [truncated]';
+}
+
+/** Escape pipe characters and newlines for safe inclusion in markdown table cells. */
+function escapeTableCell(text) {
+    return String(text || '').replace(/\|/g, '\\|').replace(/\n/g, ' ');
+}
+
+function compactLinearResponse(data) {
+    if (!data) return JSON.stringify(data, null, 2);
+
+    // GraphQL responses wrap in data.data; REST responses are flat
+    const payload = data.data || data;
+    const result = { ...payload };
+
+    // Compact issue lists into markdown tables
+    const issueArrays = ['issues', 'archivedIssues'];
+    for (const key of issueArrays) {
+        if (result[key]?.nodes && Array.isArray(result[key].nodes)) {
+            const issues = result[key].nodes;
+            if (issues.length === 0) continue;
+            // Render as markdown table
+            let table = '| ID | Title | Status | Assignee | Labels |\n|---|---|---|---|---|\n';
+            for (const issue of issues) {
+                const id = escapeTableCell(issue.identifier || issue.id || '');
+                const title = escapeTableCell(issue.title || '');
+                const status = escapeTableCell(issue.state?.name || '');
+                const assignee = escapeTableCell(issue.assignee?.name || '—');
+                const labels = escapeTableCell((issue.labels?.nodes || []).map(l => l.name).join(', ') || '—');
+                table += `| ${id} | ${title} | ${status} | ${assignee} | ${labels} |\n`;
+            }
+            result[key] = { count: issues.length, table };
+        }
+    }
+
+    // Compact single issue: truncate description, keep key fields
+    if (result.issue) {
+        if (result.issue.description) {
+            result.issue.description = truncateDescription(result.issue.description);
+        }
+        // Compact children (sub-issues) as table
+        if (result.issue.children?.nodes) {
+            const children = result.issue.children.nodes;
+            if (children.length > 0) {
+                let table = '| ID | Title | Status |\n|---|---|---|\n';
+                for (const child of children) {
+                    table += `| ${escapeTableCell(child.identifier || child.id)} | ${escapeTableCell(child.title)} | ${escapeTableCell(child.state?.name || '')} |\n`;
+                }
+                result.issue.children = { count: children.length, table };
+            }
+        }
+    }
+
+    // REST single-issue response (flat, no data.data wrapper)
+    if (!data.data && data.identifier && data.title) {
+        const compact = {
+            id: data.id,
+            identifier: data.identifier,
+            title: data.title,
+            state: data.state?.name || data.state?.type || '',
+            description: truncateDescription(data.description || ''),
+            assignee: data.assignee?.name || undefined,
+            team: data.team?.key || undefined,
+            labels: (data.labels?.nodes || data.labels || []).map(l => l.name || l).join(', ') || undefined,
+            priority: data.priority?.name || undefined,
+            dueDate: data.dueDate || undefined
+        };
+        for (const key of Object.keys(compact)) {
+            if (compact[key] === undefined) delete compact[key];
+        }
+        return JSON.stringify(compact, null, 2);
+    }
+
+    return JSON.stringify(result, null, 2);
+}
+
+function compactClickUpResponse(data) {
+    if (!data) return JSON.stringify(data, null, 2);
+
+    // Compact task lists into markdown tables
+    if (Array.isArray(data.tasks)) {
+        const tasks = data.tasks;
+        if (tasks.length > 0) {
+            let table = '| ID | Name | Status | List | Parent |\n|---|---|---|---|---|\n';
+            for (const task of tasks) {
+                const id = escapeTableCell(task.id || '');
+                const name = escapeTableCell(task.name || '');
+                const status = escapeTableCell(task.status?.status || '');
+                const list = escapeTableCell(task.list?.name || '—');
+                const parent = escapeTableCell(task.parent || '—');
+                table += `| ${id} | ${name} | ${status} | ${list} | ${parent} |\n`;
+            }
+            // Preserve subtasks if present (from composite query)
+            const result = { count: tasks.length, table };
+            if (data.subtasks) {
+                result.subtasks = data.subtasks.map(s => ({
+                    id: s.id, name: s.name, status: s.status?.status || ''
+                }));
+            }
+            return JSON.stringify(result, null, 2);
+        }
+    }
+
+    // Compact single task: truncate description, strip custom fields, embed subtasks
+    if (data.id && data.name && !Array.isArray(data.tasks)) {
+        const compact = {
+            id: data.id,
+            name: data.name,
+            status: data.status?.status || '',
+            description: truncateDescription(data.description || data.markdown_description || ''),
+            list: data.list ? { id: data.list.id, name: data.list.name } : undefined,
+            parent: data.parent || undefined,
+            url: data.url || undefined,
+            assignee: data.assignee ? { id: data.assignee.id, username: data.assignee.username } : undefined,
+            due_date: data.due_date || undefined,
+            priority: data.priority?.priority || undefined,
+            subtasks: data.subtasks ? data.subtasks.map(s => ({
+                id: s.id, name: s.name, status: s.status?.status || ''
+            })) : undefined
+        };
+        // Remove undefined keys
+        for (const key of Object.keys(compact)) {
+            if (compact[key] === undefined) delete compact[key];
+        }
+        return JSON.stringify(compact, null, 2);
+    }
+
+    // Fallback: return as-is for non-task responses (lists, spaces, teams, etc.)
+    // NOTE: Compact formatting for hierarchy responses (teams, spaces, folders) is
+    // deferred to a future iteration. These responses can be large; use format="raw"
+    // explicitly if full data is needed, or request specific fields via endpoint selection.
+    return JSON.stringify(data, null, 2);
+}
+
 // --- IPC Helpers ---
 
 const pendingIpcInputRequests = new Map();
@@ -1822,7 +2243,7 @@ process.on('message', (message) => {
             pendingIpcInputRequests.delete(id);
             if (success) {
                 pending.resolve({
-                    content: [{ type: "text", text: `Ã¢Å“â€¦ Sent input to '${pending.name}' (VS Code terminal)` }]
+                    content: [{ type: "text", text: `✓ Sent input to '${pending.name}' (VS Code terminal)` }]
                 });
             } else {
                 pending.reject(new Error(error || 'Failed to send input to terminal'));
@@ -1953,7 +2374,7 @@ async function pushMessageToTerminal(name, message, paced = true) {
  * @returns {Promise<string>} The resolved workspace_id.
  */
 async function ensureWorkspaceIdentityInMcp(workspaceRoot) {
-    const sbDir = path.join(workspaceRoot, '.switchboard');
+    const sbDir = path.join(resolveStateRoot(workspaceRoot), '.switchboard');
     const dbPath = path.join(sbDir, 'kanban.db');
     const tmpPath = dbPath + '.mcp_init.tmp';
 
@@ -2551,7 +2972,8 @@ function registerTools(server) {
         },
         async ({ column, complexity, tag } = {}) => {
             const workspaceRoot = getWorkspaceRoot();
-            const sbDir = path.join(workspaceRoot, '.switchboard');
+            const stateRoot = getStateRoot();
+            const sbDir = path.join(stateRoot, '.switchboard');
             const dbPath = path.join(sbDir, 'kanban.db');
 
             // Read workspace ID from DB only
@@ -2628,7 +3050,7 @@ function registerTools(server) {
             const workspaceRoot = getWorkspaceRoot();
             try {
                 const workspaceId = await ensureWorkspaceIdentityInMcp(workspaceRoot);
-                const sbDir = path.join(workspaceRoot, '.switchboard');
+                const sbDir = path.join(getStateRoot(), '.switchboard');
                 const dbPath = path.join(sbDir, 'kanban.db');
                 return {
                     content: [{
@@ -2770,8 +3192,7 @@ function registerTools(server) {
                 }
 
             if (autoRegisteredChat) {
-                const workspaceRoot = process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
-                const inboxDir = path.join(workspaceRoot, '.switchboard', 'inbox', name);
+                const inboxDir = path.join(getStateRoot(), '.switchboard', 'inbox', name);
                 if (!fs.existsSync(inboxDir)) {
                     fs.mkdirSync(inboxDir, { recursive: true });
                 }
@@ -2798,6 +3219,7 @@ function registerTools(server) {
         async ({ action, payload, metadata }) => {
             try {
                 const workspaceRoot = process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
+                const stateRoot = getStateRoot();
                 const state = await loadState();
                 const envSender = sanitizePathToken(process.env.SWITCHBOARD_AGENT_NAME || process.env.SWITCHBOARD_SENDER);
                 const inferredEnvSender = envSender ? (resolveAgentName(state, envSender) || envSender) : null;
@@ -3056,7 +3478,7 @@ function registerTools(server) {
                     if (!isValidAgentName(storageRecipient)) {
                         return { isError: true, content: [{ type: "text", text: `❌ Invalid recipient name for inbox write: must contain only alphanumeric characters, spaces, dashes, or underscores.` }] };
                     }
-                    const targetDir = path.join(workspaceRoot, '.switchboard', targetBox, storageRecipient);
+                    const targetDir = path.join(stateRoot, '.switchboard', targetBox, storageRecipient);
                     if (!fs.existsSync(targetDir)) {
                         fs.mkdirSync(targetDir, { recursive: true });
                     }
@@ -3112,7 +3534,7 @@ function registerTools(server) {
                 if (!isValidAgentName(agent)) {
                     return { isError: true, content: [{ type: "text", text: `❌ Invalid agent name: must contain only alphanumeric characters, dashes, or underscores.` }] };
                 }
-                const workspaceRoot = process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
+                const stateRoot = getStateRoot();
                 const state = await loadState();
                 await updateState(current => {
                     const node = resolveNodeForAgentEvidence(current, agent);
@@ -3124,7 +3546,7 @@ function registerTools(server) {
                 const agentRecord = state.chatAgents?.[agent] || state.terminals?.[agent];
                 const canonicalInboxAgent = isInboxRequest ? getCanonicalInboxForAgent(state, agent) : null;
                 const storageAgent = canonicalInboxAgent || agent;
-                const targetDir = path.join(workspaceRoot, '.switchboard', requestedBox, storageAgent);
+                const targetDir = path.join(stateRoot, '.switchboard', requestedBox, storageAgent);
 
                 let effectiveSince = since;
 
@@ -3729,6 +4151,799 @@ function registerTools(server) {
         }
     );
 
+    // --- Linear API Tool (Standalone Mode) ---
+
+    server.tool(
+        "call_linear_api",
+        `Call the Linear API directly via GraphQL or REST. Works in standalone MCP mode (no IPC required).
+
+By default returns **compact output**: issue lists rendered as markdown tables with key fields only (ID, Title, Status, Assignee, Labels). Descriptions truncated to 500 chars. Use \`format="raw"\` for full unprocessed API responses.
+
+The tool automatically caches team/project IDs from responses for future calls.
+
+**Composite Query Examples (GraphQL — recommended):**
+- Get issue with sub-issues in one call: \`{ query: "query { issue(id: \\"LIN-123\\") { id title description state { name } children(first: 20) { nodes { id title state { name } } } } }" }\`
+- Search issues across team: \`{ query: "query { issues(filter: { title: { contains: \\"migration\\" } }, first: 10) { nodes { id title state { name } assignee { name } team { key } } } }" }\`
+
+**GraphQL Mutation Examples:**
+- Update state: \`{ query: "mutation($id: String!, $stateId: String!) { issueUpdate(id: $id, input: { stateId: $stateId }) { issue { id state { name } } } }", variables: { id: "LIN-123", stateId: "done" } }\`
+- Add comment: \`{ query: "mutation($id: String!, $body: String!) { commentCreate(input: { issueId: $id, body: $body }) { comment { id body } } }", variables: { id: "LIN-123", body: "Fixed in PR #42" } }\`
+
+**REST API Examples:**
+- Get issue: \`{ method: "GET", endpoint: "/issues/LIN-123" }\`
+- Update issue: \`{ method: "PATCH", endpoint: "/issues/LIN-123", body: { stateId: "done" } }\`
+
+Returns the API response (compact or raw), or an error if the request fails.`,
+        {
+            query: z.string().optional().describe("GraphQL query or mutation string"),
+            variables: z.record(z.any()).optional().describe("GraphQL variables (for mutations)"),
+            method: z.enum(["GET", "POST", "PATCH", "DELETE"]).optional().describe("HTTP method for REST API calls"),
+            endpoint: z.string().optional().describe("REST API endpoint path (e.g., '/issues/LIN-123')"),
+            body: z.record(z.any()).optional().describe("Request body for REST API calls"),
+            format: z.enum(["compact", "raw"]).optional().describe("Output format: 'compact' (default) for AI-readable markdown tables with filtered fields, 'raw' for full unprocessed JSON")
+        },
+        async ({ query, variables, method, endpoint, body, format }) => {
+            try {
+                const linearToken = process.env.SWITCHBOARD_LINEAR_TOKEN;
+                if (!linearToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Linear API token not configured. Set it via VS Code settings (switchboard.setLinearToken)." }] };
+                }
+
+                // Validate that either GraphQL or REST parameters are provided
+                if (query && (method || endpoint)) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Cannot mix GraphQL (query) with REST parameters (method/endpoint)." }] };
+                }
+
+                if (!query && !method && !endpoint) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Must provide either 'query' (GraphQL) or 'method' + 'endpoint' (REST)." }] };
+                }
+
+                // REST requires both method and endpoint together
+                if (!query && (!method || !endpoint)) {
+                    return { isError: true, content: [{ type: "text", text: "Error: REST calls require both 'method' and 'endpoint'. Provide both, or use 'query' for GraphQL." }] };
+                }
+
+                // GraphQL request
+                if (query) {
+                    const response = await fetch('https://api.linear.app/graphql', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': linearToken
+                        },
+                        body: JSON.stringify({ query, variables: variables || {} })
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        return { isError: true, content: [{ type: "text", text: `Linear API error (${response.status}): ${errorText}` }] };
+                    }
+
+                    const data = await response.json();
+                    if (data.errors) {
+                        return { isError: true, content: [{ type: "text", text: `Linear GraphQL errors: ${JSON.stringify(data.errors, null, 2)}` }] };
+                    }
+
+                    // Cache team/project IDs from response for state tracking
+                    cacheLinearState(data);
+
+                    if (format === 'raw') {
+                        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+                    }
+                    return { content: [{ type: "text", text: compactLinearResponse(data) }] };
+                }
+
+                // REST request
+                if (method && endpoint) {
+                    // Guard: GET/DELETE requests must not include a body
+                    const hasBody = body && Object.keys(body).length > 0;
+                    if ((method === 'GET' || method === 'DELETE') && hasBody) {
+                        return { isError: true, content: [{ type: "text", text: `Error: 'body' is not allowed for ${method} requests.` }] };
+                    }
+
+                    const url = `https://api.linear.app${endpoint}`;
+                    const response = await fetch(url, {
+                        method,
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': linearToken
+                        },
+                        body: (method !== 'GET' && method !== 'DELETE' && body) ? JSON.stringify(body) : undefined
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        return { isError: true, content: [{ type: "text", text: `Linear API error (${response.status}): ${errorText}` }] };
+                    }
+
+                    const data = await response.json();
+
+                    // Cache team/project IDs from response for state tracking
+                    cacheLinearState(data);
+
+                    if (format === 'raw') {
+                        return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+                    }
+                    return { content: [{ type: "text", text: compactLinearResponse(data) }] };
+                }
+
+                return { isError: true, content: [{ type: "text", text: "Error: Invalid parameters." }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error calling Linear API: ${e.message}` }] };
+            }
+        }
+    );
+
+    // --- ClickUp API Tool (Standalone Mode) ---
+
+    server.tool(
+        "call_clickup_api",
+        `Call the ClickUp API directly via REST. Works in standalone MCP mode (no IPC required).
+
+By default returns **compact output**: task lists rendered as markdown tables with key fields only (ID, Name, Status, List Name, Parent ID). Descriptions truncated to 500 chars. Custom fields and empty arrays stripped. Use \`format="raw"\` for full unprocessed API responses.
+
+**Composite Query Support:**
+- Set \`subtasks=true\` on a task GET to automatically fetch and embed subtasks in the response (one call instead of two).
+- The tool automatically caches team_id, space_id, and list_id from responses for future calls.
+
+**GET Examples:**
+- List tasks: \`{ method: "GET", endpoint: "/v2/list/{list_id}/task", query: { subtasks: true } }\`
+- Get task with subtasks: \`{ method: "GET", endpoint: "/v2/task/{task_id}", subtasks: true }\`
+- Get task (compact): \`{ method: "GET", endpoint: "/v2/task/{task_id}" }\`
+- Get list: \`{ method: "GET", endpoint: "/v2/list/{list_id}" }\`
+
+**POST Examples:**
+- Create task: \`{ method: "POST", endpoint: "/v2/list/{list_id}/task", body: { name: "Fix bug", description: "Critical bug in production" } }\`
+- Create comment: \`{ method: "POST", endpoint: "/v2/task/{task_id}/comment", body: { comment_text: "Fixed in PR #42" } }\`
+
+**PUT/PATCH Examples:**
+- Update task: \`{ method: "PUT", endpoint: "/v2/task/{task_id}", body: { status: "done" } }\`
+
+**DELETE Examples:**
+- Delete task: \`{ method: "DELETE", endpoint: "/v2/task/{task_id}" }\`
+
+Note: Endpoints are relative to https://api.clickup.com/api (e.g., /v2/task/123 resolves to https://api.clickup.com/api/v2/task/123).
+
+Returns the API response (compact or raw), or an error if the request fails.
+
+Prefer the dedicated 'clickup_fetch', 'clickup_modify_task', 'clickup_create_task', 'clickup_create_subpage', 'clickup_attach' tools when applicable. Use call_clickup_api only for endpoints not covered by those.`,
+        {
+            method: z.enum(["GET", "POST", "PUT", "PATCH", "DELETE"]).describe("HTTP method"),
+            endpoint: z.string().describe("REST API endpoint path (e.g., '/v2/list/123/task')"),
+            query: z.record(z.any()).optional().describe("Query parameters for GET requests"),
+            body: z.record(z.any()).optional().describe("Request body for POST/PUT/PATCH requests"),
+            subtasks: z.boolean().optional().describe("When true and fetching a single task (GET /v2/task/{id}), automatically fetch and embed subtasks in the response. Saves a round-trip."),
+            format: z.enum(["compact", "raw"]).optional().describe("Output format: 'compact' (default) for AI-readable markdown tables with filtered fields, 'raw' for full unprocessed JSON")
+        },
+        async ({ method, endpoint, query, body, subtasks, format }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured. Set it via VS Code settings (switchboard.setClickUpToken)." }] };
+                }
+
+                if (!method || !endpoint) {
+                    return { isError: true, content: [{ type: "text", text: "Error: 'method' and 'endpoint' are required." }] };
+                }
+
+                // Build URL with query parameters
+                // NOTE: ClickUp API base is https://api.clickup.com/api (not https://api.clickup.com)
+                // This matches the existing ClickUpSyncService.ts pattern: hostname 'api.clickup.com' + path '/api/v2${apiPath}'
+                const url = new URL(`https://api.clickup.com/api${endpoint}`);
+                if (query && Object.keys(query).length > 0) {
+                    Object.entries(query).forEach(([key, value]) => {
+                        url.searchParams.append(key, String(value));
+                    });
+                }
+
+                // Guard: GET/DELETE requests must not include a body
+                const hasBody = body && Object.keys(body).length > 0;
+                if ((method === 'GET' || method === 'DELETE') && hasBody) {
+                    return { isError: true, content: [{ type: "text", text: `Error: 'body' is not allowed for ${method} requests. Use 'query' for parameters instead.` }] };
+                }
+
+                const response = await fetch(url.toString(), {
+                    method,
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': clickupToken
+                    },
+                    body: (method !== 'GET' && method !== 'DELETE' && body) ? JSON.stringify(body) : undefined
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    return { isError: true, content: [{ type: "text", text: `ClickUp API error (${response.status}): ${errorText}` }] };
+                }
+
+                let data = await response.json();
+
+                // Cache team/space/list IDs from response for state tracking
+                cacheClickUpState(data);
+
+                // Composite query: if subtasks=true and this is a single task GET, fetch subtasks and merge
+                if (subtasks && method === 'GET' && endpoint.match(/^\/v2\/task\/[a-zA-Z0-9]+$/)) {
+                    const taskId = endpoint.split('/').pop();
+                    try {
+                        const subtaskUrl = new URL(`https://api.clickup.com/api/v2/task/${taskId}/task`);
+                        const subtaskResponse = await fetch(subtaskUrl.toString(), {
+                            method: 'GET',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': clickupToken
+                            }
+                        });
+                        if (subtaskResponse.ok) {
+                            const subtaskData = await subtaskResponse.json();
+                            data.subtasks = Array.isArray(subtaskData.tasks) ? subtaskData.tasks : [];
+                        }
+                        // Partial failure: if subtask fetch fails, return task with empty subtasks (not an error)
+                    } catch (subtaskErr) {
+                        // Subtask fetch failed — continue with task data only
+                    }
+                }
+
+                if (format === 'raw') {
+                    return { content: [{ type: "text", text: JSON.stringify(data, null, 2) }] };
+                }
+                return { content: [{ type: "text", text: compactClickUpResponse(data) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error calling ClickUp API: ${e.message}` }] };
+            }
+        }
+    );
+
+    // --- ClickUp Semantic Tools ---
+
+    server.tool(
+        "clickup_fetch",
+        `Use this to read a single ClickUp task/list/doc/space/folder by ID or name. When \`name\` is provided, resolves from the local cache (populated by prior calls). Returns the full object plus a \`_resolved\` field indicating how the lookup succeeded. Use this instead of \`call_clickup_api\` for read operations on known objects.`,
+        {
+            kind: z.enum(['task', 'list', 'doc', 'space', 'folder']).describe("What to fetch"),
+            id: z.string().optional().describe("Exact ClickUp ID. Mutually exclusive with 'name'."),
+            name: z.string().optional().describe("Name to resolve from cache. Returns candidates if ambiguous."),
+            include_subtasks: z.boolean().optional().describe("Only valid when kind='task'. Embeds subtasks in response."),
+            format: z.enum(['compact', 'raw']).optional()
+        },
+        async ({ kind, id, name, include_subtasks, format }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured. Set it via VS Code settings (switchboard.setClickUpToken)." }] };
+                }
+
+                if ((id && name) || (!id && !name)) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Provide either 'id' or 'name', not both." }] };
+                }
+
+                let resolvedId = id;
+                let resolvedInfo = {};
+
+                if (name) {
+                    const kindPlural = kind + 's';
+                    const resolution = resolveClickUpIdByName(kindPlural, name);
+                    if (resolution.source === 'miss') {
+                        return { isError: true, content: [{ type: "text", text: `Error: No ${kind} found with name "${name}". Check spelling or use exact ID.` }] };
+                    }
+                    resolvedId = resolution.id;
+                    resolvedInfo = { _resolved: { source: resolution.source, original: name, matched: resolution.candidates?.[0]?.name } };
+                    if (resolution.source === 'cache-fuzzy' && resolution.candidates) {
+                        resolvedInfo._resolved.candidates = resolution.candidates;
+                    }
+                }
+
+                // Map kind to a fully-qualified path under api.clickup.com.
+                // Keep each branch owning the full path so v2 vs v3 prefixes
+                // don't accidentally double up via a shared wrapper.
+                let endpoint;
+                const state = readApiState();
+                const workspaceId = state.clickup?.spaceId; // v3 docs uses team/workspace id
+
+                if (kind === 'task') {
+                    endpoint = `/api/v2/task/${resolvedId}`;
+                } else if (kind === 'list') {
+                    endpoint = `/api/v2/list/${resolvedId}`;
+                } else if (kind === 'doc') {
+                    // v3 docs API — caller must have a cached workspace/team id.
+                    if (!workspaceId) {
+                        return { isError: true, content: [{ type: "text", text: "Error: clickup_fetch kind='doc' requires a cached workspace/team id. Call clickup_fetch kind='space' or call_clickup_api first." }] };
+                    }
+                    endpoint = `/api/v3/workspaces/${workspaceId}/docs/${resolvedId}`;
+                } else if (kind === 'space') {
+                    endpoint = `/api/v2/space/${resolvedId}`;
+                } else if (kind === 'folder') {
+                    endpoint = `/api/v2/folder/${resolvedId}`;
+                }
+
+                const url = new URL(`https://api.clickup.com${endpoint}`);
+                const response = await fetch(url.toString(), {
+                    method: 'GET',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': clickupToken
+                    }
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    const enhanced = enhanceClickUpError({ status: response.status, body: errorText, attemptedName: name, kind: kind + 's' });
+                    return { isError: true, content: [{ type: "text", text: `ClickUp API error (${response.status}): ${enhanced}` }] };
+                }
+
+                let data = await response.json();
+                cacheClickUpState(data);
+
+                // Subtasks composite query
+                if (include_subtasks && kind === 'task') {
+                    try {
+                        const subtaskUrl = new URL(`https://api.clickup.com/api/v2/task/${resolvedId}/task`);
+                        const subtaskResponse = await fetch(subtaskUrl.toString(), {
+                            method: 'GET',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': clickupToken
+                            }
+                        });
+                        if (subtaskResponse.ok) {
+                            const subtaskData = await subtaskResponse.json();
+                            data.subtasks = Array.isArray(subtaskData.tasks) ? subtaskData.tasks : [];
+                        }
+                    } catch { /* ignore subtask failure */ }
+                }
+
+                const result = { ...data, ...resolvedInfo };
+                if (format === 'raw') {
+                    return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+                }
+                return { content: [{ type: "text", text: compactClickUpResponse(result) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error in clickup_fetch: ${e.message}` }] };
+            }
+        }
+    );
+
+    server.tool(
+        "clickup_modify_task",
+        `Use this for ANY task update — status, tags, assignees, due_date, priority — even one field at a time. Supports status, name, description, assignees, tags, due_date, priority. Tags are applied via per-tag POSTs internally; partial tag failures are reported in \`tagFailures\` while the primary update is preserved. Use this instead of \`call_clickup_api\` for any task modification.`,
+        {
+            task_id: z.string().describe("ClickUp task ID. Use clickup_fetch with name first if you only have a name."),
+            status: z.string().optional(),
+            name: z.string().optional(),
+            description: z.string().optional(),
+            assignees_add: z.array(z.string()).optional().describe("User IDs or emails to add"),
+            assignees_remove: z.array(z.string()).optional(),
+            tags_add: z.array(z.string()).optional(),
+            tags_remove: z.array(z.string()).optional(),
+            due_date_ms: z.number().optional().describe("Epoch milliseconds"),
+            priority: z.number().min(1).max(4).optional().describe("1=urgent, 2=high, 3=normal, 4=low"),
+            comment: z.string().optional().describe("Optional comment to post after the update (for audit trail)")
+        },
+        async ({ task_id, status, name, description, assignees_add, assignees_remove, tags_add, tags_remove, due_date_ms, priority, comment }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured." }] };
+                }
+
+                // Build primary body (non-tag fields)
+                const primaryBody = {};
+                if (status !== undefined) primaryBody.status = status;
+                if (name !== undefined) primaryBody.name = name;
+                if (description !== undefined) primaryBody.description = description;
+                if (due_date_ms !== undefined) primaryBody.due_date = due_date_ms;
+                if (priority !== undefined) primaryBody.priority = priority;
+                if (assignees_add || assignees_remove) {
+                    primaryBody.assignees = {};
+                    if (assignees_add) primaryBody.assignees.add = assignees_add;
+                    if (assignees_remove) primaryBody.assignees.remove = assignees_remove;
+                }
+
+                let primaryResult = null;
+                let primaryError = null;
+
+                // Issue primary PUT if any fields present
+                if (Object.keys(primaryBody).length > 0) {
+                    const url = new URL(`https://api.clickup.com/api/v2/task/${task_id}`);
+                    const response = await fetch(url.toString(), {
+                        method: 'PUT',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': clickupToken
+                        },
+                        body: JSON.stringify(primaryBody)
+                    });
+
+                    if (!response.ok) {
+                        const errorText = await response.text();
+                        primaryError = `ClickUp API error (${response.status}): ${errorText}`;
+                        return { isError: true, content: [{ type: "text", text: primaryError }] };
+                    }
+                    primaryResult = await response.json();
+                    cacheClickUpState(primaryResult);
+                }
+
+                // Handle tags (separate per-tag POSTs)
+                const tagResults = [];
+                const tagFailures = [];
+
+                if (tags_add && tags_add.length > 0) {
+                    for (const tag of tags_add) {
+                        try {
+                            const url = new URL(`https://api.clickup.com/api/v2/task/${task_id}/tag/${encodeURIComponent(tag)}`);
+                            const response = await fetch(url.toString(), {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': clickupToken
+                                }
+                            });
+                            if (response.ok) {
+                                tagResults.push({ tag, op: 'add', status: 'ok' });
+                            } else {
+                                const errorText = await response.text();
+                                tagFailures.push({ tag, op: 'add', error: errorText });
+                            }
+                        } catch (e) {
+                            tagFailures.push({ tag, op: 'add', error: e.message });
+                        }
+                    }
+                }
+
+                if (tags_remove && tags_remove.length > 0) {
+                    for (const tag of tags_remove) {
+                        try {
+                            const url = new URL(`https://api.clickup.com/api/v2/task/${task_id}/tag/${encodeURIComponent(tag)}`);
+                            const response = await fetch(url.toString(), {
+                                method: 'DELETE',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': clickupToken
+                                }
+                            });
+                            if (response.ok) {
+                                tagResults.push({ tag, op: 'remove', status: 'ok' });
+                            } else {
+                                const errorText = await response.text();
+                                tagFailures.push({ tag, op: 'remove', error: errorText });
+                            }
+                        } catch (e) {
+                            tagFailures.push({ tag, op: 'remove', error: e.message });
+                        }
+                    }
+                }
+
+                // Handle comment
+                let commentResult = null;
+                let commentError = null;
+                if (comment) {
+                    try {
+                        const url = new URL(`https://api.clickup.com/api/v2/task/${task_id}/comment`);
+                        const response = await fetch(url.toString(), {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': clickupToken
+                            },
+                            body: JSON.stringify({ comment_text: comment })
+                        });
+                        if (response.ok) {
+                            commentResult = await response.json();
+                        } else {
+                            const errorText = await response.text();
+                            commentError = errorText;
+                        }
+                    } catch (e) {
+                        commentError = e.message;
+                    }
+                }
+
+                // Build response envelope
+                const envelope = {
+                    status: tagFailures.length > 0 || commentError ? 'partial' : 'ok',
+                    primary: primaryResult,
+                    tagResults,
+                    tagFailures: tagFailures.length > 0 ? tagFailures : undefined,
+                    comment: commentResult,
+                    commentError: commentError || undefined
+                };
+
+                return { content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error in clickup_modify_task: ${e.message}` }] };
+            }
+        }
+    );
+
+    server.tool(
+        "clickup_create_task",
+        `Use this to create a task, optionally with subtasks, in one call. Subtasks are created sequentially after the parent succeeds; on subtask failure, the parent task is preserved and the failure index is reported. Use this instead of \`call_clickup_api\` for task creation.`,
+        {
+            list_id: z.string().optional(),
+            list_name: z.string().optional().describe("Resolved from cache; returns error with candidates if ambiguous"),
+            name: z.string(),
+            description: z.string().optional(),
+            status: z.string().optional(),
+            assignees: z.array(z.string()).optional(),
+            tags: z.array(z.string()).optional(),
+            priority: z.number().min(1).max(4).optional(),
+            due_date_ms: z.number().optional(),
+            subtasks: z.array(z.object({
+                name: z.string(),
+                description: z.string().optional(),
+                status: z.string().optional(),
+                assignees: z.array(z.string()).optional()
+            })).optional()
+        },
+        async ({ list_id, list_name, name, description, status, assignees, tags, priority, due_date_ms, subtasks }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured." }] };
+                }
+
+                let targetListId = list_id;
+                if (list_name && !list_id) {
+                    const resolution = resolveClickUpIdByName('lists', list_name);
+                    if (resolution.source === 'miss') {
+                        return { isError: true, content: [{ type: "text", text: `Error: No list found with name "${list_name}".` }] };
+                    }
+                    targetListId = resolution.id;
+                }
+                if (!targetListId) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Provide either 'list_id' or 'list_name'." }] };
+                }
+
+                // Create parent task
+                const parentBody = {};
+                if (name) parentBody.name = name;
+                if (description) parentBody.description = description;
+                if (status) parentBody.status = status;
+                if (assignees) parentBody.assignees = assignees;
+                if (tags) parentBody.tags = tags;
+                if (priority) parentBody.priority = priority;
+                if (due_date_ms) parentBody.due_date = due_date_ms;
+
+                const url = new URL(`https://api.clickup.com/api/v2/list/${targetListId}/task`);
+                const response = await fetch(url.toString(), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': clickupToken
+                    },
+                    body: JSON.stringify(parentBody)
+                });
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    return { isError: true, content: [{ type: "text", text: `ClickUp API error (${response.status}): ${errorText}` }] };
+                }
+
+                const parentTask = await response.json();
+                cacheClickUpState(parentTask);
+
+                // Create subtasks if provided
+                let createdSubtasks = [];
+                let failedAtIndex = null;
+                let subtaskError = null;
+
+                if (subtasks && subtasks.length > 0) {
+                    for (let i = 0; i < subtasks.length; i++) {
+                        const subtask = subtasks[i];
+                        const subBody = {
+                            ...subtask,
+                            parent: parentTask.id
+                        };
+                        try {
+                            const subUrl = new URL(`https://api.clickup.com/api/v2/list/${targetListId}/task`);
+                            const subResponse = await fetch(subUrl.toString(), {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Authorization': clickupToken
+                                },
+                                body: JSON.stringify(subBody)
+                            });
+                            if (subResponse.ok) {
+                                const subData = await subResponse.json();
+                                createdSubtasks.push(subData);
+                                cacheClickUpState(subData);
+                            } else {
+                                failedAtIndex = i;
+                                subtaskError = await subResponse.text();
+                                break;
+                            }
+                        } catch (e) {
+                            failedAtIndex = i;
+                            subtaskError = e.message;
+                            break;
+                        }
+                    }
+                }
+
+                const envelope = failedAtIndex !== null
+                    ? { status: 'partial', task: parentTask, subtasks: createdSubtasks, failedAtIndex, error: subtaskError }
+                    : { status: 'ok', task: parentTask, subtasks: createdSubtasks };
+
+                return { content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error in clickup_create_task: ${e.message}` }] };
+            }
+        }
+    );
+
+    server.tool(
+        "clickup_create_subpage",
+        `Use this to create a doc page (uses ClickUp Docs v3). Resolves the parent doc by name from the cache. If a \`parent_page_name\` is given, that page is resolved within the doc via a single API call. Use this instead of \`call_clickup_api\` for doc page creation.`,
+        {
+            workspace_id: z.string(),
+            doc_id: z.string().optional(),
+            doc_name: z.string().optional(),
+            page_name: z.string(),
+            content: z.string(),
+            parent_page_id: z.string().optional(),
+            parent_page_name: z.string().optional()
+        },
+        async ({ workspace_id, doc_id, doc_name, page_name, content, parent_page_id, parent_page_name }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured." }] };
+                }
+
+                let targetDocId = doc_id;
+                if (doc_name && !doc_id) {
+                    const resolution = resolveClickUpIdByName('docs', doc_name);
+                    if (resolution.source === 'miss') {
+                        return { isError: true, content: [{ type: "text", text: `Error: No doc found with name "${doc_name}".` }] };
+                    }
+                    targetDocId = resolution.id;
+                }
+                if (!targetDocId) {
+                    return { isError: true, content: [{ type: "text", text: "Error: Provide either 'doc_id' or 'doc_name'." }] };
+                }
+
+                // Resolve parent_page_name if provided
+                let resolvedParentPageId = parent_page_id;
+                if (parent_page_name && !parent_page_id) {
+                    const pagesUrl = new URL(`https://api.clickup.com/api/v3/workspaces/${workspace_id}/docs/${targetDocId}/pages`);
+                    const pagesResponse = await fetch(pagesUrl.toString(), {
+                        method: 'GET',
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'Authorization': clickupToken
+                        }
+                    });
+
+                    if (!pagesResponse.ok) {
+                        const errorText = await pagesResponse.text();
+                        return { isError: true, content: [{ type: "text", text: `Error fetching doc pages: ${errorText}` }] };
+                    }
+
+                    const pagesData = await pagesResponse.json();
+                    const pages = pagesData.pages || [];
+                    const matchedPage = pages.find(p => p.name.toLowerCase() === parent_page_name.toLowerCase());
+                    if (matchedPage) {
+                        resolvedParentPageId = matchedPage.id;
+                    } else {
+                        const pageNames = pages.map(p => p.name).join(', ');
+                        return { isError: true, content: [{ type: "text", text: `Error: Parent page "${parent_page_name}" not found. Available pages: ${pageNames}` }] };
+                    }
+                }
+
+                // Create the page
+                const createUrl = new URL(`https://api.clickup.com/api/v3/workspaces/${workspace_id}/docs/${targetDocId}/pages`);
+                const createBody = {
+                    name: page_name,
+                    content: content,
+                    parent_page_id: resolvedParentPageId || undefined
+                };
+
+                const createResponse = await fetch(createUrl.toString(), {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                        'Authorization': clickupToken
+                    },
+                    body: JSON.stringify(createBody)
+                });
+
+                if (!createResponse.ok) {
+                    const errorText = await createResponse.text();
+                    return { isError: true, content: [{ type: "text", text: `ClickUp API error (${createResponse.status}): ${errorText}` }] };
+                }
+
+                const result = await createResponse.json();
+                return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error in clickup_create_subpage: ${e.message}` }] };
+            }
+        }
+    );
+
+    server.tool(
+        "clickup_attach",
+        `Use this to upload a workspace file to a task with an optional comment. File path is resolved relative to the workspace root with symlink rejection and 10 MB cap. Uses multipart/form-data. Use this instead of \`call_clickup_api\` for any attachment upload.`,
+        {
+            task_id: z.string(),
+            file_path: z.string().describe("Path relative to workspace root. Symlinks and paths outside the workspace are rejected."),
+            comment: z.string().optional().describe("If provided, a comment is posted after the attachment uploads.")
+        },
+        async ({ task_id, file_path, comment }) => {
+            try {
+                const clickupToken = process.env.SWITCHBOARD_CLICKUP_TOKEN;
+                if (!clickupToken) {
+                    return { isError: true, content: [{ type: "text", text: "Error: ClickUp API token not configured." }] };
+                }
+
+                const realPath = validateAttachmentPath(file_path);
+                const fileBuffer = fs.readFileSync(realPath);
+                const fileName = path.basename(realPath);
+
+                // Multipart upload
+                const formData = new FormData();
+                formData.append('attachment', new Blob([fileBuffer]), fileName);
+
+                const url = new URL(`https://api.clickup.com/api/v2/task/${task_id}/attachment`);
+                const response = await fetch(url.toString(), {
+                    method: 'POST',
+                    headers: {
+                        'Authorization': clickupToken
+                        // Let fetch set Content-Type with boundary for multipart
+                    },
+                    body: formData
+                });
+
+                let attachmentResult = null;
+                let attachmentError = null;
+
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    attachmentError = errorText;
+                } else {
+                    attachmentResult = await response.json();
+                }
+
+                // Post comment if provided and attachment succeeded
+                let commentResult = null;
+                let commentError = null;
+
+                if (comment && !attachmentError) {
+                    try {
+                        const commentUrl = new URL(`https://api.clickup.com/api/v2/task/${task_id}/comment`);
+                        const commentResponse = await fetch(commentUrl.toString(), {
+                            method: 'POST',
+                            headers: {
+                                'Content-Type': 'application/json',
+                                'Authorization': clickupToken
+                            },
+                            body: JSON.stringify({ comment_text: comment })
+                        });
+                        if (commentResponse.ok) {
+                            commentResult = await commentResponse.json();
+                        } else {
+                            const errorText = await commentResponse.text();
+                            commentError = errorText;
+                        }
+                    } catch (e) {
+                        commentError = e.message;
+                    }
+                }
+
+                const envelope = {
+                    status: attachmentError || commentError ? 'partial' : 'ok',
+                    attachment: attachmentResult,
+                    attachmentError: attachmentError || undefined,
+                    comment: commentResult,
+                    commentError: commentError || undefined
+                };
+
+                return { content: [{ type: "text", text: JSON.stringify(envelope, null, 2) }] };
+            } catch (e) {
+                return { isError: true, content: [{ type: "text", text: `Error in clickup_attach: ${e.message}` }] };
+            }
+        }
+    );
+
     // --- Resources ---
     server.resource(
         "switchboard://active-rules",
@@ -3769,6 +4984,94 @@ function registerTools(server) {
         }
     );
 
+    // Tool: generate_architectural_diagram
+    server.tool(
+        "generate_architectural_diagram",
+        {
+            diagramType: z.enum(['flowchart', 'sequence', 'component']).optional().describe("Type of diagram to generate"),
+            maxNodes: z.number().optional().describe("Maximum nodes to display"),
+            focusPath: z.string().optional().describe("Relative path to focus analysis on (e.g., 'src/services/')"),
+            detailLevel: z.enum(['summary', 'detailed']).optional().describe("Level of detail"),
+            targetId: z.string().describe("ClickUp task ID or Linear issue ID to upload the diagram to"),
+            platform: z.enum(['clickup', 'linear']).describe("Target platform for upload"),
+            preview: z.boolean().optional().describe("Show IDE preview before upload")
+        },
+        async ({ diagramType, maxNodes, focusPath, detailLevel, targetId, platform, preview }) => {
+            const { ArchitectureAnalyzer } = require('../services/ArchitectureAnalyzer');
+            const { MermaidGenerator } = require('../services/MermaidGenerator');
+            const { DiagramRenderer } = require('../services/DiagramRenderer');
+
+            const workspaceRoot = getWorkspaceRoot();
+            if (!workspaceRoot) {
+                return {
+                    isError: true,
+                    content: [{ type: "text", text: "No workspace folder open" }]
+                };
+            }
+
+            try {
+                // Step 1: Analyze codebase
+                const analyzer = new ArchitectureAnalyzer(workspaceRoot);
+                const graph = analyzer.analyze(focusPath, maxNodes || 50);
+
+                // Step 2: Generate Mermaid text
+                const generator = new MermaidGenerator();
+                const mermaidText = generator.generate(graph, {
+                    type: diagramType || 'flowchart',
+                    maxNodes: maxNodes || 50,
+                    detailLevel: detailLevel || 'summary'
+                });
+
+                // Step 3: Render via webview (upload is handled by the calling agent via MCP tools)
+                const renderer = new DiagramRenderer();
+                const renderResult = await renderer.render({
+                    mermaidText,
+                    preview: preview !== false
+                });
+
+                // Step 4: Upload to platform using the ClickUp/Linear MCP tools available to the calling agent
+                let imageUrl = null;
+                let textUrl = null;
+
+                if (targetId && platform) {
+                    // Return upload instructions and base64 data so the calling agent can use
+                    // mcp1_clickup_attach_task_file or the Linear MCP tool to attach the files.
+                    // The MCP tool handler cannot directly call other MCP tools, but the calling
+                    // agent (e.g., Cascade) has access to mcp1_clickup_attach_task_file.
+                    imageUrl = renderResult.base64Svg
+                        ? `Upload pending: use mcp1_clickup_attach_task_file with task_id="${targetId}", file_name="architecture-diagram.svg", file_data="${renderResult.base64Svg.slice(0, 50)}..."`
+                        : null;
+                    textUrl = `Upload pending: use mcp1_clickup_attach_task_file with task_id="${targetId}", file_name="architecture-diagram.mmd", file_data="${renderResult.base64MermaidText.slice(0, 50)}..."`;
+                }
+
+                return {
+                    content: [{
+                        type: "text",
+                        text: JSON.stringify({
+                            success: !!renderResult.svg,
+                            mermaidText,
+                            base64Svg: renderResult.base64Svg,
+                            base64MermaidText: renderResult.base64MermaidText,
+                            imageUrl,
+                            textUrl,
+                            nodeCount: graph.nodes.size,
+                            edgeCount: graph.edges.length,
+                            uploadInstructions: targetId && platform
+                                ? `To attach this diagram to ${platform} ticket ${targetId}, use the ${platform === 'clickup' ? 'mcp1_clickup_attach_task_file' : 'Linear file attach'} tool with the base64Svg and base64MermaidText values above.`
+                                : 'No targetId/platform provided — diagram rendered but not uploaded.',
+                            error: renderResult.error
+                        }, null, 2)
+                    }]
+                };
+            } catch (error) {
+                return {
+                    isError: true,
+                    content: [{ type: "text", text: `Error generating architectural diagram: ${error.message}` }]
+                };
+            }
+        }
+    );
+
 }
 
 module.exports = {
@@ -3783,5 +5086,17 @@ module.exports = {
     validateRecipient,
     handleInternalRegistration,
     WORKFLOWS,
-    PhaseGateSchema
+    PhaseGateSchema,
+    // Exposed for unit tests (see src/test/integrations/clickup/clickup-semantic-tools.test.js).
+    // Not part of the public MCP surface.
+    _testing: {
+        cacheClickUpState,
+        resolveClickUpIdByName,
+        isCacheEntryFresh,
+        levenshtein,
+        enhanceClickUpError,
+        validateAttachmentPath,
+        CLICKUP_NAME_CACHE_TTL_LIST_DOC_MS,
+        CLICKUP_NAME_CACHE_TTL_TEAM_SPACE_MS
+    }
 };

@@ -95,6 +95,46 @@ Key safety behavior on `sendToTerminal`:
 - Blocks rapid fan-out broadcast to different targets unless `allowBroadcast=true`.
 - Falls back to live VS Code terminal lookup if registry is stale.
 
+## 4.5) Agent Access to Integrations
+
+Agents can access Switchboard's Linear and ClickUp integrations through the `call_linear_api` and `call_clickup_api` MCP tools. These tools use direct HTTP API calls and work in all IDEs (VS Code, Antigravity, Windsurf, etc.) without requiring IPC bridging.
+
+### Smart Output (Default: Compact)
+By default, both tools return **compact, AI-readable output**:
+- Issue/task lists are rendered as **markdown tables** with key fields only (no raw JSON dumps)
+- Descriptions are truncated to 500 chars
+- Custom fields and empty arrays are stripped
+- Use `format="raw"` to get full unprocessed API responses when needed
+
+### Composite Queries
+- **ClickUp**: Set `subtasks=true` on a task GET to automatically fetch and embed subtasks in one call (saves a round-trip)
+- **Linear**: Use GraphQL to fetch issues with children (sub-issues) in a single query
+
+### State Tracking
+The tools automatically cache frequently used IDs (team_id, space_id, list_id, project_id) in `api_state.json` under the Switchboard state root. This reduces the need to navigate the hierarchy on every call.
+
+### Security Model
+- Tools only work with Linear/ClickUp API tokens configured in VS Code settings
+- Tokens are passed to the MCP server via environment variables
+- No arbitrary VS Code command execution (unlike the removed execute_vscode_command tool)
+
+### Linear API Tool
+- `call_linear_api` — Call Linear GraphQL or REST API directly
+  - GraphQL: Provide `query` and optional `variables`
+  - REST: Provide `method`, `endpoint`, and optional `body`
+  - `format`: `"compact"` (default) or `"raw"`
+  - Example: `call_linear_api(query="query { issues(first: 10) { nodes { id title state { name } } } }")`
+
+### ClickUp API Tool
+- `call_clickup_api` — Call ClickUp REST API directly
+  - Provide `method`, `endpoint`, and optional `query`/`body`
+  - `subtasks=true`: Fetch task + subtasks in one call (composite query)
+  - `format`: `"compact"` (default) or `"raw"`
+  - Example: `call_clickup_api(method="GET", endpoint="/v2/list/123/task")`
+  - Example with subtasks: `call_clickup_api(method="GET", endpoint="/v2/task/abc123", subtasks=true)`
+
+These tools work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
+
 ## 5) MCP server runtime internals
 
 `mcp-server.js` runs stdio MCP transport and registers tools from `register-tools.js`.

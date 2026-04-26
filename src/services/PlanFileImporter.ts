@@ -4,91 +4,57 @@ import * as path from 'path';
 import { buildKanbanColumns, parseCustomAgents, parseCustomKanbanColumns } from './agentConfig';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
 import { inspectKanbanState } from './planStateUtils';
+import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
+
+type ImportablePlanFile = {
+    filePath: string;
+    repoScope: string;
+};
+
+export interface ImportPlanFilesResult {
+    count: number;
+    sessionIds: string[];
+    /** Maps sessionId → kanbanColumn for integration sync */
+    columns: Record<string, string>;
+}
 
 /**
- * Scans `.switchboard/plans/*.md` and upserts records into the kanban DB.
+ * Scans top-level `.switchboard/plans/*.md` files plus one immediate
+ * `.switchboard/plans/<repoName>/*.md` layer and upserts records into the
+ * kanban DB.
  * Used by the "Reset Database" command to repopulate from plan files.
  * When a plan file contains a `## Switchboard State` section, the embedded
  * kanban column and status are used instead of defaulting to CREATED/active.
  */
-export async function importPlanFiles(workspaceRoot: string): Promise<number> {
+export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?: string): Promise<ImportPlanFilesResult> {
     const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
     if (!fs.existsSync(plansDir)) {
-        return 0;
+        return { count: 0, sessionIds: [], columns: {} };
     }
 
-    const files = (await fs.promises.readdir(plansDir))
-        .filter(f => f.endsWith('.md'));
+    const files = await listImportablePlanFiles(plansDir);
 
     if (files.length === 0) {
-        return 0;
+        return { count: 0, sessionIds: [], columns: {} };
     }
 
     const db = KanbanDatabase.forWorkspace(workspaceRoot);
     const ready = await db.ensureReady();
     if (!ready) {
-        return 0;
+        return { count: 0, sessionIds: [], columns: {} };
     }
 
-    const validKanbanColumns = await readImportableKanbanColumns(workspaceRoot);
+    const validKanbanColumns = await readImportableKanbanColumns(
+        resolveImportableStateRoot(workspaceRoot, effectiveStateRoot)
+    );
 
-    let workspaceId = await db.getWorkspaceId()
-        || await db.getDominantWorkspaceId();
-
-    const committedIdPath = path.join(workspaceRoot, '.switchboard', 'workspace-id');
-
-    // Read the workspace-local workspace-id file if present.
-    // Checked after DB so that the local machine's established ID takes precedence,
-    // but before legacy/hash fallbacks so existing local workspaces keep using the same ID source.
-    if (!workspaceId) {
-        try {
-            const fileContent = await fs.promises.readFile(committedIdPath, 'utf-8');
-            const trimmed = fileContent.trim();
-            if (/^[0-9a-f]{8,36}(?:-[0-9a-f]{4,})*$/i.test(trimmed) && trimmed.length >= 8) {
-                workspaceId = trimmed;
-            }
-        } catch {
-            // File doesn't exist or unreadable — fall through
-        }
-    }
-
-    if (!workspaceId) {
-        // Legacy workspace_identity.json fallback (backward compat)
-        const legacyIdPath = path.join(workspaceRoot, '.switchboard', 'workspace_identity.json');
-        try {
-            if (fs.existsSync(legacyIdPath)) {
-                const data = JSON.parse(await fs.promises.readFile(legacyIdPath, 'utf-8'));
-                if (typeof data?.workspaceId === 'string' && data.workspaceId.length > 0) {
-                    workspaceId = data.workspaceId;
-                }
-            }
-        } catch { /* ignore parse errors */ }
-    }
-
-    if (!workspaceId) {
-        // Deterministic hash fallback — stable for the same absolute path
-        workspaceId = crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 12);
-    }
-
-    // Persist the resolved workspace ID so downstream consumers (board queries,
-    // _getOrCreateWorkspaceId) find it in the config table immediately.
-    await db.setWorkspaceId(workspaceId);
-
-    // Opportunistically write the workspace-local file (wx = exclusive create)
-    try {
-        await fs.promises.mkdir(path.dirname(committedIdPath), { recursive: true });
-        await fs.promises.writeFile(committedIdPath, workspaceId + '\n', { flag: 'wx' });
-    } catch (err: any) {
-        if (err?.code !== 'EEXIST') {
-            console.warn('[PlanFileImporter] Failed to write workspace-id file:', err);
-        }
-    }
+    const workspaceId = await ensureWorkspaceIdentity(workspaceRoot);
 
     const now = new Date().toISOString();
     const records: KanbanPlanRecord[] = [];
 
     for (const file of files) {
-        const filePath = path.join(plansDir, file);
+        const filePath = file.filePath;
         let content: string;
         try {
             content = await fs.promises.readFile(filePath, 'utf-8');
@@ -119,10 +85,17 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
             }
         }
 
-        const topic = extractTopic(content, file);
+        const topic = extractTopic(content, path.basename(filePath));
         const complexity = extractComplexity(content);
         const tags = extractTags(content);
+        const embeddedRepoScope = extractRepoScope(content);
+        const repoScope = file.repoScope || embeddedRepoScope;
         const planFileNormalized = filePath.replace(/\\/g, '/');
+        if (file.repoScope && embeddedRepoScope && embeddedRepoScope !== file.repoScope) {
+            console.warn(
+                `[PlanFileImporter] Repo scope mismatch in ${planFileNormalized}; using folder scope '${file.repoScope}' instead of embedded metadata '${embeddedRepoScope}'.`
+            );
+        }
 
         // Use embedded kanban state if present; fall back to defaults for
         // legacy files that pre-date the ## Switchboard State section.
@@ -150,6 +123,7 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
             status,
             complexity,
             tags,
+            repoScope,
             dependencies: '',
             workspaceId,
             createdAt: now,
@@ -167,11 +141,82 @@ export async function importPlanFiles(workspaceRoot: string): Promise<number> {
     }
 
     if (records.length === 0) {
-        return 0;
+        return { count: 0, sessionIds: [], columns: {} };
     }
 
     const success = await db.upsertPlans(records);
-    return success ? records.length : 0;
+    if (!success) {
+        return { count: 0, sessionIds: [], columns: {} };
+    }
+    const columns: Record<string, string> = {};
+    for (const record of records) {
+        columns[record.sessionId] = record.kanbanColumn;
+    }
+    return {
+        count: records.length,
+        sessionIds: records.map(r => r.sessionId),
+        columns
+    };
+}
+
+async function listImportablePlanFiles(plansDir: string): Promise<ImportablePlanFile[]> {
+    const entries = await fs.promises.readdir(plansDir, { withFileTypes: true });
+    const files: ImportablePlanFile[] = [];
+
+    for (const entry of entries) {
+        if (entry.isFile() && entry.name.endsWith('.md')) {
+            if (isRuntimeMirrorPlanFile(entry.name)) {
+                continue;
+            }
+            files.push({
+                filePath: path.join(plansDir, entry.name),
+                repoScope: ''
+            });
+            continue;
+        }
+
+        if (!entry.isDirectory()) {
+            continue;
+        }
+
+        const repoScope = sanitizeRepoScope(entry.name);
+        if (!repoScope) {
+            continue;
+        }
+
+        const repoDir = path.join(plansDir, entry.name);
+        const childEntries = await fs.promises.readdir(repoDir, { withFileTypes: true });
+        for (const childEntry of childEntries) {
+            if (!childEntry.isFile() || !childEntry.name.endsWith('.md')) {
+                continue;
+            }
+            if (isRuntimeMirrorPlanFile(childEntry.name)) {
+                continue;
+            }
+            files.push({
+                filePath: path.join(repoDir, childEntry.name),
+                repoScope
+            });
+        }
+    }
+
+    return files.sort((left, right) => left.filePath.localeCompare(right.filePath));
+}
+
+function resolveImportableStateRoot(workspaceRoot: string, effectiveStateRoot?: string): string {
+    const providedStateRoot = String(effectiveStateRoot || '').trim();
+    if (providedStateRoot) {
+        return path.resolve(providedStateRoot);
+    }
+    const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+    const directParentRoot = path.dirname(resolvedWorkspaceRoot);
+    if (directParentRoot !== resolvedWorkspaceRoot) {
+        const parentKanbanDb = path.join(directParentRoot, '.switchboard', 'kanban.db');
+        if (fs.existsSync(parentKanbanDb)) {
+            return directParentRoot;
+        }
+    }
+    return resolvedWorkspaceRoot;
 }
 
 function extractTopic(content: string, filename: string): string {
@@ -221,6 +266,24 @@ function extractTags(content: string): string {
         return tagsMatch[1].trim();
     }
     return '';
+}
+
+export function sanitizeRepoScope(raw: string): string {
+    const value = String(raw || '').trim().replace(/^['"`]|['"`]$/g, '');
+    if (!value || value.includes('/') || value.includes('\\') || value.includes('.')) {
+        return '';
+    }
+    return value;
+}
+
+function isRuntimeMirrorPlanFile(fileName: string): boolean {
+    return /^brain_[0-9a-f]{64}\.md$/i.test(fileName)
+        || /^ingested_[0-9a-f]{64}\.md$/i.test(fileName);
+}
+
+export function extractRepoScope(content: string): string {
+    const match = content.match(/## Metadata[\s\S]*?\*\*Repo:\*\*\s*([^\r\n]+)/i);
+    return sanitizeRepoScope(match ? match[1] : '');
 }
 
 async function readImportableKanbanColumns(workspaceRoot: string): Promise<Set<string>> {

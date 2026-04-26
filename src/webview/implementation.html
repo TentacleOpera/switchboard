@@ -217,6 +217,21 @@
             color: var(--text-secondary);
         }
 
+        .plan-select.loading {
+            opacity: 0.6;
+            cursor: wait;
+            pointer-events: none;
+        }
+
+        .select-arrow.loading {
+            animation: spin 0.8s linear infinite;
+        }
+
+        @keyframes spin {
+            from { transform: translateY(-50%) rotate(0deg); }
+            to { transform: translateY(-50%) rotate(360deg); }
+        }
+
         /* Agent List Section */
         .tab-bar {
             display: flex;
@@ -310,6 +325,309 @@
             flex-direction: column;
             gap: 8px;
             overflow-y: auto;
+        }
+
+        .project-panel {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .project-view-shell {
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .project-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .project-input,
+        .project-select {
+            background: rgba(255, 255, 255, 0.03);
+            border: 1px solid var(--border-color);
+            color: var(--text-primary);
+            padding: 8px 10px;
+            border-radius: 2px;
+            min-width: 160px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .project-input {
+            flex: 1;
+        }
+
+        .project-empty-state {
+            padding: 12px;
+            border: 1px dashed var(--border-color);
+            border-radius: 2px;
+            color: var(--text-secondary);
+            font-size: 11px;
+            line-height: 1.5;
+        }
+
+        .project-issues-list,
+        .project-detail-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .project-issue-card,
+        .project-detail-item {
+            width: 100%;
+            /* Mix 12% teal into the top, fading to 4% teal at the bottom */
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 10px 12px;
+            text-align: left;
+            transition: all 0.15s;
+            position: relative;
+        }
+
+        .project-issue-card {
+            cursor: pointer;
+        }
+
+        .project-issue-card:hover,
+        .project-detail-item:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .project-issue-title,
+        .project-task-title,
+        .project-detail-heading {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .project-issue-meta,
+        .project-task-meta,
+        .project-task-description,
+        .project-detail-item {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .project-task-description {
+            overflow-x: hidden;
+            word-break: break-word;
+            max-width: 100%;
+        }
+
+        /* Text overflow constraints for Linear issue cards */
+        .project-issue-card {
+            overflow: hidden;
+        }
+
+        /* Loading spinner for Linear cards */
+        .project-issue-card.loading {
+            overflow: visible;
+            opacity: 0.7;
+            pointer-events: none;
+        }
+
+        .project-issue-card.loading::after {
+            content: '';
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 16px;
+            height: 16px;
+            border: 2px solid var(--accent-teal-dim);
+            border-top-color: var(--accent-teal);
+            border-radius: 50%;
+            animation: linearCardSpinner 0.8s linear infinite;
+        }
+
+        @keyframes linearCardSpinner {
+            to { transform: rotate(360deg); }
+        }
+
+        .project-issue-title {
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .project-issue-meta {
+            overflow: hidden;
+            word-break: break-word;
+        }
+
+        .project-issue-card .project-issue-meta:last-child {
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            white-space: normal;
+            /* Fallback for non-WebKit: 2 lines × 11px font-size × 1.5 line-height */
+            max-height: calc(11px * 1.5 * 2);
+            overflow: hidden;
+        }
+
+        /* ClickUp project card styles - match Linear card styling */
+        .project-card {
+            width: 100%;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border: 1px solid var(--vscode-contrastBorder, var(--border-color));
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 10px 12px;
+            text-align: left;
+            transition: all 0.15s;
+            position: relative;
+            cursor: pointer;
+            margin-bottom: 8px;
+            overflow: hidden;
+        }
+
+        .project-card:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .project-card.selected {
+            border-left-color: var(--accent-teal);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 20%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg)) 100%);
+        }
+
+        .project-card.loading {
+            opacity: 0.7;
+            pointer-events: none;
+        }
+
+        .project-card-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: flex-start;
+            gap: 8px;
+            margin-bottom: 6px;
+        }
+
+        .project-card-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            display: -webkit-box;
+            -webkit-line-clamp: 2;
+            -webkit-box-orient: vertical;
+            flex: 1;
+        }
+
+        .project-card-status {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--panel-bg);
+            padding: 2px 6px;
+            border-radius: 3px;
+            white-space: nowrap;
+            flex-shrink: 0;
+        }
+
+        .project-card-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .project-card-id {
+            color: var(--accent-teal);
+        }
+
+        .project-card-assignees {
+            color: var(--text-secondary);
+        }
+
+        .project-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-green);
+            border: 1px solid var(--accent-green);
+            padding: 2px 8px;
+            font-size: 9px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            margin-top: 6px;
+            letter-spacing: 0.5px;
+        }
+
+        .project-issue-import-btn:hover {
+            background: var(--accent-green);
+            color: var(--panel-bg);
+        }
+
+        .project-issue-import-btn:disabled,
+        .project-issue-import-btn[data-importing] {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .project-issue-import-btn[data-importing]::after {
+            content: '...';
+        }
+
+        .project-issue-send-planner-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-blue, var(--vscode-button-background));
+            border: 1px solid var(--accent-blue, var(--vscode-button-background));
+            padding: 2px 8px;
+            font-size: 9px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            margin-top: 6px;
+            letter-spacing: 0.5px;
+        }
+
+        .project-issue-send-planner-btn:hover {
+            background: var(--accent-blue, var(--vscode-button-background));
+            color: var(--panel-bg);
+        }
+
+        .project-issue-send-planner-btn:disabled,
+        .project-issue-send-planner-btn[data-sending] {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        .project-issue-send-planner-btn[data-sending]::after {
+            content: '...';
+        }
+
+        .project-task-header,
+        .project-detail-section {
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+
+        .project-detail-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .project-back-btn {
+            align-self: flex-start;
         }
 
         .activity-list {
@@ -1189,6 +1507,139 @@
             opacity: 0.3;
             cursor: not-allowed;
         }
+
+        .markdown-body {
+            font-family: var(--font-family);
+            line-height: 1.5;
+            font-size: 12px;
+            padding: 8px;
+            overflow-y: auto;
+            max-height: 300px;
+            background: #0b0d12;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            color: var(--text-primary);
+            word-wrap: break-word;
+        }
+        .markdown-body h1, .markdown-body h2, .markdown-body h3,
+        .markdown-body h4, .markdown-body h5, .markdown-body h6 {
+            margin-top: 8px;
+            margin-bottom: 4px;
+            font-weight: 600;
+        }
+        .markdown-body h1 { font-size: 16px; }
+        .markdown-body h2 { font-size: 14px; }
+        .markdown-body h3 { font-size: 13px; }
+        .markdown-body p { margin: 4px 0; }
+        .markdown-body a { color: var(--accent-cyan); text-decoration: none; }
+        .markdown-body a:hover { text-decoration: underline; }
+        .markdown-body code {
+            background: rgba(255,255,255,0.06);
+            padding: 1px 4px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .markdown-body pre {
+            background: rgba(255,255,255,0.04);
+            padding: 6px 8px;
+            border-radius: 4px;
+            overflow-x: auto;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+        .markdown-body pre code {
+            background: none;
+            padding: 0;
+        }
+        .markdown-body ul, .markdown-body ol {
+            margin: 4px 0;
+            padding-left: 20px;
+        }
+        .markdown-body blockquote {
+            border-left: 3px solid var(--border-color);
+            margin: 4px 0;
+            padding-left: 8px;
+            color: var(--text-secondary);
+        }
+        .markdown-body strong { font-weight: 600; }
+        .markdown-body em { font-style: italic; }
+        .markdown-body img { max-width: 100%; border-radius: 4px; }
+        .markdown-body hr {
+            border: none;
+            border-top: 1px solid var(--border-color);
+            margin: 8px 0;
+        }
+
+        /* ClickUp-specific styles */
+        .hierarchy-nav-container {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+            padding: 8px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .hierarchy-nav {
+            display: flex;
+            align-items: center;
+            flex-wrap: wrap;
+            gap: 4px;
+        }
+
+        .hierarchy-level {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .hierarchy-level.selected {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+
+        .hierarchy-label {
+            font-size: 11px;
+            color: var(--text-muted);
+            font-weight: 500;
+        }
+
+        .hierarchy-select {
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px 8px;
+            font-size: 11px;
+            cursor: pointer;
+        }
+
+        .hierarchy-select:hover {
+            border-color: var(--accent-teal);
+        }
+
+        .hierarchy-change-btn {
+            background: transparent;
+            border: none;
+            color: var(--accent-teal);
+            font-size: 10px;
+            cursor: pointer;
+            padding: 2px 4px;
+        }
+
+        .hierarchy-change-btn:hover {
+            text-decoration: underline;
+        }
+
+        .hierarchy-separator {
+            color: var(--text-muted);
+            font-size: 12px;
+            margin: 0 2px;
+        }
+
     </style>
 </head>
 
@@ -1320,25 +1771,35 @@
                     aria-label="Copy plan link">COPY</button>
                 <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
             </div>
-            <div style="margin-top: 6px;">
-                <button id="btn-open-kanban" class="secondary-btn is-teal w-full">OPEN AUTOBAN</button>
+            <div style="margin-top: 6px; display:flex; gap:6px;">
+                <button id="btn-open-kanban" class="secondary-btn is-teal" style="flex:1">OPEN AUTOBAN</button>
+                <button id="btn-open-planning" class="secondary-btn is-cyan" style="flex:1">PLANNING</button>
             </div>
         </div>
 
         <!-- PINNED DASHBOARD: AGENT LIST (includes Auto-agent) -->
         <div id="panel-agents" class="tab-panel">
             <div class="sub-tab-bar">
-                <button class="sub-tab-btn is-active" data-tab="agents">Agents</button>
-                <button class="sub-tab-btn" data-tab="webai">Planning</button>
-                <button class="sub-tab-btn" data-tab="autoban">Autoban</button>
+                <button class="sub-tab-btn" data-tab="agents">Agents</button>
+                <button class="sub-tab-btn is-active" data-tab="terminals">Terminals</button>
+                <button id="integration-tab-btn" class="sub-tab-btn" data-tab="project">Projects</button>
             </div>
-            <div id="agent-list-standard" class="agent-list">
+            <div id="agent-list-standard" class="agent-list hidden">
                 <div style="text-align: center; padding: 20px; color: var(--text-secondary);">
                     Initializing...
                 </div>
             </div>
-            <div id="agent-list-autoban" class="agent-list hidden"></div>
-            <div id="agent-list-webai" class="agent-list hidden"></div>
+            <div id="agent-list-terminals" class="agent-list">
+                <!-- Terminal Operations content -->
+                <div class="terminals-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
+                    <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
+                    <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
+                    <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">OPEN SETUP</button>
+                    <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
+                </div>
+
+            </div>
+            <div id="agent-list-project" class="agent-list hidden"></div>
         </div>
 
         <!-- LIVE ACTIVITY FEED -->
@@ -1355,20 +1816,6 @@
             </div>
             <button id="btn-activity-load-more" class="secondary-btn w-full activity-load-more hidden">LOAD
                 MORE</button>
-        </div>
-
-        <!-- TERMINAL OPERATIONS -->
-        <div class="system-section">
-            <div class="panel-toggle" id="terminal-operations-toggle">
-                <div class="section-label" style="margin:0">TERMINAL OPERATIONS</div>
-                <span class="chevron open" id="terminal-operations-chevron">▶</span>
-            </div>
-            <div class="panel-fields open" id="terminal-operations-fields" data-accordion="true">
-                <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
-                <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
-                <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">OPEN SETUP</button>
-                <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
-            </div>
         </div>
 
         <!-- STATUS FOOTER -->
@@ -1405,8 +1852,8 @@
         // DOM Elements
         const runSheetSelect = document.getElementById('run-sheet-select');
         const agentListStandard = document.getElementById('agent-list-standard');
-        const agentListAutoban = document.getElementById('agent-list-autoban');
-        const agentListWebai = document.getElementById('agent-list-webai');
+        const agentListTerminals = document.getElementById('agent-list-terminals');
+        const agentListProject = document.getElementById('agent-list-project');
         const agentList = agentListStandard; // backward compat alias
         const activityList = document.getElementById('activity-list');
         const activityLoadMoreBtn = document.getElementById('btn-activity-load-more');
@@ -1430,6 +1877,73 @@
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
         let lastDesignDocLink = '';
+        let linearProjectIssues = [];
+        let selectedLinearIssue = null;
+
+        let linearProjectLoadedOnce = false;
+        let linearProjectLoading = false;
+        let linearProjectStatus = 'idle';
+        let linearProjectMessage = '';
+        let linearProjectScopeLabel = 'Linear team';
+        let pendingLinearDetailIssueId = '';
+        let loadingLinearCardId = '';
+        let linearImportPending = false;
+        let linearProjectSearchValue = '';
+        let linearProjectStateFilterValue = '';
+        let linearTaskDetailsTimeoutId = null;
+        let lastIntegrationProvider = null;
+        let linearProjectPickerValue = '';
+        let linearAvailableProjects = [];
+        let currentWorkspaceRoot = '';
+
+        // ClickUp project state (mirrors Linear state)
+        let clickUpProjectIssues = [];
+        let selectedClickUpIssue = null;
+        let clickUpProjectStatus = 'idle';
+        let clickUpProjectMessage = '';
+        let clickUpProjectLoadedOnce = false;
+        let clickUpProjectLoading = false;
+        let clickUpLoadSeq = 0;  // request sequence counter to discard stale responses
+        let clickUpProjectScopeLabel = 'ClickUp list';
+
+        // Hierarchy navigation state (Space → Folder → List)
+        let clickUpAvailableSpaces = [];
+        let clickUpAvailableFolders = [];
+        let clickUpAvailableListsInFolder = [];
+        let clickUpAvailableDirectLists = [];
+        let clickUpSelectedSpaceId = '';
+        let clickUpSelectedFolderId = '';
+        let clickUpSelectedListId = '';
+        let clickUpHierarchyLoading = false;
+
+        // Task loading state
+        let pendingClickUpDetailIssueId = '';
+        let loadingClickUpCardId = '';
+        let clickUpImportPending = false;
+        let clickUpProjectSearchValue = '';
+        let clickUpProjectStatusFilterValue = '';
+        let clickUpTaskDetailsTimeoutId = null;
+        let clickUpCurrentPage = 0;
+        let clickUpProjectHasMore = false;
+        let clickUpProjectIsLoadingMore = false;
+
+        // Cached HTML strings for DOM guard comparisons — avoids innerHTML read-back
+        // serialization mismatches (browser may reorder attrs, normalize whitespace).
+        let _lastStateFilterHtml = '';
+        let _lastProjectPickerHtml = '';
+        let _lastIssuesContainerHtml = '';
+        let _lastDetailDescriptionHtml = '';
+        let _lastDetailSubtasksHtml = '';
+        let _lastDetailCommentsHtml = '';
+        let _lastDetailAttachmentsHtml = '';
+        let _lastClickUpHierarchyHtml = '';
+        let _lastClickUpIssuesContainerHtml = '';
+        let _lastClickUpDetailDescriptionHtml = '';
+        let _lastClickUpDetailSubtasksHtml = '';
+        let _lastClickUpDetailCommentsHtml = '';
+        let _lastClickUpDetailAttachmentsHtml = '';
+        let _lastClickUpStateFilterHtml = '';
+        const selectArrow = document.querySelector('.select-arrow');
 
         // Global helper — no class scope (underscore prefix is convention only, not enforced)
         function _relativeTime(date) {
@@ -1490,6 +2004,9 @@
                 .replace(/"/g, '&quot;')
                 .replace(/'/g, '&#39;');
         }
+        function escapeAttr(value) {
+            return String(value || '').replace(/"/g, '&quot;');
+        }
         function inferTopicFromPath(filePath) {
             if (!filePath) return '(untitled)';
             var name = filePath.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
@@ -1543,7 +2060,9 @@
             if (event.target === recoverPlansModal) closeRecoverPlansModal();
         });
         document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') { closeRecoverPlansModal(); }
+            if (e.key === 'Escape') {
+                closeRecoverPlansModal();
+            }
         });
         recoverSearchInput.addEventListener('input', () => {
             renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
@@ -1556,17 +2075,6 @@
                 btnGrid.classList.add('dispatching');
                 btnGrid.classList.remove('is-teal');
                 btnGrid.disabled = true;
-
-                // Auto-collapse Terminal Operations accordion so the user can see the agent list
-                const _toFieldsOnLaunch = document.getElementById('terminal-operations-fields');
-                const _toChevronOnLaunch = document.getElementById('terminal-operations-chevron');
-                if (_toFieldsOnLaunch && _toFieldsOnLaunch.classList.contains('open')) {
-                    _toFieldsOnLaunch.classList.remove('open');
-                    if (_toChevronOnLaunch) _toChevronOnLaunch.classList.remove('open');
-                    // hasManuallyCollapsedThisSession is intentionally NOT set here —
-                    // this is programmatic closure, not user intent. The onboarding guard
-                    // may re-open if agents fail to register, which is correct behaviour.
-                }
 
                 // Collect current CLI commands and custom agent state
                 const commands = {
@@ -1606,6 +2114,8 @@
         if (btnDeregister) btnDeregister.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
         const btnKanban = document.getElementById('btn-open-kanban');
         if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
+        const btnPlanning = document.getElementById('btn-open-planning');
+        if (btnPlanning) btnPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
         const btnOpenCentralSetup = document.getElementById('btn-open-central-setup');
         if (btnOpenCentralSetup) {
             btnOpenCentralSetup.addEventListener('click', () => {
@@ -1666,31 +2176,7 @@
             });
         }
 
-        const termOpsToggle = document.getElementById('terminal-operations-toggle');
-        if (termOpsToggle) {
-            termOpsToggle.addEventListener('click', () => {
-                const fields = document.getElementById('terminal-operations-fields');
-                const chevron = document.getElementById('terminal-operations-chevron');
-                if (fields && chevron) {
-                    const willOpen = !fields.classList.contains('open');
-                    if (willOpen) {
-                        // Collapse all other accordions before opening this one
-                        collapseAllAccordions('terminal-operations-fields');
-                    }
-                    const isOpen = fields.classList.toggle('open');
-                    chevron.classList.toggle('open', isOpen);
-                    if (isOpen) {
-                        vscode.postMessage({ type: 'getStartupCommands' });
-                        vscode.postMessage({ type: 'getVisibleAgents' });
-                        vscode.postMessage({ type: 'getCustomAgents' });
-                        vscode.postMessage({ type: 'getJulesAutoSyncSetting' });
-                    } else {
-                        // User explicitly collapsed: remember for the rest of this session
-                        hasManuallyCollapsedThisSession = true;
-                    }
-                }
-            });
-        }
+        // REMOVED: Terminal Operations accordion no longer exists - content moved to Terminals tab
 
         if (liveFeedToggle && liveFeedFields && liveFeedChevron) {
             liveFeedToggle.addEventListener('click', () => {
@@ -1774,7 +2260,8 @@
         let noAgentsDetectionTime = null;        // timestamp of first 0-green detection
         let hasManuallyCollapsedThisSession = false; // true if user collapsed Terminal Ops this session
         const RECOVERY_THRESHOLD_MS = 5000;      // ms before onboarding activates
-        let _setupComplete = false;               // true once needsSetup === false
+        let _setupComplete = true;                // ACTIVE BY DEFAULT — don't wait for initialState IPC
+        let hasEverHadGreenAgents = false;        // skip grace period until agents have been seen alive
 
         function getDispatchKey(role) {
             const sessionId = runSheetSelect.value || '';
@@ -1944,6 +2431,8 @@
                 const sessionId = runSheetSelect.value;
                 vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: sessionId || null });
                 if (userInitiatedChange && sessionId) {
+                    runSheetSelect.classList.add('loading');
+                    if (selectArrow) selectArrow.classList.add('loading');
                     vscode.postMessage({ type: 'viewPlan', sessionId });
                 }
                 userInitiatedChange = false;
@@ -1970,6 +2459,9 @@
                     setActiveTab(message.activeTab || 'agents', false);
                     if (message.type === 'initialState') {
                         toggleOnboarding(message.needsSetup === true);
+                        if (message.workspaceRoot) {
+                            currentWorkspaceRoot = String(message.workspaceRoot).trim();
+                        }
                     }
                     break;
                 case 'setupStatus':
@@ -2008,6 +2500,11 @@
                         if (message.success) {
                             gridBtn.classList.add('success', 'feedback');
                             gridBtn.innerText = 'TERMINALS OPENED';
+                            // Auto-switch to Agents tab on confirmed successful launch
+                            const agentsTabBtn = document.querySelector('.sub-tab-btn[data-tab="agents"]');
+                            if (agentsTabBtn) {
+                                agentsTabBtn.click();
+                            }
                         } else {
                             gridBtn.classList.add('error', 'feedback');
                             gridBtn.innerText = 'FAILED';
@@ -2017,6 +2514,25 @@
                             gridBtn.classList.remove('success', 'error', 'feedback');
                             gridBtn.classList.add('is-teal');
                             gridBtn.disabled = false;
+                        }, 2000);
+
+                    }
+                    // Reset onboarding button if it exists (outside gridBtn guard — button may persist even if original is absent)
+                    const onboardBtn = document.getElementById('createAgentGrid-onboarding');
+                    if (onboardBtn) {
+                        onboardBtn.classList.remove('dispatching');
+                        if (message.success) {
+                            onboardBtn.classList.add('success', 'feedback');
+                            onboardBtn.innerText = 'TERMINALS OPENED';
+                        } else {
+                            onboardBtn.classList.add('error', 'feedback');
+                            onboardBtn.innerText = 'FAILED';
+                        }
+                        setTimeout(() => {
+                            onboardBtn.innerText = 'OPEN AGENT TERMINALS';
+                            onboardBtn.classList.remove('success', 'error', 'feedback');
+                            onboardBtn.classList.add('is-teal');
+                            onboardBtn.disabled = false;
                         }, 2000);
                     }
                     break;
@@ -2036,6 +2552,217 @@
                         updatePlanActionStates();
                         vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
                     }
+                    break;
+                case 'linearProjectLoaded':
+                    linearProjectLoading = false;
+                    linearProjectLoadedOnce = true;
+                    linearProjectStatus = message.status || 'loaded';
+                    linearProjectIssues = Array.isArray(message.issues) ? message.issues : [];
+                    linearProjectMessage = String(message.message || '');
+                    linearProjectScopeLabel = String(message.projectName || '').trim() || 'Linear team';
+                    if (linearProjectStatus !== 'loaded') {
+                        selectedLinearIssue = null;
+                    }
+                    renderSidebarLinearProjectPanel();
+                    break;
+                case 'linearProjectsLoaded':
+                    if (message.status === 'loaded' && Array.isArray(message.projects)) {
+                        linearAvailableProjects = message.projects;
+                        renderSidebarLinearProjectPickerOptions();
+                    }
+                    break;
+                case 'linearTaskDetailsLoaded':
+                    // Capture the pending ID before any modification so we can detect stale responses.
+                    const previousPendingId = pendingLinearDetailIssueId;
+                    const responseId = String(message.issue ? message.issue.id : '');
+
+                    // Only clear loading state variables if they belong to THIS response.
+                    // If the user clicked a different issue after this request was dispatched,
+                    // these variables now track the newer request — clearing them would clobber
+                    // its loading state and break its safety timeout.
+                    if (responseId && loadingLinearCardId === responseId) {
+                        loadingLinearCardId = '';
+                    }
+                    if (responseId && pendingLinearDetailIssueId === responseId) {
+                        pendingLinearDetailIssueId = '';
+                    }
+
+                    // Clear safety timeout since we got a response
+                    if (linearTaskDetailsTimeoutId) {
+                        clearTimeout(linearTaskDetailsTimeoutId);
+                        linearTaskDetailsTimeoutId = null;
+                    }
+
+                    if (!message.issue) {
+                        // Backend couldn't find the issue. Clear loading state to unblock
+                        // the card. Without message.issue.id we can't verify this response
+                        // isn't stale, but null-issue responses arrive quickly (error path),
+                        // making races unlikely. The alternative (not clearing) leaves the
+                        // card permanently bricked.
+                        loadingLinearCardId = '';
+                        pendingLinearDetailIssueId = '';
+                        if (linearTaskDetailsTimeoutId) {
+                            clearTimeout(linearTaskDetailsTimeoutId);
+                            linearTaskDetailsTimeoutId = null;
+                        }
+                        renderSidebarLinearProjectPanel();
+                        break;
+                    }
+
+                    // Stale-response guard: if the user clicked a different issue
+                    // after this request was dispatched, skip setting selectedLinearIssue.
+                    // The pending request for the new issue will populate it on arrival.
+                    if (previousPendingId && previousPendingId !== responseId) {
+                        break;
+                    }
+
+                    selectedLinearIssue = {
+                        issue: message.issue,
+                        subtasks: Array.isArray(message.subtasks) ? message.subtasks : [],
+                        comments: Array.isArray(message.comments) ? message.comments : [],
+                        attachments: Array.isArray(message.attachments) ? message.attachments : [],
+                        renderedDescriptionHtml: message.renderedDescriptionHtml || ''
+                    };
+                    linearImportPending = false;
+                    renderSidebarLinearProjectPanel();
+                    break;
+                case 'linearTaskImported':
+                    linearImportPending = false;
+                    if (message.success === false) {
+                        vscode.postMessage({
+                            type: 'showWarning',
+                            message: message.error || 'Failed to import the selected Linear task.'
+                        });
+                        renderSidebarLinearProjectPanel();
+                    } else {
+                        vscode.postMessage({
+                            type: 'showInfo',
+                            message: message.message || 'Imported the selected Linear task.'
+                        });
+                        loadLinearProject(true);
+                    }
+                    renderSidebarLinearTaskDetail();
+                    break;
+                case 'linearTaskImportedToPlanner':
+                    linearImportPending = false;
+                    if (message.error) {
+                        vscode.postMessage({
+                            type: 'showWarning',
+                            message: message.error || 'Failed to import and send the selected Linear task to planner.'
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'showInfo',
+                            message: message.message || 'Imported and sent the selected Linear task to planner.'
+                        });
+                        loadLinearProject(true);
+                    }
+                    renderSidebarLinearProjectPanel();
+                    renderSidebarLinearTaskDetail();
+                    break;
+                case 'linearError':
+                    linearProjectLoading = false;
+                    linearProjectLoadedOnce = true;
+                    linearImportPending = false;
+                    loadingLinearCardId = '';
+                    if (message.scope === 'project') {
+                        linearProjectStatus = 'error';
+                        linearProjectMessage = String(message.error || 'Failed to load the configured Linear project.');
+                    } else if (!message.issueId || !pendingLinearDetailIssueId || pendingLinearDetailIssueId === String(message.issueId || '')) {
+                        pendingLinearDetailIssueId = '';
+                        vscode.postMessage({
+                            type: 'showWarning',
+                            message: message.error || 'Failed to load the selected Linear task.'
+                        });
+                    }
+                    renderSidebarLinearProjectPanel();
+                    break;
+                case 'clickupProjectLoaded':
+                    // Discard stale responses from prior list selections
+                    if (message.loadSeq && message.loadSeq !== clickUpLoadSeq) {
+                        break;  // stale response — ignore
+                    }
+                    clickUpProjectLoading = false;
+                    clickUpProjectLoadedOnce = true;
+                    if (message.status === 'loaded' && Array.isArray(message.tasks)) {
+                        clickUpProjectIssues = message.tasks;
+                        clickUpProjectStatus = 'loaded';
+                    } else if (message.status === 'setup-required') {
+                        clickUpProjectStatus = 'setup-required';
+                        clickUpProjectMessage = message.message || 'Select a Space, Folder, and List to view tasks.';
+                    } else if (message.status === 'error') {
+                        clickUpProjectStatus = 'error';
+                        clickUpProjectMessage = message.error || 'Failed to load ClickUp project.';
+                    }
+                    renderSidebarClickUpProjectPanel();
+                    break;
+                case 'clickupSpacesLoaded':
+                    clickUpHierarchyLoading = false;
+                    clickUpAvailableSpaces = message.spaces || [];
+                    renderSidebarClickUpProjectPanel();
+                    break;
+                case 'clickupFoldersLoaded':
+                    clickUpHierarchyLoading = false;
+                    clickUpAvailableFolders = message.folders || [];
+                    clickUpAvailableDirectLists = message.directLists || [];
+                    renderSidebarClickUpProjectPanel();
+                    break;
+                case 'clickupListsLoaded':
+                    clickUpHierarchyLoading = false;
+                    clickUpAvailableListsInFolder = message.lists || [];
+                    renderSidebarClickUpProjectPanel();
+                    break;
+                case 'clickupTaskDetailsLoaded': {
+                    const previousPendingId = pendingClickUpDetailIssueId;
+                    const responseId = String(message.task ? message.task.id : '');
+
+                    if (responseId && loadingClickUpCardId === responseId) {
+                        loadingClickUpCardId = '';
+                    }
+                    if (responseId && pendingClickUpDetailIssueId === responseId) {
+                        pendingClickUpDetailIssueId = '';
+                    }
+                    if (clickUpTaskDetailsTimeoutId) {
+                        clearTimeout(clickUpTaskDetailsTimeoutId);
+                        clickUpTaskDetailsTimeoutId = null;
+                    }
+
+                    if (!message.task) {
+                        loadingClickUpCardId = '';
+                        pendingClickUpDetailIssueId = '';
+                        if (clickUpTaskDetailsTimeoutId) {
+                            clearTimeout(clickUpTaskDetailsTimeoutId);
+                            clickUpTaskDetailsTimeoutId = null;
+                        }
+                        renderSidebarClickUpProjectPanel();
+                        break;
+                    }
+
+                    if (previousPendingId && previousPendingId !== responseId) {
+                        break;
+                    }
+
+                    selectedClickUpIssue = {
+                        task: message.task,
+                        subtasks: Array.isArray(message.subtasks) ? message.subtasks : [],
+                        comments: Array.isArray(message.comments) ? message.comments : [],
+                        attachments: Array.isArray(message.attachments) ? message.attachments : []
+                    };
+                    clickUpImportPending = false;
+                    renderSidebarClickUpProjectPanel();
+                    break;
+                }
+                case 'clickupError':
+                    clickUpProjectLoading = false;
+                    clickUpProjectLoadedOnce = true;
+                    clickUpImportPending = false;
+                    loadingClickUpCardId = '';
+                    if (message.scope === 'project') {
+                        clickUpProjectStatus = 'error';
+                        clickUpProjectMessage = String(message.error || 'Failed to load the configured ClickUp project.');
+                    }
+                    renderSidebarClickUpProjectPanel();
+                    renderSidebarClickUpTaskDetail();
                     break;
                 case 'copyPlanLinkResult':
                     showCopyPlanLinkFeedback(message.success === true);
@@ -2082,28 +2809,61 @@
                         renderAgentList();
                     }
                     break;
-                case 'customAgents':
-                    if (Array.isArray(message.customAgents)) {
-                        lastCustomAgents = message.customAgents;
-                        renderAgentList();
-                    }
-                    break;
-                case 'julesAutoSyncSetting': {
-                    lastJulesAutoSyncEnabled = message.enabled === true;
-                    break;
-                }
                 case 'designDocSetting': {
                     lastDesignDocLink = message.link || '';
-
                     const notionUrlInput = document.getElementById('notion-url-input');
                     if (notionUrlInput) { notionUrlInput.value = lastDesignDocLink; }
-
                     const statusLine = document.getElementById('design-doc-status-line');
                     if (statusLine) {
                         statusLine.textContent = lastDesignDocLink
                             ? `Source: ${lastDesignDocLink.length > 60 ? lastDesignDocLink.slice(0, 57) + '...' : lastDesignDocLink}`
                             : 'Not configured — configure in Planning tab';
                     }
+                    break;
+                }
+                case 'customAgents':
+                    if (Array.isArray(message.customAgents)) {
+                        lastCustomAgents = message.customAgents;
+                        renderAgentList();
+                    }
+                    break;
+                case 'integrationProviderPreference': {
+                    const newProvider = message.provider;
+                    const providerChanged = lastIntegrationProvider !== null && lastIntegrationProvider !== newProvider;
+                    lastIntegrationProvider = newProvider;
+                    updateIntegrationTabLabel(newProvider);
+                    // Only reload project tab content if the provider actually changed.
+                    // _refreshConfigurationState broadcasts this preference on every
+                    // refreshUI call (file saves, column moves, workflow actions), so
+                    // reloading unconditionally would cancel any in-progress "view
+                    // task details" action and make the panel appear to constantly reset.
+                    if (providerChanged && currentAgentTab === 'project') {
+                        // Clear Linear state
+                        linearProjectLoadedOnce = false;
+                        selectedLinearIssue = null;
+                        linearProjectIssues = [];
+                        // Clear ClickUp state
+                        clickUpProjectLoadedOnce = false;
+                        selectedClickUpIssue = null;
+                        clickUpProjectIssues = [];
+                        clickUpSelectedSpaceId = '';
+                        clickUpSelectedFolderId = '';
+                        clickUpSelectedListId = '';
+                        clickUpAvailableSpaces = [];
+                        clickUpAvailableFolders = [];
+                        clickUpAvailableListsInFolder = [];
+                        clickUpAvailableDirectLists = [];
+
+                        if (newProvider === 'clickup') {
+                            loadClickUpSpaces();
+                        } else {
+                            loadLinearProject();
+                        }
+                    }
+                    break;
+                }
+                case 'workspaceChanged': {
+                    currentWorkspaceRoot = String(message.workspaceRoot || '').trim();
                     break;
                 }
                 case 'recentActivity': {
@@ -2269,6 +3029,19 @@
                     }
                     break;
                 }
+                case 'planLoading': {
+                    if (message.value) {
+                        runSheetSelect.classList.add('loading');
+                        if (selectArrow) selectArrow.classList.add('loading');
+                    } else {
+                        // Only clear if this response matches the current selection
+                        if (!message.sessionId || message.sessionId === runSheetSelect.value) {
+                            runSheetSelect.classList.remove('loading');
+                            if (selectArrow) selectArrow.classList.remove('loading');
+                        }
+                    }
+                    break;
+                }
             }
         });
 
@@ -2331,22 +3104,1207 @@
             vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
         }
 
-        let currentAgentTab = 'agents';
+        let currentAgentTab = 'terminals';
         let isAutobanPanelInteracting = false;
         function switchAgentTab(tab) {
             currentAgentTab = tab;
-            const tabs = { agents: agentListStandard, autoban: agentListAutoban, webai: agentListWebai };
+            const tabs = { agents: agentListStandard, terminals: agentListTerminals, project: agentListProject };
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);
             });
+            if (tab === 'project') {
+                if (lastIntegrationProvider === 'clickup') {
+                    renderSidebarClickUpProjectPanel();
+                    if (!clickUpProjectLoadedOnce && !clickUpProjectLoading) {
+                        loadClickUpSpaces();
+                    }
+                } else {
+                    renderSidebarLinearProjectPanel();
+                    if (!linearProjectLoadedOnce && !linearProjectLoading) {
+                        loadLinearProject();
+                    }
+                }
+            }
+            if (tab === 'terminals') {
+                vscode.postMessage({ type: 'getStartupCommands' });
+                vscode.postMessage({ type: 'getVisibleAgents' });
+                vscode.postMessage({ type: 'getAccurateCodingSetting' });
+                vscode.postMessage({ type: 'getAdvancedReviewerSetting' });
+                vscode.postMessage({ type: 'getLeadChallengeSetting' });
+                vscode.postMessage({ type: 'getAggressivePairSetting' });
+                vscode.postMessage({ type: 'getDesignDocSetting' });
+                // NOTE: getDefaultPromptOverrides is not requested here — the
+                // prompt-override UI lives in the Kanban AGENTS tab, not the
+                // sidebar terminals tab. No handler or DOM target exists here.
+            }
             Object.entries(tabs).forEach(([key, el]) => {
                 el.classList.toggle('hidden', key !== tab);
             });
         }
 
+        function updateIntegrationTabLabel(provider) {
+            const tabBtn = document.getElementById('integration-tab-btn');
+            if (tabBtn) {
+                tabBtn.textContent = provider === 'clickup' ? 'ClickUp' : 'Linear';
+            }
+        }
+
         document.querySelectorAll('.sub-tab-btn').forEach(btn => {
             btn.addEventListener('click', () => switchAgentTab(btn.dataset.tab));
         });
+
+        function getProjectTabElements() {
+            return {
+                searchInput: document.getElementById('sidebar-linear-project-search'),
+                projectPicker: document.getElementById('sidebar-linear-project-picker'),
+                stateFilter: document.getElementById('sidebar-linear-state-filter'),
+                refreshButton: document.getElementById('sidebar-linear-project-refresh'),
+                emptyState: document.getElementById('sidebar-linear-project-empty'),
+                openSetupButton: document.getElementById('sidebar-linear-project-open-setup'),
+                issuesContainer: document.getElementById('sidebar-linear-issues-container'),
+                listView: document.getElementById('sidebar-project-list-view'),
+                taskView: document.getElementById('sidebar-project-task-view'),
+                backButton: document.getElementById('sidebar-task-back-button'),
+                detailTitle: document.getElementById('sidebar-detail-task-title'),
+                detailIdentifier: document.getElementById('sidebar-detail-task-identifier'),
+                detailState: document.getElementById('sidebar-detail-task-state'),
+                detailAssignee: document.getElementById('sidebar-detail-task-assignee'),
+                detailDescription: document.getElementById('sidebar-detail-task-description'),
+                detailSubtasksList: document.getElementById('sidebar-detail-subtasks-list'),
+                detailCommentsList: document.getElementById('sidebar-detail-comments-list'),
+                detailAttachmentsList: document.getElementById('sidebar-detail-attachments-list'),
+                detailAskAgentButton: document.getElementById('sidebar-detail-ask-agent'),
+                detailImportTaskButton: document.getElementById('sidebar-detail-import-task'),
+                detailSendPlannerTaskButton: document.getElementById('sidebar-detail-send-planner-task'),
+                hierarchyNav: document.getElementById('sidebar-clickup-hierarchy-nav')
+            };
+        }
+
+        function renderSidebarLinearStateFilterOptions() {
+            const { stateFilter } = getProjectTabElements();
+            if (!stateFilter) {
+                return;
+            }
+            const states = Array.from(new Set(
+                linearProjectIssues
+                    .map((issue) => String(issue?.state?.name || '').trim())
+                    .filter(Boolean)
+            )).sort((left, right) => left.localeCompare(right));
+
+            const newHtml = `<option value="">All states</option>${states.map((state) =>
+                `<option value="${escapeAttr(state)}">${escapeHtml(state)}</option>`
+            ).join('')}`;
+
+            // Guard: skip DOM mutation if content is unchanged.
+            if (_lastStateFilterHtml !== newHtml) {
+                stateFilter.innerHTML = newHtml;
+                _lastStateFilterHtml = newHtml;
+            }
+
+            stateFilter.value = states.includes(linearProjectStateFilterValue) ? linearProjectStateFilterValue : '';
+            linearProjectStateFilterValue = stateFilter.value;
+        }
+
+        function renderSidebarLinearProjectPickerOptions() {
+            const { projectPicker } = getProjectTabElements();
+            if (!projectPicker) {
+                return;
+            }
+            const projects = Array.from(new Set(
+                linearProjectIssues
+                    .map((issue) => String(issue?.project?.name || '').trim())
+                    .filter(Boolean)
+            )).sort();
+
+            const newHtml = `<option value="">All projects</option>${projects.map((project) =>
+                `<option value="${escapeAttr(project)}">${escapeHtml(project)}</option>`
+            ).join('')}`;
+
+            // Guard: skip DOM mutation if content is unchanged.
+            if (_lastProjectPickerHtml !== newHtml) {
+                projectPicker.innerHTML = newHtml;
+                _lastProjectPickerHtml = newHtml;
+            }
+
+            projectPicker.value = projects.includes(linearProjectPickerValue) ? linearProjectPickerValue : '';
+            linearProjectPickerValue = projectPicker.value;
+        }
+
+        function getFilteredLinearIssues() {
+            const search = String(linearProjectSearchValue || '').trim().toLowerCase();
+            const stateFilter = String(linearProjectStateFilterValue || '').trim();
+            const projectFilter = String(linearProjectPickerValue || '').trim();
+            return linearProjectIssues.filter((issue) => {
+                if (stateFilter && String(issue?.state?.name || '') !== stateFilter) {
+                    return false;
+                }
+                if (projectFilter && String(issue?.project?.name || '') !== projectFilter) {
+                    return false;
+                }
+                if (!search) {
+                    return true;
+                }
+                const haystack = [
+                    issue.identifier,
+                    issue.title,
+                    issue.description,
+                    issue.assignee?.name,
+                    issue.assignee?.email
+                ].join('\n').toLowerCase();
+                return haystack.includes(search);
+            });
+        }
+
+        function renderSidebarLinearProjectList() {
+            const { emptyState, issuesContainer, openSetupButton, searchInput } = getProjectTabElements();
+            if (!emptyState || !issuesContainer) {
+                return;
+            }
+            if (searchInput && searchInput.value !== linearProjectSearchValue) {
+                searchInput.value = linearProjectSearchValue;
+            }
+            const showSetupButton = linearProjectStatus === 'setup-required';
+            openSetupButton?.classList.toggle('hidden', !showSetupButton);
+
+            // Loading branch: always clear — no guard.
+            if (linearProjectStatus === 'loading') {
+                emptyState.textContent = linearProjectMessage || 'Loading Linear project...';
+                emptyState.classList.remove('hidden');
+                issuesContainer.innerHTML = '';  // intentional unconditional clear
+                _lastIssuesContainerHtml = '';
+                return;
+            }
+            // Error/setup branch: always clear — no guard.
+            if (linearProjectStatus !== 'loaded') {
+                emptyState.textContent = linearProjectMessage || 'Set up Linear in Setup first.';
+                emptyState.classList.remove('hidden');
+                issuesContainer.innerHTML = '';  // intentional unconditional clear
+                _lastIssuesContainerHtml = '';
+                return;
+            }
+
+            const filteredIssues = getFilteredLinearIssues();
+            if (filteredIssues.length === 0) {
+                const emptyText = linearProjectIssues.length === 0
+                    ? `No Linear issues are currently available in ${linearProjectScopeLabel}.`
+                    : 'No Linear issues matched the current search/filter.';
+                if (emptyState.textContent !== emptyText) {
+                    emptyState.textContent = emptyText;
+                }
+                emptyState.classList.remove('hidden');
+                if (_lastIssuesContainerHtml !== '') {
+                    issuesContainer.innerHTML = '';
+                    _lastIssuesContainerHtml = '';
+                }
+                return;
+            }
+
+            emptyState.classList.add('hidden');
+
+            // Build the new HTML string first, then compare before mutating the DOM.
+            const newHtml = filteredIssues.map((issue) => `
+                <div class="project-issue-card" data-linear-issue-id="${escapeAttr(issue.id)}">
+                    <div class="project-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
+                    <div class="project-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
+                    <div class="project-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
+                    <div class="project-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
+                    <div style="display:flex; gap:4px;">
+                        <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}" aria-label="Import ${escapeAttr(issue.identifier || issue.id)}">IMPORT</button>
+                        <button type="button" class="project-issue-send-planner-btn" data-send-planner-issue-id="${escapeAttr(issue.id)}" aria-label="Send ${escapeAttr(issue.identifier || issue.id)} to planner">SEND TO PLANNER</button>
+                    </div>
+                </div>
+            `).join('');
+
+            // Only mutate the DOM if the rendered output has actually changed.
+            if (_lastIssuesContainerHtml !== newHtml) {
+                issuesContainer.innerHTML = newHtml;
+                _lastIssuesContainerHtml = newHtml;
+            }
+        }
+
+        function renderSidebarLinearTaskDetail() {
+            const {
+                detailTitle,
+                detailIdentifier,
+                detailState,
+                detailAssignee,
+                detailDescription,
+                detailSubtasksList,
+                detailCommentsList,
+                detailAttachmentsList,
+                detailAskAgentButton,
+                detailImportTaskButton,
+                detailSendPlannerTaskButton
+            } = getProjectTabElements();
+            if (!detailTitle || !detailIdentifier || !detailState || !detailAssignee || !detailDescription) {
+                return;
+            }
+            if (!selectedLinearIssue) {
+                detailTitle.textContent = 'Select a Linear task';
+                detailIdentifier.textContent = '';
+                detailState.textContent = '';
+                detailAssignee.textContent = '';
+                const noSelectionHtml = '<div class="project-empty-state">Choose a task from the project list to inspect subtasks, comments, and attachments.</div>';
+                if (_lastDetailDescriptionHtml !== noSelectionHtml) {
+                    detailDescription.innerHTML = noSelectionHtml;
+                    _lastDetailDescriptionHtml = noSelectionHtml;
+                }
+                if (detailSubtasksList && _lastDetailSubtasksHtml !== '') { detailSubtasksList.innerHTML = ''; _lastDetailSubtasksHtml = ''; }
+                if (detailCommentsList && _lastDetailCommentsHtml !== '') { detailCommentsList.innerHTML = ''; _lastDetailCommentsHtml = ''; }
+                if (detailAttachmentsList && _lastDetailAttachmentsHtml !== '') { detailAttachmentsList.innerHTML = ''; _lastDetailAttachmentsHtml = ''; }
+                if (detailAskAgentButton) detailAskAgentButton.disabled = true;
+                if (detailImportTaskButton) detailImportTaskButton.disabled = true;
+                if (detailSendPlannerTaskButton) detailSendPlannerTaskButton.disabled = true;
+                return;
+            }
+
+            const issue = selectedLinearIssue.issue;
+            detailTitle.textContent = issue.title || issue.identifier || issue.id;
+            detailIdentifier.textContent = issue.identifier || issue.id;
+            detailState.textContent = issue.state?.name ? `State: ${issue.state.name}` : 'State: Unknown';
+            detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
+
+            if (selectedLinearIssue.renderedDescriptionHtml) {
+                if (_lastDetailDescriptionHtml !== selectedLinearIssue.renderedDescriptionHtml) {
+                    detailDescription.innerHTML = selectedLinearIssue.renderedDescriptionHtml;
+                    _lastDetailDescriptionHtml = selectedLinearIssue.renderedDescriptionHtml;
+                }
+                detailDescription.classList.add('markdown-body');
+            } else {
+                // Fallback: plain-text rendering for backward compatibility
+                const plainHtml = escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
+                if (_lastDetailDescriptionHtml !== plainHtml) {
+                    detailDescription.innerHTML = plainHtml;
+                    _lastDetailDescriptionHtml = plainHtml;
+                }
+                detailDescription.classList.remove('markdown-body');
+            }
+
+            if (detailSubtasksList) {
+                const newSubtasksHtml = selectedLinearIssue.subtasks.length > 0
+                    ? selectedLinearIssue.subtasks.map((subtask) => `
+                        <button type="button" class="project-detail-item" data-linear-subtask-id="${escapeAttr(subtask.id)}">
+                            ${escapeHtml(subtask.title || subtask.identifier || subtask.id)} · ${escapeHtml(subtask.state?.name || 'Unknown state')}
+                        </button>
+                    `).join('')
+                    : '<div class="project-empty-state">No subtasks attached to this issue.</div>';
+                if (_lastDetailSubtasksHtml !== newSubtasksHtml) {
+                    detailSubtasksList.innerHTML = newSubtasksHtml;
+                    _lastDetailSubtasksHtml = newSubtasksHtml;
+                }
+            }
+
+            if (detailCommentsList) {
+                const newCommentsHtml = selectedLinearIssue.comments.length > 0
+                    ? selectedLinearIssue.comments.map((comment) => `
+                        <div class="project-detail-item">
+                            <strong>${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</strong>
+                            <div>${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</div>
+                            <div>${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                        </div>
+                    `).join('')
+                    : '<div class="project-empty-state">No comments attached to this issue.</div>';
+                if (_lastDetailCommentsHtml !== newCommentsHtml) {
+                    detailCommentsList.innerHTML = newCommentsHtml;
+                    _lastDetailCommentsHtml = newCommentsHtml;
+                }
+            }
+
+            if (detailAttachmentsList) {
+                const newAttachmentsHtml = selectedLinearIssue.attachments.length > 0
+                    ? selectedLinearIssue.attachments.map((attachment) => `
+                        <button type="button" class="project-detail-item" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
+                            ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
+                        </button>
+                    `).join('')
+                    : '<div class="project-empty-state">No attachments attached to this issue.</div>';
+                if (_lastDetailAttachmentsHtml !== newAttachmentsHtml) {
+                    detailAttachmentsList.innerHTML = newAttachmentsHtml;
+                    _lastDetailAttachmentsHtml = newAttachmentsHtml;
+                }
+            }
+
+            if (detailAskAgentButton) {
+                detailAskAgentButton.disabled = false;
+            }
+            if (detailImportTaskButton) {
+                detailImportTaskButton.disabled = linearImportPending;
+            }
+            if (detailSendPlannerTaskButton) {
+                detailSendPlannerTaskButton.disabled = linearImportPending;
+            }
+        }
+
+        function renderSidebarLinearProjectPanel() {
+            // Guard: only render if Linear is the active provider
+            if (lastIntegrationProvider !== 'linear') {
+                return;
+            }
+
+            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, refreshButton, emptyState, backButton } = getProjectTabElements();
+            if (!listView || !taskView) {
+                return;
+            }
+
+            // Show Linear toolbar elements, hide ClickUp hierarchy
+            if (searchInput) searchInput.classList.remove('hidden');
+            if (projectPicker) projectPicker.classList.remove('hidden');
+            if (stateFilter) stateFilter.classList.remove('hidden');
+            if (refreshButton) refreshButton.classList.remove('hidden');
+            if (hierarchyNav) hierarchyNav.classList.add('hidden');
+
+            // Update empty state message for Linear
+            if (emptyState && linearProjectStatus !== 'loaded') {
+                emptyState.textContent = linearProjectMessage || 'Open the Project tab to load Linear tasks.';
+            }
+
+            // Update back button text for Linear
+            if (backButton) {
+                backButton.textContent = 'BACK TO PROJECT';
+            }
+
+            renderSidebarLinearStateFilterOptions();
+            renderSidebarLinearProjectPickerOptions();
+            const showTaskView = !!selectedLinearIssue;
+            listView.classList.toggle('hidden', showTaskView);
+            taskView.classList.toggle('hidden', !showTaskView);
+            renderSidebarLinearProjectList();
+            renderSidebarLinearTaskDetail();
+        }
+
+        function loadLinearProject(force = false) {
+            if (linearProjectLoading && !force) {
+                return;
+            }
+            linearProjectLoading = true;
+            linearProjectStatus = 'loading';
+            linearProjectMessage = 'Loading Linear project...';
+            renderSidebarLinearProjectPanel();
+            vscode.postMessage({ type: 'linearLoadProject', workspaceRoot: currentWorkspaceRoot || undefined });
+        }
+
+        function loadLinearTaskDetails(issueId) {
+            pendingLinearDetailIssueId = String(issueId || '').trim();
+            if (!pendingLinearDetailIssueId) {
+                return;
+            }
+            loadingLinearCardId = pendingLinearDetailIssueId;
+            selectedLinearIssue = null;
+            renderSidebarLinearProjectPanel();
+            // After re-render, apply loading spinner to the freshly-created card
+            const loadingCard = document.querySelector(`[data-linear-issue-id="${loadingLinearCardId}"]`);
+            if (loadingCard) {
+                loadingCard.classList.add('loading');
+            }
+            vscode.postMessage({ type: 'linearLoadTaskDetails', issueId: pendingLinearDetailIssueId, workspaceRoot: currentWorkspaceRoot || undefined });
+
+            // Safety timeout: if the backend never responds, clear the loading
+            // state after 30s so the card isn't permanently bricked (pointer-events: none).
+            if (linearTaskDetailsTimeoutId) {
+                clearTimeout(linearTaskDetailsTimeoutId);
+            }
+            const safetyIssueId = pendingLinearDetailIssueId;
+            linearTaskDetailsTimeoutId = setTimeout(() => {
+                linearTaskDetailsTimeoutId = null;
+                if (loadingLinearCardId === safetyIssueId) {
+                    loadingLinearCardId = '';
+                    pendingLinearDetailIssueId = '';
+                    const stuckCard = document.querySelector(`[data-linear-issue-id="${safetyIssueId}"]`);
+                    if (stuckCard) {
+                        stuckCard.classList.remove('loading');
+                    }
+                }
+            }, 30000);
+        }
+
+        function loadClickUpProject(force = false, listIdOverride = undefined) {
+            if (clickUpProjectLoading && !force) {
+                return;
+            }
+            clickUpCurrentPage = 0;
+            clickUpProjectHasMore = false;
+            clickUpProjectLoading = true;
+            clickUpProjectStatus = 'loading';
+            clickUpProjectMessage = 'Loading ClickUp project...';
+            clickUpLoadSeq++;  // increment sequence counter
+            renderSidebarClickUpProjectPanel();
+            vscode.postMessage({
+                type: 'clickupLoadProject',
+                workspaceRoot: currentWorkspaceRoot || undefined,
+                page: 0,
+                statusFilter: clickUpProjectStatusFilterValue || undefined,
+                searchQuery: clickUpProjectSearchValue || undefined,
+                listId: listIdOverride || clickUpSelectedListId || undefined,
+                loadSeq: clickUpLoadSeq  // attach sequence counter
+            });
+        }
+
+        function loadMoreClickUpTasks() {
+            if (clickUpProjectIsLoadingMore || !clickUpProjectHasMore) {
+                return;
+            }
+            clickUpProjectIsLoadingMore = true;
+            renderSidebarClickUpProjectPanel();
+            vscode.postMessage({
+                type: 'clickupLoadProject',
+                workspaceRoot: currentWorkspaceRoot || undefined,
+                page: clickUpCurrentPage + 1,
+                statusFilter: clickUpProjectStatusFilterValue || undefined,
+                searchQuery: clickUpProjectSearchValue || undefined,
+                isLoadMore: true,
+                listId: clickUpSelectedListId || undefined
+            });
+        }
+
+        function loadClickUpTaskDetails(taskId) {
+            pendingClickUpDetailIssueId = String(taskId || '').trim();
+            if (!pendingClickUpDetailIssueId) {
+                return;
+            }
+            loadingClickUpCardId = pendingClickUpDetailIssueId;
+            selectedClickUpIssue = null;
+            renderSidebarClickUpProjectPanel();
+
+            const loadingCard = document.querySelector(`[data-clickup-task-id="${loadingClickUpCardId}"]`);
+            if (loadingCard) {
+                loadingCard.classList.add('loading');
+            }
+
+            vscode.postMessage({
+                type: 'clickupLoadTaskDetails',
+                taskId: pendingClickUpDetailIssueId,
+                workspaceRoot: currentWorkspaceRoot || undefined
+            });
+
+            if (clickUpTaskDetailsTimeoutId) {
+                clearTimeout(clickUpTaskDetailsTimeoutId);
+            }
+            const safetyTaskId = pendingClickUpDetailIssueId;
+            clickUpTaskDetailsTimeoutId = setTimeout(() => {
+                clickUpTaskDetailsTimeoutId = null;
+                if (loadingClickUpCardId === safetyTaskId) {
+                    loadingClickUpCardId = '';
+                    pendingClickUpDetailIssueId = '';
+                    const stuckCard = document.querySelector(`[data-clickup-task-id="${safetyTaskId}"]`);
+                    if (stuckCard) {
+                        stuckCard.classList.remove('loading');
+                    }
+                }
+            }, 30000);
+        }
+
+        function loadClickUpSpaces() {
+            clickUpHierarchyLoading = true;
+            renderSidebarClickUpProjectPanel();
+            vscode.postMessage({
+                type: 'clickupLoadSpaces',
+                workspaceRoot: currentWorkspaceRoot || undefined
+            });
+        }
+
+        function renderSidebarClickUpProjectPanel() {
+            // Guard: only render if ClickUp is the active provider
+            if (lastIntegrationProvider !== 'clickup') {
+                return;
+            }
+
+            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, refreshButton, emptyState, issuesContainer, backButton } = getProjectTabElements();
+            if (!listView || !taskView) {
+                return;
+            }
+
+            // Hide Linear toolbar elements, show ClickUp hierarchy
+            if (searchInput) searchInput.classList.add('hidden');
+            if (projectPicker) projectPicker.classList.add('hidden');
+            if (stateFilter) stateFilter.classList.add('hidden');
+            // Keep refresh button visible for ClickUp to allow manual refresh
+            if (refreshButton) {
+                refreshButton.classList.remove('hidden');
+                refreshButton.textContent = 'REFRESH';
+            }
+            if (hierarchyNav) {
+                hierarchyNav.classList.remove('hidden');
+            }
+
+            // Update empty state message for ClickUp
+            if (emptyState) {
+                if (!clickUpSelectedListId) {
+                    emptyState.textContent = 'Select a Space, Folder, and List to view tasks.';
+                    emptyState.classList.remove('hidden');
+                } else if (clickUpProjectStatus !== 'loaded') {
+                    emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
+                    emptyState.classList.remove('hidden');
+                } else {
+                    emptyState.classList.add('hidden');
+                }
+            }
+
+            // Update back button text for ClickUp
+            if (backButton) {
+                backButton.textContent = 'BACK TO LIST';
+            }
+
+            if (lastIntegrationProvider === 'clickup') {
+                renderSidebarClickUpHierarchyNav();
+            }
+
+            if (clickUpSelectedListId) {
+                renderSidebarClickUpStatusFilterOptions();
+                renderSidebarClickUpProjectList();
+            } else {
+                // Clear issues container when no list selected
+                if (issuesContainer) {
+                    issuesContainer.innerHTML = '';
+                }
+            }
+
+            renderSidebarClickUpTaskDetail();
+
+            const showTaskView = !!selectedClickUpIssue;
+            listView.classList.toggle('hidden', showTaskView);
+            taskView.classList.toggle('hidden', !showTaskView);
+        }
+
+        function renderSidebarClickUpHierarchyNav() {
+            const { hierarchyNav } = getProjectTabElements();
+            if (!hierarchyNav) return;
+
+            const html = buildHierarchyHtml();
+            if (_lastClickUpHierarchyHtml !== html) {
+                hierarchyNav.innerHTML = html;
+                _lastClickUpHierarchyHtml = html;
+                attachHierarchyListeners();
+            }
+        }
+
+        function buildHierarchyHtml() {
+            const parts = [];
+
+            if (!clickUpSelectedSpaceId) {
+                parts.push(`
+                    <div class="hierarchy-level">
+                        <select id="clickup-space-select" class="hierarchy-select">
+                            <option value="">Select Space...</option>
+                            ${clickUpAvailableSpaces.map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`).join('')}
+                        </select>
+                    </div>
+                `);
+            } else {
+                const space = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId);
+                parts.push(`
+                    <div class="hierarchy-level selected">
+                        <span class="hierarchy-label">${escapeHtml(space?.name || 'Unknown')}</span>
+                        <button class="hierarchy-change-btn" data-level="space">Change</button>
+                    </div>
+                `);
+
+                if (clickUpAvailableFolders.length > 0 || clickUpSelectedFolderId) {
+                    if (!clickUpSelectedFolderId) {
+                        parts.push(`
+                            <div class="hierarchy-separator">›</div>
+                            <div class="hierarchy-level">
+                                <select id="clickup-folder-select" class="hierarchy-select">
+                                    <option value="">Select Folder...</option>
+                                    <option value="_root_">(Root - Lists not in any Folder)</option>
+                                    ${clickUpAvailableFolders.map(f => `<option value="${escapeAttr(f.id)}">${escapeHtml(f.name)}</option>`).join('')}
+                                </select>
+                            </div>
+                        `);
+                    } else {
+                        const folder = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId);
+                        parts.push(`
+                            <div class="hierarchy-separator">›</div>
+                            <div class="hierarchy-level selected">
+                                <span class="hierarchy-label">${escapeHtml(folder?.name || 'Unknown')}</span>
+                                <button class="hierarchy-change-btn" data-level="folder">Change</button>
+                            </div>
+                        `);
+                    }
+                }
+
+                const availableLists = clickUpSelectedFolderId
+                    ? clickUpAvailableListsInFolder
+                    : clickUpAvailableDirectLists;
+
+                if (!clickUpSelectedListId) {
+                    parts.push(`
+                        <div class="hierarchy-separator">›</div>
+                        <div class="hierarchy-level">
+                            <select id="clickup-list-select" class="hierarchy-select">
+                                <option value="">Select List (Sprint)...</option>
+                                ${availableLists.map(l => `<option value="${escapeAttr(l.id)}">${escapeHtml(l.name)} ${l.taskCount ? `(${l.taskCount})` : ''}</option>`).join('')}
+                            </select>
+                        </div>
+                    `);
+                } else {
+                    const list = availableLists.find(l => l.id === clickUpSelectedListId);
+                    parts.push(`
+                        <div class="hierarchy-separator">›</div>
+                        <div class="hierarchy-level selected">
+                            <span class="hierarchy-label">${escapeHtml(list?.name || 'Unknown')}</span>
+                            <button class="hierarchy-change-btn" data-level="list">Change</button>
+                        </div>
+                    `);
+                }
+            }
+
+            return `<div class="hierarchy-nav">${parts.join('')}</div>`;
+        }
+
+        function attachHierarchyListeners() {
+            const spaceSelect = document.getElementById('clickup-space-select');
+            spaceSelect?.addEventListener('change', (e) => {
+                const spaceId = e.target.value;
+                if (spaceId) {
+                    clickUpSelectedSpaceId = spaceId;
+                    clickUpSelectedFolderId = '';
+                    clickUpSelectedListId = '';
+                    clickUpAvailableFolders = [];
+                    clickUpAvailableListsInFolder = [];
+                    clickUpAvailableDirectLists = [];
+                    clickUpHierarchyLoading = true;
+                    renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'clickupLoadFolders',
+                        spaceId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            });
+
+            const folderSelect = document.getElementById('clickup-folder-select');
+            folderSelect?.addEventListener('change', (e) => {
+                const folderId = e.target.value;
+                if (folderId) {
+                    clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
+                    clickUpSelectedListId = '';
+                    clickUpAvailableListsInFolder = [];
+                    clickUpHierarchyLoading = true;
+                    renderSidebarClickUpProjectPanel();
+                    if (folderId === '_root_') {
+                        clickUpHierarchyLoading = false;
+                        renderSidebarClickUpProjectPanel();
+                    } else {
+                        vscode.postMessage({
+                            type: 'clickupLoadLists',
+                            spaceId: clickUpSelectedSpaceId,
+                            folderId: clickUpSelectedFolderId,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    }
+                }
+            });
+
+            const listSelect = document.getElementById('clickup-list-select');
+            listSelect?.addEventListener('change', (e) => {
+                const listId = e.target.value;
+                if (listId) {
+                    clickUpSelectedListId = listId;
+                    // Reset loading state to unblock future loads (prior load may have stalled)
+                    clickUpProjectLoading = false;
+                    clickUpProjectIssues = [];
+                    vscode.postMessage({
+                        type: 'clickupSaveListSelection',
+                        spaceId: clickUpSelectedSpaceId,
+                        folderId: clickUpSelectedFolderId,
+                        listId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                    // Pass listId directly to avoid race condition with config file save
+                    loadClickUpProject(false, listId);
+                }
+            });
+
+            document.querySelectorAll('.hierarchy-change-btn').forEach(btn => {
+                btn.addEventListener('click', (e) => {
+                    const level = e.target.dataset.level;
+                    if (level === 'space') {
+                        clickUpSelectedSpaceId = '';
+                        clickUpSelectedFolderId = '';
+                        clickUpSelectedListId = '';
+                        clickUpProjectIssues = [];
+                        loadClickUpSpaces();
+                    } else if (level === 'folder') {
+                        clickUpSelectedFolderId = '';
+                        clickUpSelectedListId = '';
+                        clickUpProjectIssues = [];
+                    } else if (level === 'list') {
+                        clickUpSelectedListId = '';
+                        clickUpProjectIssues = [];
+                    }
+                    renderSidebarClickUpProjectPanel();
+                });
+            });
+        }
+
+        function renderSidebarClickUpStatusFilterOptions() {
+            const { stateFilter } = getProjectTabElements();
+            if (!stateFilter) return;
+
+            const statuses = Array.from(new Set(
+                clickUpProjectIssues.map(task => task.status || 'Unknown')
+            )).sort();
+
+            const html = `
+                <option value="">All statuses</option>
+                ${statuses.map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`).join('')}
+            `;
+
+            if (_lastClickUpStateFilterHtml !== html) {
+                stateFilter.innerHTML = html;
+                _lastClickUpStateFilterHtml = html;
+                stateFilter.value = clickUpProjectStatusFilterValue || '';
+                // Use onclick to avoid listener leak (replaces previous handler)
+                stateFilter.onchange = (e) => {
+                    clickUpProjectStatusFilterValue = e.target.value;
+                    renderSidebarClickUpProjectList();
+                };
+            }
+        }
+
+        function renderSidebarClickUpProjectList() {
+            const { issuesContainer, emptyState, openSetupButton } = getProjectTabElements();
+            if (!issuesContainer) return;
+
+            if (clickUpProjectStatus === 'setup-required' || clickUpProjectStatus === 'error') {
+                if (emptyState) {
+                    emptyState.textContent = clickUpProjectMessage || 'Select a Space, Folder, and List to view tasks.';
+                    emptyState.classList.remove('hidden');
+                }
+                if (openSetupButton) {
+                    openSetupButton.classList.remove('hidden');
+                }
+                issuesContainer.innerHTML = '';
+                _lastClickUpIssuesContainerHtml = '';
+                return;
+            }
+
+            if (clickUpProjectStatus === 'loading') {
+                // Don't hide emptyState — renderSidebarClickUpProjectPanel set a loading message
+                if (openSetupButton) openSetupButton.classList.add('hidden');
+                issuesContainer.innerHTML = '';
+                _lastClickUpIssuesContainerHtml = '';
+                return;
+            }
+
+            if (emptyState) emptyState.classList.add('hidden');
+            if (openSetupButton) openSetupButton.classList.add('hidden');
+
+            const tasks = getFilteredClickUpTasks();
+            const html = tasks.length === 0
+                ? `<div class="project-empty-state">No tasks found.</div>`
+                : tasks.map(task => {
+                    const isLoading = loadingClickUpCardId === task.id;
+                    const isSelected = selectedClickUpIssue?.task?.id === task.id;
+                    const statusColor = getStatusColor(task.status);
+                    return `
+                        <div class="project-card ${isSelected ? 'selected' : ''} ${isLoading ? 'loading' : ''}"
+                             data-clickup-task-id="${escapeAttr(task.id)}"
+                             data-clickup-task-url="${escapeAttr(task.url || '')}">
+                            <div class="project-card-header">
+                                <span class="project-card-title">${escapeHtml(task.title || task.identifier)}</span>
+                                <span class="project-card-status" style="background-color: ${statusColor};">${escapeHtml(task.status)}</span>
+                            </div>
+                            <div class="project-card-meta">
+                                ${task.assignees?.length ? `<span class="project-card-assignees">${escapeHtml(task.assignees.map(a => a.username || a.email).join(', '))}</span>` : ''}
+                            </div>
+                        </div>
+                    `;
+                }).join('');
+
+            if (_lastClickUpIssuesContainerHtml !== html) {
+                issuesContainer.innerHTML = html;
+                _lastClickUpIssuesContainerHtml = html;
+
+                issuesContainer.querySelectorAll('.project-card').forEach(card => {
+                    card.addEventListener('click', () => {
+                        const taskId = card.getAttribute('data-clickup-task-id');
+                        if (taskId) loadClickUpTaskDetails(taskId);
+                    });
+                });
+            }
+        }
+
+        function renderSidebarClickUpTaskDetail() {
+            const { detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
+                    detailSubtasksList, detailCommentsList, detailAttachmentsList,
+                    detailAskAgentButton, detailImportTaskButton, detailSendPlannerTaskButton } = getProjectTabElements();
+
+            if (!selectedClickUpIssue) {
+                [detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
+                 detailSubtasksList, detailCommentsList, detailAttachmentsList].forEach(el => {
+                    if (el) el.innerHTML = '';
+                });
+                [detailAskAgentButton, detailImportTaskButton, detailSendPlannerTaskButton].forEach(el => {
+                    if (el) el.disabled = true;
+                });
+                return;
+            }
+
+            const { task, subtasks, comments, attachments } = selectedClickUpIssue;
+
+            if (detailTitle) detailTitle.textContent = task.title || task.identifier;
+            if (detailIdentifier) detailIdentifier.textContent = task.identifier;
+            if (detailState) detailState.textContent = task.status;
+            if (detailAssignee) detailAssignee.textContent = task.assignees?.length
+                ? task.assignees.map(a => a.username || a.email).join(', ')
+                : 'Unassigned';
+
+            const descHtml = task.markdownDescription
+                ? `<pre>${escapeHtml(task.markdownDescription)}</pre>`
+                : (task.description ? `<pre>${escapeHtml(task.description)}</pre>` : '<p>No description provided.</p>');
+
+            if (_lastClickUpDetailDescriptionHtml !== descHtml && detailDescription) {
+                detailDescription.innerHTML = descHtml;
+                _lastClickUpDetailDescriptionHtml = descHtml;
+            }
+
+            const subtasksHtml = subtasks.length === 0
+                ? '<p>No subtasks.</p>'
+                : subtasks.map(st => `
+                    <div class="project-detail-item">
+                        <span class="project-detail-item-title">${escapeHtml(st.title)}</span>
+                        <span class="project-detail-item-status">${escapeHtml(st.status)}</span>
+                    </div>
+                `).join('');
+
+            if (_lastClickUpDetailSubtasksHtml !== subtasksHtml && detailSubtasksList) {
+                detailSubtasksList.innerHTML = subtasksHtml;
+                _lastClickUpDetailSubtasksHtml = subtasksHtml;
+            }
+
+            const commentsHtml = comments.length === 0
+                ? '<p>No comments.</p>'
+                : comments.map(c => `
+                    <div class="project-detail-item">
+                        <div class="project-detail-item-header">
+                            <span class="project-detail-item-author">${escapeHtml(c.user?.username || c.user?.email || 'Unknown')}</span>
+                            <span class="project-detail-item-date">${c.date ? new Date(c.date).toLocaleString() : ''}</span>
+                        </div>
+                        <div class="project-detail-item-body">${escapeHtml(c.comment_text)}</div>
+                    </div>
+                `).join('');
+
+            if (_lastClickUpDetailCommentsHtml !== commentsHtml && detailCommentsList) {
+                detailCommentsList.innerHTML = commentsHtml;
+                _lastClickUpDetailCommentsHtml = commentsHtml;
+            }
+
+            const attachmentsHtml = attachments.length === 0
+                ? '<p>No attachments.</p>'
+                : attachments.map(a => `
+                    <div class="project-detail-item">
+                        <a href="${escapeAttr(a.url)}" target="_blank" class="project-detail-item-link">${escapeHtml(a.title || a.filename)}</a>
+                    </div>
+                `).join('');
+
+            if (_lastClickUpDetailAttachmentsHtml !== attachmentsHtml && detailAttachmentsList) {
+                detailAttachmentsList.innerHTML = attachmentsHtml;
+                _lastClickUpDetailAttachmentsHtml = attachmentsHtml;
+            }
+
+            if (detailAskAgentButton) detailAskAgentButton.disabled = clickUpImportPending;
+            if (detailImportTaskButton) detailImportTaskButton.disabled = clickUpImportPending;
+            if (detailSendPlannerTaskButton) detailSendPlannerTaskButton.disabled = clickUpImportPending;
+        }
+
+        function getFilteredClickUpTasks() {
+            let tasks = [...clickUpProjectIssues];
+
+            if (clickUpProjectSearchValue) {
+                const query = clickUpProjectSearchValue.toLowerCase();
+                tasks = tasks.filter(task =>
+                    (task.title || '').toLowerCase().includes(query) ||
+                    (task.identifier || '').toLowerCase().includes(query) ||
+                    (task.description || '').toLowerCase().includes(query)
+                );
+            }
+
+            if (clickUpProjectStatusFilterValue) {
+                tasks = tasks.filter(task => task.status === clickUpProjectStatusFilterValue);
+            }
+
+            return tasks;
+        }
+
+        function getStatusColor(status) {
+            const colors = {
+                'To Do': '#e0e0e0',
+                'In Progress': '#ffd700',
+                'Review': '#ff8c00',
+                'Done': '#4caf50',
+                'Closed': '#9e9e9e'
+            };
+            return colors[status] || '#e0e0e0';
+        }
+
+        function buildLinearAskAgentText(detail) {
+            if (!detail || !detail.issue) {
+                return '';
+            }
+            const issue = detail.issue;
+            const subtaskLines = Array.isArray(detail.subtasks) && detail.subtasks.length > 0
+                ? detail.subtasks.map((subtask) => `- ${subtask.title || subtask.identifier || subtask.id} (${subtask.state?.name || 'Unknown'})`).join('\n')
+                : '- None';
+            const commentLines = Array.isArray(detail.comments) && detail.comments.length > 0
+                ? detail.comments.map((comment) => `- ${(comment.user?.name || comment.user?.email || 'Unknown')}: ${comment.body}`).join('\n')
+                : '- None';
+            const attachmentLines = Array.isArray(detail.attachments) && detail.attachments.length > 0
+                ? detail.attachments.map((attachment) => `- ${attachment.title || attachment.filename || attachment.url}`).join('\n')
+                : '- None';
+            return [
+                `Linear issue: ${issue.title || issue.identifier || issue.id}`,
+                `Identifier: ${issue.identifier || issue.id}`,
+                `State: ${issue.state?.name || 'Unknown'}`,
+                `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`,
+                '',
+                'Description:',
+                issue.description || 'No description provided.',
+                '',
+                'Subtasks:',
+                subtaskLines,
+                '',
+                'Comments:',
+                commentLines,
+                '',
+                'Attachments:',
+                attachmentLines
+            ].join('\n');
+        }
+
+        function createProjectPanel() {
+            const container = document.createElement('div');
+            container.className = 'project-panel';
+            container.innerHTML = `
+                <div id="sidebar-project-list-view" class="project-view-shell">
+                    <div class="project-toolbar">
+                        <input id="sidebar-linear-project-search" class="project-input" type="text" placeholder="Search Linear tasks...">
+                        <select id="sidebar-linear-project-picker" class="project-select">
+                            <option value="">All projects</option>
+                        </select>
+                        <select id="sidebar-linear-state-filter" class="project-select">
+                            <option value="">All states</option>
+                        </select>
+                        <button id="sidebar-linear-project-refresh" class="secondary-btn" type="button">REFRESH</button>
+                    </div>
+                    <div id="sidebar-linear-project-empty" class="project-empty-state">Select a Space, Folder, and List to view tasks.</div>
+                    <button id="sidebar-linear-project-open-setup" class="secondary-btn hidden" type="button">OPEN PROJECT SETUP</button>
+                    <div id="sidebar-clickup-hierarchy-nav" class="hierarchy-nav-container hidden"></div>
+                    <div id="sidebar-linear-issues-container" class="project-issues-list"></div>
+                </div>
+                <div id="sidebar-project-task-view" class="project-view-shell hidden">
+                    <button id="sidebar-task-back-button" class="secondary-btn project-back-btn" type="button">BACK TO LIST</button>
+                    <div class="project-task-header">
+                        <div class="project-task-title" id="sidebar-detail-task-title">Select a Linear task</div>
+                        <div class="project-task-meta" id="sidebar-detail-task-identifier"></div>
+                        <div class="project-task-meta" id="sidebar-detail-task-state"></div>
+                        <div class="project-task-meta" id="sidebar-detail-task-assignee"></div>
+                    </div>
+                    <div id="sidebar-detail-task-description" class="project-task-description"></div>
+                    <div class="project-detail-actions">
+                        <button id="sidebar-detail-ask-agent" class="secondary-btn" type="button">ASK AGENT</button>
+                        <button id="sidebar-detail-import-task" class="secondary-btn" type="button">IMPORT TASK + SUBTASKS</button>
+                        <button id="sidebar-detail-send-planner-task" class="secondary-btn" type="button">SEND TO PLANNER + SUBTASKS</button>
+                    </div>
+                    <div class="project-detail-section">
+                        <div class="project-detail-heading">Subtasks</div>
+                        <div id="sidebar-detail-subtasks-list" class="project-detail-list"></div>
+                    </div>
+                    <div class="project-detail-section">
+                        <div class="project-detail-heading">Comments</div>
+                        <div id="sidebar-detail-comments-list" class="project-detail-list"></div>
+                    </div>
+                    <div class="project-detail-section">
+                        <div class="project-detail-heading">Attachments</div>
+                        <div id="sidebar-detail-attachments-list" class="project-detail-list"></div>
+                    </div>
+                </div>
+            `;
+
+            const searchInput = container.querySelector('#sidebar-linear-project-search');
+            const projectPicker = container.querySelector('#sidebar-linear-project-picker');
+            const stateFilter = container.querySelector('#sidebar-linear-state-filter');
+            const refreshButton = container.querySelector('#sidebar-linear-project-refresh');
+            const openSetupButton = container.querySelector('#sidebar-linear-project-open-setup');
+            const issuesContainer = container.querySelector('#sidebar-linear-issues-container');
+            const detailSubtasksList = container.querySelector('#sidebar-detail-subtasks-list');
+            const backButton = container.querySelector('#sidebar-task-back-button');
+            const detailAskAgentButton = container.querySelector('#sidebar-detail-ask-agent');
+            const detailImportTaskButton = container.querySelector('#sidebar-detail-import-task');
+            const detailAttachmentsList = container.querySelector('#sidebar-detail-attachments-list');
+
+            if (searchInput) {
+                searchInput.value = linearProjectSearchValue;
+                searchInput.addEventListener('input', () => {
+                    linearProjectSearchValue = searchInput.value;
+                    renderSidebarLinearProjectPanel();
+                });
+            }
+            if (projectPicker) {
+                projectPicker.value = linearProjectPickerValue;
+                projectPicker.addEventListener('change', () => {
+                    linearProjectPickerValue = projectPicker.value;
+                    // Reset loading state to unblock future loads (prior load may have stalled)
+                    linearProjectLoading = false;
+                    linearProjectIssues = [];
+                    renderSidebarLinearProjectPanel();
+                });
+            }
+            if (stateFilter) {
+                stateFilter.addEventListener('change', () => {
+                    linearProjectStateFilterValue = stateFilter.value;
+                    renderSidebarLinearProjectPanel();
+                });
+            }
+            refreshButton?.addEventListener('click', () => {
+                if (lastIntegrationProvider === 'clickup') {
+                    loadClickUpProject(true);
+                } else {
+                    loadLinearProject(true);
+                }
+            });
+            openSetupButton?.addEventListener('click', () => {
+                vscode.postMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
+            });
+            issuesContainer?.addEventListener('click', (event) => {
+                // Handle import button click first (before card navigation)
+                const importBtn = event.target.closest('.project-issue-import-btn');
+                if (importBtn && importBtn.dataset.importIssueId) {
+                    importBtn.disabled = true;
+                    importBtn.dataset.importing = '';
+                    vscode.postMessage({
+                        type: 'linearImportTask',
+                        issueId: importBtn.dataset.importIssueId,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                    return;
+                }
+                const sendPlannerBtn = event.target.closest('.project-issue-send-planner-btn');
+                if (sendPlannerBtn && sendPlannerBtn.dataset.sendPlannerIssueId) {
+                    sendPlannerBtn.disabled = true;
+                    sendPlannerBtn.dataset.sending = '';
+                    vscode.postMessage({
+                        type: 'linearImportAndSendToPlanner',
+                        issueId: sendPlannerBtn.dataset.sendPlannerIssueId,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                    return;
+                }
+                const card = event.target.closest('[data-linear-issue-id]');
+                if (!card) {
+                    return;
+                }
+                loadLinearTaskDetails(card.dataset.linearIssueId);
+            });
+            detailSubtasksList?.addEventListener('click', (event) => {
+                const button = event.target.closest('[data-linear-subtask-id]');
+                if (!button) {
+                    return;
+                }
+                loadLinearTaskDetails(button.dataset.linearSubtaskId);
+            });
+            backButton?.addEventListener('click', () => {
+                if (lastIntegrationProvider === 'clickup') {
+                    pendingClickUpDetailIssueId = '';
+                    selectedClickUpIssue = null;
+                    renderSidebarClickUpProjectPanel();
+                } else {
+                    pendingLinearDetailIssueId = '';
+                    selectedLinearIssue = null;
+                    renderSidebarLinearProjectPanel();
+                }
+            });
+            detailAskAgentButton?.addEventListener('click', () => {
+                if (lastIntegrationProvider === 'clickup') {
+                    vscode.postMessage({ type: 'showWarning', message: 'ClickUp Ask Agent not yet implemented.' });
+                    return;
+                }
+                const text = buildLinearAskAgentText(selectedLinearIssue);
+                if (!text) {
+                    vscode.postMessage({ type: 'showWarning', message: 'Load a Linear task first.' });
+                    return;
+                }
+                vscode.postMessage({
+                    type: 'copyTextToClipboard',
+                    text,
+                    message: 'Linear task context copied to clipboard.'
+                });
+            });
+            detailImportTaskButton?.addEventListener('click', () => {
+                if (lastIntegrationProvider === 'clickup') {
+                    if (!selectedClickUpIssue?.task?.id) {
+                        vscode.postMessage({ type: 'showWarning', message: 'Load a ClickUp task first.' });
+                        return;
+                    }
+                    clickUpImportPending = true;
+                    renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportTask',
+                        issueId: selectedClickUpIssue.task.id,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                } else {
+                    if (!selectedLinearIssue?.issue?.id) {
+                        vscode.postMessage({ type: 'showWarning', message: 'Load a Linear task first.' });
+                        return;
+                    }
+                    linearImportPending = true;
+                    renderSidebarLinearProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportTask',
+                        issueId: selectedLinearIssue.issue.id,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            });
+            const detailSendPlannerTaskButton = container.querySelector('#sidebar-detail-send-planner-task');
+            detailSendPlannerTaskButton?.addEventListener('click', () => {
+                if (lastIntegrationProvider === 'clickup') {
+                    if (!selectedClickUpIssue?.task?.id) {
+                        vscode.postMessage({ type: 'showWarning', message: 'Load a ClickUp task first.' });
+                        return;
+                    }
+                    clickUpImportPending = true;
+                    renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportAndSendToPlanner',
+                        issueId: selectedClickUpIssue.task.id,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                } else {
+                    if (!selectedLinearIssue?.issue?.id) {
+                        vscode.postMessage({ type: 'showWarning', message: 'Load a Linear task first.' });
+                        return;
+                    }
+                    linearImportPending = true;
+                    renderSidebarLinearProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportAndSendToPlanner',
+                        issueId: selectedLinearIssue.issue.id,
+                        includeSubtasks: true,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            });
+            detailAttachmentsList?.addEventListener('click', (event) => {
+                const button = event.target.closest('[data-linear-attachment-url]');
+                if (!button) {
+                    return;
+                }
+                const url = String(button.dataset.linearAttachmentUrl || '').trim();
+                if (!url) {
+                    return;
+                }
+                vscode.postMessage({ type: 'openExternalUrl', url });
+            });
+
+            return container;
+        }
 
         function createAgentRow(label, roleId, actionLabel, findTerminalFn, hideLocate) {
             const container = document.createElement('div');
@@ -2595,50 +4553,77 @@
                     if (greenCount > 0) {
                         // Agents connected — reset detection state
                         noAgentsDetectionTime = null;
+                        hasEverHadGreenAgents = true;
                         // Fall through to normal render below
                     } else {
                         // No green agents
-                        if (noAgentsDetectionTime === null) {
-                            noAgentsDetectionTime = Date.now();
-                        }
-                        const elapsed = Date.now() - noAgentsDetectionTime;
-                        if (elapsed < RECOVERY_THRESHOLD_MS) {
-                            // Still within grace period — keep the current display unchanged.
-                            return; // keep current display unchanged during grace period
+                        if (!hasEverHadGreenAgents) {
+                            // First render, no agents ever seen — show onboarding IMMEDIATELY
+                            // (skip grace period so buttons appear on first paint)
+                        } else {
+                            // Previously had agents, now lost — apply grace period
+                            if (noAgentsDetectionTime === null) {
+                                noAgentsDetectionTime = Date.now();
+                            }
+                            const elapsed = Date.now() - noAgentsDetectionTime;
+                            if (elapsed < RECOVERY_THRESHOLD_MS) {
+                                // Still within grace period — keep the current display unchanged.
+                                return; // keep current display unchanged during grace period
+                            }
                         }
                         // Grace period expired — render onboarding state
                         agentListStandard.innerHTML = '';
-                        agentListAutoban.innerHTML = '';
-                        agentListWebai.innerHTML = '';
+                        // Terminals tab is static HTML — do NOT clear (buttons would be permanently lost)
+                        // Preserve project panel DOM (same guard as main path below)
+                        if (!agentListProject.querySelector('.project-panel')) {
+                            agentListProject.innerHTML = '';
+                        }
 
                         // Onboarding message
                         const onboardMsg = document.createElement('div');
                         onboardMsg.style.cssText = 'text-align:center; padding:20px 12px; color:var(--text-secondary); font-family:var(--font-mono); font-size:11px; line-height:1.6;';
-                        onboardMsg.textContent = 'Agents not connected. Assign and open terminals in Terminal Operations below.';
+                        onboardMsg.textContent = 'Agents not connected. Click the Terminals tab to open agent terminals.';
                         agentListStandard.appendChild(onboardMsg);
 
-                        // Auto-expand Terminal Operations only if user has not manually collapsed it this session
-                        if (!hasManuallyCollapsedThisSession) {
-                            const toFields = document.getElementById('terminal-operations-fields');
-                            const toChevron = document.getElementById('terminal-operations-chevron');
-                            if (toFields && toChevron && !toFields.classList.contains('open')) {
-                                // Collapse SETUP and Database Operations before auto-opening Terminal Ops
-                                collapseAllAccordions('terminal-operations-fields');
-                                toFields.classList.add('open');
-                                toChevron.classList.add('open');
-                                // Fire same messages as the toggle click handler would
-                                vscode.postMessage({ type: 'getStartupCommands' });
-                                vscode.postMessage({ type: 'getVisibleAgents' });
-                                vscode.postMessage({ type: 'getCustomAgents' });
-                                vscode.postMessage({ type: 'getJulesAutoSyncSetting' });
-                            }
-                        }
+                        // Add duplicate OPEN AGENT TERMINALS button below the onboarding message
+                        const onboardBtn = document.createElement('button');
+                        onboardBtn.id = 'createAgentGrid-onboarding';
+                        onboardBtn.className = 'secondary-btn is-teal w-full';
+                        onboardBtn.style.marginTop = '12px';
+                        onboardBtn.textContent = 'OPEN AGENT TERMINALS';
+                        onboardBtn.addEventListener('click', () => {
+                            // Visual feedback on the onboarding button before delegating
+                            onboardBtn.innerText = 'SAVING & OPENING...';
+                            onboardBtn.classList.add('dispatching');
+                            onboardBtn.classList.remove('is-teal');
+                            onboardBtn.disabled = true;
 
-                        // Restore autoban and webai panels so other tabs still work
-                        agentListAutoban.appendChild(createAutobanPanel());
-                        agentListWebai.appendChild(createClipboardImportPanel());
-                        agentListWebai.appendChild(createNotionPanel());
-                        agentListWebai.appendChild(createNotebookLMPanel());
+                            // Delegate to the existing button handler
+                            const originalBtn = document.getElementById('createAgentGrid');
+                            if (originalBtn) {
+                                originalBtn.click();
+                            }
+                        });
+                        agentListStandard.appendChild(onboardBtn);
+
+                        // Add duplicate OPEN SETUP button below the onboarding message
+                        const setupOnboardBtn = document.createElement('button');
+                        setupOnboardBtn.id = 'btn-open-setup-onboarding';
+                        setupOnboardBtn.className = 'secondary-btn w-full';
+                        setupOnboardBtn.style.marginTop = '12px';
+                        setupOnboardBtn.textContent = 'OPEN SETUP';
+                        setupOnboardBtn.addEventListener('click', () => {
+                            vscode.postMessage({ type: 'openSetupPanel' });
+                        });
+                        agentListStandard.appendChild(setupOnboardBtn);
+
+                        // Terminals tab content is statically defined in HTML
+                        // No dynamic panel creation needed
+                        // Preserve project panel if it already exists (same guard as main path)
+                        if (!agentListProject.querySelector('.project-panel')) {
+                            agentListProject.appendChild(createProjectPanel());
+                        }
+                        renderSidebarLinearProjectPanel();
                         switchAgentTab(currentAgentTab);
                         return; // skip the rest of normal renderAgentList
                     }
@@ -2656,8 +4641,14 @@
             };
 
             agentListStandard.innerHTML = '';
-            agentListAutoban.innerHTML = '';
-            agentListWebai.innerHTML = '';
+            // Terminals tab is static HTML — do NOT clear (buttons would be permanently lost)
+            // Preserve project panel DOM across routine re-renders to prevent
+            // constant flicker when viewing issue details (heartbeats trigger
+            // renderAgentList every few seconds). Only clear if panel doesn't
+            // exist yet (first render) or was force-cleared (provider change).
+            if (!agentListProject.querySelector('.project-panel')) {
+                agentListProject.innerHTML = '';
+            }
 
             // === AGENTS TAB: Planner, Lead Coder, Coder, Intern, Reviewer, Analyst ===
             // Filter agents based on visibility preferences
@@ -2762,13 +4753,16 @@
                 agentListStandard.appendChild(emptyMsg);
             }
 
-            // === AUTOBAN TAB: Kanban automation control center ===
-            agentListAutoban.appendChild(createAutobanPanel());
+            // === TERMINALS TAB: Buttons are statically defined in HTML ===
+            // No dynamic panel creation needed - see #agent-list-terminals in HTML
 
-            // === PLANNING TAB: Notion Design Doc + NotebookLM Airlock ===
-            agentListWebai.appendChild(createClipboardImportPanel());
-            agentListWebai.appendChild(createNotionPanel());
-            agentListWebai.appendChild(createNotebookLMPanel());
+            // === PROJECT TAB: Linear project browser in the sidebar ===
+            // Only create panel DOM if it doesn't exist; content refresh is handled
+            // by renderSidebarLinearProjectPanel() below regardless.
+            if (!agentListProject.querySelector('.project-panel')) {
+                agentListProject.appendChild(createProjectPanel());
+            }
+            renderSidebarLinearProjectPanel();
 
             // Restore active tab visibility after re-render
             switchAgentTab(currentAgentTab);
@@ -3225,421 +5219,6 @@
             return container;
         }
 
-        function createAutobanPanel() {
-            const container = document.createElement('div');
-            container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
-            const autobanSelectStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
-            const autobanNumberInputStyle = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-            const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
-            const smallButtonStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
-            const guardInteraction = (el) => {
-                el.addEventListener('focus', () => { isAutobanPanelInteracting = true; });
-                el.addEventListener('blur', () => { isAutobanPanelInteracting = false; });
-            };
-            const autobanRoles = [
-                { role: 'planner', label: 'Planner' },
-                { role: 'intern', label: 'Intern' },
-                { role: 'coder', label: 'Coder' },
-                { role: 'lead', label: 'Lead Coder' },
-                { role: 'reviewer', label: 'Reviewer' },
-                ...lastCustomAgents
-                    .filter(agent => agent.includeInKanban === true)
-                    .map(agent => ({ role: agent.role, label: agent.name }))
-            ];
-
-            const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
-            const columnTransitions = [
-                { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
-                { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> INTERN/CODER/LEAD', defaultMin: 20, floorPerPlan: 5 },
-                { column: 'INTERN CODED', label: 'INTERN CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
-                { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
-                { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
-            ];
-
-            const resolveTerminalLiveness = (terminalName) => {
-                const terminal = lastTerminals[terminalName];
-                if (!terminal) {
-                    return { terminal: null, alive: false };
-                }
-                const heartbeatThresholdMs = 60_000;
-                const lastSeenMs = Date.parse(terminal.lastSeen || '');
-                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < heartbeatThresholdMs;
-                const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
-                return { terminal, alive: !!alive };
-            };
-
-            const getRolePoolEntries = (role) => {
-                const configuredPool = Array.isArray(autobanState.terminalPools?.[role]) ? autobanState.terminalPools[role].filter(Boolean) : [];
-                const managedPool = new Set(Array.isArray(autobanState.managedTerminalPools?.[role]) ? autobanState.managedTerminalPools[role] : []);
-                const aliveRoleTerminals = Object.keys(lastTerminals)
-                    .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
-                    .filter(name => resolveTerminalLiveness(name).alive)
-                    .sort((a, b) => a.localeCompare(b));
-                const alivePrimaryRoleTerminals = aliveRoleTerminals
-                    .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
-                const effectivePool = (
-                    configuredPool.length > 0
-                        ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
-                        : alivePrimaryRoleTerminals
-                ).slice(0, 5);
-                return effectivePool.map(name => {
-                    const status = resolveTerminalLiveness(name);
-                    const count = Number(autobanState.sendCounts?.[name] || 0);
-                    return {
-                        name,
-                        count,
-                        max: Number(autobanState.maxSendsPerTerminal || 10),
-                        managed: managedPool.has(name),
-                        alive: status.alive,
-                        terminal: status.terminal,
-                        exhausted: count >= Number(autobanState.maxSendsPerTerminal || 10)
-                    };
-                });
-            };
-
-            const automationRulesHeader = document.createElement('div');
-            automationRulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px; margin-bottom:8px;';
-            automationRulesHeader.textContent = 'AUTOMATION RULES';
-            container.appendChild(automationRulesHeader);
-
-            const batchRow = document.createElement('div');
-            batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            const batchLabel = document.createElement('span');
-            batchLabel.textContent = 'MAX BATCH SIZE:';
-
-            const batchSelect = document.createElement('select');
-            batchSelect.style.cssText = autobanSelectStyle;
-            guardInteraction(batchSelect);
-            const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5];
-            AUTOBAN_BATCH_SIZE_OPTIONS.forEach(val => {
-                const opt = document.createElement('option');
-                opt.value = String(val);
-                opt.textContent = String(val);
-                if (val === autobanState.batchSize) opt.selected = true;
-                batchSelect.appendChild(opt);
-            });
-            batchSelect.addEventListener('change', () => {
-                autobanState.batchSize = parseInt(batchSelect.value, 10) || 3;
-                emitAutobanState();
-            });
-
-            batchRow.appendChild(batchLabel);
-            batchRow.appendChild(batchSelect);
-            container.appendChild(batchRow);
-
-            const complexityRow = document.createElement('div');
-            complexityRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            const complexityLabel = document.createElement('span');
-            complexityLabel.textContent = 'COMPLEXITY:';
-
-            const complexitySelect = document.createElement('select');
-            complexitySelect.style.cssText = autobanSelectStyle;
-            guardInteraction(complexitySelect);
-            [
-                { value: 'all', label: 'All' },
-                { value: 'low_and_below', label: 'Low and below (1-4)' },
-                { value: 'medium_and_below', label: 'Medium and below (1-6)' },
-                { value: 'medium_and_above', label: 'Medium and above (5-10)' },
-                { value: 'high_and_above', label: 'High and above (7-10)' }
-            ].forEach(({ value, label }) => {
-                const opt = document.createElement('option');
-                opt.value = value;
-                opt.textContent = label;
-                if (value === autobanState.complexityFilter) opt.selected = true;
-                complexitySelect.appendChild(opt);
-            });
-            complexitySelect.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
-            complexitySelect.addEventListener('change', () => {
-                autobanState.complexityFilter = complexitySelect.value || 'all';
-                emitAutobanState();
-            });
-
-            complexityRow.appendChild(complexityLabel);
-            complexityRow.appendChild(complexitySelect);
-            container.appendChild(complexityRow);
-
-            const routingRow = document.createElement('div');
-            routingRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            const routingLabel = document.createElement('span');
-            routingLabel.textContent = 'ROUTING:';
-
-            const routingSelect = document.createElement('select');
-            routingSelect.style.cssText = autobanSelectStyle;
-            guardInteraction(routingSelect);
-            [
-                { value: 'dynamic', label: 'Dynamic' },
-                { value: 'all_coder', label: 'All -> Coder' },
-                { value: 'all_lead', label: 'All -> Lead' }
-            ].forEach(({ value, label }) => {
-                const opt = document.createElement('option');
-                opt.value = value;
-                opt.textContent = label;
-                if (value === autobanState.routingMode) opt.selected = true;
-                routingSelect.appendChild(opt);
-            });
-            routingSelect.addEventListener('change', () => {
-                autobanState.routingMode = routingSelect.value || 'dynamic';
-                emitAutobanState();
-            });
-
-            routingRow.appendChild(routingLabel);
-            routingRow.appendChild(routingSelect);
-            container.appendChild(routingRow);
-
-            const maxSendsRow = document.createElement('div');
-            maxSendsRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            const maxSendsLabel = document.createElement('span');
-            maxSendsLabel.textContent = 'MAX SENDS / TERMINAL:';
-
-            const maxSendsInput = document.createElement('input');
-            maxSendsInput.type = 'number';
-            maxSendsInput.min = '1';
-            maxSendsInput.max = '100';
-            maxSendsInput.value = String(Number(autobanState.maxSendsPerTerminal || 10));
-            maxSendsInput.style.cssText = autobanNumberInputStyle;
-            guardInteraction(maxSendsInput);
-            maxSendsInput.addEventListener('change', () => {
-                const value = Math.max(1, Math.min(100, parseInt(maxSendsInput.value, 10) || 10));
-                autobanState.maxSendsPerTerminal = value;
-                maxSendsInput.value = String(value);
-                vscode.postMessage({ type: 'updateAutobanMaxSends', maxSendsPerTerminal: value });
-                isAutobanPanelInteracting = false;
-                renderAgentList();
-            });
-
-            const sessionCapBadge = document.createElement('span');
-            sessionCapBadge.style.cssText = chipStyle;
-            sessionCapBadge.textContent = 'SESSION ' + Number(autobanState.sessionSendCount || 0) + '/' + Number(autobanState.globalSessionCap || 200);
-
-            maxSendsRow.appendChild(maxSendsLabel);
-            maxSendsRow.appendChild(maxSendsInput);
-            maxSendsRow.appendChild(sessionCapBadge);
-            container.appendChild(maxSendsRow);
-
-            const sep = document.createElement('div');
-            sep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
-            container.appendChild(sep);
-
-            const rulesHeader = document.createElement('div');
-            rulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
-            rulesHeader.textContent = 'COLUMN RULES';
-            container.appendChild(rulesHeader);
-
-            const timingExplanation = document.createElement('div');
-            timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-            timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
-            container.appendChild(timingExplanation);
-
-            columnTransitions.forEach(({ column, label, defaultMin, floorPerPlan }) => {
-                const idSuffix = getAutobanRuleIdSuffix(column);
-                const rule = autobanState.rules[column] || { enabled: true, intervalMinutes: defaultMin };
-                const ruleRow = document.createElement('div');
-                ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
-
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.checked = rule.enabled;
-                checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
-                checkbox.addEventListener('change', () => {
-                    if (!autobanState.rules[column]) {
-                        autobanState.rules[column] = { enabled: true, intervalMinutes: defaultMin };
-                    }
-                    autobanState.rules[column].enabled = checkbox.checked;
-                    emitAutobanState();
-                });
-
-                const ruleLbl = document.createElement('span');
-                ruleLbl.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-                ruleLbl.textContent = label;
-
-                const everyLbl = document.createElement('span');
-                everyLbl.style.cssText = 'color:var(--text-secondary);';
-                everyLbl.textContent = 'every';
-
-                const minInput = document.createElement('input');
-                minInput.type = 'number';
-                minInput.min = '1';
-                minInput.max = '60';
-                minInput.id = 'interval-input-' + idSuffix;
-                minInput.value = String(rule.intervalMinutes);
-                minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-                guardInteraction(minInput);
-                minInput.addEventListener('change', () => {
-                    if (!autobanState.rules[column]) {
-                        autobanState.rules[column] = { enabled: true, intervalMinutes: defaultMin };
-                    }
-                    const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
-                    autobanState.rules[column].intervalMinutes = val;
-                    minInput.value = String(val);
-                    emitAutobanState();
-                });
-
-                const minLbl = document.createElement('span');
-                minLbl.style.cssText = 'color:var(--text-secondary);';
-                minLbl.textContent = 'min';
-
-                ruleRow.appendChild(checkbox);
-                ruleRow.appendChild(ruleLbl);
-                ruleRow.appendChild(everyLbl);
-                ruleRow.appendChild(minInput);
-                ruleRow.appendChild(minLbl);
-                container.appendChild(ruleRow);
-            });
-
-            const poolSep = document.createElement('div');
-            poolSep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
-            container.appendChild(poolSep);
-
-            const poolsHeader = document.createElement('div');
-            poolsHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
-            poolsHeader.textContent = 'TERMINAL POOLS';
-            container.appendChild(poolsHeader);
-
-            const poolsHelp = document.createElement('div');
-            poolsHelp.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            poolsHelp.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
-            container.appendChild(poolsHelp);
-
-            autobanRoles.forEach(({ role, label }) => {
-                const poolEntries = getRolePoolEntries(role);
-                const roleBlock = document.createElement('div');
-                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
-
-                const roleHeader = document.createElement('div');
-                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
-
-                const roleTitleWrap = document.createElement('div');
-                roleTitleWrap.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
-
-                const roleTitle = document.createElement('span');
-                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
-                roleTitle.textContent = label;
-
-                const roleCapacity = document.createElement('span');
-                roleCapacity.style.cssText = chipStyle + ' flex-shrink:0;';
-                roleCapacity.textContent = 'POOL ' + poolEntries.length + '/5';
-
-                roleTitleWrap.appendChild(roleTitle);
-                roleTitleWrap.appendChild(roleCapacity);
-
-                const addButton = document.createElement('button');
-                addButton.className = 'action-btn';
-                addButton.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
-                addButton.textContent = 'ADD TERMINAL';
-                addButton.disabled = poolEntries.length >= 5;
-                addButton.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'addAutobanTerminal', role });
-                });
-
-                roleHeader.appendChild(roleTitleWrap);
-                roleHeader.appendChild(addButton);
-                roleBlock.appendChild(roleHeader);
-
-                if (poolEntries.length === 0) {
-                    const emptyState = document.createElement('div');
-                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
-                    emptyState.textContent = 'No live terminals available for this role yet.';
-                    roleBlock.appendChild(emptyState);
-                } else {
-                    poolEntries.forEach(entry => {
-                        const terminalRow = document.createElement('div');
-                        terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
-
-                        const left = document.createElement('div');
-                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
-
-                        const nameSpan = document.createElement('span');
-                        nameSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                        nameSpan.textContent = entry.name;
-
-                        const usageBadge = document.createElement('span');
-                        usageBadge.style.cssText = chipStyle + (entry.exhausted ? ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);' : '');
-                        usageBadge.textContent = entry.count + '/' + entry.max;
-
-                        const statusBadge = document.createElement('span');
-                        statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
-                        statusBadge.textContent = entry.alive ? (entry.exhausted ? 'EXHAUSTED' : 'READY') : 'OFFLINE';
-
-                        const kindBadge = document.createElement('span');
-                        kindBadge.style.cssText = chipStyle;
-                        kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
-
-                        left.appendChild(nameSpan);
-                        left.appendChild(usageBadge);
-                        left.appendChild(statusBadge);
-                        left.appendChild(kindBadge);
-
-                        const right = document.createElement('div');
-                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                        if (entry.terminal) {
-                            const focusButton = document.createElement('button');
-                            focusButton.style.cssText = smallButtonStyle;
-                            focusButton.textContent = 'FOCUS';
-                            focusButton.addEventListener('click', () => {
-                                vscode.postMessage({ type: 'focusTerminal', terminalName: entry.name });
-                            });
-                            right.appendChild(focusButton);
-                        }
-
-                        if (entry.managed) {
-                            const removeButton = document.createElement('button');
-                            removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
-                            removeButton.textContent = 'REMOVE';
-                            removeButton.addEventListener('click', () => {
-                                vscode.postMessage({ type: 'removeAutobanTerminal', role, terminalName: entry.name });
-                            });
-                            right.appendChild(removeButton);
-                        }
-
-                        terminalRow.appendChild(left);
-                        terminalRow.appendChild(right);
-                        roleBlock.appendChild(terminalRow);
-                    });
-                }
-
-                container.appendChild(roleBlock);
-            });
-
-            const resetRow = document.createElement('div');
-            resetRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px; padding:0 8px;';
-
-            const resetHint = document.createElement('span');
-            resetHint.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
-            resetHint.textContent = 'Clear sends, restart timers, and remove autoban-created backup terminals.';
-
-            const resetButton = document.createElement('button');
-            resetButton.className = 'action-btn';
-            resetButton.style.cssText = 'padding:4px 8px; font-size:9px; color:var(--accent-red, #e55);';
-            resetButton.textContent = 'CLEAR & RESET';
-            resetButton.addEventListener('click', () => {
-                if (!window.confirm('Clear autoban send counters and remove autoban backup terminals?')) return;
-                vscode.postMessage({ type: 'resetAutobanPools' });
-            });
-
-            resetRow.appendChild(resetHint);
-            resetRow.appendChild(resetButton);
-            container.appendChild(resetRow);
-
-            return container;
-        }
-
-        function emitAutobanState() {
-            vscode.postMessage({
-                type: 'updateAutobanState',
-                state: {
-                    enabled: autobanState.enabled,
-                    batchSize: autobanState.batchSize,
-                    complexityFilter: autobanState.complexityFilter,
-                    routingMode: autobanState.routingMode,
-                    rules: autobanState.rules
-                }
-            });
-        }
 
         function createAnalystRow() {
             const container = document.createElement('div');
@@ -3804,7 +5383,7 @@
                 _setupComplete = true;
                 onboardingContainer.classList.add('hidden');
                 mainContainer.classList.remove('hidden');
-                // Request saved state to populate Terminal Operations section
+                // Request saved state to populate Terminals tab
                 vscode.postMessage({ type: 'getStartupCommands' });
                 vscode.postMessage({ type: 'getVisibleAgents' });
             }
@@ -3872,6 +5451,11 @@
         setActiveTab(activeTab, false);
         vscode.postMessage({ type: 'getRecentActivity', limit: 50 });
         vscode.postMessage({ type: 'ready' });
+
+        // IMMEDIATE first render: show "Agents not connected" + buttons right away
+        // instead of waiting for terminalStatuses IPC (which can take 25+ seconds).
+        // The onboarding guard will replace the static "Initializing..." placeholder.
+        renderAgentList();
 
     </script>
 </body>

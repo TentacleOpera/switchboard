@@ -20,7 +20,8 @@
         "${workspaceFolder}/.switchboard/MCP/mcp-server.js"
       ],
       "env": {
-        "SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
+        "SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard",
+        "SWITCHBOARD_STATE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
       }
     }
   }

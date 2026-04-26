@@ -4,18 +4,19 @@
 	"switchboard.archive.autoArchiveCompleted": true,
 	"mcpServers": {
 		"switchboard": {
-			"command": "node",
+			"command": "/opt/homebrew/bin/node",
 			"args": [
 				"/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
 			],
 			"env": {
-				"SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
+				"SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard",
+				"SWITCHBOARD_STATE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
 			},
 			"disabled": false,
 			"alwaysAllow": []
 		}
 	},
-	"switchboard.accurateCoding.enabled": false,
+	"switchboard.accurateCoding.enabled": true,
 	"switchboard.review.strictPrompts": false,
 	"switchboard.planner.strictPrompts": false,
 	"switchboard.workspaceBrainPaths": [
@@ -26,7 +27,14 @@
 	"switchboard.jules.autoSync": false,
 	"switchboard.pairProgramming.aggressive": false,
 	"switchboard.reviewer.advancedMode": false,
-	"switchboard.planner.designDocEnabled": false,
+	"switchboard.planner.designDocEnabled": true,
 	"switchboard.workspace.ignoreStrategy": "targetedGitignore",
-	"switchboard.workspace.ignoreRules": []
+	"switchboard.workspace.ignoreRules": [],
+	"switchboard.ollama.intern.enabled": true,
+	"switchboard.ollama.intern.mode": "cloud",
+	"switchboard.ollama.intern.model": "gemma4:31b-cloud",
+	"switchboard.ollama.intern.baseUrl": "https://ollama.com/api",
+	"switchboard.integrations.preferredProvider": "clickup",
+	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
+	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/research-aggregate-cache.md"
 }

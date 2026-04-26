@@ -17,6 +17,22 @@ function run() {
     assert.ok(setupSource.includes('julesAutoSyncEnabled'), 'Expected setup autosave payload to include Jules autosync.');
     assert.ok(setupSource.includes('gitIgnoreStrategy'), 'Expected setup autosave payload to include git-ignore strategy.');
     assert.ok(setupSource.includes('gitIgnoreRules'), 'Expected setup autosave payload to include git-ignore rules.');
+    assert.ok(setupSource.includes('let lastOllamaSetupState = null;'), 'Expected setup state to track Ollama hydration separately from the autosave payload.');
+    assert.ok(setupSource.includes('id="ollama-use-gemma-cloud"'), 'Expected simplified Ollama UI to include the Gemma cloud checkbox.');
+    assert.ok(!setupSource.includes('id="ollama-launch-via-claude"'), 'Expected Ollama UI to remove the Claude Code launch checkbox (now mandatory).');
+    assert.ok(setupSource.includes('id="ollama-effective-command"'), 'Expected simplified Ollama UI to include the command preview div.');
+    assert.ok(!setupSource.includes('id="btn-ollama-save-intern"'), 'Expected simplified Ollama UI to remove the Save Intern Model button.');
+    assert.ok(!setupSource.includes('id="btn-ollama-launch"'), 'Expected simplified Ollama UI to remove the Launch Claude Code button.');
+    assert.ok(!setupSource.includes('id="btn-ollama-signout"'), 'Expected simplified Ollama UI to remove the Sign Out button.');
+    assert.ok(!setupSource.includes('let ollamaDraftMode'), 'Expected simplified Ollama UI to remove the draft mode variable.');
+    assert.ok(!setupSource.includes('let ollamaDraftDirty'), 'Expected simplified Ollama UI to remove the draft dirty flag.');
+    assert.ok(!setupSource.includes('syncOllamaDraftFromSaved'), 'Expected simplified Ollama UI to remove the draft sync function.');
+    assert.ok(!setupSource.includes('startOllamaPullPolling'), 'Expected simplified Ollama UI to remove the pull polling function.');
+    assert.match(
+        setupSource,
+        /case 'ollamaSetupState':[\s\S]*lastOllamaSetupState = cloneOllamaSetupState\([\s\S]*renderOllamaSetupState\(\);[\s\S]*\}/s,
+        'Expected simplified Ollama setup hydration to directly render state without draft management.'
+    );
 
     assert.ok(!implementationSource.includes('id="jules-auto-sync-toggle"'), 'Expected Terminal Operations to stop rendering the persistent Jules autosync toggle.');
 
@@ -27,7 +43,7 @@ function run() {
     );
     assert.match(
         providerSource,
-        /await Promise\.all\(\[\s*this\._postSidebarConfigurationState\(activeWorkspaceRoot\),\s*this\.postSetupPanelState\(activeWorkspaceRoot\)\s*\]\);/s,
+        /await Promise\.all\(\[\s*this\._postSidebarConfigurationState\((?:activeWorkspaceRoot|resolvedWorkspaceRoot|resolvedRoot)\),\s*this\.postSetupPanelState\((?:activeWorkspaceRoot|resolvedWorkspaceRoot|resolvedRoot)\)\s*\]\);/s,
         'Expected autosave to keep rebroadcasting refreshed state to both webviews after save.'
     );
 

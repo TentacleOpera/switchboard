@@ -105,6 +105,13 @@ query: "authentication"
    - `metadata`: { topic: "Archive setup", project: "switchboard", tags: ["setup", "duckdb"] }
 3. Confirm export success to user
 
+## Skills Registry
+
+| Skill Name | Description |
+|------------|-------------|
+| `architectural_diagrams` | Generate Mermaid architectural diagrams, render to images, and upload to ClickUp/Linear tickets for team review |
+| `archive` | Query and manage the DuckDB archive of historical plans and conversations |
+
 ## Related Files
 - Schema: `src/services/archiveSchema.sql`
 - Service: `src/services/ArchiveManager.ts`

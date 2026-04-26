@@ -48,6 +48,45 @@ function buildConfig(columnMappings) {
     };
 }
 
+function createClickUpTask(overrides = {}) {
+    return {
+        id: 'task-1',
+        name: 'Analytics migration',
+        description: 'Move analytics pipeline.',
+        markdown_description: '## Analytics migration',
+        text_content: 'Move analytics pipeline.',
+        url: 'https://app.clickup.com/t/task-1',
+        parent: null,
+        archived: false,
+        status: {
+            status: 'in progress',
+            color: '#123456',
+            type: 'custom',
+            orderindex: '1'
+        },
+        priority: {
+            id: '2',
+            priority: 'high',
+            color: '#ff0000',
+            orderindex: '2'
+        },
+        list: {
+            id: 'list-sprint',
+            name: 'Sprint 113'
+        },
+        creator: {
+            id: 'user-1',
+            username: 'patrick',
+            email: 'patrick@example.com'
+        },
+        assignees: [],
+        tags: [],
+        date_created: '1710000000000',
+        date_updated: '1710000001000',
+        ...overrides
+    };
+}
+
 async function testConfigNormalizationAndSetupFlow() {
     await withWorkspace('clickup-setup', async ({ workspaceRoot }) => {
         const { service, secretStorage, vscodeState, CANONICAL_COLUMNS } = createContext(workspaceRoot);
@@ -385,11 +424,128 @@ async function testLoopGuardAndUnmappedColumns() {
     });
 }
 
+async function testNativeTaskQueryAndMutationHelpers() {
+    await withWorkspace('clickup-native-api', async ({ workspaceRoot }) => {
+        const { service } = createContext(workspaceRoot, {
+            'switchboard.clickup.apiToken': 'pk_native_clickup'
+        });
+        await service.saveConfig(buildConfig({ CREATED: 'list-created' }));
+
+        const http = installHttpsMock();
+        try {
+            http.queueJson(200, {
+                spaces: [
+                    { id: 'space-1', name: 'Engineering' }
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/team/team-1/space?archived=false');
+            http.queueJson(200, {
+                lists: [
+                    { id: 'list-created', name: 'Created List', archived: false, task_count: 2 }
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/space/space-1/list?archived=false');
+            http.queueJson(200, {
+                folders: [
+                    { id: 'folder-1', name: 'Sprint Folder' }
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/space/space-1/folder?archived=false');
+            http.queueJson(200, {
+                lists: [
+                    { id: 'list-sprint', name: 'Sprint 113', archived: false, task_count: 3 }
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/folder/folder-1/list?archived=false');
+
+            const matchingLists = await service.findList('sprint');
+            assert.deepStrictEqual(matchingLists.map((list) => list.id), ['list-sprint']);
+            assert.strictEqual(matchingLists[0].space?.id, 'space-1');
+            assert.strictEqual(matchingLists[0].folder?.id, 'folder-1');
+
+            http.queueJson(200, {
+                tasks: [
+                    createClickUpTask(),
+                    createClickUpTask({ id: 'task-2', name: 'Docs cleanup' })
+                ]
+            }, (req) => req.method === 'GET' && req.path === '/api/v2/list/list-sprint/task?page=0&subtasks=true&include_closed=true&include_markdown_description=true');
+            const matchingTasks = await service.findTask('list-sprint', 'analytics');
+            assert.deepStrictEqual(matchingTasks.map((task) => task.id), ['task-1']);
+
+            const allTasksPageOne = Array.from({ length: 100 }, (_, index) => createClickUpTask({
+                id: `task-page1-${index}`,
+                name: `Page one task ${index}`,
+                list: { id: 'list-created', name: 'Created List' }
+            }));
+            const allTasksPageTwo = [
+                createClickUpTask({
+                    id: 'task-page2-0',
+                    name: 'Page two task',
+                    list: { id: 'list-created', name: 'Created List' }
+                })
+            ];
+            http.queueJson(200, { tasks: allTasksPageOne }, (req) =>
+                req.method === 'GET'
+                && req.path === '/api/v2/team/team-1/task?subtasks=true&include_closed=true&include_markdown_description=true&page=0'
+            );
+            http.queueJson(200, { tasks: allTasksPageTwo }, (req) =>
+                req.method === 'GET'
+                && req.path === '/api/v2/team/team-1/task?subtasks=true&include_closed=true&include_markdown_description=true&page=1'
+            );
+            const allTasks = await service.searchTasks('');
+            assert.strictEqual(allTasks.length, 101, 'Expected blank native ClickUp search to return all paginated team tasks.');
+
+            http.queueJson(200, {
+                tasks: [
+                    createClickUpTask({
+                        id: 'subtask-1',
+                        name: 'Analytics migration / backfill',
+                        parent: 'task-1'
+                    })
+                ]
+            }, (req) =>
+                req.method === 'GET'
+                && req.path === '/api/v2/team/team-1/task?parent=task-1&subtasks=true&include_markdown_description=true'
+            );
+            const subtasks = await service.getSubtasks('task-1');
+            assert.deepStrictEqual(subtasks.map((task) => task.id), ['subtask-1']);
+
+            http.queueJson(201, { id: 'task-created' }, (req) =>
+                req.method === 'POST'
+                && req.path === '/api/v2/list/list-created/task'
+                && req.jsonBody?.name === 'Created task'
+            );
+            http.queueJson(503, {}, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-created');
+            const createdTask = await service.createTask('list-created', 'Created task', {
+                description: 'Created description',
+                status: 'to do'
+            });
+            assert.ok(createdTask, 'Expected createTask to return a task even when the readback request fails.');
+            assert.strictEqual(createdTask.id, 'task-created');
+            assert.strictEqual(createdTask.name, 'Created task');
+            assert.strictEqual(createdTask.description, 'Created description');
+
+            http.queueJson(200, { id: 'task-created' }, (req) =>
+                req.method === 'PUT'
+                && req.path === '/api/v2/task/task-created'
+                && req.jsonBody?.status === 'in progress'
+            );
+            await service.updateTask('task-created', { status: 'in progress' });
+
+            http.queueJson(200, { id: 'comment-1' }, (req) =>
+                req.method === 'POST'
+                && req.path === '/api/v2/task/task-created/comment'
+                && req.jsonBody?.comment_text === 'Looks good'
+            );
+            await service.addTaskComment('task-created', 'Looks good');
+        } finally {
+            http.restore();
+        }
+    });
+}
+
 async function run() {
     await testConfigNormalizationAndSetupFlow();
     await testApplyConfigOptionsAndValidation();
     await testSyncPlanCreateAndUpdateFlows();
     await testLoopGuardAndUnmappedColumns();
+    await testNativeTaskQueryAndMutationHelpers();
     console.log('clickup sync service test passed');
 }
 

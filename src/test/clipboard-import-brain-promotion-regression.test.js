@@ -13,13 +13,13 @@ function run() {
 
     assert.match(
         source,
-        /public async importPlanFromClipboard\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, text, false, true\);/,
+        /public async importPlanFromClipboard\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, text, false, \{ skipBrainPromotion: true \}\);/,
         'Expected single-plan clipboard import to pass skipBrainPromotion=true.'
     );
 
     assert.match(
         source,
-        /private async _importMultiplePlansFromClipboard\(text: string\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(plan\.title, plan\.content, false, true\);/,
+        /private async _importMultiplePlansFromClipboard\(text: string\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(plan\.title, plan\.content, false, \{ skipBrainPromotion: true \}\);/,
         'Expected multi-plan clipboard imports to pass skipBrainPromotion=true for each imported plan.'
     );
 
@@ -31,7 +31,7 @@ function run() {
 
     assert.match(
         source,
-        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*skipBrainPromotion: boolean = false\s*\): Promise<\{ sessionId: string; planFileAbsolute: string; \}> \{[\s\S]*if \(!skipBrainPromotion\) \{[\s\S]*void this\._promotePlanToBrain\(planFileAbsolute, fileName\)\.catch\(\(e\) => \{/,
+        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;\s*\} = \{\}\s*\): Promise<\{ sessionId: string; planFileAbsolute: string; \}> \{[\s\S]*if \(!options\.skipBrainPromotion\) \{[\s\S]*void this\._promotePlanToBrain\(planFileAbsolute, fileName\)\.catch\(\(e\) => \{/,
         'Expected _createInitiatedPlan to skip auto-promotion when skipBrainPromotion=true.'
     );
 

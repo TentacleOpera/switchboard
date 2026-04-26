@@ -3,7 +3,9 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as https from 'https';
 import { CANONICAL_COLUMNS } from './ClickUpSyncService';
+import { KanbanDatabase } from './KanbanDatabase';
 import type { AutoPullIntervalMinutes } from './IntegrationAutoPullService';
+import { DEFAULT_LIVE_SYNC_CONFIG } from '../models/LiveSyncTypes';
 import {
   type LinearAutomationRule,
   normalizeLinearAutomationRules
@@ -12,7 +14,8 @@ import {
 export interface LinearConfig {
   teamId: string;
   teamName: string;
-  projectId?: string;
+  includeProjectNames?: string[];
+  excludeProjectNames?: string[];
   columnToStateId: Record<string, string>;
   switchboardLabelId: string;
   setupComplete: boolean;
@@ -21,14 +24,75 @@ export interface LinearConfig {
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
   automationRules: LinearAutomationRule[];
+  deleteSyncEnabled?: boolean;  // default: true — archive Linear issue when plan is deleted
+  completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
+  excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
 }
 
 export interface LinearApplyOptions {
   mapColumns: boolean;
   createLabel: boolean;
-  scopeProject: boolean;
+  includeProjectNames?: string[];
+  excludeProjectNames?: string[];
   enableRealtimeSync: boolean;
   enableAutoPull: boolean;
+  deleteSyncEnabled?: boolean;
+  enableCompleteSync?: boolean;
+  excludeBacklog?: boolean;  // NEW: exclude backlog issues from sync
+}
+
+export interface LinearIssue {
+  id: string;
+  identifier: string;
+  title: string;
+  description: string;
+  state: { id: string; name: string; type: string } | null;
+  priority: number | null;
+  assignee: { id: string; name: string; email: string } | null;
+  project: { id: string; name: string } | null;
+  labels: Array<{ id: string; name: string }>;
+  createdAt: string;
+  updatedAt: string;
+  url: string;
+}
+
+export interface LinearComment {
+  id: string;
+  body: string;
+  user: { name: string; email?: string } | null;
+  createdAt: string;
+}
+
+export interface LinearAttachment {
+  id: string;
+  title: string;
+  url: string;
+  filename?: string;
+  filesize?: number;
+  mimeType?: string;
+}
+
+export type LinearIssueFilter = {
+  team: { id: { eq: string } };
+  project?: { id: { eq: string } };
+};
+
+export function buildLinearIssueFilter(teamId: string, projectId?: string): LinearIssueFilter {
+  const normalizedTeamId = String(teamId || '').trim();
+  if (!normalizedTeamId) {
+    throw new Error('Linear issue list queries require a team ID.');
+  }
+
+  const normalizedProjectId = String(projectId || '').trim();
+  const filter: LinearIssueFilter = {
+    team: { id: { eq: normalizedTeamId } }
+  };
+
+  if (normalizedProjectId) {
+    filter.project = { id: { eq: normalizedProjectId } };
+  }
+
+  return filter;
 }
 
 export { CANONICAL_COLUMNS };
@@ -47,6 +111,36 @@ export class LinearSyncService {
   private _consecutiveFailures = 0;
   private _debounceTimers: Map<string, NodeJS.Timeout> = new Map();
   private readonly _maxRetries = 3;
+  private _lastRequestTime = 0;
+  private readonly _minDelayMs = 50;
+
+  private static readonly _transientMarkers = [
+    'socket hang up',
+    'ETIMEDOUT',
+    'ECONNRESET',
+    'ECONNREFUSED',
+    'EPIPE',
+    'EAI_AGAIN',
+    'timeout',
+    'network error',
+    '429',
+    'rate limit',
+    'too many requests'
+  ];
+
+  private _isTransientError(error: unknown): boolean {
+    const message = (error instanceof Error ? error.message : String(error)).toLowerCase();
+    return LinearSyncService._transientMarkers.some(marker => message.includes(marker.toLowerCase()));
+  }
+
+  private async _throttle(): Promise<void> {
+    const now = Date.now();
+    const elapsed = now - this._lastRequestTime;
+    if (elapsed < this._minDelayMs) {
+      await this.delay(this._minDelayMs - elapsed);
+    }
+    this._lastRequestTime = Date.now();
+  }
 
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
     this._workspaceRoot = workspaceRoot;
@@ -61,7 +155,8 @@ export class LinearSyncService {
     return {
       teamId: '',
       teamName: '',
-      projectId: undefined,
+      includeProjectNames: undefined,
+      excludeProjectNames: undefined,
       columnToStateId: {},
       switchboardLabelId: '',
       setupComplete: false,
@@ -69,7 +164,9 @@ export class LinearSyncService {
       realTimeSyncEnabled: false,
       autoPullEnabled: false,
       pullIntervalMinutes: 60,
-      automationRules: []
+      automationRules: [],
+      completeSyncEnabled: true,
+      excludeBacklog: true  // default to excluding backlog for lightweight sync
     };
   }
 
@@ -82,10 +179,19 @@ export class LinearSyncService {
     const normalizedInterval: AutoPullIntervalMinutes =
       interval === 5 || interval === 15 || interval === 30 || interval === 60 ? interval : 60;
 
+    const normalizeNameArray = (arr: unknown): string[] | undefined => {
+      if (!Array.isArray(arr)) return undefined;
+      const normalized = arr
+        .map((item: unknown) => String(item || '').trim())
+        .filter((name: string) => name.length > 0);
+      return normalized.length > 0 ? normalized : undefined;
+    };
+
     return {
       teamId: raw.teamId || '',
       teamName: raw.teamName || '',
-      projectId: raw.projectId || undefined,
+      includeProjectNames: normalizeNameArray(raw.includeProjectNames),
+      excludeProjectNames: normalizeNameArray(raw.excludeProjectNames),
       columnToStateId: raw.columnToStateId || {},
       switchboardLabelId: raw.switchboardLabelId || '',
       setupComplete: raw.setupComplete === true,
@@ -95,14 +201,40 @@ export class LinearSyncService {
         : raw.realTimeSyncEnabled === true,
       autoPullEnabled: raw.autoPullEnabled === true,
       pullIntervalMinutes: normalizedInterval,
-      automationRules: normalizeLinearAutomationRules(raw.automationRules)
+      automationRules: normalizeLinearAutomationRules(raw.automationRules),
+      deleteSyncEnabled: raw.deleteSyncEnabled === undefined
+        ? (raw.setupComplete === true)  // default true for existing setups
+        : raw.deleteSyncEnabled === true,
+      completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
+      excludeBacklog: raw.excludeBacklog !== false  // default true — exclude backlog issues
     };
   }
 
   async loadConfig(): Promise<LinearConfig | null> {
     try {
       const content = await fs.promises.readFile(this._configPath, 'utf8');
-      const normalized = this._normalizeConfig(JSON.parse(content));
+      const raw = JSON.parse(content);
+
+      // Migration: legacy projectId → includeProjectNames
+      if (raw.projectId && (!raw.includeProjectNames || raw.includeProjectNames.length === 0)) {
+        try {
+          const resolvedName = await this._resolveProjectIdToName(raw.projectId);
+          if (resolvedName) {
+            console.log(`[LinearSync] Migrating legacy projectId to includeProjectNames: ${resolvedName}`);
+            raw.includeProjectNames = [resolvedName];
+            delete raw.projectId;
+            // Save migrated config
+            await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
+            await fs.promises.writeFile(this._configPath, JSON.stringify(raw, null, 2));
+          } else {
+            console.warn(`[LinearSync] Failed to resolve legacy projectId to name, deferring migration. API may be unavailable.`);
+          }
+        } catch (error) {
+          console.warn(`[LinearSync] Migration deferred due to error:`, error);
+        }
+      }
+
+      const normalized = this._normalizeConfig(raw);
       this._config = normalized;
       return normalized;
     } catch { return null; }
@@ -176,6 +308,643 @@ export class LinearSyncService {
     };
   }
 
+  private _normalizeLinearIssue(raw: any): LinearIssue {
+    return {
+      id: String(raw?.id || '').trim(),
+      identifier: String(raw?.identifier || '').trim(),
+      title: String(raw?.title || '').trim(),
+      description: String(raw?.description || ''),
+      state: raw?.state
+        ? {
+          id: String(raw.state.id || '').trim(),
+          name: String(raw.state.name || '').trim(),
+          type: String(raw.state.type || '').trim()
+        }
+        : null,
+      priority: raw?.priority === undefined || raw?.priority === null ? null : Number(raw.priority),
+      assignee: raw?.assignee
+        ? {
+          id: String(raw.assignee.id || '').trim(),
+          name: String(raw.assignee.name || '').trim(),
+          email: String(raw.assignee.email || '').trim()
+        }
+        : null,
+      project: raw?.project
+        ? {
+          id: String(raw.project.id || '').trim(),
+          name: String(raw.project.name || '').trim()
+        }
+        : null,
+      labels: Array.isArray(raw?.labels?.nodes)
+        ? raw.labels.nodes.map((label: any) => ({
+          id: String(label?.id || '').trim(),
+          name: String(label?.name || '').trim()
+        })).filter((label: { id: string; name: string }) => label.id.length > 0 || label.name.length > 0)
+        : [],
+      createdAt: String(raw?.createdAt || '').trim(),
+      updatedAt: String(raw?.updatedAt || '').trim(),
+      url: String(raw?.url || '').trim()
+    };
+  }
+
+  private _normalizeLinearComment(raw: any): LinearComment {
+    return {
+      id: String(raw?.id || '').trim(),
+      body: String(raw?.body || ''),
+      user: raw?.user
+        ? {
+          name: String(raw.user.name || '').trim(),
+          email: String(raw.user.email || '').trim() || undefined
+        }
+        : null,
+      createdAt: String(raw?.createdAt || '').trim()
+    };
+  }
+
+  private _normalizeLinearAttachment(raw: any): LinearAttachment {
+    const title = String(raw?.title || '').trim();
+    const url = String(raw?.url || '').trim();
+    const metadata = raw?.metadata && typeof raw.metadata === 'object' ? raw.metadata : {};
+    const subtitle = String(raw?.subtitle || '').trim();
+    const derivedFilename = subtitle
+      || title
+      || (url ? url.split('/').filter(Boolean).pop() || '' : '');
+    const filesizeValue = Number(metadata?.size);
+    return {
+      id: String(raw?.id || '').trim(),
+      title,
+      url,
+      filename: derivedFilename || undefined,
+      filesize: Number.isFinite(filesizeValue) && filesizeValue > 0 ? filesizeValue : undefined,
+      mimeType: String(metadata?.contentType || metadata?.mimeType || '').trim() || undefined
+    };
+  }
+
+  private _buildIssueListQuery(): string {
+    return `
+      query($filter: IssueFilter!, $after: String, $first: Int!) {
+        issues(
+          filter: $filter
+          after: $after
+          first: $first
+        ) {
+          nodes {
+            id
+            identifier
+            title
+            description
+            state { id name type }
+            priority
+            assignee { id name email }
+            project { id name }
+            labels { nodes { id name } }
+            createdAt
+            updatedAt
+            url
+          }
+          pageInfo { hasNextPage endCursor }
+        }
+      }
+    `;
+  }
+
+  private _isIssueIdentifier(value: string): boolean {
+    return /^[A-Z][A-Z0-9_]*-\d+$/.test(value);
+  }
+
+  private _buildFallbackDescription(planFile: string): string {
+    return `Managed by Switchboard.\n\nPlan file: \`${planFile}\`\n\nDo not edit the title — it is synced from Switchboard.`;
+  }
+
+  private _truncateInitialDescription(markdownContent: string): string {
+    const maxBytes = DEFAULT_LIVE_SYNC_CONFIG.maxContentSizeBytes;
+    const suffix = '\n\n... (truncated by Switchboard before Linear issue creation)';
+
+    if (Buffer.byteLength(markdownContent, 'utf8') <= maxBytes) {
+      return markdownContent;
+    }
+
+    let end = markdownContent.length;
+    while (end > 0 && Buffer.byteLength(`${markdownContent.slice(0, end)}${suffix}`, 'utf8') > maxBytes) {
+      end--;
+    }
+
+    return `${markdownContent.slice(0, end)}${suffix}`;
+  }
+
+  /**
+   * Strip a leading ATX H1 header from markdown content.
+   * Only strips if the first non-blank line starts with '# ' at column 0.
+   * Also skips blank lines immediately after the H1 to avoid a leading blank line.
+   * Does NOT handle Setext-style H1s (underlined with ===).
+   */
+  private _stripH1Header(markdownContent: string): string {
+    const lines = markdownContent.split(/\r?\n/);
+
+    // Find the first non-blank line
+    let h1LineIndex = -1;
+    for (let i = 0; i < lines.length; i++) {
+      if (lines[i].trim() === '') {
+        continue;
+      }
+      // Check if this line is an ATX H1: starts with '# ' at column 0
+      if (/^# /.test(lines[i])) {
+        h1LineIndex = i;
+      }
+      // Whether or not it's an H1, stop scanning — we only strip if H1 is the very first non-blank line
+      break;
+    }
+
+    if (h1LineIndex === -1) {
+      // No leading H1 found — return content unchanged
+      return markdownContent;
+    }
+
+    // Skip the H1 line and any blank lines immediately after it
+    let startIndex = h1LineIndex + 1;
+    while (startIndex < lines.length && lines[startIndex].trim() === '') {
+      startIndex++;
+    }
+
+    return lines.slice(startIndex).join('\n');
+  }
+
+  private async _buildInitialIssueDescription(planFile: string): Promise<string> {
+    const fallback = this._buildFallbackDescription(planFile);
+    try {
+      const planFilePath = path.isAbsolute(planFile)
+        ? planFile
+        : path.join(this._workspaceRoot, planFile);
+      const markdownContent = await fs.promises.readFile(planFilePath, 'utf8');
+      const contentWithoutH1 = this._stripH1Header(markdownContent);
+      return this._truncateInitialDescription(contentWithoutH1);
+    } catch (error) {
+      console.warn(`[LinearSync] Failed to read plan file ${planFile}:`, error);
+      return fallback;
+    }
+  }
+
+  // ── Project Filter Helpers ───────────────────────────────────────
+
+  public async getAvailableProjects(): Promise<{ id: string; name: string }[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
+    `, { teamId: config.teamId });
+
+    const projects = Array.isArray(result.data?.team?.projects?.nodes)
+      ? result.data.team.projects.nodes
+      : [];
+    return projects.map((project: any) => ({
+      id: String(project?.id || '').trim(),
+      name: String(project?.name || '').trim()
+    })).filter((project: { id: string; name: string }) => project.id.length > 0 && project.name.length > 0);
+  }
+
+  public async resolveSingleIncludeProjectId(config?: LinearConfig): Promise<string | undefined> {
+    const cfg = config || await this.loadConfig();
+    if (!cfg) {
+      return undefined;
+    }
+    const includeNames = cfg.includeProjectNames || [];
+    const excludeNames = cfg.excludeProjectNames || [];
+    if (includeNames.length !== 1 || excludeNames.length > 0) {
+      return undefined;
+    }
+    const projectName = includeNames[0];
+    const projects = await this.getAvailableProjects();
+    const project = projects.find(p => p.name.toLowerCase() === projectName.toLowerCase());
+    return project?.id;
+  }
+
+  private async _resolveProjectIdToName(projectId: string): Promise<string | null> {
+    try {
+      const projects = await this.getAvailableProjects();
+      const match = projects.find((p) => p.id === projectId);
+      return match?.name || null;
+    } catch (error) {
+      console.warn(`[LinearSync] Failed to resolve project ID to name:`, error);
+      return null;
+    }
+  }
+
+  private _applyProjectNameFilters(issues: LinearIssue[], config: LinearConfig): LinearIssue[] {
+    const includeNames = config.includeProjectNames || [];
+    const excludeNames = config.excludeProjectNames || [];
+
+    if (includeNames.length === 0 && excludeNames.length === 0) {
+      return issues;
+    }
+
+    const includeLower = includeNames.map((n) => n.toLowerCase());
+    const excludeLower = excludeNames.map((n) => n.toLowerCase());
+
+    return issues.filter((issue) => {
+      const projectName = issue.project?.name || '';
+
+      // Issues with no project: exclude if include filter is set, include otherwise
+      if (!projectName) {
+        return includeNames.length === 0;
+      }
+
+      const projectNameLower = projectName.toLowerCase();
+
+      // Apply exclude filter
+      if (excludeLower.includes(projectNameLower)) {
+        return false;
+      }
+
+      // Apply include filter
+      if (includeNames.length > 0) {
+        return includeLower.includes(projectNameLower);
+      }
+
+      return true;
+    });
+  }
+
+  private async _resolveSingleIncludeProjectId(config: LinearConfig): Promise<string | undefined> {
+    const includeNames = config.includeProjectNames || [];
+    const excludeNames = config.excludeProjectNames || [];
+
+    // Only use server-side filter for single include with no excludes
+    if (includeNames.length === 1 && excludeNames.length === 0) {
+      try {
+        const projects = await this.getAvailableProjects();
+        const match = projects.find((p) => p.name.toLowerCase() === includeNames[0].toLowerCase());
+        return match?.id;
+      } catch (error) {
+        console.warn(`[LinearSync] Failed to resolve single include project ID, falling back to client-side filtering:`, error);
+        return undefined;
+      }
+    }
+
+    return undefined;
+  }
+
+  public async queryIssues(options: {
+    search?: string;
+    stateId?: string;
+    assigneeId?: string;
+    projectId?: string;
+    limit?: number;
+  }): Promise<LinearIssue[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedSearch = String(options.search || '').trim().toLowerCase();
+    const normalizedStateId = String(options.stateId || '').trim();
+    const normalizedAssigneeId = String(options.assigneeId || '').trim();
+    const requestedLimit = Number(options.limit);
+    const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
+      ? Math.min(Math.floor(requestedLimit), 100)
+      : 50;
+
+    // Hybrid optimization: use server-side filter for single include, no excludes
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+
+    const issues: LinearIssue[] = [];
+    let cursor: string | null = null;
+    const query = this._buildIssueListQuery();
+    let pageCount = 0;
+    const maxPages = 10; // Hard cap to prevent runaway pagination
+
+    while (issues.length < limit && pageCount < maxPages) {
+      const result = await this.graphqlRequest(query, {
+        filter,
+        after: cursor,
+        first: Math.min(50, limit - issues.length)
+      });
+
+      const page = result.data?.issues;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      for (const node of nodes) {
+        const issue = this._normalizeLinearIssue(node);
+        if (normalizedStateId && issue.state?.id !== normalizedStateId) {
+          continue;
+        }
+        if (normalizedAssigneeId && issue.assignee?.id !== normalizedAssigneeId) {
+          continue;
+        }
+        if (normalizedSearch) {
+          const searchableText = [
+            issue.identifier,
+            issue.title,
+            issue.description
+          ].join('\n').toLowerCase();
+          if (!searchableText.includes(normalizedSearch)) {
+            continue;
+          }
+        }
+        issues.push(issue);
+        if (issues.length >= limit) {
+          break;
+        }
+      }
+
+      if (!page?.pageInfo?.hasNextPage) {
+        break;
+      }
+      cursor = String(page.pageInfo.endCursor || '').trim() || null;
+      if (!cursor) {
+        break;
+      }
+      pageCount++;
+      if (pageCount >= maxPages) {
+        console.warn(`[LinearSync] Reached maximum page cap (${maxPages}) for queryIssues. Some issues may be omitted.`);
+      }
+      await this.delay(200);
+    }
+
+    // Apply client-side project name filters
+    return this._applyProjectNameFilters(issues, config);
+  }
+
+  public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedLookup = String(issueIdOrIdentifier || '').trim();
+    if (!normalizedLookup) {
+      throw new Error('Linear issue lookup requires an issue ID or identifier.');
+    }
+
+    if (!this._isIssueIdentifier(normalizedLookup)) {
+      const result = await this.graphqlRequest(`
+        query($issueId: String!) {
+          issue(id: $issueId) {
+            id
+            identifier
+            title
+            description
+            state { id name type }
+            priority
+            assignee { id name email }
+            project { id name }
+            labels { nodes { id name } }
+            createdAt
+            updatedAt
+            url
+          }
+        }
+      `, { issueId: normalizedLookup });
+
+      return result.data?.issue ? this._normalizeLinearIssue(result.data.issue) : null;
+    }
+
+    const query = this._buildIssueListQuery();
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
+    let cursor: string | null = null;
+    while (true) {
+      const result = await this.graphqlRequest(query, {
+        filter,
+        after: cursor,
+        first: 50
+      });
+
+      const page = result.data?.issues;
+      const nodes = Array.isArray(page?.nodes) ? page.nodes : [];
+      const match = nodes.find((node: any) =>
+        String(node?.identifier || '').trim().toUpperCase() === normalizedLookup.toUpperCase()
+      );
+      if (match) {
+        const issue = this._normalizeLinearIssue(match);
+        // Apply client-side project name filters
+        const filtered = this._applyProjectNameFilters([issue], config);
+        return filtered.length > 0 ? filtered[0] : null;
+      }
+
+      if (!page?.pageInfo?.hasNextPage) {
+        break;
+      }
+      cursor = String(page.pageInfo.endCursor || '').trim() || null;
+      if (!cursor) {
+        break;
+      }
+      await this.delay(200);
+    }
+
+    return null;
+  }
+
+  public async getSubtasks(issueId: string): Promise<LinearIssue[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear subtasks lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          children {
+            nodes {
+              id
+              identifier
+              title
+              description
+              state { id name type }
+              priority
+              assignee { id name email }
+              project { id name }
+              labels { nodes { id name } }
+              createdAt
+              updatedAt
+              url
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const children = Array.isArray(result.data?.issue?.children?.nodes)
+      ? result.data.issue.children.nodes
+      : [];
+    return children.map((child: any) => this._normalizeLinearIssue(child));
+  }
+
+  public async getComments(issueId: string): Promise<LinearComment[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear comment lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          comments {
+            nodes {
+              id
+              body
+              createdAt
+              user { name email }
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const comments = Array.isArray(result.data?.issue?.comments?.nodes)
+      ? result.data.issue.comments.nodes
+      : [];
+    return comments.map((comment: any) => this._normalizeLinearComment(comment));
+  }
+
+  public async getAttachments(issueId: string): Promise<LinearAttachment[]> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete || !config.teamId) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      throw new Error('Linear attachment lookup requires an issue ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      query($issueId: String!) {
+        issue(id: $issueId) {
+          attachments {
+            nodes {
+              id
+              title
+              url
+            }
+          }
+        }
+      }
+    `, { issueId: normalizedIssueId });
+
+    const attachments = Array.isArray(result.data?.issue?.attachments?.nodes)
+      ? result.data.issue.attachments.nodes
+      : [];
+    return attachments.map((attachment: any) => this._normalizeLinearAttachment(attachment));
+  }
+
+  public async updateIssueState(issueId: string, stateId: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedStateId = String(stateId || '').trim();
+    if (!normalizedIssueId || !normalizedStateId) {
+      throw new Error('Linear state updates require both an issue ID and a state ID.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $stateId: String!) {
+        issueUpdate(id: $id, input: { stateId: $stateId }) { success }
+      }
+    `, { id: normalizedIssueId, stateId: normalizedStateId });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested state update.`);
+    }
+  }
+
+  public async addIssueComment(issueId: string, comment: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedComment = String(comment || '').trim();
+    if (!normalizedIssueId || !normalizedComment) {
+      throw new Error('Linear comments require both an issue ID and non-empty comment text.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($issueId: String!, $body: String!) {
+        commentCreate(input: { issueId: $issueId, body: $body }) {
+          success
+        }
+      }
+    `, { issueId: normalizedIssueId, body: normalizedComment });
+
+    if (!result.data?.commentCreate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested comment.`);
+    }
+  }
+
+  public async updateIssueDescription(issueId: string, description: string): Promise<void> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    const normalizedDescription = String(description || '').trim();
+    if (!normalizedIssueId || !normalizedDescription) {
+      throw new Error('Linear description updates require both an issue ID and non-empty content.');
+    }
+
+    const result = await this.graphqlRequest(`
+      mutation($id: String!, $description: String!) {
+        issueUpdate(id: $id, input: { description: $description }) { success }
+      }
+    `, { id: normalizedIssueId, description: normalizedDescription });
+
+    if (!result.data?.issueUpdate?.success) {
+      throw new Error(`Linear issue ${normalizedIssueId} rejected the requested description update.`);
+    }
+  }
+
+  async archiveIssue(issueId: string): Promise<{ success: boolean; error?: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      return { success: false, error: 'Linear not configured' };
+    }
+
+    const normalizedIssueId = String(issueId || '').trim();
+    if (!normalizedIssueId) {
+      return { success: false, error: 'Issue ID is required' };
+    }
+
+    try {
+      const result = await this.graphqlRequest(`
+        mutation($id: String!, $archivedAt: DateTime!) {
+          issueUpdate(id: $id, input: { archivedAt: $archivedAt }) {
+            success
+          }
+        }
+      `, {
+        id: normalizedIssueId,
+        archivedAt: new Date().toISOString()
+      });
+
+      if (result.data?.issueUpdate?.success) {
+        console.log(`[LinearSync] Archived Linear issue ${normalizedIssueId}`);
+        return { success: true };
+      } else {
+        return { success: false, error: `Linear issue ${normalizedIssueId} rejected the archive request.` };
+      }
+    } catch (error) {
+      return { success: false, error: `Failed to archive Linear issue: ${error instanceof Error ? error.message : String(error)}` };
+    }
+  }
+
   // ── Local Sync Map (sessionId → Linear issueId) ──────────────
 
   async loadSyncMap(): Promise<Record<string, string>> {
@@ -219,12 +988,26 @@ export class LinearSyncService {
   async graphqlRequest(
     query: string,
     variables?: Record<string, unknown>,
-    timeoutMs = 10000
+    timeoutMs = 30000,
+    signal?: AbortSignal
   ): Promise<{ data: any }> {
+    await this._throttle();
     const token = await this.getApiToken();
     if (!token) { throw new Error('Linear API token not configured'); }
 
     return new Promise((resolve, reject) => {
+      let settled = false;
+      const safeResolve = (value: { data: any }) => {
+        if (settled) return;
+        settled = true;
+        resolve(value);
+      };
+      const safeReject = (err: Error) => {
+        if (settled) return;
+        settled = true;
+        reject(err);
+      };
+
       const payload = JSON.stringify({ query, variables });
       const req = https.request({
         hostname: LINEAR_API_HOST,
@@ -238,24 +1021,44 @@ export class LinearSyncService {
         timeout: timeoutMs
       }, (res) => {
         let raw = '';
+        // Node emits socket errors/aborts on `res` (not `req`) once response
+        // headers have arrived. Without these listeners the Promise orphans
+        // forever on mid-stream failures — the primary hang root cause.
+        res.on('error', (err) => safeReject(new Error(`Linear response stream error: ${err.message}`)));
+        res.on('aborted', () => safeReject(new Error('Linear response aborted by server')));
         res.on('data', (chunk: Buffer) => { raw += chunk.toString(); });
         res.on('end', () => {
           if (res.statusCode !== 200) {
-            return reject(new Error(`Linear API HTTP ${res.statusCode}`));
+            return safeReject(new Error(`Linear API HTTP ${res.statusCode}`));
           }
           try {
             const parsed = JSON.parse(raw);
             if (parsed.errors?.length) {
-              return reject(new Error(`Linear GraphQL error: ${parsed.errors[0].message}`));
+              return safeReject(new Error(`Linear GraphQL error: ${parsed.errors[0].message}`));
             }
-            resolve({ data: parsed.data });
+            safeResolve({ data: parsed.data });
           } catch {
-            reject(new Error('Failed to parse Linear API response'));
+            safeReject(new Error('Failed to parse Linear API response'));
           }
         });
       });
-      req.on('timeout', () => { req.destroy(); reject(new Error('Linear request timed out')); });
-      req.on('error', reject);
+      req.on('timeout', () => { req.destroy(); safeReject(new Error('Linear request timed out')); });
+      req.on('error', (err) => safeReject(err));
+
+      // Wire up AbortController cancellation
+      if (signal) {
+        if (signal.aborted) {
+          req.destroy(new Error('AbortError'));
+          return safeReject(new Error('AbortError'));
+        }
+        const abortHandler = () => {
+          req.destroy(new Error('AbortError'));
+          safeReject(new Error('AbortError'));
+        };
+        signal.addEventListener('abort', abortHandler);
+        req.on('close', () => signal.removeEventListener('abort', abortHandler));
+      }
+
       req.write(payload);
       req.end();
     });
@@ -267,7 +1070,7 @@ export class LinearSyncService {
     try {
       const token = await this.getApiToken();
       if (!token) { return false; }
-      await this.graphqlRequest('{ viewer { id } }', undefined, 2000);
+      await this.graphqlRequest('{ viewer { id } }', undefined, 10000);
       return true;
     } catch { return false; }
   }
@@ -304,29 +1107,6 @@ export class LinearSyncService {
     config.teamId = selectedTeam.id;
     config.teamName = selectedTeam.label;
     return { id: config.teamId, label: config.teamName };
-  }
-
-  private async _selectProjectScope(teamId: string): Promise<string | undefined> {
-    const projectsResult = await this.graphqlRequest(`
-      query($teamId: String!) { team(id: $teamId) { projects { nodes { id name } } } }
-    `, { teamId });
-    const projects = Array.isArray(projectsResult.data?.team?.projects?.nodes)
-      ? projectsResult.data.team.projects.nodes
-      : [];
-    const projectOptions = [
-      { label: '(All issues in team)', id: '' },
-      ...projects.map((project: any) => ({
-        label: String(project?.name || '').trim(),
-        id: String(project?.id || '').trim()
-      })).filter((project: { label: string; id: string }) => project.label.length > 0)
-    ];
-    const selectedProject = await vscode.window.showQuickPick(projectOptions, {
-      placeHolder: 'Scope to a project? (optional)'
-    });
-    if (selectedProject === undefined) {
-      throw new Error('No Linear project scope selected.');
-    }
-    return selectedProject.id || undefined;
   }
 
   private async _mapColumnsToStates(teamId: string): Promise<Record<string, string>> {
@@ -407,21 +1187,15 @@ export class LinearSyncService {
         return { success: false, error: 'Linear token is invalid. Get a valid token at linear.app/settings/api' };
       }
 
-      const needsTeamSelection = options.mapColumns || options.createLabel || options.scopeProject || options.enableRealtimeSync || options.enableAutoPull;
+      const needsTeamSelection = options.mapColumns || options.createLabel || (options.includeProjectNames && options.includeProjectNames.length > 0) || (options.excludeProjectNames && options.excludeProjectNames.length > 0) || options.enableRealtimeSync || options.enableAutoPull;
       const hasExistingSetup = !!config.teamId || !!config.switchboardLabelId || Object.keys(config.columnToStateId || {}).length > 0 || config.setupComplete;
-      if (!hasExistingSetup && !needsTeamSelection) {
-        return { success: false, error: 'Select at least one Linear option to apply.' };
-      }
 
       if (needsTeamSelection && !config.teamId) {
         await this._selectTeam(config);
       }
 
-      if (options.scopeProject) {
-        config.projectId = await this._selectProjectScope(config.teamId);
-      } else {
-        config.projectId = undefined;
-      }
+      config.includeProjectNames = options.includeProjectNames;
+      config.excludeProjectNames = options.excludeProjectNames;
 
       if (options.mapColumns) {
         config.columnToStateId = await this._mapColumnsToStates(config.teamId);
@@ -449,6 +1223,9 @@ export class LinearSyncService {
 
       config.realTimeSyncEnabled = options.enableRealtimeSync === true;
       config.autoPullEnabled = options.enableAutoPull === true;
+      config.deleteSyncEnabled = options.deleteSyncEnabled !== false;
+      config.completeSyncEnabled = options.enableCompleteSync !== false;
+      config.excludeBacklog = options.excludeBacklog !== false;  // default true
       config.setupComplete = true;
       await this.saveConfig(config);
       return { success: true };
@@ -478,13 +1255,17 @@ export class LinearSyncService {
     if (!config?.setupComplete) { return; }
 
     const stateId = config.columnToStateId[newColumn];
-    if (!stateId) { return; } // column not mapped
+    if (!stateId) {
+      console.warn(`[LinearSync] No Linear state mapped for column "${newColumn}" - skipping sync for plan ${plan.sessionId}`);
+      return;
+    } // column not mapped
 
     const existingIssueId = await this.getIssueIdForPlan(plan.sessionId);
     const priority = this._complexityToPriority(plan.complexity);
 
     try {
       if (existingIssueId) {
+        console.log(`[LinearSync] Updating existing Linear issue ${existingIssueId} for plan ${plan.sessionId} to state ${stateId}`);
         const result = await this.retry(() => this.graphqlRequest(`
           mutation($id: String!, $stateId: String!) {
             issueUpdate(id: $id, input: { stateId: $stateId }) { success }
@@ -492,7 +1273,10 @@ export class LinearSyncService {
         `, { id: existingIssueId, stateId }));
 
         if (!result.data.issueUpdate.success) {
+          console.warn(`[LinearSync] Issue update failed for ${existingIssueId}, attempting to recreate`);
           await this._createIssue(plan, stateId, priority, config);
+        } else {
+          console.log(`[LinearSync] Successfully updated Linear issue ${existingIssueId} for plan ${plan.sessionId}`);
         }
       } else {
         await this._createIssue(plan, stateId, priority, config);
@@ -508,12 +1292,15 @@ export class LinearSyncService {
    * Used by ContinuousSyncService for live updates.
    * Does NOT change issue state or other fields.
    */
-  async syncPlanContent(issueId: string, markdownContent: string): Promise<{ success: boolean; error?: string }> {
+  async syncPlanContent(issueId: string, markdownContent: string, signal?: AbortSignal): Promise<{ success: boolean; error?: string }> {
     try {
       const config = await this.loadConfig();
       if (!config?.setupComplete) {
         return { success: false, error: 'Linear not set up' };
       }
+
+      // Strip H1 header before syncing to description
+      const contentWithoutH1 = this._stripH1Header(markdownContent);
 
       // Use existing graphqlRequest helper (line 192) — handles token, timeouts, error formatting
       const mutation = `
@@ -527,8 +1314,8 @@ export class LinearSyncService {
 
       const result = await this.graphqlRequest(mutation, {
         id: issueId,
-        description: markdownContent
-      });
+        description: contentWithoutH1
+      }, 30000, signal);
 
       if (result.data?.issueUpdate?.success) {
         return { success: true };
@@ -546,25 +1333,69 @@ export class LinearSyncService {
     priority: number,
     config: LinearConfig
   ): Promise<void> {
-    const description = `Managed by Switchboard.\n\nPlan file: \`${plan.planFile}\`\n\nDo not edit the title — it is synced from Switchboard.`;
-    const result = await this.retry(() => this.graphqlRequest(`
-      mutation($input: IssueCreateInput!) {
-        issueCreate(input: $input) { success issue { id identifier } }
-      }
-    `, {
-      input: {
-        teamId: config.teamId,
-        title: plan.topic,
-        stateId,
-        priority,
-        labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
-        description,
-        ...(config.projectId ? { projectId: config.projectId } : {})
-      }
-    }));
+    console.log(`[LinearSync] Creating Linear issue for plan ${plan.sessionId} with title "${plan.topic}"`);
+    const description = await this._buildInitialIssueDescription(plan.planFile);
 
-    if (result.data.issueCreate.success) {
-      await this.setIssueIdForPlan(plan.sessionId, result.data.issueCreate.issue.id);
+    // Pre-mark in sync map BEFORE GraphQL call to prevent automation race condition.
+    // Marker format: `creating_${sessionId}_${timestamp}`. The timestamp is used by the
+    // stale-marker sweep in importIssuesFromLinear to age out abandoned markers.
+    const tempMarker = `creating_${plan.sessionId}_${Date.now()}`;
+    await this.setIssueIdForPlan(plan.sessionId, tempMarker);
+
+    const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+    let issueCreated = false;
+    try {
+      const result = await this.retry(() => this.graphqlRequest(`
+        mutation($input: IssueCreateInput!) {
+          issueCreate(input: $input) { success issue { id identifier } }
+        }
+      `, {
+        input: {
+          teamId: config.teamId,
+          title: plan.topic,
+          stateId,
+          priority,
+          labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
+          description,
+          ...(resolvedProjectId ? { projectId: resolvedProjectId } : {})
+        }
+      }));
+
+      if (result.data.issueCreate.success) {
+        const issueId = result.data.issueCreate.issue.id;
+        const identifier = result.data.issueCreate.issue.identifier;
+        // Overwrite the temp marker with the real issue ID — this is the race-free handoff.
+        await this.setIssueIdForPlan(plan.sessionId, issueId);
+        issueCreated = true;
+        const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+        const ready = await db.ensureReady();
+        if (!ready) {
+          throw new Error(`Kanban database unavailable while linking Linear issue ${issueId} to plan ${plan.sessionId}.`);
+        }
+        const persisted = await db.updateLinearIssueId(plan.sessionId, issueId);
+        if (!persisted) {
+          throw new Error(`Failed to persist Linear issue ${issueId} for plan ${plan.sessionId}.`);
+        }
+        console.log(`[LinearSync] Created Linear issue ${identifier} (ID: ${issueId}) for plan ${plan.sessionId}`);
+      } else {
+        console.error(`[LinearSync] Failed to create Linear issue for plan ${plan.sessionId}`);
+        throw new Error(`Failed to create Linear issue for plan ${plan.sessionId}.`);
+      }
+    } finally {
+      // Guaranteed cleanup: if the temp marker is still present (we never replaced it
+      // with the real issue ID), remove it. Covers success-that-failed-to-link,
+      // GraphQL mutation returning success=false, and retry() exhaustion throws.
+      if (!issueCreated) {
+        try {
+          const map = await this.loadSyncMap();
+          if (map[plan.sessionId] === tempMarker) {
+            delete map[plan.sessionId];
+            await this.saveSyncMap(map);
+          }
+        } catch (cleanupErr) {
+          console.warn(`[LinearSync] Failed to clean up temp marker for ${plan.sessionId}:`, cleanupErr);
+        }
+      }
     }
   }
 
@@ -578,7 +1409,8 @@ export class LinearSyncService {
       try {
         await this.syncPlan(plan, column);
         this._consecutiveFailures = 0;
-      } catch {
+      } catch (error) {
+        console.error(`[LinearSync] Failed to sync plan ${sessionId} to column ${column}:`, error);
         this._consecutiveFailures++;
       }
     }, 500));
@@ -611,7 +1443,11 @@ export class LinearSyncService {
       try { return await fn(); }
       catch (error) {
         if (i === retries - 1) { throw error; }
-        await this.delay(Math.pow(2, i) * 1000);
+        // Fast-fail on permanent errors (auth, config, GraphQL validation)
+        if (!this._isTransientError(error)) { throw error; }
+        const jitterMs = Math.floor(Math.random() * 400);
+        const backoffMs = Math.min(Math.pow(2, i) * 1000, 5000) + jitterMs;
+        await this.delay(backoffMs);
       }
     }
     throw new Error('Max retries exceeded');
@@ -626,20 +1462,54 @@ export class LinearSyncService {
     }
 
     try {
+      // --- Stale marker sweep (TTL = 60s) ------------------------------------
+      // A `creating_${sessionId}_${timestamp}` marker older than 60s is assumed
+      // to be abandoned (extension restart mid-create, network stall past retry
+      // budget, etc.). Removing it unblocks auto-pull for that session.
+      const STALE_MARKER_TTL_MS = 60_000;
+      const nowTs = Date.now();
+      {
+        const map = await this.loadSyncMap();
+        let dirty = false;
+        for (const [sid, val] of Object.entries(map)) {
+          if (typeof val === 'string' && val.startsWith('creating_')) {
+            const m = val.match(/^creating_(.+)_(\d+)$/);
+            const ts = m ? parseInt(m[2], 10) : NaN;
+            if (!Number.isFinite(ts) || (nowTs - ts) > STALE_MARKER_TTL_MS) {
+              delete map[sid];
+              dirty = true;
+            }
+          }
+        }
+        if (dirty) { await this.saveSyncMap(map); }
+      }
+
       const syncMap = await this.loadSyncMap();
       const syncMapIssueIds = new Set(Object.values(syncMap));
+
+      // Sessions with a live (non-stale) creating_* marker. An inbound issue
+      // whose title matches one of these sessions is our own outbound create
+      // still in flight — skip it to avoid a duplicate.
+      const sessionIdsBeingCreated = new Set<string>(
+        Object.entries(syncMap)
+          .filter(([, v]) => typeof v === 'string' && v.startsWith('creating_'))
+          .map(([sid]) => sid)
+      );
+
+      // Resolve DB handle + workspaceId once for the scoped title fallback.
+      const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
+      const ready = await db.ensureReady();
+      const workspaceId = ready ? (await db.getWorkspaceId()) || '' : '';
 
       const allIssues: any[] = [];
       let cursor: string | null = null;
 
-      const projectFilter = config.projectId ? '\n              project: { id: { eq: $projectId } }' : '';
+      const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
+      const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
       const QUERY = `
-        query($teamId: String!${config.projectId ? ', $projectId: String!' : ''}, $after: String) {
+        query($filter: IssueFilter!, $after: String) {
           issues(
-            filter: {
-              team: { id: { eq: $teamId } }
-              ${projectFilter}
-            }
+            filter: $filter
             after: $after
             first: 50
           ) {
@@ -663,8 +1533,7 @@ export class LinearSyncService {
 
       while (true) {
         const result = await this.graphqlRequest(QUERY, {
-          teamId: config.teamId,
-          ...(config.projectId ? { projectId: config.projectId } : {}),
+          filter,
           after: cursor
         });
         const page = result.data.issues;
@@ -674,8 +1543,11 @@ export class LinearSyncService {
         await this.delay(200);
       }
 
-      const subIssues = allIssues.flatMap((issue: any) => issue.children?.nodes || []);
-      const allTasks = [...new Map([...allIssues, ...subIssues].map((t: any) => [t.id, t])).values()];
+      // Apply client-side project name filters
+      const filteredIssues = this._applyProjectNameFilters(allIssues, config);
+
+      const subIssues = filteredIssues.flatMap((issue: any) => issue.children?.nodes || []);
+      const allTasks = [...new Map([...filteredIssues, ...subIssues].map((t: any) => [t.id, t])).values()];
 
       const issueNameById = new Map<string, string>(allTasks.map((t: any) => [t.id, `${t.title} (${t.identifier})`]));
       const subIssuesByParentId = new Map<string, any[]>();
@@ -694,12 +1566,34 @@ export class LinearSyncService {
       for (const issue of allTasks) {
         if (syncMapIssueIds.has(issue.id)) { skipped++; continue; }
 
+        // Scoped title fallback: only suppress if a local session is actively
+        // being created AND its topic matches this issue's title. Global title
+        // matching is explicitly avoided to prevent silent import loss.
+        if (sessionIdsBeingCreated.size > 0 && ready && workspaceId) {
+          const localPlan = await db.getPlanByTopic(issue.title || '', workspaceId);
+          if (localPlan && sessionIdsBeingCreated.has(localPlan.sessionId)) {
+            skipped++;
+            continue;
+          }
+        }
+
         const stateType = (issue.state?.type || '').toLowerCase();
-        if (stateType === 'completed' || stateType === 'cancelled') { skipped++; continue; }
+        // Always filter out completed/cancelled/archived issues
+        if (stateType === 'completed' || stateType === 'cancelled' || stateType === 'canceled' || stateType === 'archived') {
+          skipped++;
+          continue;
+        }
+
+        // Filter out backlog if configured (default: true)
+        if (config.excludeBacklog !== false && stateType === 'backlog') {
+          skipped++;
+          continue;
+        }
 
         const planFile = path.join(plansDir, `linear_import_${issue.id}.md`);
         try { await fs.promises.access(planFile); skipped++; continue; } catch { /* proceed */ }
 
+        // Note: backlog issues reach here only when excludeBacklog is explicitly false
         const kanbanColumn = stateType === 'backlog' ? 'BACKLOG' : 'CREATED';
         const priority = ['', 'urgent', 'high', 'normal', 'low'][issue.priority] || '';
         const dueDate = issue.dueDate || '';

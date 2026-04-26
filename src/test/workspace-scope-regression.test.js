@@ -11,7 +11,7 @@ describe('workspace scope enforcement regressions', () => {
     it('auto-claims newly created brain plans and mirrors owned plans in _mirrorBrainPlan', () => {
         assert.match(
             source,
-            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, workspaceRoot\);[\s\S]*const existingEntry = this\._planRegistry\.entries\[pathHash\];[\s\S]*const shouldAutoClaim = !eligibility\.eligible && allowAutoClaim && !existingEntry;/,
+            /const eligibility = this\._isPlanEligibleForWorkspace\(stablePath, resolvedWorkspaceRoot\);[\s\S]*const existingEntry = this\._planRegistry\.entries\[pathHash\];[\s\S]*const wouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;[\s\S]*const canClaim = wouldAutoClaim[\s\S]*const shouldAutoClaim = wouldAutoClaim && canClaim;/,
             'Expected _mirrorBrainPlan to check workspace eligibility.'
         );
         assert.match(
@@ -31,21 +31,36 @@ describe('workspace scope enforcement regressions', () => {
         );
     });
 
-    it('does not suppress new brain-plan auto-claim when the window is unfocused', () => {
+    it('coordinates auto-claim via atomic claim markers to prevent cross-workspace contamination', () => {
         assert.match(
             source,
-            /const handleBrainEvent = \(uri: vscode\.Uri, allowAutoClaim: boolean\) => \{[\s\S]*const effectiveAutoClaim = allowAutoClaim;/,
-            'Expected the VS Code brain watcher to preserve create-event auto-claim without a focus gate.'
+            /_tryClaimBrainPlan/,
+            'Expected _mirrorBrainPlan to call _tryClaimBrainPlan for claim coordination.'
         );
         assert.match(
             source,
-            /const rawAutoClaim = _eventType === 'rename';[\s\S]*const effectiveAutoClaim = rawAutoClaim;/,
-            'Expected the fs.watch fallback to preserve rename-event auto-claim without a focus gate.'
+            /const wouldAutoClaim = !eligibility\.eligible && \(allowAutoClaim \|\| isFreshUnregisteredCandidate\) && !existingEntry;/,
+            'Expected wouldAutoClaim to compute the uncoordinated auto-claim condition.'
         );
-        assert.doesNotMatch(
+        assert.match(
             source,
-            /Brain auto-claim suppressed \(window not focused\)|Brain auto-claim suppressed via fs\.watch \(window not focused\)/,
-            'Expected brain auto-claim to remain enabled when Antigravity creates a new plan while the IDE is in the background.'
+            /const canClaim = wouldAutoClaim/,
+            'Expected canClaim to gate auto-claim on the atomic claim marker result.'
+        );
+        assert.match(
+            source,
+            /const shouldAutoClaim = wouldAutoClaim && canClaim;/,
+            'Expected shouldAutoClaim to require both wouldAutoClaim and canClaim.'
+        );
+        assert.match(
+            source,
+            /\.switchboard_claim_.*\.json/,
+            'Expected claim marker file path to use .switchboard_claim_ prefix.'
+        );
+        assert.match(
+            source,
+            /flag: 'wx'/,
+            'Expected claim marker write to use exclusive-create flag for atomicity.'
         );
     });
 

@@ -23,6 +23,7 @@ function findRoot(startDir) {
 }
 
 const WORKSPACE_ROOT = findRoot(__dirname);
+const STATE_ROOT = process.env.SWITCHBOARD_STATE_ROOT || WORKSPACE_ROOT;
 const SERVER_PATH = path.resolve(__dirname, 'mcp-server.js');
 
 // 2. Hashed Unique Naming (Audit Finding 1)
@@ -36,6 +37,7 @@ function register() {
     console.log(`🚀 Registering unique MCP server: ${SERVER_NAME}`);
     console.log(`📍 Server Path: ${SERVER_PATH}`);
     console.log(`📂 Workspace Root: ${WORKSPACE_ROOT}`);
+    console.log(`🗂️ State Root: ${STATE_ROOT}`);
 
     if (!fs.existsSync(CONFIG_DIR)) {
         fs.mkdirSync(CONFIG_DIR, { recursive: true });
@@ -63,7 +65,8 @@ function register() {
         command: 'node',
         args: [SERVER_PATH, WORKSPACE_ROOT],
         env: {
-            SWITCHBOARD_WORKSPACE_ROOT: WORKSPACE_ROOT
+            SWITCHBOARD_WORKSPACE_ROOT: WORKSPACE_ROOT,
+            SWITCHBOARD_STATE_ROOT: STATE_ROOT
         }
     };
 

@@ -100,6 +100,7 @@ async function run() {
         const legacyPlan = await db.getPlanBySessionId('legacy-sess');
         assert.ok(legacyPlan, 'expected legacy plan to remain readable after migration');
         assert.strictEqual(legacyPlan.topic, 'Legacy Plan');
+        assert.strictEqual(legacyPlan.repoScope, '', 'expected legacy DB migration to default repoScope to empty');
 
         const updatedAt = '2026-04-02T00:00:00.000Z';
         const upserted = await db.upsertPlans([{
@@ -112,6 +113,7 @@ async function run() {
             complexity: 'Unknown',
             tags: '',
             dependencies: '',
+            repoScope: '',
             workspaceId: 'legacy-ws',
             createdAt: '2026-04-01T00:00:00.000Z',
             updatedAt,
@@ -130,10 +132,12 @@ async function run() {
         const clickupPlan = await db.findPlanByClickUpTaskId('legacy-ws', 'CU-123');
         assert.ok(clickupPlan, 'expected migrated DB to query by ClickUp task ID');
         assert.strictEqual(clickupPlan.sessionId, 'legacy-sess');
+        assert.strictEqual(clickupPlan.repoScope, '', 'expected repoScope to remain empty after metadata updates');
 
         const linearPlan = await db.findPlanByLinearIssueId('legacy-ws', 'LIN-123');
         assert.ok(linearPlan, 'expected migrated DB to query by Linear issue ID');
         assert.strictEqual(linearPlan.sessionId, 'legacy-sess');
+        assert.strictEqual(linearPlan.repoScope, '', 'expected repoScope to remain empty after linear metadata updates');
 
         console.log('kanban-database legacy clickup migration tests passed');
     } finally {

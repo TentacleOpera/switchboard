@@ -9,6 +9,7 @@ export type LegacyKanbanSnapshotRow = {
     complexity: string;
     tags: string;
     dependencies: string;
+    repoScope: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -39,6 +40,7 @@ export class KanbanMigration {
             status: 'active',
             tags: row.tags || '',
             dependencies: row.dependencies || '',
+            repoScope: row.repoScope || '',
             brainSourcePath: (row as any).brainSourcePath || '',
             mirrorPath: (row as any).mirrorPath || '',
             routedTo: '',
@@ -110,7 +112,8 @@ export class KanbanMigration {
         snapshotRows: LegacyKanbanSnapshotRow[],
         resolveComplexity?: (planFile: string) => Promise<string>,
         resolveTags?: (planFile: string) => Promise<string>,
-        resolveDependencies?: (planFile: string) => Promise<string>
+        resolveDependencies?: (planFile: string) => Promise<string>,
+        resolveRepoScope?: (planFile: string) => Promise<string>
     ): Promise<boolean> {
         const ready = await db.ensureReady();
         if (!ready) return false;
@@ -125,6 +128,7 @@ export class KanbanMigration {
                 complexity?: string;
                 tags?: string;
                 dependencies?: string;
+                repoScope?: string;
             }> = [];
             const deletedRowsToRevive = new Set<string>();
 
@@ -156,13 +160,21 @@ export class KanbanMigration {
                         const parsed = await resolveDependencies(row.planFile);
                         resolvedDependencies = parsed || undefined;
                     }
+                    let resolvedRepoScope: string | undefined;
+                    if (row.repoScope) {
+                        resolvedRepoScope = row.repoScope;
+                    } else if (resolveRepoScope) {
+                        const parsed = await resolveRepoScope(row.planFile);
+                        resolvedRepoScope = parsed || undefined;
+                    }
                     metadataUpdates.push({
                         sessionId: row.sessionId,
                         topic: row.topic,
                         planFile: row.planFile,
                         complexity: resolvedComplexity,
                         tags: resolvedTags,
-                        dependencies: resolvedDependencies
+                        dependencies: resolvedDependencies,
+                        repoScope: resolvedRepoScope
                     });
                 }
             }

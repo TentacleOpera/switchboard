@@ -101,35 +101,31 @@ async function run() {
         ''
     ].join('\n');
 
+    // File-based state inspection is DISABLED — inspectKanbanState always returns null state.
     const duplicateInspection = inspectKanbanState(duplicateTopLevelContent);
     assert.strictEqual(
+        duplicateInspection.state,
+        null,
+        'Expected inspectKanbanState to return null state (file-based state disabled).'
+    );
+    assert.strictEqual(
         duplicateInspection.topLevelSectionCount,
-        2,
-        'Expected both real top-level Switchboard State sections to be counted.'
-    );
-    assert.strictEqual(
-        duplicateInspection.state?.kanbanColumn,
-        'PLAN REVIEWED',
-        'Expected the last valid top-level Switchboard State section to win.'
-    );
-    assert.strictEqual(
-        duplicateInspection.state?.status,
-        'active',
-        'Expected duplicate top-level state parsing to preserve active status.'
+        0,
+        'Expected topLevelSectionCount to be 0 (file-based state disabled).'
     );
 
     const malformedTrailingState = extractKanbanState(malformedTailContent);
     assert.strictEqual(
-        malformedTrailingState?.kanbanColumn,
-        'BACKLOG',
-        'Expected parser to fall back to the last earlier valid top-level state when the trailing section is malformed.'
+        malformedTrailingState,
+        null,
+        'Expected extractKanbanState to return null (file-based state disabled).'
     );
 
     const preservedInspection = inspectKanbanState(preservedDraftContent);
     assert.strictEqual(
-        preservedInspection.topLevelSectionCount,
-        1,
-        'Expected fenced preserved-draft state examples not to count as live top-level state sections.'
+        preservedInspection.state,
+        null,
+        'Expected inspectKanbanState to return null state for preserved-draft content (file-based state disabled).'
     );
     const rewrittenPreservedDraft = applyKanbanStateToPlanContent(preservedDraftContent, {
         kanbanColumn: 'PLAN REVIEWED',
@@ -194,7 +190,7 @@ async function run() {
         );
 
         const imported = await importPlanFiles(workspaceRoot);
-        assert.strictEqual(imported, 1, 'Expected importPlanFiles to ingest the duplicate-state fixture.');
+        assert.strictEqual(imported.count, 1, 'Expected importPlanFiles to ingest the duplicate-state fixture.');
 
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const ready = await db.ensureReady();
@@ -202,15 +198,16 @@ async function run() {
 
         const importedPlan = await db.getPlanBySessionId('duplicate-state-top-level');
         assert.ok(importedPlan, 'Expected imported duplicate-state fixture to be persisted.');
+        // File-based state is DISABLED — importer defaults to CREATED/active regardless of embedded state.
         assert.strictEqual(
             importedPlan?.kanbanColumn,
-            'PLAN REVIEWED',
-            'Expected importer to persist the column from the last valid top-level Switchboard State section.'
+            'CREATED',
+            'Expected importer to default to CREATED since file-based state inspection is disabled.'
         );
         assert.strictEqual(
             importedPlan?.status,
             'active',
-            'Expected importer to preserve active status from the last valid top-level Switchboard State section.'
+            'Expected importer to default to active status.'
         );
     } finally {
         await KanbanDatabase.invalidateWorkspace(workspaceRoot);

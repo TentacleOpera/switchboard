@@ -12,6 +12,12 @@ export interface BatchPromptPlan {
     absolutePath: string;
     complexity?: string;
     dependencies?: string;
+    workingDir?: string;
+}
+
+interface PromptDispatchContext {
+    planList: string;
+    dispatchContextBlock: string;
 }
 
 export interface PromptBuilderOptions {
@@ -37,6 +43,7 @@ export interface PromptBuilderOptions {
 
 function applyPromptOverride(
     generated: string,
+    dispatchContextBlock: string,
     planList: string,
     override: DefaultPromptOverride | undefined
 ): string {
@@ -47,7 +54,7 @@ function applyPromptOverride(
         case 'append':
             return `${generated}\n\n${override.text}`;
         case 'replace':
-            return `${override.text}\n\nPLANS TO PROCESS:\n${planList}`;
+            return `${override.text}${dispatchContextBlock ? `\n\n${dispatchContextBlock}` : ''}\n\nPLANS TO PROCESS:\n${planList}`;
         default:
             return generated;
     }
@@ -76,6 +83,45 @@ function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): st
 
     const accuracyInstruction = `\n\nAccuracy Mode: Before coding, read and follow the workflow at .agent/workflows/accuracy.md step-by-step while implementing this task.`;
     return `${basePayload}${accuracyInstruction}`;
+}
+
+function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDispatchContext {
+    const normalizedPlans = plans.map(plan => ({
+        ...plan,
+        workingDir: (plan.workingDir || '').trim()
+    }));
+    const planList = normalizedPlans.map(plan => `- [${plan.topic}] Plan File: ${plan.absolutePath}`).join('\n');
+    const distinctWorkingDirs = [...new Set(normalizedPlans.map(plan => plan.workingDir).filter(Boolean))];
+    const allPlansShareDir =
+        normalizedPlans.length > 0
+        && distinctWorkingDirs.length === 1
+        && normalizedPlans.every(plan => !!plan.workingDir && plan.workingDir === distinctWorkingDirs[0]);
+
+    if (allPlansShareDir) {
+        return {
+            planList,
+            dispatchContextBlock: `WORKING DIRECTORY: ${distinctWorkingDirs[0]}
+All file reads and writes must be relative to this directory unless the plan explicitly states otherwise.`
+        };
+    }
+
+    const anyWorkingDirSet = normalizedPlans.some(plan => !!plan.workingDir);
+    if (!anyWorkingDirSet) {
+        return { planList, dispatchContextBlock: '' };
+    }
+
+    const perPlanDirectories = normalizedPlans.map(plan =>
+        `- [${plan.topic}] Working Directory: ${plan.workingDir
+            ? plan.workingDir
+            : '[not set — add **Repo:** to the plan metadata before dispatching from a control plane]'}`
+    ).join('\n');
+
+    return {
+        planList,
+        dispatchContextBlock: `MULTI-REPO BATCH:
+Do NOT assume a single working directory for every plan in this prompt.
+${perPlanDirectories}`
+    };
 }
 
 const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
@@ -113,7 +159,8 @@ export function buildKanbanBatchPrompt(
 - then execute using those corrections,
 - do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
     const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
-    const planList = plans.map(plan => `- [${plan.topic}] Plan File: ${plan.absolutePath}`).join('\n');
+    const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
+    const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
     const plansWithDeps = plans.filter(p => p.dependencies);
     const depSection = plansWithDeps.length > 0
@@ -131,7 +178,7 @@ export function buildKanbanBatchPrompt(
         const aggressiveDirective = aggressivePairProgramming
             ? `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`
             : '';
-        const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, devops, infrastructure, bugfix";
+        const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics";
         const designDocLink = options?.designDocLink?.trim();
         let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}
 MANDATORY: You MUST read and strictly adhere to \`.agent/rules/how_to_plan.md\` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the guide.
@@ -148,6 +195,7 @@ For each plan:
 ## Metadata
 **Tags:** [comma-separated list chosen ONLY from: ${ALLOWED_TAGS}]
 **Complexity:** [integer 1-10]
+**Repo:** [bare sub-repo folder name, e.g. 'be'. Omit if not a multi-repo setup or if this plan spans multiple repos.]
 
 Scoring guide:
 1-2: Very Low — trivial config/copy changes
@@ -162,7 +210,7 @@ Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** n
 7. Update the original plan with the enhancement findings. Do NOT truncate, summarize, or delete existing implementation steps, code blocks, or goal statements.
 8. Recommend agent: if complexity ≤ 6, say "Send to Coder". If complexity ≥ 7, say "Send to Lead Coder".
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -174,7 +222,7 @@ ${planList}`;
             plannerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}`;
         }
 
-        return applyPromptOverride(plannerPrompt, planList, promptOverride);
+        return applyPromptOverride(plannerPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'reviewer') {
@@ -209,10 +257,10 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
 ${chatCritiqueDirective}
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
-${planList}`, planList, promptOverride);
+${planList}`, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'tester') {
@@ -240,7 +288,7 @@ For each plan:
 4. Run verification checks as applicable and include results.
 5. Update the original plan with files changed, validation results, and remaining requirement gaps.
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -251,7 +299,7 @@ ${planList}`;
             testerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
         }
 
-        return applyPromptOverride(testerPrompt, planList, promptOverride);
+        return applyPromptOverride(testerPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'lead') {
@@ -261,7 +309,7 @@ ${executionDirective}
 
 ${batchExecutionRules}${challengeBlock}
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -272,7 +320,7 @@ ${planList}`;
                 leadPrompt += ` Routine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
             }
         }
-        return applyPromptOverride(leadPrompt, planList, promptOverride);
+        return applyPromptOverride(leadPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'coder') {
@@ -285,7 +333,7 @@ ${executionDirective}
 
 ${batchExecutionRules}${challengeBlock}
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
@@ -293,7 +341,7 @@ ${planList}`, accurateCodingEnabled);
         if (pairProgrammingEnabled) {
             coderPrompt += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
         }
-        return applyPromptOverride(coderPrompt, planList, promptOverride);
+        return applyPromptOverride(coderPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'team-lead') {
@@ -301,20 +349,20 @@ ${planList}`, accurateCodingEnabled);
 
 You own all internal coordination: decomposing work, assigning tasks, routing between specialists, running your own review cycles, and handling retries. Do NOT escalate to the user for task routing decisions or intermediate failures — those are yours to resolve internally. Only escalate if the plan genuinely requires external credentials, access, or human approval that is outside the codebase.
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
-${planList}`, planList, promptOverride);
+${planList}`, dispatchContextBlock, planList, promptOverride);
     }
 
     return applyPromptOverride(`Please process the following ${plans.length} plans.
 
 ${batchExecutionRules}
 
-${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
 
 PLANS TO PROCESS:
-${planList}`, planList, promptOverride);
+${planList}`, dispatchContextBlock, planList, promptOverride);
 }
 
 /**

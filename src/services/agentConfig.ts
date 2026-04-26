@@ -8,7 +8,7 @@ export interface CustomAgentConfig {
     promptInstructions: string;
     includeInKanban: boolean;
     kanbanOrder: number;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
 }
 
 export interface CustomKanbanColumnConfig {
@@ -17,7 +17,7 @@ export interface CustomKanbanColumnConfig {
     role: string;
     triggerPrompt: string;
     order: number;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
 }
 
 export interface KanbanColumnDefinition {
@@ -25,10 +25,10 @@ export interface KanbanColumnDefinition {
     label: string;
     role?: string;
     order: number;
-    kind: 'created' | 'review' | 'coded' | 'reviewed' | 'custom-agent' | 'custom-user' | 'completed';
+    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'custom-agent' | 'custom-user' | 'completed';
     source: 'built-in' | 'custom-agent' | 'custom-user';
     autobanEnabled: boolean;
-    dragDropMode: 'cli' | 'prompt';
+    dragDropMode: 'cli' | 'prompt' | 'disabled';
     hideWhenNoAgent?: boolean;
     triggerPrompt?: string;
 }
@@ -51,6 +51,7 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 150, kind: 'gather', source: 'built-in', autobanEnabled: false, dragDropMode: 'disabled', hideWhenNoAgent: true },
     { id: 'TEAM LEAD CODED', label: 'Team Lead', role: 'team-lead', order: 170, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },

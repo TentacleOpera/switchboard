@@ -166,23 +166,11 @@ export function inspectKanbanState(
     content: string,
     options?: KanbanStateInspectionOptions
 ): KanbanStateInspection {
-    const sections = collectTopLevelSwitchboardStateSections(content);
-    const validColumns = resolveValidColumns(options);
-    for (let i = sections.length - 1; i >= 0; i--) {
-        const parsedState = parseStateSectionBody(sections[i].body, validColumns);
-        if (parsedState) {
-            return {
-                state: parsedState,
-                topLevelSectionCount: sections.length,
-                lastSeenColumn: sections[i].fields.kanbanColumn
-            };
-        }
-    }
-
+    // DISABLED: We no longer trust or read file-based state.
     return {
         state: null,
-        topLevelSectionCount: sections.length,
-        lastSeenColumn: sections.length > 0 ? sections[sections.length - 1].fields.kanbanColumn : null
+        topLevelSectionCount: 0,
+        lastSeenColumn: null
     };
 }
 
@@ -229,31 +217,7 @@ export async function writePlanStateToFile(
     column: string,
     status: string
 ): Promise<void> {
-    const resolvedPlan = path.resolve(planFilePath);
-    const resolvedRoot = path.resolve(workspaceRoot);
-    if (!resolvedPlan.startsWith(resolvedRoot + path.sep)) {
-        console.warn(`[Switchboard] Skipping state write: path outside workspace root: ${resolvedPlan}`);
-        return;
-    }
-
-    if (!fs.existsSync(resolvedPlan)) {
-        console.warn(`[Switchboard] Skipping state write: plan file not found: ${resolvedPlan}`);
-        return;
-    }
-
-    const tmpPath = resolvedPlan + '.swb.tmp';
-    try {
-        const content = await fs.promises.readFile(resolvedPlan, 'utf-8');
-        const updated = applyKanbanStateToPlanContent(content, {
-            kanbanColumn: column,
-            status,
-            lastUpdated: new Date().toISOString(),
-            formatVersion: 1
-        });
-        await fs.promises.writeFile(tmpPath, updated, 'utf-8');
-        await fs.promises.rename(tmpPath, resolvedPlan);
-    } catch (err) {
-        try { await fs.promises.unlink(tmpPath); } catch { /* ignore */ }
-        console.error(`[Switchboard] Failed to write kanban state to plan file ${resolvedPlan}: ${err}`);
-    }
+    // DISABLED: Switchboard State writes are disabled to prevent file-state override bugs.
+    // The KanbanDatabase is the sole source of truth.
+    return Promise.resolve();
 }

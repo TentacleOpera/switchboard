@@ -25,10 +25,21 @@ export class ContinuousSyncService implements vscode.Disposable {
   private _idleCheckTimer?: NodeJS.Timeout;
   private _disposables: vscode.Disposable[] = [];
   private _fileWatcherSubscription?: vscode.Disposable;
-  private _pendingSyncTimers = new Map<string, NodeJS.Timeout>();
   private _inFlightSessions = new Set<string>();
   private _resyncAfterCurrent = new Set<string>();
   private _serviceEnabled = false;
+  private _activeControllers = new Map<string, AbortController>();
+  // Per-session monotonic epoch. Bumped at sync start, watchdog recovery,
+  // pause, and teardown. State-mutating writes inside _executeSync guard on
+  // their captured epoch so a late-resolving orphaned Promise cannot silently
+  // overwrite the watchdog's 'error' state hours later.
+  private _syncEpoch: Map<string, number> = new Map();
+  // Tracks skip-toast messages already shown this runtime, so the
+  // informational toast fires at most once per (sessionId, reason) pair.
+  // Not persisted across extension reloads. Replaced the prior anti-pattern
+  // of pushing `{ [key]: true }` POJOs into `_disposables`, which would have
+  // thrown on `dispose()` because plain objects have no `dispose` method.
+  private _skipToastsShown: Set<string> = new Set();
 
   constructor(
     private readonly _kanbanProvider: KanbanProvider,
@@ -112,9 +123,27 @@ export class ContinuousSyncService implements vscode.Disposable {
    * User pauses live sync for a specific plan.
    */
   public pausePlan(sessionId: string): void {
+    // Bump epoch so any in-flight sync's late resolution cannot resurrect a
+    // paused session back to 'active'.
+    this._bumpEpoch(sessionId);
+
+    const controller = this._activeControllers.get(sessionId);
+    if (controller) {
+      controller.abort('User paused sync');
+    }
+
     const state = this._states.get(sessionId);
     if (state) {
-      this._states.set(sessionId, { ...state, status: 'paused' });
+      // Clear quiet timer and needsResync flag
+      if (state.quietTimer) {
+        clearTimeout(state.quietTimer);
+      }
+      this._states.set(sessionId, {
+        ...state,
+        status: 'paused',
+        quietTimer: undefined,
+        needsResync: false
+      });
       this._kanbanProvider.postMessage({
         type: 'liveSyncUpdate',
         sessionId,
@@ -138,8 +167,52 @@ export class ContinuousSyncService implements vscode.Disposable {
         lastSyncAt: state.lastSyncAt
       });
       // Trigger immediate sync check
-      void this._scheduleSyncIfNeeded(sessionId, workspaceRoot);
+      void this._maybeSync(sessionId, workspaceRoot);
     }
+  }
+
+  /**
+   * Reconcile live sync state when a plan's column changes.
+   * Called by KanbanProvider after column updates to add/remove tracking.
+   */
+  public async onPlanColumnChange(
+    sessionId: string,
+    oldColumn: string,
+    newColumn: string,
+    workspaceRoot: string
+  ): Promise<void> {
+    if (!this._serviceEnabled) {
+      return;
+    }
+
+    const plan = await this._getPlanRecord(sessionId, workspaceRoot);
+    if (!plan) {
+      return;
+    }
+
+    const isEligible = await this._isEligibleForLiveSync(plan, workspaceRoot);
+    const currentState = this._states.get(sessionId);
+
+    if (isEligible && !currentState) {
+      // Plan newly eligible - create state and begin watching
+      const state = this._createInitialState(sessionId);
+      this._states.set(sessionId, state);
+      this._postStates();
+    } else if (!isEligible && currentState) {
+      // Plan newly ineligible - flush pending sync, delete state, emit idle
+      if (currentState.quietTimer) {
+        clearTimeout(currentState.quietTimer);
+      }
+      this._states.delete(sessionId);
+      this._kanbanProvider.postMessage({
+        type: 'liveSyncUpdate',
+        sessionId,
+        status: 'idle',
+        lastSyncAt: currentState.lastSyncAt
+      });
+      this._postStates();
+    }
+    // If eligibility unchanged, do nothing
   }
 
   /**
@@ -158,6 +231,37 @@ export class ContinuousSyncService implements vscode.Disposable {
       await this._showConflictDialog(sessionId, workspaceRoot);
     }
     return hasConflict;
+  }
+
+  /**
+   * Check if a plan is eligible for live sync based on integration configuration
+   * and external issue mapping, not hardcoded column names.
+   */
+  private async _isEligibleForLiveSync(
+    plan: import('./KanbanDatabase').KanbanPlanRecord,
+    workspaceRoot: string
+  ): Promise<boolean> {
+    // Always skip terminal columns
+    if (plan.kanbanColumn === 'COMPLETED' || plan.kanbanColumn === 'ARCHIVED') {
+      return false;
+    }
+
+    // Check if at least one integration is realtime-enabled AND the plan has an external handle
+    let linearOK = false;
+    if (plan.linearIssueId) {
+      const linear = this._getLinearService(workspaceRoot);
+      const linearConfig = await linear.loadConfig();
+      linearOK = linearConfig?.setupComplete === true && linearConfig.realTimeSyncEnabled === true;
+    }
+
+    let clickupOK = false;
+    if (plan.clickupTaskId) {
+      const clickup = this._getClickUpService(workspaceRoot);
+      const clickupConfig = await clickup.loadConfig();
+      clickupOK = clickupConfig?.setupComplete === true && clickupConfig.realTimeSyncEnabled === true;
+    }
+
+    return linearOK || clickupOK;
   }
 
   private async _handleFileChange(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
@@ -182,9 +286,9 @@ export class ContinuousSyncService implements vscode.Disposable {
 
     const sessionId = plan.sessionId;
 
-    // Only sync plans in eligible columns (not COMPLETED, not CREATED)
-    const eligibleColumns = ['INVESTIGATION', 'PLAN REVIEWED', 'CODER CODED', 'LEAD REVIEW'];
-    if (!eligibleColumns.includes(plan.kanbanColumn)) return;
+    // Check eligibility dynamically based on integration config and external issue mapping
+    const isEligible = await this._isEligibleForLiveSync(plan, workspaceRoot);
+    if (!isEligible) return;
 
     // Check if plan already tracked
     let state = this._states.get(sessionId);
@@ -221,38 +325,68 @@ export class ContinuousSyncService implements vscode.Disposable {
       return;
     }
 
-    // Update state and queue sync
-    state = { ...state, lastContentHash: hash, status: 'active' };
+    // Update state and queue sync with quiet-period debounce
+    const now = Date.now();
+    state = {
+      ...state,
+      lastContentHash: hash,
+      status: 'active',
+      lastContentChangeAt: now,
+      firstPendingEditAt: state.firstPendingEditAt ?? now
+    };
+
+    // Clear existing quiet timer and start fresh
+    if (state.quietTimer) {
+      clearTimeout(state.quietTimer);
+    }
+
+    // Set quiet timer to fire after QUIET_MS of no further changes
+    state.quietTimer = setTimeout(() => {
+      void this._maybeSync(sessionId, workspaceRoot);
+    }, this._config.quietMs);
+
     this._states.set(sessionId, state);
 
-    // Debounce: schedule sync after interval
-    void this._scheduleSyncIfNeeded(sessionId, workspaceRoot);
+    // Check MAX_DEFER_MS ceiling - force sync if we've been editing continuously too long
+    if (now - (state.firstPendingEditAt ?? now) > this._config.maxDeferMs) {
+      void this._maybeSync(sessionId, workspaceRoot);
+    }
   }
 
-  private async _scheduleSyncIfNeeded(sessionId: string, workspaceRoot: string): Promise<void> {
+  /**
+   * Two-timer sync scheduler: quiet-period debounce + rate-limit floor.
+   * Called when quiet timer fires or when MAX_DEFER_MS ceiling is hit.
+   */
+  private async _maybeSync(sessionId: string, workspaceRoot: string): Promise<void> {
     if (!this._serviceEnabled) return;
 
     const state = this._states.get(sessionId);
     if (!state || state.status !== 'active') return;
 
-    const existingTimer = this._pendingSyncTimers.get(sessionId);
-    if (existingTimer) {
-      clearTimeout(existingTimer);
-    }
-
-    if (this._inFlightSessions.has(sessionId)) {
-      this._resyncAfterCurrent.add(sessionId);
+    // If sync is in-flight, set needsResync flag and return
+    if (state.inFlight) {
+      this._states.set(sessionId, { ...state, needsResync: true });
       return;
     }
 
-    const timeSinceLastSync = Date.now() - state.lastSyncAt;
-    const delay = Math.max(0, this._config.syncIntervalMs - timeSinceLastSync);
+    // Rate-limit floor: ensure minimum time between syncs
+    const now = Date.now();
+    const floor = state.lastSyncAt + this._config.minIntervalMs - now;
+    if (floor > 0) {
+      // Defer until floor is reached
+      setTimeout(() => {
+        void this._maybeSync(sessionId, workspaceRoot);
+      }, floor);
+      return;
+    }
 
-    const timer = setTimeout(() => {
-      this._pendingSyncTimers.delete(sessionId);
-      void this._executeSync(sessionId, workspaceRoot);
-    }, delay);
-    this._pendingSyncTimers.set(sessionId, timer);
+    // Clear quiet timer since we're about to sync
+    if (state.quietTimer) {
+      clearTimeout(state.quietTimer);
+    }
+
+    // Execute sync
+    void this._executeSync(sessionId, workspaceRoot);
   }
 
   private async _executeSync(sessionId: string, workspaceRoot: string): Promise<void> {
@@ -279,7 +413,26 @@ export class ContinuousSyncService implements vscode.Disposable {
 
     this._inFlightSessions.add(sessionId);
     this._activeSyncs++;
-    this._states.set(sessionId, { ...state, status: 'syncing' });
+    // Mark syncStartedAt NOW so the stall watchdog measures elapsed time against
+    // the current in-flight sync, not the last successful sync (which may be 0
+    // for a plan that has never synced and would otherwise trip the watchdog
+    // instantly). lastSyncAt is only updated on successful completion.
+    this._states.set(sessionId, { ...state, status: 'syncing', syncStartedAt: Date.now(), inFlight: true });
+    const myEpoch = this._bumpEpoch(sessionId);
+
+    const controller = new AbortController();
+    this._activeControllers.set(sessionId, controller);
+    // Track whether this sync was aborted (covers timeout, pause, and teardown)
+    // — we cannot rely on the raised error's message because wrappers like
+    // syncPlanContent stringify the error into a generic "Sync failed: ..." form
+    // that loses the `AbortError` name.
+    let wasAborted = false;
+    controller.signal.addEventListener('abort', () => { wasAborted = true; }, { once: true });
+
+    // 30 second hard timeout for the entire sync operation
+    const timeoutId = setTimeout(() => {
+      controller.abort('Sync operation timed out after 30s');
+    }, 30000);
 
     try {
       const plan = await this._getPlanRecord(sessionId, workspaceRoot);
@@ -288,7 +441,10 @@ export class ContinuousSyncService implements vscode.Disposable {
       // Check rate limits
       const canProceed = await this._checkRateLimits(workspaceRoot);
       if (!canProceed) {
-        // Re-queue
+        // Rate limited — revert to 'active' so the stall watchdog doesn't
+        // mistake us for a hung sync, and re-queue after a short backoff.
+        const rlState = this._states.get(sessionId) ?? state;
+        this._states.set(sessionId, { ...rlState, status: 'active', syncStartedAt: undefined });
         setTimeout(() => {
           void this._executeSync(sessionId, workspaceRoot);
         }, 5000);
@@ -308,55 +464,193 @@ export class ContinuousSyncService implements vscode.Disposable {
         }
       }
 
-      // Perform sync
+      // Perform sync — only to the active provider, not both. Syncing both
+      // doubles the hang risk and spends rate-limit budget on disabled
+      // providers.
       const content = await this._readPlanContent(plan.planFile, workspaceRoot);
-      await this._syncToClickUp(plan, content, workspaceRoot);
-      await this._syncToLinear(plan, content, workspaceRoot);
+
+      // Defensive optional chaining: vscode.workspace may be unavailable in
+      // unit-test harnesses that stub only a minimal vscode surface. Without
+      // this guard, _executeSync throws before reaching the sync call and
+      // every existing regression test fails at the first assertion.
+      const folderUri = vscode.workspace?.workspaceFolders?.find((folder) =>
+        path.resolve(folder.uri.fsPath) === path.resolve(workspaceRoot)
+      )?.uri;
+      const preferredProvider = vscode.workspace?.getConfiguration
+        ? vscode.workspace
+            .getConfiguration('switchboard', folderUri)
+            .get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear'
+        : 'linear';
+
+      let syncResult;
+      if (preferredProvider === 'clickup') {
+        syncResult = await this._syncToClickUp(plan, content, workspaceRoot, controller.signal);
+      } else {
+        syncResult = await this._syncToLinear(plan, content, workspaceRoot, controller.signal);
+      }
+
+      // Handle skip results - map to UI states and emit one-shot toasts
+      if (syncResult.skipped) {
+        if (!this._serviceEnabled) {
+          return;
+        }
+
+        const currentState = this._states.get(sessionId) ?? state;
+        // Map skip reason to UI state
+        let targetStatus: LiveSyncStatus = 'idle';
+        if (syncResult.reason?.includes('disabled')) {
+          targetStatus = 'idle';
+        } else if (syncResult.reason?.includes('linked')) {
+          targetStatus = 'error';
+        } else {
+          targetStatus = 'paused';
+        }
+
+        // Emit one-shot informational toast for first-time skip.
+        // Tracked in a Set keyed by (sessionId, reason) so a given plan's
+        // skip reason surfaces exactly once per extension runtime.
+        const skipToastKey = `skip_${sessionId}_${syncResult.reason}`;
+        if (!this._skipToastsShown.has(skipToastKey)) {
+          this._skipToastsShown.add(skipToastKey);
+          vscode.window.showInformationMessage(
+            `Live sync skipped for "${plan.topic || sessionId}": ${syncResult.reason}. Enable real-time sync in Setup to activate.`
+          );
+        }
+
+        // Update state and notify UI
+        if (this._isCurrentEpoch(sessionId, myEpoch)) {
+          this._states.set(sessionId, {
+            ...currentState,
+            status: targetStatus,
+            syncStartedAt: undefined,
+            inFlight: false
+          });
+          this._kanbanProvider.postMessage({
+            type: 'liveSyncUpdate',
+            sessionId,
+            status: targetStatus,
+            lastSyncAt: currentState.lastSyncAt
+          });
+        }
+        return;
+      }
 
       if (!this._serviceEnabled) {
         return;
       }
 
-      const currentState = this._states.get(sessionId) ?? state;
-      const lastContentHash = currentState.lastContentHash || state.lastContentHash;
-      const now = Date.now();
+      // Epoch guard: if the watchdog recovered this session, or a pause/teardown
+      // bumped the epoch, a late-resolving orphaned success must NOT overwrite
+      // the newer state. Drop all writes and UI notifications silently.
+      if (this._isCurrentEpoch(sessionId, myEpoch)) {
+        const currentState = this._states.get(sessionId) ?? state;
+        const lastContentHash = currentState.lastContentHash || state.lastContentHash;
+        const now = Date.now();
 
-      // Update state on success
-      this._states.set(sessionId, {
-        ...currentState,
-        status: 'active',
-        lastSyncAt: now,
-        lastExternalHash: lastContentHash || currentState.lastExternalHash,
-        consecutiveErrors: 0
-      });
+        // Update state on success
+        this._states.set(sessionId, {
+          ...currentState,
+          status: 'active',
+          lastSyncAt: now,
+          syncStartedAt: undefined,
+          lastExternalHash: lastContentHash || currentState.lastExternalHash,
+          consecutiveErrors: 0,
+          timeoutWarningShown: false,
+          inFlight: false,
+          firstPendingEditAt: undefined,
+          needsResync: false
+        });
 
-      // Notify UI
-      this._kanbanProvider.postMessage({
-        type: 'liveSyncUpdate',
-        sessionId,
-        status: 'active',
-        lastSyncAt: now
-      });
+        // Notify UI
+        this._kanbanProvider.postMessage({
+          type: 'liveSyncUpdate',
+          sessionId,
+          status: 'active',
+          lastSyncAt: now
+        });
+      }
 
-    } catch (error) {
+    } catch (error: any) {
       if (!this._serviceEnabled) {
         return;
       }
 
+      // Epoch guard: watchdog recovery / pause / teardown has already moved
+      // this session on. Swallow the late rejection — do not overwrite state
+      // or warn the user about an already-superseded sync.
+      if (!this._isCurrentEpoch(sessionId, myEpoch)) {
+        return;
+      }
+
       const currentState = this._states.get(sessionId) ?? state;
+      // Detect abort via the tracked flag OR by string-matching the (possibly
+      // wrapped) error message — upstream helpers like syncPlanContent wrap
+      // errors as "Sync failed: Error: AbortError", which loses `error.name`.
+      const errMsg = typeof error?.message === 'string' ? error.message : String(error ?? '');
+      const isTimeout = wasAborted || error?.name === 'AbortError' || /AbortError/.test(errMsg);
       const newErrorCount = currentState.consecutiveErrors + 1;
-      const newStatus: LiveSyncStatus = newErrorCount >= 5 ? 'error' : 'active';
+
+      // Do NOT overwrite a user-initiated 'paused' status or a terminal
+      // 'conflict'/'completed' status that was set while the request was in
+      // flight. pausePlan() aborts the controller and then sets 'paused' — the
+      // catch handler would otherwise clobber that back to 'active'/'error'.
+      // 'error' is treated as a protected/terminal state here because the
+      // stall watchdog may have already transitioned this session into 'error'
+      // and bumped consecutiveErrors; clobbering it would double-count.
+      const protectedStatus = currentState.status === 'paused'
+        || currentState.status === 'conflict'
+        || currentState.status === 'completed'
+        || currentState.status === 'error';
+      const newStatus: LiveSyncStatus = protectedStatus
+        ? currentState.status
+        : (newErrorCount >= 5 ? 'error' : 'active');
+
+      console.error(
+        `[ContinuousSync] Sync failed for ${sessionId}:`,
+        isTimeout ? (protectedStatus ? `Aborted (status=${currentState.status})` : 'Timeout exceeded') : error
+      );
+
+      // Surface a user-visible warning ONCE per error streak when a timeout
+      // repeats. We wait for the 2nd consecutive timeout (single transient
+      // failure is common and self-recovering) but still fire well before
+      // the 5-strike `error` flip so the user isn't left staring at a
+      // silently-retrying card. `timeoutWarningShown` is reset on the next
+      // successful sync so subsequent streaks will warn again.
+      const shouldWarnTimeout =
+        isTimeout
+        && !protectedStatus
+        && newErrorCount >= 2
+        && !currentState.timeoutWarningShown;
 
       this._states.set(sessionId, {
         ...currentState,
         status: newStatus,
-        consecutiveErrors: newErrorCount
+        // Only bump error count when the abort was NOT user-initiated — a
+        // user pause should not trip the 5-strike error threshold.
+        consecutiveErrors: protectedStatus ? currentState.consecutiveErrors : newErrorCount,
+        syncStartedAt: undefined,
+        timeoutWarningShown: shouldWarnTimeout ? true : currentState.timeoutWarningShown,
+        inFlight: false
       });
 
-      console.error(`[ContinuousSync] Failed to sync ${sessionId}:`, error);
+      if (shouldWarnTimeout) {
+        // Plan name only — never include plan content or credentials in the
+        // user-visible toast (see plan Security edge-case audit).
+        const planName = await this._getPlanTopicSafe(sessionId, workspaceRoot);
+        vscode.window.showWarningMessage(
+          `Live sync for "${planName}" timed out. Will retry.`
+        );
+      }
     } finally {
-      this._activeSyncs = Math.max(0, this._activeSyncs - 1);
-      this._inFlightSessions.delete(sessionId);
+      clearTimeout(timeoutId);
+      this._activeControllers.delete(sessionId);
+      // Only decrement _activeSyncs if this sync still owned the in-flight
+      // slot — the stall watchdog may have already recovered the session and
+      // decremented the counter, in which case a second decrement here would
+      // desync the concurrency limiter.
+      if (this._inFlightSessions.delete(sessionId)) {
+        this._activeSyncs = Math.max(0, this._activeSyncs - 1);
+      }
 
       if (!this._serviceEnabled) {
         return;
@@ -365,7 +659,33 @@ export class ContinuousSyncService implements vscode.Disposable {
       const shouldReschedule = this._resyncAfterCurrent.delete(sessionId);
       this._processQueue(workspaceRoot);
       if (shouldReschedule) {
-        void this._scheduleSyncIfNeeded(sessionId, workspaceRoot);
+        void this._maybeSync(sessionId, workspaceRoot);
+      }
+
+      // Handle needsResync flag - trigger fresh quiet window if changes arrived during sync
+      const currentState = this._states.get(sessionId);
+      if (currentState && currentState.needsResync && this._isCurrentEpoch(sessionId, myEpoch)) {
+        this._states.set(sessionId, { ...currentState, needsResync: false });
+        // Trigger file change logic to start fresh quiet window
+        const plan = await this._getPlanRecord(sessionId, workspaceRoot);
+        if (plan) {
+          void this._handleFileChange(vscode.Uri.file(path.isAbsolute(plan.planFile) ? plan.planFile : path.join(workspaceRoot, plan.planFile)), workspaceRoot);
+        }
+      }
+
+      // Notify UI of final state — but only if this sync is still current.
+      // Otherwise a late settlement could overwrite the watchdog's 'error'
+      // badge with our stale 'active'/'paused' status.
+      if (this._isCurrentEpoch(sessionId, myEpoch)) {
+        const currentState = this._states.get(sessionId);
+        if (currentState) {
+          this._kanbanProvider.postMessage({
+            type: 'liveSyncUpdate',
+            sessionId,
+            status: currentState.status,
+            lastSyncAt: currentState.lastSyncAt
+          });
+        }
       }
     }
   }
@@ -374,29 +694,54 @@ export class ContinuousSyncService implements vscode.Disposable {
     plan: import('./KanbanDatabase').KanbanPlanRecord,
     workspaceRoot: string
   ): Promise<string> {
-    if (plan.clickupTaskId) {
-      const clickup = this._getClickUpService(workspaceRoot);
-      const config = await clickup.loadConfig();
-      if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
-        const result = await clickup.httpRequest('GET', `/task/${plan.clickupTaskId}`);
-        if (result.status === 200 && result.data) {
-          return result.data.description || '';
+    // Bound the watchdog's own external calls. Without this, a hung ClickUp
+    // or Linear response here can prevent the stall watchdog itself from
+    // recovering anything.
+    const controller = new AbortController();
+    const t = setTimeout(() => controller.abort(), 10_000);
+
+    try {
+      if (plan.clickupTaskId) {
+        const clickup = this._getClickUpService(workspaceRoot);
+        const config = await clickup.loadConfig();
+        if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
+          const result = await clickup.httpRequest(
+            'GET',
+            `/task/${plan.clickupTaskId}`,
+            undefined,
+            10_000,
+            controller.signal
+          );
+          if (result.status === 200 && result.data) {
+            return result.data.description || '';
+          }
         }
       }
-    }
-    if (plan.linearIssueId) {
-      const linear = this._getLinearService(workspaceRoot);
-      const config = await linear.loadConfig();
-      if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
-        const result = await linear.graphqlRequest(
-          `query ($id: String!) { issue(id: $id) { description } }`,
-          { id: plan.linearIssueId }
-        );
-        return result.data?.issue?.description || '';
+      if (plan.linearIssueId) {
+        const linear = this._getLinearService(workspaceRoot);
+        const config = await linear.loadConfig();
+        if (config?.setupComplete === true && config.realTimeSyncEnabled === true) {
+          const result = await linear.graphqlRequest(
+            `query ($id: String!) { issue(id: $id) { description } }`,
+            { id: plan.linearIssueId },
+            10_000,
+            controller.signal
+          );
+          return result.data?.issue?.description || '';
+        }
       }
+      return '';
+    } catch (err) {
+      // Fail-open: timeout/network/abort → treat as "no external description
+      // available", identical to today's semantics but now bounded.
+      console.warn(
+        `[ContinuousSync] _fetchExternalDescription bounded-error:`,
+        err instanceof Error ? err.message : err
+      );
+      return '';
+    } finally {
+      clearTimeout(t);
     }
-
-    return '';
   }
 
   private async _detectExternalConflict(
@@ -499,60 +844,154 @@ export class ContinuousSyncService implements vscode.Disposable {
   private async _syncToClickUp(
     plan: import('./KanbanDatabase').KanbanPlanRecord,
     content: string,
-    workspaceRoot: string
-  ): Promise<void> {
+    workspaceRoot: string,
+    signal?: AbortSignal
+  ): Promise<{ skipped: boolean; reason?: string }> {
     const clickup = this._getClickUpService(workspaceRoot);
     const config = await clickup.loadConfig();
-    if (!plan.clickupTaskId || !config?.setupComplete || config.realTimeSyncEnabled !== true) {
-      return;
+    if (!plan.clickupTaskId) {
+      return { skipped: true, reason: 'No external issue linked' };
     }
-    const result = await clickup.syncPlanContent(plan.clickupTaskId, content);
+    if (!config?.setupComplete) {
+      return { skipped: true, reason: 'ClickUp not set up' };
+    }
+    if (config.realTimeSyncEnabled !== true) {
+      return { skipped: true, reason: 'Real-time sync disabled' };
+    }
+    const result = await clickup.syncPlanContent(plan.clickupTaskId, content, signal);
     if (!result.success) {
       console.warn(`[ContinuousSync] ClickUp sync failed for ${plan.sessionId}: ${result.error}`);
       throw new Error(result.error);
     }
     // Update rate limit tracker from response headers (if available)
     // ClickUp returns X-RateLimit-Remaining and X-RateLimit-Reset
+    return { skipped: false };
   }
 
   private async _syncToLinear(
     plan: import('./KanbanDatabase').KanbanPlanRecord,
     content: string,
-    workspaceRoot: string
-  ): Promise<void> {
+    workspaceRoot: string,
+    signal?: AbortSignal
+  ): Promise<{ skipped: boolean; reason?: string }> {
     const linear = this._getLinearService(workspaceRoot);
     const config = await linear.loadConfig();
-    if (!plan.linearIssueId || !config?.setupComplete || config.realTimeSyncEnabled !== true) {
-      return;
+    if (!plan.linearIssueId) {
+      return { skipped: true, reason: 'No external issue linked' };
     }
-    const result = await linear.syncPlanContent(plan.linearIssueId, content);
+    if (!config?.setupComplete) {
+      return { skipped: true, reason: 'Linear not set up' };
+    }
+    if (config.realTimeSyncEnabled !== true) {
+      return { skipped: true, reason: 'Real-time sync disabled' };
+    }
+    const result = await linear.syncPlanContent(plan.linearIssueId, content, signal);
     if (!result.success) {
       console.warn(`[ContinuousSync] Linear sync failed for ${plan.sessionId}: ${result.error}`);
       throw new Error(result.error);
     }
+    return { skipped: false };
   }
 
   private async _checkIdlePlans(workspaceRoot: string): Promise<void> {
-    const now = Date.now();
+    // Absolutely do not let the setInterval callback throw — the stall
+    // watchdog MUST keep ticking even if a single session's state is corrupt.
+    try {
+      const now = Date.now();
 
-    for (const [sessionId, state] of this._states.entries()) {
-      if (state.status !== 'active') continue;
+      for (const [sessionId, state] of this._states.entries()) {
+        try {
+          if (state.status !== 'active') continue;
 
-      const timeSinceContentChange = now - state.lastContentChangeAt;
+          const timeSinceContentChange = now - state.lastContentChangeAt;
 
-      if (timeSinceContentChange > this._config.staleTimeoutMs) {
-        // Stale — pause sync
-        this._states.set(sessionId, { ...state, status: 'paused' });
-        this._kanbanProvider.postMessage({
-          type: 'liveSyncUpdate',
-          sessionId,
-          status: 'paused',
-          reason: 'Agent idle for 30 minutes'
-        });
-      } else if (timeSinceContentChange > this._config.idleTimeoutMs) {
-        // Idle — increase sync interval (back off) by updating state
-        // Actual interval change happens in _scheduleSyncIfNeeded via lastSyncAt manipulation
+          if (timeSinceContentChange > this._config.staleTimeoutMs) {
+            // Stale — pause sync
+            this._states.set(sessionId, { ...state, status: 'paused' });
+            this._kanbanProvider.postMessage({
+              type: 'liveSyncUpdate',
+              sessionId,
+              status: 'paused',
+              reason: 'Agent idle for 30 minutes'
+            });
+          } else if (timeSinceContentChange > this._config.idleTimeoutMs) {
+            // Idle — increase sync interval (back off) by updating state
+            // Actual interval change happens in _maybeSync via lastSyncAt manipulation
+          }
+        } catch (perSessionErr) {
+          console.error(
+            `[ContinuousSync] _checkIdlePlans per-session error (${sessionId}):`,
+            perSessionErr
+          );
+        }
       }
+
+      // Stall recovery MUST run every tick even if the loop above threw.
+      try {
+        this._recoverStalledSyncs();
+      } catch (stallErr) {
+        console.error(`[ContinuousSync] _recoverStalledSyncs threw:`, stallErr);
+      }
+    } catch (outerErr) {
+      console.error(`[ContinuousSync] _checkIdlePlans outer error:`, outerErr);
+    }
+  }
+
+  private _recoverStalledSyncs(): void {
+    const now = Date.now();
+    for (const [sessionId, state] of this._states.entries()) {
+      if (state.status !== 'syncing') continue;
+
+      // Stall window is measured from syncStartedAt (when the in-flight sync
+      // began), not lastSyncAt (last successful sync) — otherwise a fresh plan
+      // with lastSyncAt=0 would be marked stalled instantly, and any sync
+      // whose previous success was >60s ago would be aborted the moment it
+      // started. If syncStartedAt is missing (legacy state), fall back to
+      // lastSyncAt but require it to be non-zero to avoid the 0-timestamp
+      // instant-stall bug.
+      const startedAt = state.syncStartedAt
+        ?? (state.lastSyncAt > 0 ? state.lastSyncAt : now);
+      if (now - startedAt <= 60000) continue;
+
+      console.warn(`[ContinuousSync] Recovering stalled sync for session ${sessionId}`);
+
+      // Bump epoch FIRST — any late settlement from the original _executeSync
+      // call now fails the epoch check and becomes a silent no-op (no state
+      // overwrite, no UI flip back to 'active').
+      this._bumpEpoch(sessionId);
+
+      // Force cleanup — abort any in-flight controller and drop tracking.
+      this._activeControllers.get(sessionId)?.abort('Stall recovery');
+      this._activeControllers.delete(sessionId);
+      if (this._inFlightSessions.delete(sessionId)) {
+        this._activeSyncs = Math.max(0, this._activeSyncs - 1);
+      }
+
+      // Clear the quiet-period debounce timer and the inFlight/needsResync
+      // flags as part of recovery. Without this the recovered 'error' state
+      // still carries `inFlight: true`, which blocks every subsequent
+      // _maybeSync attempt (it defers, assuming a sync is still running).
+      if (state.quietTimer) {
+        clearTimeout(state.quietTimer);
+      }
+      this._states.set(sessionId, {
+        ...state,
+        status: 'error',
+        consecutiveErrors: state.consecutiveErrors + 1,
+        syncStartedAt: undefined,
+        quietTimer: undefined,
+        inFlight: false,
+        needsResync: false
+      });
+
+      // Notify UI — include the last SUCCESSFUL sync timestamp, not now,
+      // so the UI does not falsely advertise a fresh successful sync.
+      this._kanbanProvider.postMessage({
+        type: 'liveSyncUpdate',
+        sessionId,
+        status: 'error',
+        lastSyncAt: state.lastSyncAt
+      });
     }
   }
 
@@ -564,13 +1003,23 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     const rows = await db.getBoard(workspaceId);
 
-    const eligibleColumns = ['INVESTIGATION', 'PLAN REVIEWED', 'CODER CODED', 'LEAD REVIEW'];
     for (const row of rows) {
-      if (eligibleColumns.includes(row.kanbanColumn)) {
+      const isEligible = await this._isEligibleForLiveSync(row, workspaceRoot);
+      if (isEligible) {
         const state = this._createInitialState(row.sessionId);
         this._states.set(row.sessionId, state);
       }
     }
+  }
+
+  private _bumpEpoch(sessionId: string): number {
+    const next = (this._syncEpoch.get(sessionId) ?? 0) + 1;
+    this._syncEpoch.set(sessionId, next);
+    return next;
+  }
+
+  private _isCurrentEpoch(sessionId: string, epoch: number): boolean {
+    return this._syncEpoch.get(sessionId) === epoch;
   }
 
   private _createInitialState(sessionId: string): LiveSyncState {
@@ -580,13 +1029,35 @@ export class ContinuousSyncService implements vscode.Disposable {
       lastContentHash: '',
       lastSyncAt: 0,
       lastContentChangeAt: 0,
-      consecutiveErrors: 0
+      consecutiveErrors: 0,
+      inFlight: false,
+      needsResync: false
     };
   }
 
   private async _getPlanRecord(sessionId: string, workspaceRoot: string) {
     const db = this._getKanbanDb(workspaceRoot);
     return db.getPlanBySessionId(sessionId);
+  }
+
+  /**
+   * Look up a plan's topic for user-facing messages. Falls back to the
+   * sessionId if the DB lookup fails or the topic is missing — we don't want
+   * an error surfacing logic to itself throw. Caller must not pass the
+   * returned string anywhere it could leak beyond the warning toast (topic
+   * only, no content).
+   */
+  private async _getPlanTopicSafe(sessionId: string, workspaceRoot: string): Promise<string> {
+    try {
+      const plan = await this._getPlanRecord(sessionId, workspaceRoot);
+      const topic = plan?.topic;
+      if (typeof topic === 'string' && topic.trim().length > 0) {
+        return topic;
+      }
+    } catch {
+      // swallow — warning toast is best-effort.
+    }
+    return sessionId;
   }
 
   private async _readPlanContent(planFile: string, workspaceRoot: string): Promise<string> {
@@ -611,12 +1082,24 @@ export class ContinuousSyncService implements vscode.Disposable {
     this._fileWatcherSubscription?.dispose();
     this._fileWatcherSubscription = undefined;
 
-    for (const timer of this._pendingSyncTimers.values()) {
-      clearTimeout(timer);
+    // Clear quiet timers from all states
+    for (const state of this._states.values()) {
+      if (state.quietTimer) {
+        clearTimeout(state.quietTimer);
+      }
     }
-    this._pendingSyncTimers.clear();
     this._inFlightSessions.clear();
     this._resyncAfterCurrent.clear();
+
+    // Abort all active controllers and bump epoch for every tracked session
+    // so late settlements cannot resurrect state after teardown.
+    for (const sessionId of this._activeControllers.keys()) {
+      this._bumpEpoch(sessionId);
+    }
+    for (const controller of this._activeControllers.values()) {
+      controller.abort('Service teardown');
+    }
+    this._activeControllers.clear();
 
     if (this._idleCheckTimer) {
       clearInterval(this._idleCheckTimer);

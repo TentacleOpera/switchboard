@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { KanbanDatabase } from './KanbanDatabase';
-import { LinearSyncService, type LinearConfig } from './LinearSyncService';
+import { buildLinearIssueFilter, LinearSyncService, type LinearConfig } from './LinearSyncService';
 import {
     type LinearAutomationRule,
     matchesLinearAutomationRule
@@ -59,6 +59,27 @@ export class LinearAutomationService {
                 .filter(Boolean)
             : [];
         return labelNames.some((labelName: string) => labelName === 'switchboard' || labelName.startsWith('switchboard:'));
+    }
+
+    private _applyProjectNameFilters(issues: any[], config: LinearConfig): any[] {
+        const includeNames = (config.includeProjectNames || []).map(n => n.toLowerCase());
+        const excludeNames = (config.excludeProjectNames || []).map(n => n.toLowerCase());
+        if (includeNames.length === 0 && excludeNames.length === 0) {
+            return issues;
+        }
+        return issues.filter((issue) => {
+            const projectName = String(issue?.project?.name || '').trim().toLowerCase();
+            if (!projectName) {
+                return includeNames.length === 0;
+            }
+            if (excludeNames.length > 0 && excludeNames.includes(projectName)) {
+                return false;
+            }
+            if (includeNames.length > 0 && !includeNames.includes(projectName)) {
+                return false;
+            }
+            return true;
+        });
     }
 
     private _getRules(config: LinearConfig): LinearAutomationRule[] {
@@ -321,7 +342,9 @@ export class LinearAutomationService {
         }
 
         const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
-        if (!(await db.ensureReady())) {
+        // Force a fresh on-disk view before dedupe so outbound syncs from another
+        // instance are visible immediately during automation polling.
+        if (!(await db.refreshFromDisk())) {
             result.errors.push('Kanban database unavailable for Linear automation polling.');
             return result;
         }
@@ -331,14 +354,12 @@ export class LinearAutomationService {
         await fs.promises.mkdir(plansDir, { recursive: true });
 
         const watchedStateIds = new Set(this._getWatchedStateIds(config));
-        const projectFilter = config.projectId ? '\n                        project: { id: { eq: $projectId } }' : '';
+        const resolvedProjectId = await this._linearService.resolveSingleIncludeProjectId(config);
+        const filter = buildLinearIssueFilter(config.teamId, resolvedProjectId || undefined);
         const query = `
-            query($teamId: String!${config.projectId ? ', $projectId: String!' : ''}, $after: String) {
+            query($filter: IssueFilter!, $after: String) {
                 issues(
-                    filter: {
-                        team: { id: { eq: $teamId } }
-                        ${projectFilter}
-                    }
+                    filter: $filter
                     after: $after
                     first: 50
                 ) {
@@ -351,6 +372,7 @@ export class LinearAutomationService {
                         parent { id }
                         state { id name type }
                         labels { nodes { id name } }
+                        project { name }
                     }
                     pageInfo { hasNextPage endCursor }
                 }
@@ -362,8 +384,7 @@ export class LinearAutomationService {
             let page: any;
             try {
                 const pageResult = await this._linearService.graphqlRequest(query, {
-                    teamId: config.teamId,
-                    ...(config.projectId ? { projectId: config.projectId } : {}),
+                    filter,
                     after: cursor
                 });
                 page = pageResult.data?.issues;
@@ -373,13 +394,17 @@ export class LinearAutomationService {
             }
 
             const issues = Array.isArray(page?.nodes) ? page.nodes : [];
-            for (const issue of issues) {
+
+            // Apply client-side project name filters if needed
+            const filteredIssues = this._applyProjectNameFilters(issues, config);
+            for (const issue of filteredIssues) {
                 if (issue?.parent?.id) {
                     result.skipped++;
                     continue;
                 }
 
                 if (this._issueHasSwitchboardOwnership(issue)) {
+                    console.log(`[LinearAutomation] Skipping issue ${issue.id} (${issue.identifier}) - has switchboard label`);
                     result.skipped++;
                     continue;
                 }
@@ -392,7 +417,14 @@ export class LinearAutomationService {
 
                 const stateId = String(issue?.state?.id || '').trim();
                 const stateType = String(issue?.state?.type || '').trim().toLowerCase();
-                if (!stateId || stateType === 'completed' || stateType === 'cancelled' || stateType === 'canceled') {
+                // Always filter out completed/cancelled/archived issues
+                if (!stateId || stateType === 'completed' || stateType === 'cancelled' || stateType === 'canceled' || stateType === 'archived') {
+                    result.skipped++;
+                    continue;
+                }
+
+                // Filter out backlog if configured (default: true)
+                if (config.excludeBacklog !== false && stateType === 'backlog') {
                     result.skipped++;
                     continue;
                 }
@@ -417,6 +449,7 @@ export class LinearAutomationService {
                 const matchedRule = matchedRules[0];
                 const existingPlan = await db.findPlanByLinearIssueId(workspaceId, normalizedIssueId);
                 if (existingPlan) {
+                    console.log(`[LinearAutomation] Skipping issue ${issue.id} (${issue.identifier}) - plan already exists: ${existingPlan.planFile}`);
                     result.skipped++;
                     continue;
                 }
@@ -424,6 +457,7 @@ export class LinearAutomationService {
                 const stableAutomationId = this._buildStableAutomationId(normalizedIssueId, String(issue?.identifier || ''));
                 const planFile = this._normalizePath(path.join(plansDir, `${stableAutomationId}.md`));
                 if (await this._fileExists(planFile)) {
+                    console.log(`[LinearAutomation] Skipping issue ${issue.id} (${issue.identifier}) - plan file already exists: ${planFile}`);
                     result.skipped++;
                     continue;
                 }
@@ -448,12 +482,15 @@ export class LinearAutomationService {
                         this._buildPlanContent(issueSummary, matchedRule, stableAutomationId, stableAutomationId),
                         { encoding: 'utf8', flag: 'wx' }
                     );
+                    console.log(`[LinearAutomation] Created plan ${planFile} for Linear issue ${issue.identifier} (${normalizedIssueId})`);
                     result.created++;
                 } catch (error) {
                     if ((error as NodeJS.ErrnoException).code === 'EEXIST') {
+                        console.log(`[LinearAutomation] Plan file already exists (race): ${planFile}`);
                         result.skipped++;
                         continue;
                     }
+                    console.error(`[LinearAutomation] Failed to create plan for issue ${normalizedIssueId}:`, error);
                     result.errors.push(`Failed to create Linear automation plan for issue ${normalizedIssueId}: ${error instanceof Error ? error.message : String(error)}`);
                 }
             }

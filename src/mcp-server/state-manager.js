@@ -2,9 +2,16 @@ const fs = require('fs');
 const path = require('path');
 const lockfile = require('proper-lockfile');
 
-const STATE_ROOT = process.argv[2] || process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
-if (!process.argv[2] && !process.env.SWITCHBOARD_WORKSPACE_ROOT) {
-    console.warn("[StateManager] Warning: Neither SWITCHBOARD_WORKSPACE_ROOT nor process.argv[2] set. Falling back to process.cwd(). This may cause state fragmentation if MCP is started from different directories.");
+function resolveStateRoot() {
+    return process.env.SWITCHBOARD_STATE_ROOT
+        || process.env.SWITCHBOARD_WORKSPACE_ROOT
+        || process.argv[2]
+        || process.cwd();
+}
+
+const STATE_ROOT = resolveStateRoot();
+if (!process.env.SWITCHBOARD_STATE_ROOT && !process.env.SWITCHBOARD_WORKSPACE_ROOT && !process.argv[2]) {
+    console.warn("[StateManager] Warning: Neither SWITCHBOARD_STATE_ROOT, SWITCHBOARD_WORKSPACE_ROOT, nor process.argv[2] set. Falling back to process.cwd(). This may cause state fragmentation if MCP is started from different directories.");
 }
 const STATE_DIR = path.join(STATE_ROOT, '.switchboard');
 const STATE_FILE = path.join(STATE_DIR, 'state.json');

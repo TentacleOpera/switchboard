@@ -14,7 +14,8 @@ const suites = {
         'src/test/integrations/clickup/clickup-sync-service.test.js',
         'src/test/integrations/clickup/clickup-import-flow.test.js',
         'src/test/integrations/clickup/clickup-rate-limiting.test.js',
-        'src/test/integrations/clickup/clickup-regression.test.js'
+        'src/test/integrations/clickup/clickup-regression.test.js',
+        'src/test/integrations/clickup/clickup-semantic-tools.test.js'
     ],
     linear: [
         'src/test/integrations/linear/linear-graphql-client.test.js',
@@ -26,6 +27,9 @@ const suites = {
     shared: [
         'src/test/integrations/shared/integration-auto-pull-service.test.js'
     ],
+    regression: [
+        'src/test/integrations/sync-hang-regression.test.js'
+    ],
     e2e: [
         'src/test/integrations/e2e/integration-workflow.test.js'
     ]
@@ -33,7 +37,7 @@ const suites = {
 
 const group = process.argv[2] || 'all';
 const files = group === 'all'
-    ? [...suites.shared, ...suites.notion, ...suites.clickup, ...suites.linear, ...suites.e2e]
+    ? [...suites.shared, ...suites.notion, ...suites.clickup, ...suites.linear, ...suites.regression, ...suites.e2e]
     : suites[group];
 
 if (!files) {

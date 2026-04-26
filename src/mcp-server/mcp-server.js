@@ -18,8 +18,14 @@ const { loadState } = require("./state-manager");
 const { registerTools, handleInternalRegistration } = require("./register-tools");
 
 // --- Configuration ---
-const WORKSPACE_ROOT = process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
-const SWITCHBOARD_DIR = path.join(WORKSPACE_ROOT, '.switchboard');
+function resolveStateRoot() {
+    return process.env.SWITCHBOARD_STATE_ROOT
+        || process.env.SWITCHBOARD_WORKSPACE_ROOT
+        || process.argv[2]
+        || process.cwd();
+}
+const STATE_ROOT = resolveStateRoot();
+const SWITCHBOARD_DIR = path.join(STATE_ROOT, '.switchboard');
 
 function formatErrorForLog(error) {
     if (error instanceof Error) {
@@ -198,4 +204,3 @@ if (require.main === module) {
     });
 
 }
-

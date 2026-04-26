@@ -501,6 +501,7 @@ export class SessionActionLog {
                     })(normalized.complexity),
                     tags: '',
                     dependencies: '',
+                    repoScope: '',
                     workspaceId,
                     createdAt: normalized.createdAt,
                     updatedAt: normalized.createdAt,

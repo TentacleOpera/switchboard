@@ -16,6 +16,7 @@ export interface KanbanPlanRecord {
     complexity: string; // 'Unknown' or string integer '1'-'10'
     tags: string;
     dependencies: string;
+    repoScope: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -57,6 +58,7 @@ CREATE TABLE IF NOT EXISTS plans (
     complexity    TEXT DEFAULT 'Unknown',
     tags          TEXT DEFAULT '',
     dependencies  TEXT DEFAULT '',
+    repo_scope    TEXT DEFAULT '',
     workspace_id  TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -142,6 +144,18 @@ const MIGRATION_V12_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_linear_issue ON plans(workspace_id, linear_issue_id)`,
 ];
 
+const MIGRATION_V13_SQL = [
+    `ALTER TABLE plans ADD COLUMN repo_scope TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_repo_scope ON plans(workspace_id, repo_scope)`,
+];
+
+const MIGRATION_V14_SQL = [
+    `CREATE TABLE IF NOT EXISTS kanban_meta (
+        key   TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+    )`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -151,10 +165,10 @@ const MIGRATION_V12_SQL = [
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-    workspace_id, created_at, updated_at, last_action, source_type,
+    repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
     clickup_task_id, linear_issue_id
-) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_id) DO UPDATE SET
     session_id = excluded.session_id,
     topic = excluded.topic,
@@ -166,6 +180,7 @@ ON CONFLICT(plan_id) DO UPDATE SET
     complexity = excluded.complexity,
     tags = excluded.tags,
     dependencies = excluded.dependencies,
+    repo_scope = excluded.repo_scope,
     workspace_id = excluded.workspace_id,
     updated_at = excluded.updated_at,
     last_action = excluded.last_action,
@@ -183,14 +198,14 @@ const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-                      workspace_id, created_at, updated_at, last_action, source_type,
-                      brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                      clickup_task_id, linear_issue_id`;
+                       repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
+                       brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                       clickup_task_id, linear_issue_id`;
 
 const runtimeRequire = createRequire(__filename);
 
 const VALID_KANBAN_COLUMNS = new Set([
-    'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+    'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'CONTEXT GATHERER', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);
@@ -511,10 +526,10 @@ export class KanbanDatabase {
         return this._dbPath;
     }
 
-    public async ensureReady(): Promise<boolean> {
+    public async ensureReady(forceReload: boolean = false): Promise<boolean> {
         if (this._db) {
             // Check if another IDE has modified the DB file since we loaded it
-            await this._reloadIfStale();
+            await this._reloadIfStale(forceReload);
             return true;
         }
         if (!this._initPromise) {
@@ -526,6 +541,14 @@ export class KanbanDatabase {
             });
         }
         return this._initPromise;
+    }
+
+    public async refreshFromDisk(forceReload: boolean = true): Promise<boolean> {
+        if (!this._db) {
+            return this.ensureReady(forceReload);
+        }
+        await this._reloadIfStale(forceReload);
+        return true;
     }
 
     public async getMigrationVersion(): Promise<number> {
@@ -564,18 +587,19 @@ export class KanbanDatabase {
                     record.complexity,    // 7
                     record.tags || '',    // 8
                     record.dependencies || '', // 9
-                    record.workspaceId,   // 10
-                    record.createdAt,     // 11
-                    record.updatedAt,     // 12
-                    record.lastAction,    // 13
-                    record.sourceType,    // 14
-                    this._normalizePath(record.brainSourcePath), // 15
-                    this._normalizePath(record.mirrorPath), // 16
-                    record.routedTo || '',       // 17
-                    record.dispatchedAgent || '', // 18
-                    record.dispatchedIde || '',   // 19
-                    record.clickupTaskId || '',   // 20
-                    record.linearIssueId || ''    // 21
+                    record.repoScope || '', // 10
+                    record.workspaceId,   // 11
+                    record.createdAt,     // 12
+                    record.updatedAt,     // 13
+                    record.lastAction,    // 14
+                    record.sourceType,    // 15
+                    this._normalizePath(record.brainSourcePath), // 16
+                    this._normalizePath(record.mirrorPath), // 17
+                    record.routedTo || '',       // 18
+                    record.dispatchedAgent || '', // 19
+                    record.dispatchedIde || '',   // 20
+                    record.clickupTaskId || '',   // 21
+                    record.linearIssueId || ''    // 22
                 ]);
             }
             this._db.run('COMMIT');
@@ -686,6 +710,28 @@ export class KanbanDatabase {
         );
     }
 
+    public async getMeta(key: string): Promise<string | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare('SELECT value FROM kanban_meta WHERE key = ?', [key]);
+        try {
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                return String(row.value ?? '');
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async setMeta(key: string, value: string): Promise<boolean> {
+        return this._persistedUpdate(
+            `INSERT INTO kanban_meta(key, value) VALUES(?, ?)
+             ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
+            [key, value]
+        );
+    }
+
     public async getDependencyStatus(
         dependenciesCsv: string
     ): Promise<Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }>> {
@@ -778,6 +824,31 @@ export class KanbanDatabase {
         );
     }
 
+    public async updateLinearIssueId(sessionId: string, linearIssueId: string): Promise<boolean> {
+        const normalizedIssueId = String(linearIssueId || '').trim();
+        const persisted = await this._persistedUpdate(
+            'UPDATE plans SET linear_issue_id = ?, updated_at = ? WHERE session_id = ?',
+            [normalizedIssueId, new Date().toISOString(), sessionId]
+        );
+        if (!persisted) {
+            return false;
+        }
+
+        const updatedPlan = await this.getPlanBySessionId(sessionId);
+        if (!updatedPlan) {
+            console.error(`[KanbanDatabase] Failed to update linear_issue_id for missing session ${sessionId}.`);
+            return false;
+        }
+        if (String(updatedPlan.linearIssueId || '').trim() !== normalizedIssueId) {
+            console.error(
+                `[KanbanDatabase] Failed to verify linear_issue_id update for session ${sessionId}. ` +
+                `Expected "${normalizedIssueId}", found "${String(updatedPlan.linearIssueId || '').trim()}".`
+            );
+            return false;
+        }
+        return true;
+    }
+
     public async deletePlan(sessionId: string): Promise<boolean> {
         return this._persistedUpdate(
             'DELETE FROM plans WHERE session_id = ?',
@@ -792,6 +863,20 @@ export class KanbanDatabase {
              WHERE workspace_id = ? AND status = 'active'
              ORDER BY updated_at DESC`,
             [workspaceId]
+        );
+        return this._readRows(stmt);
+    }
+
+    public async getBoardFiltered(workspaceId: string, repoScope: string | null): Promise<KanbanPlanRecord[]> {
+        if (!repoScope) {
+            return this.getBoard(workspaceId);
+        }
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND repo_scope IN (?, '')
+             ORDER BY updated_at DESC`,
+            [workspaceId, repoScope]
         );
         return this._readRows(stmt);
     }
@@ -815,6 +900,25 @@ export class KanbanDatabase {
              ORDER BY updated_at DESC
              LIMIT ?`,
             [workspaceId, limit]
+        );
+        return this._readRows(stmt);
+    }
+
+    public async getCompletedPlansFiltered(
+        workspaceId: string,
+        repoScope: string | null,
+        limit: number = 100
+    ): Promise<KanbanPlanRecord[]> {
+        if (!repoScope) {
+            return this.getCompletedPlans(workspaceId, limit);
+        }
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'completed' AND repo_scope IN (?, '')
+             ORDER BY updated_at DESC
+             LIMIT ?`,
+            [workspaceId, repoScope, limit]
         );
         return this._readRows(stmt);
     }
@@ -908,6 +1012,20 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    public async getPlanByTopic(topic: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE LOWER(topic) = LOWER(?)
+               AND workspace_id = ?
+               AND status = 'active'
+             LIMIT 1`,
+            [topic, workspaceId]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
     /** Returns all session IDs in the DB (any status) in a single query. */
     public async getSessionIdSet(): Promise<Set<string>> {
         if (!(await this.ensureReady()) || !this._db) return new Set();
@@ -938,6 +1056,7 @@ export class KanbanDatabase {
         complexity?: string;
         tags?: string;
         dependencies?: string;
+        repoScope?: string;
     }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
         if (updates.length === 0) return true;
@@ -965,6 +1084,10 @@ export class KanbanDatabase {
                 if (typeof u.dependencies === 'string') {
                     setClauses.push('dependencies = ?');
                     params.push(u.dependencies);
+                }
+                if (typeof u.repoScope === 'string') {
+                    setClauses.push('repo_scope = ?');
+                    params.push(u.repoScope);
                 }
 
                 params.push(u.sessionId);
@@ -1430,11 +1553,11 @@ export class KanbanDatabase {
      * If so, reload the entire in-memory database from disk.
      * Debounced to avoid excessive fs.stat() calls during rapid query bursts.
      */
-    private async _reloadIfStale(): Promise<void> {
+    private async _reloadIfStale(forceReload: boolean = false): Promise<void> {
         if (!this._db) return; // Not initialized yet — _initialize() will load fresh
 
         const now = Date.now();
-        if (now - this._lastStatCheckMs < KanbanDatabase.STAT_DEBOUNCE_MS) return;
+        if (!forceReload && now - this._lastStatCheckMs < KanbanDatabase.STAT_DEBOUNCE_MS) return;
         this._lastStatCheckMs = now;
 
         try {
@@ -1732,6 +1855,16 @@ export class KanbanDatabase {
         // V12: add Linear issue tracking field and lookup index.
         for (const sql of MIGRATION_V12_SQL) {
             try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+
+        // V13: add repo-scope metadata and filtered-query index.
+        for (const sql of MIGRATION_V13_SQL) {
+            try { this._db.exec(sql); } catch { /* column/index already exists */ }
+        }
+
+        // V14: add kanban_meta table for parser versioning and backfill tracking.
+        for (const sql of MIGRATION_V14_SQL) {
+            try { this._db.exec(sql); } catch { /* table already exists */ }
         }
     }
 
@@ -2094,6 +2227,7 @@ FROM plans
                     complexity: String(row.complexity || "Unknown"),
                     tags: String(row.tags || ""),
                     dependencies: String(row.dependencies || ""),
+                    repoScope: String(row.repo_scope || ""),
                     workspaceId: String(row.workspace_id || ""),
                     createdAt: String(row.created_at || ""),
                     updatedAt: String(row.updated_at || ""),
