@@ -302,7 +302,8 @@ export class LocalFolderResearchAdapter implements ResearchSourceAdapter {
 export class ResearchImportService {
     private _adapters = new Map<string, ResearchSourceAdapter>();
 
-    registerAdapter(adapter: ResearchSourceAdapter): void {
+    registerAdapter(adapter: ResearchSourceAdapter | undefined): void {
+        if (!adapter) { return; }
         this._adapters.set(adapter.sourceId, adapter);
     }
 

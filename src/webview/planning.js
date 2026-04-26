@@ -433,23 +433,20 @@
                 configRow.appendChild(browseBtn);
                 treePane.appendChild(configRow);
 
+                // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
+                const docList = document.createElement('div');
+                docList.className = 'source-doc-list';
+                docList.dataset.sourceId = sourceId;
+                treePane.appendChild(docList);
+
                 // Set path input value from folderPath attached by backend
                 if (rootEntry.folderPath) {
                     pathInput.value = rootEntry.folderPath;
                 }
 
                 if (!nodes || nodes.length === 0) {
-                    const noConfigMsg = document.createElement('div');
-                    noConfigMsg.className = 'empty-state';
-                    noConfigMsg.style.cssText = 'padding: 12px; font-size: 12px; color: var(--text-secondary);';
-                    noConfigMsg.textContent = 'Folder not configured. Click Browse to select a folder.';
-                    treePane.appendChild(noConfigMsg);
+                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
                 } else {
-                    const docList = document.createElement('div');
-                    docList.className = 'source-doc-list';
-                    docList.dataset.sourceId = sourceId;
-                    treePane.appendChild(docList);
-
                     const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
                     const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
 

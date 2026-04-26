@@ -53,18 +53,29 @@ export class PlanningPanelProvider {
         const notionService = this._adapterFactories.getNotionService(workspaceRoot);
         const notionBrowseService = this._adapterFactories.getNotionBrowseService(workspaceRoot);
 
-        this._researchImportService.registerAdapter(
-            new NotionResearchAdapter(notionService, notionBrowseService)
-        );
-        this._researchImportService.registerAdapter(
-            new LocalFolderResearchAdapter(this._adapterFactories.getLocalFolderService(workspaceRoot))
-        );
-        this._researchImportService.registerAdapter(
-            this._adapterFactories.getLinearDocsAdapter(workspaceRoot)
-        );
-        this._researchImportService.registerAdapter(
-            this._adapterFactories.getClickUpDocsAdapter(workspaceRoot)
-        );
+        if (notionService && notionBrowseService) {
+            this._researchImportService.registerAdapter(
+                new NotionResearchAdapter(notionService, notionBrowseService)
+            );
+        }
+
+        const localFolderService = this._adapterFactories.getLocalFolderService(workspaceRoot);
+        if (localFolderService) {
+            this._researchImportService.registerAdapter(
+                new LocalFolderResearchAdapter(localFolderService)
+            );
+        }
+
+        const linearAdapter = this._adapterFactories.getLinearDocsAdapter(workspaceRoot);
+        if (linearAdapter) {
+            this._researchImportService.registerAdapter(linearAdapter);
+        }
+
+        const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter(workspaceRoot);
+        if (clickUpAdapter) {
+            this._researchImportService.registerAdapter(clickUpAdapter);
+        }
+
         this._registeredRoot = workspaceRoot;
     }
 
