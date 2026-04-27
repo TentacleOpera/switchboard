@@ -23,8 +23,10 @@ import type { AutobanConfigState } from './autobanState';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { ClickUpAutomationService } from './ClickUpAutomationService';
 import { ClickUpSyncService, type ClickUpConfig, type ClickUpSyncResult } from './ClickUpSyncService';
+import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { LinearAutomationService } from './LinearAutomationService';
 import { LinearSyncService, type LinearConfig } from './LinearSyncService';
+import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { NotionFetchService } from './NotionFetchService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
 import { ContinuousSyncService } from './ContinuousSyncService';
@@ -114,6 +116,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _fsSessionWatcher?: fs.FSWatcher;
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
+    private _metadataDebounceTimers = new Map<string, NodeJS.Timeout>();
     private _isRefreshing: boolean = false;
     private _refreshPending: boolean = false;
     private _cliTriggersEnabled: boolean;
@@ -126,6 +129,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _linearServices = new Map<string, LinearSyncService>();
     private _linearAutomationServices = new Map<string, LinearAutomationService>();
     private _notionServices = new Map<string, NotionFetchService>();
+    private _cacheServices = new Map<string, import('./PlanningPanelCacheService').PlanningPanelCacheService>();
     private readonly _integrationAutoPull = new IntegrationAutoPullService();
     private _clickUpSyncWarnings = new Map<string, string>();
     private readonly _continuousSync: ContinuousSyncService;
@@ -148,6 +152,26 @@ export class KanbanProvider implements vscode.Disposable {
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
+    }
+
+    private _getCacheService(workspaceRoot: string): import('./PlanningPanelCacheService').PlanningPanelCacheService {
+        const resolved = path.resolve(workspaceRoot);
+        const existing = this._cacheServices.get(resolved);
+        if (existing) { return existing; }
+        const { PlanningPanelCacheService } = require('./PlanningPanelCacheService');
+        const service = new PlanningPanelCacheService(resolved);
+        this._cacheServices.set(resolved, service);
+        return service;
+    }
+
+    public _getClickUpDocsAdapter(workspaceRoot: string): ClickUpDocsAdapter {
+        const clickUpService = this._getClickUpService(workspaceRoot);
+        return new ClickUpDocsAdapter(workspaceRoot, clickUpService, this._getCacheService(workspaceRoot));
+    }
+
+    public _getLinearDocsAdapter(workspaceRoot: string): LinearDocsAdapter {
+        const linearService = this._getLinearService(workspaceRoot);
+        return new LinearDocsAdapter(workspaceRoot, linearService);
     }
 
     private async _getLiveSyncConfig(workspaceRoot: string): Promise<{
@@ -464,6 +488,11 @@ export class KanbanProvider implements vscode.Disposable {
     dispose() {
         this._panel?.dispose();
         if (this._refreshDebounceTimer) clearTimeout(this._refreshDebounceTimer);
+        // Clean up metadata debounce timers
+        for (const timer of this._metadataDebounceTimers.values()) {
+            clearTimeout(timer);
+        }
+        this._metadataDebounceTimers.clear();
         this._sessionWatcher?.dispose();
         this._stateWatcher?.dispose();
         this._planContentWatcher?.dispose();
@@ -559,19 +588,25 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._planContentWatcher.onDidChange(async (uri) => {
             try {
-                const clickUp = this._getClickUpService(workspaceRoot);
-                const clickUpConfig = await clickUp.loadConfig();
-                if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
-                    const db = this._getKanbanDb(workspaceRoot);
-                    const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-                    if (workspaceId) {
-                        // Try absolute path first, then relative (DB may store either form)
-                        let plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
-                        if (!plan) {
-                            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-                            plan = await db.getPlanByPlanFile(relativePath, workspaceId);
-                        }
-                        if (plan) {
+                const db = this._getKanbanDb(workspaceRoot);
+                const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+
+                // Hoist plan lookup above ClickUp guard so both paths can use it.
+                let plan: any = null;
+                if (workspaceId) {
+                    plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
+                    if (!plan) {
+                        const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+                        plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+                    }
+                }
+
+                // ClickUp real-time sync (unchanged logic, reuses hoisted plan)
+                try {
+                    const clickUp = this._getClickUpService(workspaceRoot);
+                    const clickUpConfig = await clickUp.loadConfig();
+                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
+                        if (workspaceId && plan) {
                             clickUp.debouncedSync(plan.sessionId, {
                                 planId: plan.planId,
                                 sessionId: plan.sessionId,
@@ -588,10 +623,95 @@ export class KanbanProvider implements vscode.Disposable {
                             });
                         }
                     }
-                }
-            } catch { /* ClickUp sync failure must never block operations */ }
+                } catch { /* ClickUp sync failure must never block operations */ }
 
-            // NEW: Emit for continuous sync service
+                // Metadata update path: per-file debounced extraction + DB write + board refresh.
+                // Reads the file ONCE and extracts complexity, tags, and dependencies from the
+                // in-memory content — avoids the triple file-read that calling
+                // getComplexityFromPlan/getTagsFromPlan/getDependenciesFromPlan would cause.
+                if (plan) {
+                    const filePath = uri.fsPath;
+                    const existingTimer = this._metadataDebounceTimers.get(filePath);
+                    if (existingTimer) { clearTimeout(existingTimer); }
+
+                    const timer = setTimeout(async () => {
+                        try {
+                            this._metadataDebounceTimers.delete(filePath);
+                            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
+
+                            // Extract complexity (same logic as getComplexityFromPlan, but from in-memory content)
+                            let newComplexity: string | null = null;
+                            const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
+                            if (overrideMatch) {
+                                const val = overrideMatch[1];
+                                if (val.toLowerCase() === 'unknown') {
+                                    // fall through to metadata section
+                                } else {
+                                    const num = parseInt(val, 10);
+                                    if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
+                                    else {
+                                        const legacy = legacyToScore(val);
+                                        if (legacy > 0) newComplexity = String(legacy);
+                                    }
+                                }
+                            }
+                            if (!newComplexity) {
+                                const metadataMatch = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
+                                if (metadataMatch) {
+                                    const val = metadataMatch[1];
+                                    const num = parseInt(val, 10);
+                                    if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
+                                    else {
+                                        const legacy = legacyToScore(val);
+                                        if (legacy > 0) newComplexity = String(legacy);
+                                    }
+                                }
+                            }
+
+                            // Extract tags (same regex as getTagsFromPlan; sanitizeTags is a local function in this class)
+                            let newTags: string | null = null;
+                            const tagsMatch = content.match(/\*\*Tags:\*\*\s*(.+)/i);
+                            if (tagsMatch) {
+                                newTags = sanitizeTags(tagsMatch[1]);
+                            }
+
+                            // Extract dependencies (same logic as getDependenciesFromPlan)
+                            let newDeps: string | null = null;
+                            const sectionMatch = content.match(/^#{1,4}\s+Dependencies\b[^\n]*$/im);
+                            if (sectionMatch && sectionMatch.index !== undefined) {
+                                const afterHeading = content.slice(sectionMatch.index + sectionMatch[0].length);
+                                const nextHeadingMatch = afterHeading.match(/^\s*#{1,4}\s+/m);
+                                const sectionBody = nextHeadingMatch
+                                    ? afterHeading.slice(0, nextHeadingMatch.index)
+                                    : afterHeading;
+                                const deps = sectionBody
+                                    .split(/\r?\n/)
+                                    .map(line => line.trim())
+                                    .map(line => line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+                                    .filter(line => line.length > 0)
+                                    .filter(line => !/^(none|n\/a|na|unknown)$/i.test(line));
+                                newDeps = [...new Set(deps)].join(', ');
+                            }
+
+                            // Write to DB only if we extracted something
+                            const sessionId = plan.sessionId;
+                            const updateDb = this._getKanbanDb(workspaceRoot);
+                            if (newComplexity) { await updateDb.updateComplexity(sessionId, newComplexity); }
+                            if (newTags !== null) { await updateDb.updateTags(sessionId, newTags); }
+                            if (newDeps !== null) { await updateDb.updateDependencies(sessionId, newDeps); }
+
+                            // Push updated DB state to the board (~100ms debounce via _scheduleBoardRefresh)
+                            this._scheduleBoardRefresh(workspaceRoot);
+                        } catch (err) {
+                            console.warn('[KanbanProvider] Metadata update failed for', uri.fsPath, err);
+                        }
+                    }, 300);
+
+                    this._metadataDebounceTimers.set(filePath, timer);
+                }
+            } catch { /* File watcher failures must never block operations */ }
+
+            // Emit for continuous sync service (unchanged)
             this._planFileChangeEmitter.fire(uri);
         });
     }

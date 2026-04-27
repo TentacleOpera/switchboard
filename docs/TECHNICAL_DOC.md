@@ -590,7 +590,7 @@ All prompt-generation paths route through `buildKanbanBatchPrompt()` to ensure i
 
 ### Prompt structure by role
 
-- **Planner**: improve/enhance instructions referencing `.agent/rules/how_to_plan.md`, with plan file list
+- **Planner**: improve/enhance instructions referencing `.agent/workflows/improve-plan.md`, with plan file list
 - **Lead Coder**: execution payload with focus directive, batch execution rules, optional inline adversarial challenge block, plan file list
 - **Coder**: same as lead but with optional `low-complexity` instruction hint and accuracy mode workflow reference (`.agent/workflows/accuracy.md`)
 - **Reviewer**: reviewer-executor payload with mode directive (no auxiliary workflow), plan file list

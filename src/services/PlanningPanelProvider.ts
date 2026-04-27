@@ -48,23 +48,37 @@ export class PlanningPanelProvider {
         // Re-register when workspace root changes; adapters are workspace-scoped.
         if (this._registeredRoot === workspaceRoot) { return; }
 
-        const notionService = this._adapterFactories.getNotionService(workspaceRoot);
-        const notionBrowseService = this._adapterFactories.getNotionBrowseService(workspaceRoot);
-
-        if (notionService && notionBrowseService) {
-            this._researchImportService.registerAdapter(
-                new NotionResearchAdapter(notionService, notionBrowseService)
-            );
+        // Notion
+        try {
+            const notionService = this._adapterFactories.getNotionService?.(workspaceRoot);
+            const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
+            if (notionService && notionBrowseService) {
+                this._researchImportService.registerAdapter(
+                    new NotionResearchAdapter(notionService, notionBrowseService)
+                );
+            }
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to register Notion adapter:', err);
         }
 
-        const linearAdapter = this._adapterFactories.getLinearDocsAdapter(workspaceRoot);
-        if (linearAdapter) {
-            this._researchImportService.registerAdapter(linearAdapter);
+        // Linear
+        try {
+            const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
+            if (linearAdapter) {
+                this._researchImportService.registerAdapter(linearAdapter);
+            }
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to register Linear adapter:', err);
         }
 
-        const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter(workspaceRoot);
-        if (clickUpAdapter) {
-            this._researchImportService.registerAdapter(clickUpAdapter);
+        // ClickUp
+        try {
+            const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
+            if (clickUpAdapter) {
+                this._researchImportService.registerAdapter(clickUpAdapter);
+            }
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to register ClickUp adapter:', err);
         }
 
         this._registeredRoot = workspaceRoot;
@@ -212,14 +226,11 @@ export class PlanningPanelProvider {
             return;
         }
 
-        try {
-            this._ensureAdaptersRegistered(workspaceRoot);
-        } catch (err) {
-            console.error('[PlanningPanel] Adapter registration error:', err);
-        }
+        this._ensureAdaptersRegistered(workspaceRoot);
 
         switch (msg.type) {
             case 'fetchRoots': {
+                console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
                 await this._handleFetchRoots(workspaceRoot);
                 break;
             }
@@ -448,6 +459,15 @@ export class PlanningPanelProvider {
                 await this._handleDisableDesignDoc();
                 break;
             }
+            case 'setActivePlanningContext': {
+                await this._handleSetActivePlanningContext(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
+                break;
+            }
+            case 'resolveDuplicate': {
+                const { docName, sourceId, docId, action } = msg;
+                await this._handleResolveDuplicate(workspaceRoot, docName, sourceId, docId, action);
+                break;
+            }
         }
     }
 
@@ -467,6 +487,131 @@ export class PlanningPanelProvider {
                 enabled: true,
                 docName: this._getDesignDocName(),
                 error: String(err)
+            });
+        }
+    }
+
+    private async _handleSetActivePlanningContext(
+        workspaceRoot: string,
+        sourceId: string,
+        docId: string,
+        docName: string
+    ): Promise<void> {
+        try {
+            let docPath: string | null = null;
+
+            if (sourceId === 'local-folder') {
+                // For local-folder: resolve the file path directly
+                const folderPath = vscode.workspace.getConfiguration('switchboard').get<string>('planning.localFolderPath');
+                if (folderPath) {
+                    docPath = path.join(folderPath, docId);
+                    try {
+                        await fs.promises.access(docPath, fs.constants.R_OK);
+                    } catch {
+                        docPath = null;
+                    }
+                }
+            } else {
+                // For online sources: resolve through the import registry
+                if (this._cacheService) {
+                    const rawSlug = (docName || sourceId)
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .slice(0, 60) || sourceId;
+                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug);
+                }
+            }
+
+            if (!docPath) {
+                this._panel?.webview.postMessage({ type: 'activeContextSet', success: false, error: 'Document not found' });
+                return;
+            }
+
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocLink', docPath, vscode.ConfigurationTarget.Workspace
+            );
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
+            );
+
+            this._panel?.webview.postMessage({ type: 'activeContextSet', success: true, message: 'Set as active planning context' });
+        } catch (err) {
+            this._panel?.webview.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+        }
+    }
+
+    private async _handleResolveDuplicate(
+        workspaceRoot: string,
+        docName: string,
+        sourceId: string,
+        docId: string,
+        action: 'skip' | 'replace' | 'rename'
+    ): Promise<void> {
+        try {
+            if (action === 'skip') {
+                this._panel?.webview.postMessage({
+                    type: 'duplicateResolved', success: true, message: 'Import skipped (duplicate)'
+                });
+                return;
+            }
+
+            if (action === 'replace') {
+                // Remove existing import entry and file before re-importing
+                if (this._cacheService) {
+                    const existing = await this._cacheService.getImportByDocName(docName);
+                    if (existing) {
+                        await this._cacheService.removeImport(existing.slugPrefix);
+                        // Delete the old file from .switchboard/docs/
+                        try {
+                            const resolvedPath = await this._cacheService.resolveImportedDocPath(existing.slugPrefix);
+                            if (resolvedPath) {
+                                await fs.promises.unlink(resolvedPath);
+                            }
+                        } catch { /* file may not exist */ }
+                    }
+                }
+                // Re-import: the old registry entry is gone, so duplicate check won't trigger
+                await this._handleImportFullDoc(workspaceRoot, sourceId, docId, docName);
+                this._panel?.webview.postMessage({
+                    type: 'duplicateResolved', success: true, message: 'Replaced existing document'
+                });
+                return;
+            }
+
+            if (action === 'rename') {
+                // Generate a unique name by appending a counter
+                let newName = docName;
+                let counter = 2;
+                if (this._cacheService) {
+                    while (true) {
+                        const check = await this._cacheService.checkForDuplicate(newName, sourceId, docId);
+                        if (!check.isDuplicate) break;
+                        newName = `${docName} (${counter})`;
+                        counter++;
+                        if (counter > 100) {
+                            this._panel?.webview.postMessage({
+                                type: 'duplicateResolved', success: false,
+                                error: 'Could not generate a unique name (too many duplicates)'
+                            });
+                            return;
+                        }
+                    }
+                }
+                // Import with the new name; duplicate check passes because name is unique
+                await this._handleImportFullDoc(workspaceRoot, sourceId, docId, newName);
+                this._panel?.webview.postMessage({
+                    type: 'duplicateResolved', success: true, message: `Imported as "${newName}"`
+                });
+                return;
+            }
+
+            this._panel?.webview.postMessage({
+                type: 'duplicateResolved', success: false, error: 'Invalid action'
+            });
+        } catch (err) {
+            this._panel?.webview.postMessage({
+                type: 'duplicateResolved', success: false, error: String(err)
             });
         }
     }
@@ -507,7 +652,9 @@ export class PlanningPanelProvider {
         try {
             const localFolderService = this._getLocalFolderService(workspaceRoot);
             const files = await localFolderService.listFiles();
-            this._panel?.webview.postMessage({
+            if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send localDocsReady'); }
+            console.log('[PlanningPanel] Sending localDocsReady, nodes count:', files.length);
+            this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPath: localFolderService.getFolderPath(),
@@ -531,7 +678,9 @@ export class PlanningPanelProvider {
             .filter(sourceId => sourceId !== 'local-folder')
             .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
 
-        this._panel?.webview.postMessage({
+        if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
+        console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length);
+        this._panel.webview.postMessage({
             type: 'onlineDocsReady',
             roots,
             enabledSources: {
@@ -941,6 +1090,24 @@ export class PlanningPanelProvider {
 
         this._importInProgress = true;
         try {
+            // Duplicate check for online sources (skip for local-folder)
+            if (sourceId !== 'local-folder' && this._cacheService) {
+                const duplicateCheck = await this._cacheService.checkForDuplicate(docName, sourceId, safeDocId);
+                if (duplicateCheck.isDuplicate) {
+                    this._panel?.webview.postMessage({
+                        type: 'duplicateDetected',
+                        docName,
+                        sourceId,
+                        docId: safeDocId,
+                        matchType: duplicateCheck.matchType,
+                        existingDoc: duplicateCheck.existingDoc
+                    });
+                    // Release the import lock so resolveDuplicate can re-enter
+                    this._importInProgress = false;
+                    return;
+                }
+            }
+
             // Handle local-folder directly without adapter
             if (sourceId === 'local-folder') {
                 const localFolderService = this._getLocalFolderService(workspaceRoot);

@@ -888,6 +888,36 @@
             border-color: var(--border-color);
             color: var(--text-secondary);
         }
+
+        /* Duplicate Modal */
+        .duplicate-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .duplicate-modal .modal-content {
+            background: var(--panel-bg);
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .duplicate-modal .modal-content h3 { margin: 0 0 12px 0; color: var(--text-primary); }
+        .duplicate-modal .modal-content p { margin: 0 0 8px 0; color: var(--text-secondary); }
+        .duplicate-modal .modal-actions { display: flex; gap: 12px; margin-top: 16px; }
+        .duplicate-modal button {
+            flex: 1; padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border-radius: 4px; cursor: pointer; font-size: 13px;
+        }
+        .duplicate-modal button:hover { background: var(--accent-teal-dim); }
+        .duplicate-modal .modal-btn-replace { border-color: var(--accent-teal); color: var(--accent-teal); }
     </style>
 </head>
 <body>
@@ -908,7 +938,8 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-local">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-local">
-                <button id="btn-import-full-doc" class="strip-btn" disabled>Import</button>
+                <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
+                <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-append-to-prompts" class="strip-btn" disabled>Import and set as active planning context</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <span id="status"></span>

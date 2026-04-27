@@ -7592,7 +7592,7 @@ What would you like to find?`;
         const desiredMirrors = new Set<string>();
         const markdownFiles = await this._listMarkdownFilesRecursively(resolvedPlanFolder);
         for (const filePath of markdownFiles) {
-            if (!(await this._isLikelyPlanFile(filePath))) {
+            if (!(await this._isLikelyPlanFile(filePath, { isAdditionalFolder: true }))) {
                 continue;
             }
 
@@ -9444,7 +9444,10 @@ What would you like to find?`;
         console.log(`[TaskViewerProvider] Brain plan blacklist seeded: ${entries.size} entr${entries.size === 1 ? 'y' : 'ies'}`);
     }
 
-    private async _isLikelyPlanFile(filePath: string): Promise<boolean> {
+    private async _isLikelyPlanFile(
+        filePath: string,
+        options?: { isAdditionalFolder?: boolean }
+    ): Promise<boolean> {
         const MAX_HEADER_BYTES = 16 * 1024;
         const MAX_HEADER_LINES = 80;
         let handle: fs.promises.FileHandle | undefined;
@@ -9457,6 +9460,13 @@ What would you like to find?`;
             const firstLines = snippet.split(/\r?\n/).slice(0, MAX_HEADER_LINES).join('\n');
             const hasH1 = /^#\s+.+/m.test(firstLines);
             if (!hasH1) return false;
+
+            // Relaxed validation for additional plan folder: any .md with H1 is accepted
+            if (options?.isAdditionalFolder) {
+                return true;
+            }
+
+            // Strict validation for default plans folder
             const baseFilename = path.basename(this._getBaseBrainPath(filePath)).toLowerCase();
             if (baseFilename === 'implementation_plan.md') {
                 return true;
@@ -9466,7 +9476,10 @@ What would you like to find?`;
             ) || [];
             const hasPlanMetadata = /\*\*(?:Complexity|Tags):\*\*/i.test(firstLines);
             return planSections.length >= 2 || (planSections.length >= 1 && hasPlanMetadata);
-        } catch {
+        } catch (err) {
+            if (options?.isAdditionalFolder) {
+                console.warn(`[TaskViewerProvider] Could not read additional-folder file for plan validation: ${filePath}`, err instanceof Error ? err.message : err);
+            }
             return false;
         } finally {
             if (handle) await handle.close();
@@ -10981,11 +10994,6 @@ What would you like to find?`;
             await vscode.env.clipboard.writeText(textToCopy);
             this._view?.webview.postMessage({ type: 'copyPlanLinkResult', success: true });
 
-            vscode.window.showInformationMessage('📋 Prompt copied to clipboard', 'Open Agent Chat').then(selection => {
-                if (selection === 'Open Agent Chat') {
-                    vscode.commands.executeCommand('workbench.action.chat.open');
-                }
-            });
             const isTesterEligible = effectiveColumn === 'CODE REVIEWED' && role === 'tester'
                 && await this._isAcceptanceTesterActive(resolvedWorkspaceRoot);
             const workflowName = effectiveColumn === 'CREATED'

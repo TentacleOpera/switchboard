@@ -42,7 +42,12 @@ Use this for:
 
 2. **Dependency & Conflict Check**
    - MANDATORY: Read the code of any service, utility, or module being modified or worked around.
-   - MANDATORY: Scan `.switchboard/plans/` or the current Kanban state to identify if this plan conflicts with, or relies on, other pending work.
+   - **Query active Kanban plans for dependencies (DO NOT scan the plans folder directly):**
+     - Call the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans grouped by Kanban column.
+     - Inspect plans in **New** and **Planned** columns for potential dependencies and conflicts.
+     - **Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns** — these are already implemented (or in final review) and irrelevant for dependency/conflict analysis.
+     - Document any cross-plan conflicts with the active plan set only.
+     - **If the database query fails:** Do not fall back to unfiltered file scanning. Instead, note the uncertainty in the review findings.
    - Do not assume black-box behavior. Verify actual implementation before review.
    - Call `complete_workflow_phase(phase: 2, workflow: "challenge", artifacts: [{ path: ".switchboard", description: "Dependencies verified" }])`.
 

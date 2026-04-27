@@ -27,7 +27,7 @@
 	"switchboard.jules.autoSync": false,
 	"switchboard.pairProgramming.aggressive": false,
 	"switchboard.reviewer.advancedMode": false,
-	"switchboard.planner.designDocEnabled": true,
+	"switchboard.planner.designDocEnabled": false,
 	"switchboard.workspace.ignoreStrategy": "targetedGitignore",
 	"switchboard.workspace.ignoreRules": [],
 	"switchboard.ollama.intern.enabled": true,
@@ -36,5 +36,5 @@
 	"switchboard.ollama.intern.baseUrl": "https://ollama.com/api",
 	"switchboard.integrations.preferredProvider": "clickup",
 	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
-	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/research-aggregate-cache.md"
+	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/docs/technical_documentation_gaps_c3c1aa74.md"
 }

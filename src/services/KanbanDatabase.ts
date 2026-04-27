@@ -204,7 +204,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
 
 const runtimeRequire = createRequire(__filename);
 
-const VALID_KANBAN_COLUMNS = new Set([
+export const VALID_KANBAN_COLUMNS = new Set([
     'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'CONTEXT GATHERER', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts

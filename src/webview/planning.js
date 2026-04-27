@@ -148,8 +148,6 @@
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
     const btnAppendToPrompts = document.getElementById('btn-append-to-prompts');
     const btnAppendToPromptsOnline = document.getElementById('btn-append-to-prompts-online');
-    const btnImportAndCopyLink = document.getElementById('btn-import-and-copy-link');
-    const btnImportAndCopyLinkOnline = document.getElementById('btn-import-and-copy-link-online');
     const btnExportToSource = document.getElementById('btn-export-to-source');
     const statusEl = document.getElementById('status');
     const statusElOnline = document.getElementById('status-online');
@@ -314,7 +312,6 @@
         state.previewRequestId++;
 
         btnAppendToPrompts.disabled = true;
-        btnImportAndCopyLink.disabled = true;
         
         if (sourceId === 'local-folder' && btnExportToSource) {
             const importedInfo = state.importedDocs.get(docName);
@@ -558,6 +555,7 @@
     }
 
     function handleLocalDocsReady(msg) {
+        console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
         renderLocalDocs({
             sourceId: msg.sourceId || 'local-folder',
             nodes: msg.nodes || [],
@@ -574,17 +572,6 @@
         });
     }
 
-    function handleRootsReady(msg) {
-        const roots = msg.roots || [];
-        const localRoot = roots.find(({ sourceId }) => sourceId === 'local-folder');
-        if (localRoot) {
-            renderLocalDocs(localRoot);
-        }
-        renderOnlineDocs(
-            roots.filter(({ sourceId }) => ONLINE_SOURCES.includes(sourceId)),
-            msg.enabledSources
-        );
-    }
 
     function handleChildrenReady(msg) {
         const { sourceId, parentId, nodes } = msg;
@@ -618,14 +605,30 @@
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
         const targetStatus = isOnline ? statusElOnline : statusEl;
         const targetBtnAppend = isOnline ? btnAppendToPromptsOnline : btnAppendToPrompts;
-        const targetBtnImport = isOnline ? btnImportAndCopyLinkOnline : btnImportAndCopyLink;
         const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
-        if (btnImportFullDoc) {
-            btnImportFullDoc.style.display = '';
-            btnImportFullDoc.disabled = false;
-            btnImportFullDoc.dataset.docId = state.activeDocId || '';
+        const btnSetActiveLocal = document.getElementById('btn-set-active-context-local');
+
+        if (sourceId === 'local-folder') {
+            if (btnImportFullDoc) {
+                btnImportFullDoc.style.display = 'none';
+                btnImportFullDoc.disabled = true;
+            }
+            if (btnSetActiveLocal) {
+                btnSetActiveLocal.style.display = '';
+                btnSetActiveLocal.disabled = false;
+            }
+        } else {
+            if (btnImportFullDoc) {
+                btnImportFullDoc.style.display = '';
+                btnImportFullDoc.disabled = false;
+                btnImportFullDoc.dataset.docId = state.activeDocId || '';
+            }
+            if (btnSetActiveLocal) {
+                btnSetActiveLocal.style.display = 'none';
+                btnSetActiveLocal.disabled = true;
+            }
         }
 
         if (pages && pages.length > 0) {
@@ -693,14 +696,12 @@
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
         const targetStatus = isOnline ? statusElOnline : statusEl;
         const targetBtnAppend = isOnline ? btnAppendToPromptsOnline : btnAppendToPrompts;
-        const targetBtnImport = isOnline ? btnImportAndCopyLinkOnline : btnImportAndCopyLink;
         const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
 
         targetPreview.innerHTML = `<div class="error-state">Error: ${error}</div>`;
         targetStatus.textContent = 'Error loading preview';
         
         targetBtnAppend.disabled = true;
-        targetBtnImport.disabled = true;
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
         if (btnImportFullDoc) {
@@ -717,16 +718,12 @@
             vscode.postMessage({ type: 'fetchImportedDocs' });
             
             btnAppendToPrompts.disabled = false;
-            btnImportAndCopyLink.disabled = false;
             btnAppendToPromptsOnline.disabled = false;
-            btnImportAndCopyLinkOnline.disabled = false;
         } else if (msg.error) {
             statusEl.textContent = `Error: ${msg.error}`;
             statusElOnline.textContent = `Error: ${msg.error}`;
             btnAppendToPrompts.disabled = false;
-            btnImportAndCopyLink.disabled = false;
             btnAppendToPromptsOnline.disabled = false;
-            btnImportAndCopyLinkOnline.disabled = false;
         }
     }
 
@@ -1117,13 +1114,27 @@
     }
 
     // Message handler
+    function showDuplicateModal(duplicateInfo) {
+        const existingModal = document.querySelector('.duplicate-modal');
+        if (existingModal) existingModal.remove();
+        const sourceDisplayName = { clickup: 'ClickUp', notion: 'Notion', linear: 'Linear Docs', 'local-folder': 'Local Folder' }[duplicateInfo.existingDoc?.sourceId] || duplicateInfo.existingDoc?.sourceId || 'another source';
+        const modal = document.createElement('div');
+        modal.className = 'duplicate-modal';
+        modal.innerHTML = `<div class="modal-content"><h3>Duplicate Document Detected</h3><p>"${duplicateInfo.docName}" already exists from ${sourceDisplayName}.</p><p style="font-size: 12px; color: var(--text-secondary);">Match type: ${duplicateInfo.matchType?.replace(/_/g, ' ') || 'unknown'}</p><div class="modal-actions"><button class="modal-btn-skip" data-action="skip">Skip</button><button class="modal-btn-replace" data-action="replace">Replace</button><button class="modal-btn-rename" data-action="rename">Import as Copy</button></div></div>`;
+        modal.querySelectorAll('button').forEach(btn => {
+            btn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'resolveDuplicate', docName: duplicateInfo.docName, sourceId: duplicateInfo.sourceId, docId: duplicateInfo.docId, action: btn.dataset.action });
+                modal.remove();
+            });
+        });
+        document.body.appendChild(modal);
+    }
+
     window.addEventListener('message', (event) => {
         const msg = event.data;
+        console.log('[PlanningPanel Webview] Received message:', msg.type, msg);
 
         switch (msg.type) {
-            case 'rootsReady':
-                handleRootsReady(msg);
-                break;
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
@@ -1155,9 +1166,7 @@
                     statusEl.textContent = `Error: ${msg.error}`;
                     statusElOnline.textContent = `Error: ${msg.error}`;
                 }
-                btnImportAndCopyLink.disabled = false;
                 btnAppendToPrompts.disabled = false;
-                btnImportAndCopyLinkOnline.disabled = false;
                 btnAppendToPromptsOnline.disabled = false;
                 break;
             case 'importFullDocResult':
@@ -1218,6 +1227,26 @@
             case 'activeDesignDocUpdated':
                 updateActiveDocBanner(msg);
                 break;
+            case 'duplicateDetected':
+                showDuplicateModal(msg);
+                break;
+            case 'duplicateResolved':
+                if (msg.success) {
+                    statusElOnline.textContent = msg.message || 'Duplicate resolved';
+                    vscode.postMessage({ type: 'fetchImportedDocs' });
+                } else {
+                    statusElOnline.textContent = `Error: ${msg.error}`;
+                }
+                break;
+            case 'activeContextSet':
+                if (msg.success) {
+                    statusEl.textContent = msg.message || 'Set as active planning context';
+                } else {
+                    statusEl.textContent = `Error: ${msg.error || 'Failed to set active context'}`;
+                }
+                const btnSAL = document.getElementById('btn-set-active-context-local');
+                if (btnSAL) btnSAL.disabled = false;
+                break;
         }
     });
 
@@ -1274,24 +1303,6 @@
         vscode.postMessage(payload);
     });
 
-    btnImportAndCopyLink.addEventListener('click', () => {
-        if (!state.activeSource || !state.activeDocId) return;
-
-        btnImportAndCopyLink.disabled = true;
-        statusEl.textContent = 'Importing and copying link...';
-
-        const payload = {
-            type: 'importAndCopyLink',
-            sourceId: state.activeSource,
-            docId: state.activeDocId,
-            docName: state.activeDocName || state.activeDocId
-        };
-        if (state.activeDocContent) {
-            payload.content = state.activeDocContent;
-        }
-        vscode.postMessage(payload);
-    });
-
     if (btnAppendToPromptsOnline) {
         btnAppendToPromptsOnline.addEventListener('click', () => {
             if (!state.activeSource || !state.activeDocId) return;
@@ -1301,26 +1312,6 @@
 
             const payload = {
                 type: 'appendToPlannerPrompt',
-                sourceId: state.activeSource,
-                docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId
-            };
-            if (state.activeDocContent) {
-                payload.content = state.activeDocContent;
-            }
-            vscode.postMessage(payload);
-        });
-    }
-
-    if (btnImportAndCopyLinkOnline) {
-        btnImportAndCopyLinkOnline.addEventListener('click', () => {
-            if (!state.activeSource || !state.activeDocId) return;
-
-            btnImportAndCopyLinkOnline.disabled = true;
-            statusElOnline.textContent = 'Importing and copying link...';
-
-            const payload = {
-                type: 'importAndCopyLink',
                 sourceId: state.activeSource,
                 docId: state.activeDocId,
                 docName: state.activeDocName || state.activeDocId
@@ -1364,6 +1355,21 @@
                 sourceId: state.activeSource,
                 docId: docId,
                 docName: state.activeDocName || docId
+            });
+        });
+    }
+
+    const btnSetActiveLocal = document.getElementById('btn-set-active-context-local');
+    if (btnSetActiveLocal) {
+        btnSetActiveLocal.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            btnSetActiveLocal.disabled = true;
+            statusEl.textContent = 'Setting as active planning context...';
+            vscode.postMessage({
+                type: 'setActivePlanningContext',
+                sourceId: state.activeSource,
+                docId: state.activeDocId,
+                docName: state.activeDocName || state.activeDocId
             });
         });
     }

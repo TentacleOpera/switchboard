@@ -569,6 +569,21 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._triggerPlanningPanelSync(workspaceRoot, 'sync-selected');
                     break;
                 }
+                case 'getPlanningSources': {
+                    const folderUri = this._getWorkspaceFolderUri();
+                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
+                    const enabledSources = config.get<any>('planning.enabledSources', {
+                        clickup: true,
+                        linear: true,
+                        notion: true,
+                        'local-folder': true
+                    });
+                    this._panel?.webview.postMessage({
+                        type: 'planningSources',
+                        sources: enabledSources
+                    });
+                    break;
+                }
                 default:
                     break;
             }

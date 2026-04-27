@@ -76,11 +76,9 @@ sess_1776555843399 — Notion Page Hierarchy Filtering for Research Modal
 ```
 
 ## Adversarial Synthesis
-### Grumpy Critique
-[Simulate the Grumpy Engineer: Attack the plan's weaknesses, missing error handling, and naive assumptions.]
+2-3 sentence summary of key risks identified and how they are mitigated in the implementation below.
 
-### Balanced Response
-[Simulate the Lead Developer: Address Grumpy's concerns and explain how the implementation steps below have been adjusted to prevent them.]
+> **Process Note:** Full Grumpy and Balanced critiques are produced during planning and included in the chat response for user review. Only this Risk Summary is persisted to the plan file to optimize token usage.
 
 ## Proposed Changes
 > [!IMPORTANT]

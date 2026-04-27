@@ -359,6 +359,68 @@ cachedAt: ${new Date().toISOString()}
     }
 
     /**
+     * Check if a document would be a duplicate of an existing import.
+     * Scans the registry for name or ID collisions across sources.
+     * Same source + same docId is treated as idempotent (not a duplicate).
+     */
+    public async checkForDuplicate(
+        docName: string,
+        sourceId: string,
+        docId?: string
+    ): Promise<{
+        isDuplicate: boolean;
+        matchType?: 'exact_name' | 'case_insensitive_name' | 'same_doc_id';
+        existingDoc?: ImportRegistryEntry;
+    }> {
+        const registry = await this._readRegistry();
+
+        // Check for docName match (case-insensitive)
+        for (const entry of Object.values(registry)) {
+            if (entry.docName.toLowerCase() === docName.toLowerCase()) {
+                // Same source + same docId = idempotent re-import, not a duplicate
+                if (entry.sourceId === sourceId && entry.docId === docId) {
+                    continue;
+                }
+                return {
+                    isDuplicate: true,
+                    matchType: entry.docName === docName ? 'exact_name' : 'case_insensitive_name',
+                    existingDoc: entry
+                };
+            }
+        }
+
+        // Check for same docId from a different source
+        if (docId) {
+            for (const entry of Object.values(registry)) {
+                if (entry.docId === docId && entry.sourceId !== sourceId) {
+                    return {
+                        isDuplicate: true,
+                        matchType: 'same_doc_id',
+                        existingDoc: entry
+                    };
+                }
+            }
+        }
+
+        return { isDuplicate: false };
+    }
+
+    /**
+     * Find an import registry entry by document name (case-insensitive).
+     * Returns the first match, or null if not found.
+     */
+    public async getImportByDocName(docName: string): Promise<ImportRegistryEntry | null> {
+        const registry = await this._readRegistry();
+        const lowerName = docName.toLowerCase();
+        for (const entry of Object.values(registry)) {
+            if (entry.docName.toLowerCase() === lowerName) {
+                return entry;
+            }
+        }
+        return null;
+    }
+
+    /**
      * Resolve the actual file path for an imported doc by scanning .switchboard/docs/
      * for files matching the slug prefix. Handles content-hash changes in filenames.
      */

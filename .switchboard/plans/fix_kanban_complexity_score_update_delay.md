@@ -355,8 +355,13 @@ describe('Kanban Metadata File Watcher', () => {
 - Per-file debounce (300ms) + global board refresh debounce (100ms) = max ~400ms from edit to board update
 
 ## Validation Results
-- TypeScript compilation: pending implementation
-- Manual test checklist: pending implementation
+- TypeScript compilation: ✅ Passed (1 pre-existing unrelated error at line 3218 for ArchiveManager import)
+- Implementation complete:
+  1. ✅ Added `_metadataDebounceTimers` Map field at line 119
+  2. ✅ Restructured `onDidChange` handler with hoisted plan lookup (lines 584-711)
+  3. ✅ Added per-file debounced metadata extraction + DB update + board refresh
+  4. ✅ Added timer cleanup in `dispose()` (lines 491-495)
+- Manual test checklist: pending user verification
 
 ## Remaining Risks
 1. **Low**: The `require('./complexityScale')` call inside the timer callback uses dynamic require to avoid circular imports. If this module is refactored to ESM-only in the future, the call would need updating. However, the existing `getComplexityFromPlan` method already uses the same `legacyToScore` function, so the import pattern is consistent. `sanitizeTags` is a local function in KanbanProvider.ts (line 78) — no external import needed.

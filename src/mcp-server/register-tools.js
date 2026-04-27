@@ -2962,83 +2962,10 @@ function registerTools(server) {
         }
     );
 
-    // Tool: get_kanban_state
-    server.tool(
-        "get_kanban_state",
-        {
-            column: z.string().optional().describe("Optional kanban column to return. Supports internal IDs like 'CREATED' and UI labels like 'New'."),
-            complexity: z.string().optional().describe("Filter by complexity: 'low_and_below' (1-4), 'medium_and_below' (1-6), 'medium_and_above' (5-10), 'high_and_above' (7-10), or legacy 'Low'/'High'."),
-            tag: z.string().optional().describe("Filter by a specific tag, e.g., 'backend' or 'authentication'.")
-        },
-        async ({ column, complexity, tag } = {}) => {
-            const workspaceRoot = getWorkspaceRoot();
-            const stateRoot = getStateRoot();
-            const sbDir = path.join(stateRoot, '.switchboard');
-            const dbPath = path.join(sbDir, 'kanban.db');
-
-            // Read workspace ID from DB only
-            let workspaceId = null;
-            try {
-                if (fs.existsSync(dbPath)) {
-                    const SQL = await getSqlJs(workspaceRoot);
-                    const dbBytes = fs.readFileSync(dbPath);
-                    const db = new SQL.Database(new Uint8Array(dbBytes));
-                    try {
-                        const stmt = db.prepare("SELECT value FROM config WHERE key = 'workspace_id'");
-                        if (stmt.step()) {
-                            workspaceId = stmt.getAsObject().value;
-                        }
-                        stmt.free();
-                    } finally {
-                        if (typeof db.close === 'function') db.close();
-                    }
-                }
-            } catch (e) {
-                // DB read failed
-            }
-            if (!workspaceId) {
-                // Workspace not yet initialized — auto-bootstrap it so this tool
-                // succeeds instead of failing. The returned state will be empty
-                // (no plans) which is correct for a brand-new workspace.
-                try {
-                    workspaceId = await ensureWorkspaceIdentityInMcp(workspaceRoot);
-                } catch (initErr) {
-                    const initErrorMessage = initErr?.message || String(initErr);
-                    // Init failed (disk permissions, etc.) — surface a clear error
-                    return {
-                        isError: true,
-                        content: [{
-                            type: "text",
-                            text: `Error: Switchboard workspace could not be initialized. ${initErrorMessage}\n\n${buildWorkspaceInitializationGuidance(initErrorMessage)}`,
-                        }],
-                    };
-                }
-            }
-
-            const columnDefinitions = getKanbanColumnDefinitions(workspaceRoot);
-            const availableColumnIds = columnDefinitions.map((definition) => definition.id);
-            const requestedColumnId = column
-                ? resolveRequestedKanbanColumn(column, availableColumnIds, columnDefinitions)
-                : null;
-
-            if (column && !requestedColumnId) {
-                return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), column, columnDefinitions);
-            }
-
-            const dbColumns = await readKanbanStateFromDb(workspaceRoot, workspaceId, requestedColumnId, columnDefinitions, complexity || null, tag || null);
-            if (dbColumns) {
-                return buildKanbanStateResponse(dbColumns, requestedColumnId, columnDefinitions);
-            }
-
-            // DB unavailable and no legacy files — return empty state
-            return buildKanbanStateResponse(createEmptyKanbanColumnBuckets(columnDefinitions), requestedColumnId, columnDefinitions);
-        }
-    );
-
     // Tool: init_workspace
     server.tool(
         "init_workspace",
-        "One-time bootstrap for repos that have never been opened with the Switchboard VS Code extension. Creates .switchboard/kanban.db with a workspace identity so that other Switchboard tools work. Safe to call if already initialised (returns existing ID). Do NOT call on every session — only when get_kanban_state has never succeeded in this repo.",
+        "One-time bootstrap for repos that have never been opened with the Switchboard VS Code extension. Creates .switchboard/kanban.db with a workspace identity so that other Switchboard tools work. Safe to call if already initialised (returns existing ID). Do NOT call on every session — only when kanban DB operations have never succeeded in this repo.",
         {
             // No parameters required — workspace root is resolved from process env
         },
@@ -3061,7 +2988,7 @@ function registerTools(server) {
                             `Workspace ID : ${workspaceId}`,
                             `Database     : ${dbPath}`,
                             ``,
-                            `You can now use get_kanban_state, move_kanban_card, and other Switchboard tools normally.`,
+                            `You can now use Switchboard tools normally.`,
                             `If you have existing plan files in .switchboard/plans/, open this workspace in VS Code to sync them into the board.`,
                         ].join('\n'),
                     }],
@@ -3075,43 +3002,6 @@ function registerTools(server) {
                     }],
                 };
             }
-        }
-    );
-
-    // Tool: move_kanban_card
-    server.tool(
-        "move_kanban_card",
-        {
-            sessionId: z.string().describe("The session ID of the plan to route (for example 'sess_12345')."),
-            target: z.string().describe("Conversational destination. Can be a kanban column label (for example 'PLAN REVIEWED', 'LEAD CODED', or 'CODER CODED') or an explicit role/custom kanban agent name.")
-        },
-        async ({ sessionId, target }) => {
-            const trimmedSessionId = String(sessionId || '').trim();
-            const trimmedTarget = String(target || '').trim();
-
-            if (!trimmedSessionId) {
-                return { isError: true, content: [{ type: "text", text: "❌ sessionId is required." }] };
-            }
-            if (!trimmedTarget) {
-                return { isError: true, content: [{ type: "text", text: "❌ target is required." }] };
-            }
-            if (!process.send) {
-                return { isError: true, content: [{ type: "text", text: "❌ IPC not available. Cannot communicate with the Switchboard host." }] };
-            }
-
-            process.send({
-                type: 'triggerKanbanMove',
-                sessionId: trimmedSessionId,
-                target: trimmedTarget,
-                workspaceRoot: getWorkspaceRoot()
-            });
-
-            return {
-                content: [{
-                    type: "text",
-                    text: `✅ Plan '${trimmedSessionId}' queued for routing to '${trimmedTarget}'. Switchboard will resolve the conversational target and advance the board if the route is valid.`
-                }]
-            };
         }
     );
 
@@ -3988,54 +3878,6 @@ function registerTools(server) {
         }
     );
 
-    // --- Archive Query Tool ---
-    server.tool(
-        "query_plan_archive",
-        {
-            sql: z.string().describe("SELECT query to run against the DuckDB archive (e.g., \"SELECT * FROM plans WHERE complexity = 'High'\")"),
-            limit: z.number().optional().describe("Max rows to return (default 100)")
-        },
-        async ({ sql, limit = 100 }) => {
-            const workspaceRoot = getWorkspaceRoot();
-            const resolvedPath = resolveArchiveDbPath(workspaceRoot);
-
-            if (!resolvedPath) {
-                return { isError: true, content: [{ type: "text", text: "Archive not configured. Set switchboard.archive.dbPath in VS Code settings." }] };
-            }
-            if (!fs.existsSync(resolvedPath)) {
-                return { content: [{ type: "text", text: "No archive database found. Complete and archive some plans first." }] };
-            }
-
-            // Security: only allow SELECT statements
-            const trimmed = sql.trim().toUpperCase();
-            if (!trimmed.startsWith('SELECT')) {
-                return { isError: true, content: [{ type: "text", text: "Only SELECT queries are allowed on the archive." }] };
-            }
-
-            // Word-boundary match to avoid false positives on column names
-            // like updated_at, created_at, etc.
-            const blocked = ['COPY', 'ATTACH', 'DETACH', 'EXPORT', 'IMPORT', 'INSTALL', 'LOAD', 'CALL', 'PRAGMA', 'CREATE', 'DROP', 'ALTER', 'INSERT', 'UPDATE', 'DELETE', 'TRUNCATE'];
-            for (const keyword of blocked) {
-                if (new RegExp(`\\b${keyword}\\b`).test(trimmed)) {
-                    return { isError: true, content: [{ type: "text", text: `Blocked keyword "${keyword}" detected in query.` }] };
-                }
-            }
-
-            // Strip semicolons (defense-in-depth) and handle existing LIMIT
-            const cleaned = sql.replace(/;/g, '');
-            const withoutLimit = cleaned.replace(/\bLIMIT\s+\d+\s*$/i, '').trim();
-            const limitedSql = `${withoutLimit} LIMIT ${limit}`;
-
-            try {
-                const { stdout } = await execFileAsync('duckdb', ['-readonly', '-json', resolvedPath, limitedSql]);
-                const results = JSON.parse(stdout || '[]');
-                return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-            } catch (e) {
-                return { isError: true, content: [{ type: "text", text: `Query failed: ${e.message}` }] };
-            }
-        }
-    );
-
     // --- Export Conversation Tool ---
     server.tool(
         "export_conversation",
@@ -4113,40 +3955,6 @@ function registerTools(server) {
                 return { content: [{ type: "text", text: JSON.stringify({ success: true, conversationId, title }) }] };
             } catch (e) {
                 return { isError: true, content: [{ type: "text", text: JSON.stringify({ success: false, error: e.message }) }] };
-            }
-        }
-    );
-
-    // --- Search Archive Tool ---
-    server.tool(
-        "search_archive",
-        {
-            query: z.string().describe("Search query (keywords)"),
-            limit: z.number().optional().describe("Maximum results (default 10)")
-        },
-        async ({ query, limit = 10 }) => {
-            const workspaceRoot = getWorkspaceRoot();
-            const resolvedPath = resolveArchiveDbPath(workspaceRoot);
-
-            if (!resolvedPath) {
-                return { isError: true, content: [{ type: "text", text: "Archive not configured. Set switchboard.archive.dbPath in VS Code settings." }] };
-            }
-            if (!fs.existsSync(resolvedPath)) {
-                return { content: [{ type: "text", text: "No archive database found. Complete and archive some plans first." }] };
-            }
-
-            const escapeSql = (s) => (s || '').replace(/'/g, "''");
-            const safeQuery = escapeSql(query);
-            const safeLimit = Math.max(1, Math.min(100, Math.floor(limit)));
-
-            const searchSql = `SELECT id, title, topic, conversation_date, project, exported_at, LEFT(content, 200) AS snippet FROM conversations WHERE content ILIKE '%${safeQuery}%' OR title ILIKE '%${safeQuery}%' OR topic ILIKE '%${safeQuery}%' ORDER BY exported_at DESC LIMIT ${safeLimit};`;
-
-            try {
-                const { stdout } = await execFileAsync('duckdb', ['-readonly', '-json', resolvedPath, searchSql]);
-                const results = JSON.parse(stdout || '[]');
-                return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
-            } catch (e) {
-                return { isError: true, content: [{ type: "text", text: `Search failed: ${e.message}` }] };
             }
         }
     );
