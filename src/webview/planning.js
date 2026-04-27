@@ -376,131 +376,108 @@
     const LOCAL_SOURCES = ['local-folder'];
     const ONLINE_SOURCES = ['clickup', 'linear', 'notion'];
 
-    function handleRootsReady(msg) {
-        console.log('[planning] handleRootsReady called', msg);
+    function renderLocalDocs(rootEntry) {
+        const { sourceId, nodes, folderPath } = rootEntry;
+        
+        // Clear only local pane
         treePane.innerHTML = '';
-        if (treePaneOnline) treePaneOnline.innerHTML = '';
+        
+        if (sourceId === 'local-folder') {
+            const configRow = document.createElement('div');
+            configRow.className = 'folder-config';
+            const pathInput = document.createElement('input');
+            pathInput.type = 'text';
+            pathInput.readOnly = true;
+            pathInput.placeholder = 'No folder set';
+            pathInput.id = 'local-folder-path';
+            
+            // Add a manual refresh button for the local folder
+            const refreshLocalBtn = document.createElement('button');
+            refreshLocalBtn.textContent = '↻';
+            refreshLocalBtn.title = 'Refresh Local Folder';
+            refreshLocalBtn.style.padding = '2px 6px';
+            refreshLocalBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
+            });
 
-        if (!msg.roots || msg.roots.length === 0) {
-            treePane.innerHTML = '<div class="empty-state">No local sources available</div>';
-            if (treePaneOnline) treePaneOnline.innerHTML = '<div class="empty-state">No online sources available</div>';
-            return;
-        }
+            const browseBtn = document.createElement('button');
+            browseBtn.textContent = 'Browse';
+            browseBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'browseLocalFolder' });
+            });
+            
+            configRow.appendChild(pathInput);
+            configRow.appendChild(refreshLocalBtn);
+            configRow.appendChild(browseBtn);
+            treePane.appendChild(configRow);
 
-        const enabledSources = msg.enabledSources || {
-            clickup: true,
-            linear: true,
-            notion: true,
-            'local-folder': true
-        };
+            // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
+            const docList = document.createElement('div');
+            docList.className = 'source-doc-list';
+            docList.dataset.sourceId = sourceId;
+            treePane.appendChild(docList);
 
-        const filteredRoots = msg.roots.filter(({ sourceId }) => {
-            const key = sourceId === 'local-folder' ? 'local-folder' : sourceId;
-            return enabledSources[key] !== false;
-        });
+            // Set path input value from folderPath attached by backend
+            if (folderPath) {
+                pathInput.value = folderPath;
+            }
 
-        const localRoots = filteredRoots.filter(({ sourceId }) => LOCAL_SOURCES.includes(sourceId));
-        const onlineRoots = filteredRoots.filter(({ sourceId }) => ONLINE_SOURCES.includes(sourceId));
+            if (!nodes || nodes.length === 0) {
+                docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
+            } else {
+                const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
+                const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
 
-        localRoots.forEach((rootEntry) => {
-            const { sourceId, nodes } = rootEntry;
-            if (sourceId === 'local-folder') {
-                const configRow = document.createElement('div');
-                configRow.className = 'folder-config';
-                const pathInput = document.createElement('input');
-                pathInput.type = 'text';
-                pathInput.readOnly = true;
-                pathInput.placeholder = 'No folder set';
-                pathInput.id = 'local-folder-path';
-                
-                // Add a manual refresh button for the local folder
-                const refreshLocalBtn = document.createElement('button');
-                refreshLocalBtn.textContent = '↻';
-                refreshLocalBtn.title = 'Refresh Local Folder';
-                refreshLocalBtn.style.padding = '2px 6px';
-                refreshLocalBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-                });
+                const folderNameMap = new Map();
+                folderNodes.forEach(f => folderNameMap.set(f.id, f.name));
 
-                const browseBtn = document.createElement('button');
-                browseBtn.textContent = 'Browse';
-                browseBtn.addEventListener('click', () => {
-                    vscode.postMessage({ type: 'browseLocalFolder' });
-                });
-                
-                configRow.appendChild(pathInput);
-                configRow.appendChild(refreshLocalBtn);
-                configRow.appendChild(browseBtn);
-                treePane.appendChild(configRow);
+                const docsByFolder = new Map();
+                const rootDocs = [];
+                docNodes.forEach(d => {
+                    const docPath = d.id || d.relativePath || '';
+                    const lastSlashIdx = docPath.lastIndexOf('/');
+                    const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
 
-                // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
-                const docList = document.createElement('div');
-                docList.className = 'source-doc-list';
-                docList.dataset.sourceId = sourceId;
-                treePane.appendChild(docList);
-
-                // Set path input value from folderPath attached by backend
-                if (rootEntry.folderPath) {
-                    pathInput.value = rootEntry.folderPath;
-                }
-
-                if (!nodes || nodes.length === 0) {
-                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
-                } else {
-                    const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
-                    const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
-
-                    const folderNameMap = new Map();
-                    folderNodes.forEach(f => folderNameMap.set(f.id, f.name));
-
-                    const docsByFolder = new Map();
-                    const rootDocs = [];
-                    docNodes.forEach(d => {
-                        const docPath = d.id || d.relativePath || '';
-                        const lastSlashIdx = docPath.lastIndexOf('/');
-                        const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
-                        if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                            if (!docsByFolder.has(parentFolderId)) {
-                                docsByFolder.set(parentFolderId, []);
-                            }
-                            docsByFolder.get(parentFolderId).push(d);
-                        } else {
-                            rootDocs.push(d);
+                    if (parentFolderId && folderNameMap.has(parentFolderId)) {
+                        if (!docsByFolder.has(parentFolderId)) {
+                            docsByFolder.set(parentFolderId, []);
                         }
-                    });
+                        docsByFolder.get(parentFolderId).push(d);
+                    } else {
+                        rootDocs.push(d);
+                    }
+                });
 
-                    folderNodes.forEach(folder => {
-                        const folderDocs = docsByFolder.get(folder.id) || [];
-                        if (folderDocs.length === 0) return;
+                folderNodes.forEach(folder => {
+                    const folderDocs = docsByFolder.get(folder.id) || [];
+                    if (folderDocs.length === 0) return;
 
-                        const subheader = document.createElement('div');
-                        subheader.className = 'folder-subheader';
-                        subheader.textContent = folder.name;
-                        docList.appendChild(subheader);
+                    const subheader = document.createElement('div');
+                    subheader.className = 'folder-subheader';
+                    subheader.textContent = folder.name;
+                    docList.appendChild(subheader);
 
-                        folderDocs.forEach(doc => {
-                            const { wrapper } = renderNode(doc, sourceId);
-                            docList.appendChild(wrapper);
-                        });
-                    });
-
-                    rootDocs.forEach(doc => {
+                    folderDocs.forEach(doc => {
                         const { wrapper } = renderNode(doc, sourceId);
                         docList.appendChild(wrapper);
                     });
-                }
-            } else {
-                const docList = document.createElement('div');
-                docList.className = 'source-doc-list';
-                docList.dataset.sourceId = sourceId;
-                treePane.appendChild(docList);
-                (nodes || []).forEach(node => {
-                    const { wrapper } = renderNode(node, sourceId);
+                });
+
+                rootDocs.forEach(doc => {
+                    const { wrapper } = renderNode(doc, sourceId);
                     docList.appendChild(wrapper);
                 });
             }
-        });
+        } else {
+            const docList = document.createElement('div');
+            docList.className = 'source-doc-list';
+            docList.dataset.sourceId = sourceId;
+            treePane.appendChild(docList);
+            (nodes || []).forEach(node => {
+                const { wrapper } = renderNode(node, sourceId);
+                docList.appendChild(wrapper);
+            });
+        }
 
         // Add separate imported docs section
         const importedSection = document.createElement('div');
@@ -515,8 +492,30 @@
 
         // Fetch imported docs on initial load
         vscode.postMessage({ type: 'fetchImportedDocs' });
+    }
 
-        onlineRoots.forEach(({ sourceId, nodes }) => {
+    function renderOnlineDocs(roots, enabledSources) {
+        if (!treePaneOnline) return;
+        
+        // Clear only online pane
+        treePaneOnline.innerHTML = '';
+
+        if (!roots || roots.length === 0) {
+            treePaneOnline.innerHTML = '<div class="empty-state">No online sources available</div>';
+            return;
+        }
+
+        const effectiveEnabledSources = enabledSources || {
+            clickup: true,
+            linear: true,
+            notion: true
+        };
+
+        const filteredRoots = roots.filter(({ sourceId }) => {
+            return effectiveEnabledSources[sourceId] !== false;
+        });
+
+        filteredRoots.forEach(({ sourceId, nodes }) => {
             const headerRow = document.createElement('div');
             headerRow.className = 'source-header-row';
             headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:var(--panel-bg2);border-bottom:1px solid var(--accent-teal-dim);';
@@ -556,6 +555,35 @@
             
             vscode.postMessage({ type: 'fetchContainers', sourceId });
         });
+    }
+
+    function handleLocalDocsReady(msg) {
+        renderLocalDocs({
+            sourceId: msg.sourceId || 'local-folder',
+            nodes: msg.nodes || [],
+            folderPath: msg.folderPath || '',
+            error: msg.error
+        });
+    }
+
+    function handleOnlineDocsReady(msg) {
+        renderOnlineDocs(msg.roots || [], msg.enabledSources || {
+            clickup: true,
+            linear: true,
+            notion: true
+        });
+    }
+
+    function handleRootsReady(msg) {
+        const roots = msg.roots || [];
+        const localRoot = roots.find(({ sourceId }) => sourceId === 'local-folder');
+        if (localRoot) {
+            renderLocalDocs(localRoot);
+        }
+        renderOnlineDocs(
+            roots.filter(({ sourceId }) => ONLINE_SOURCES.includes(sourceId)),
+            msg.enabledSources
+        );
     }
 
     function handleChildrenReady(msg) {
@@ -1095,6 +1123,12 @@
         switch (msg.type) {
             case 'rootsReady':
                 handleRootsReady(msg);
+                break;
+            case 'localDocsReady':
+                handleLocalDocsReady(msg);
+                break;
+            case 'onlineDocsReady':
+                handleOnlineDocsReady(msg);
                 break;
             case 'childrenReady':
                 handleChildrenReady(msg);

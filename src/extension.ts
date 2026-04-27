@@ -16,6 +16,7 @@ import { importPlanFiles } from './services/PlanFileImporter';
 import { ClickUpSyncService } from './services/ClickUpSyncService';
 import { LinearSyncService } from './services/LinearSyncService';
 import { NotionFetchService } from './services/NotionFetchService';
+import { LocalFolderService } from './services/LocalFolderService';
 import { ControlPlaneMigrationService } from './services/ControlPlaneMigrationService';
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
 import { cleanWorkspace, pruneZombieTerminalEntries } from './lifecycle/cleanWorkspace';
@@ -1310,7 +1311,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Research Panel Setup
     const plannerPromptWriter = new PlannerPromptWriter({
         getNotionService: (root) => (kanbanProvider as any)._getNotionService(root),
-        getLocalFolderService: (root) => (kanbanProvider as any)._getLocalFolderService(root),
+        getLocalFolderService: (root) => new LocalFolderService(root),
         getLinearDocsAdapter: (root) => (kanbanProvider as any)._getLinearDocsAdapter(root),
         getClickUpDocsAdapter: (root) => (kanbanProvider as any)._getClickUpDocsAdapter(root),
         getCacheService,
@@ -1329,7 +1330,6 @@ export async function activate(context: vscode.ExtensionContext) {
         {
             getNotionService: (root) => (kanbanProvider as any)._getNotionService(root),
             getNotionBrowseService: (root) => (kanbanProvider as any)._getNotionBrowseService(root),
-            getLocalFolderService: (root) => (kanbanProvider as any)._getLocalFolderService(root),
             getLinearDocsAdapter: (root) => (kanbanProvider as any)._getLinearDocsAdapter(root),
             getClickUpDocsAdapter: (root) => (kanbanProvider as any)._getClickUpDocsAdapter(root),
             getCacheService

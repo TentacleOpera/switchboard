@@ -1,6 +1,5 @@
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBrowseService } from './NotionBrowseService';
-import { LocalFolderService } from './LocalFolderService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 
@@ -236,66 +235,6 @@ export class NotionResearchAdapter implements ResearchSourceAdapter {
         } catch (err) {
             return { success: false, error: String(err) };
         }
-    }
-}
-
-// New adapter wrapping LocalFolderService for the ResearchSourceAdapter interface
-export class LocalFolderResearchAdapter implements ResearchSourceAdapter {
-    readonly sourceId = 'local-folder';
-    private _service: LocalFolderService;
-
-    constructor(service: LocalFolderService) {
-        this._service = service;
-    }
-
-    async listFiles(): Promise<ResearchFile[]> {
-        const files = await this._service.listFiles();
-        return files.map(f => ({
-            id: f.relativePath || f.id,
-            name: f.name,
-            source: 'local-folder',
-            url: undefined,
-            lastModified: undefined,
-            isFolder: f.isFolder,
-            parentId: f.parentId
-        }));
-    }
-
-    async fetchContent(fileId: string): Promise<string> {
-        // Fetch the specific file so preview matches the clicked node AND
-        // the on-disk cache is updated before PlannerPromptWriter reads it.
-        // Falls back to cache on error (e.g. file missing) for graceful degradation.
-        if (fileId) {
-            const result = await this._service.fetchDocContent(fileId);
-            if (result.success && typeof result.content === 'string') {
-                return result.content;
-            }
-        }
-        const cached = await this._service.loadCachedContent();
-        return cached || '';
-    }
-
-    async fetchChildren(parentId?: string): Promise<TreeNode[]> {
-        const files = await this._service.listFiles();
-
-        return files.map(f => ({
-            id: f.relativePath || f.id,
-            name: f.name,
-            kind: f.isFolder ? 'folder' : 'document',
-            parentId: f.parentId,
-            // Folders always show expand arrow — children resolved lazily.
-            // Known trade-off: empty folders will show an expand arrow that resolves to [].
-            hasChildren: f.isFolder === true,
-            url: undefined
-        }));
-    }
-
-    async listContainers(): Promise<TreeNode[]> {
-        return [];  // No container hierarchy for local folders
-    }
-
-    async listDocumentsByContainer(containerId: string): Promise<TreeNode[]> {
-        return [];  // Not applicable — files are listed flat
     }
 }
 

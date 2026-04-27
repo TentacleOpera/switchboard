@@ -5,8 +5,7 @@ import * as fs from 'fs';
 import {
     ResearchImportService,
     TreeNode,
-    NotionResearchAdapter,
-    LocalFolderResearchAdapter
+    NotionResearchAdapter
 } from './ResearchImportService';
 import { PlannerPromptWriter } from './PlannerPromptWriter';
 import { NotionFetchService } from './NotionFetchService';
@@ -19,7 +18,6 @@ import { PlanningPanelCacheService } from './PlanningPanelCacheService';
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
     getNotionBrowseService: (root: string) => NotionBrowseService;
-    getLocalFolderService: (root: string) => LocalFolderService;
     getLinearDocsAdapter: (root: string) => LinearDocsAdapter;
     getClickUpDocsAdapter: (root: string) => ClickUpDocsAdapter;
     getCacheService: (root: string) => PlanningPanelCacheService;
@@ -56,13 +54,6 @@ export class PlanningPanelProvider {
         if (notionService && notionBrowseService) {
             this._researchImportService.registerAdapter(
                 new NotionResearchAdapter(notionService, notionBrowseService)
-            );
-        }
-
-        const localFolderService = this._adapterFactories.getLocalFolderService(workspaceRoot);
-        if (localFolderService) {
-            this._researchImportService.registerAdapter(
-                new LocalFolderResearchAdapter(localFolderService)
             );
         }
 
@@ -103,7 +94,14 @@ export class PlanningPanelProvider {
         this._panel.webview.html = this._getHtml(this._panel.webview);
 
         this._panel.webview.onDidReceiveMessage(
-            message => this._handleMessage(message),
+            async message => {
+                try {
+                    await this._handleMessage(message);
+                } catch (err) {
+                    console.error('[PlanningPanel] Message handler error:', err);
+                    this._panel?.webview.postMessage({ type: 'error', message: String(err) });
+                }
+            },
             null,
             this._disposables
         );
@@ -214,7 +212,11 @@ export class PlanningPanelProvider {
             return;
         }
 
-        this._ensureAdaptersRegistered(workspaceRoot);
+        try {
+            this._ensureAdaptersRegistered(workspaceRoot);
+        } catch (err) {
+            console.error('[PlanningPanel] Adapter registration error:', err);
+        }
 
         switch (msg.type) {
             case 'fetchRoots': {
@@ -249,15 +251,10 @@ export class PlanningPanelProvider {
                     canSelectMany: false
                 });
                 if (result && result.length > 0) {
-                    const service = this._adapterFactories.getLocalFolderService(workspaceRoot);
+                    const service = this._getLocalFolderService(workspaceRoot);
                     const folderPath = await service.setFolderPath(result[0].fsPath);
                     const files = await service.listFiles();
-                    const nodes = files.map(f => ({
-                        id: f.relativePath || f.id,
-                        name: f.name,
-                        kind: f.isFolder ? 'folder' as const : 'document' as const,
-                        hasChildren: f.isFolder === true
-                    }));
+                    const nodes = this._mapLocalFilesToTreeNodes(files);
                     this._panel?.webview.postMessage({
                         type: 'localFolderPathUpdated',
                         folderPath,
@@ -267,15 +264,10 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'setLocalFolderPath': {
-                const service = this._adapterFactories.getLocalFolderService(workspaceRoot);
+                const service = this._getLocalFolderService(workspaceRoot);
                 const folderPath = await service.setFolderPath(msg.folderPath || '');
                 const files = await service.listFiles();
-                const nodes = files.map(f => ({
-                    id: f.relativePath || f.id,
-                    name: f.name,
-                    kind: f.isFolder ? 'folder' as const : 'document' as const,
-                    hasChildren: f.isFolder === true
-                }));
+                const nodes = this._mapLocalFilesToTreeNodes(files);
                 this._panel?.webview.postMessage({
                     type: 'localFolderPathUpdated',
                     folderPath,
@@ -287,8 +279,12 @@ export class PlanningPanelProvider {
                 const sourceId = msg.sourceId;
                 // Clear cache for this source to force fresh fetch
                 await this._cacheService?.clearSourceCache(sourceId);
-                // Re-fetch roots (which will re-fetch containers via existing flow)
-                await this._handleFetchRoots(workspaceRoot);
+                // Refresh only the affected pane to avoid cross-pane flicker
+                if (sourceId === 'local-folder') {
+                    await this._sendLocalDocsReady(workspaceRoot);
+                } else {
+                    this._sendOnlineDocsReady();
+                }
                 break;
             }
             case 'fetchContainers': {
@@ -493,58 +489,80 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _handleFetchRoots(workspaceRoot: string): Promise<void> {
-        const sources = this._researchImportService.getAvailableSources();
+    private _getLocalFolderService(workspaceRoot: string): LocalFolderService {
+        return new LocalFolderService(workspaceRoot);
+    }
 
-        const roots: Array<{ sourceId: string; nodes: TreeNode[]; folderPath?: string }> = [];
+    private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string }>): TreeNode[] {
+        return files.map(f => ({
+            id: f.relativePath || f.id,
+            name: f.name,
+            kind: f.isFolder ? 'folder' : 'document',
+            parentId: f.parentId,
+            hasChildren: f.isFolder === true
+        }));
+    }
 
-        for (const sourceId of sources) {
-            if (sourceId === 'local-folder') {
-                const adapter = this._researchImportService.getAdapter(sourceId);
-                let nodes: TreeNode[] = [];
-                try {
-                    if (adapter) {
-                        nodes = await adapter.fetchChildren(undefined);
-                    }
-                } catch (err) {
-                    console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
-                    nodes = [];
-                }
-
-                const localService = this._adapterFactories.getLocalFolderService(workspaceRoot);
-                roots.push({
-                    sourceId,
-                    nodes: nodes || [],
-                    folderPath: localService.getFolderPath()
-                });
-            } else {
-                roots.push({
-                    sourceId,
-                    nodes: []
-                });
-            }
-        }
-
-        console.log('[PlanningPanel] _handleFetchRoots: sources', sources);
-        console.log('[PlanningPanel] _handleFetchRoots: roots', roots);
-        this._panel?.webview.postMessage({ type: 'rootsReady', roots, enabledSources: {
-            clickup: true,
-            linear: true,
-            notion: true,
-            'local-folder': true
-        } });
-
-        const localRoot = roots.find(r => r.sourceId === 'local-folder');
-        if (localRoot) {
+    private async _sendLocalDocsReady(workspaceRoot: string): Promise<void> {
+        try {
+            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            const files = await localFolderService.listFiles();
             this._panel?.webview.postMessage({
-                type: 'localFolderPathUpdated',
-                folderPath: localRoot.folderPath || '',
-                nodes: localRoot.nodes
+                type: 'localDocsReady',
+                sourceId: 'local-folder',
+                folderPath: localFolderService.getFolderPath(),
+                nodes: this._mapLocalFilesToTreeNodes(files)
+            });
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
+            this._panel?.webview.postMessage({
+                type: 'localDocsReady',
+                sourceId: 'local-folder',
+                folderPath: '',
+                nodes: [],
+                error: String(err)
             });
         }
     }
 
+    private _sendOnlineDocsReady(): void {
+        const roots = this._researchImportService
+            .getAvailableSources()
+            .filter(sourceId => sourceId !== 'local-folder')
+            .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
+
+        this._panel?.webview.postMessage({
+            type: 'onlineDocsReady',
+            roots,
+            enabledSources: {
+                clickup: true,
+                linear: true,
+                notion: true
+            }
+        });
+    }
+
+    private async _handleFetchRoots(workspaceRoot: string): Promise<void> {
+        await this._sendLocalDocsReady(workspaceRoot);
+        this._sendOnlineDocsReady();
+    }
+
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
+        // Handle local-folder directly without adapter
+        if (sourceId === 'local-folder') {
+            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            try {
+                const files = await localFolderService.listFiles();
+                const nodes = this._mapLocalFilesToTreeNodes(files)
+                    .filter(node => node.parentId === parentId || (!parentId && !node.parentId));
+                this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes });
+            } catch (err) {
+                console.error(`Failed to fetch children for ${sourceId}:`, err);
+                this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes: [] });
+            }
+            return;
+        }
+
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
             this._panel?.webview.postMessage({ type: 'childrenReady', sourceId, parentId, nodes: [] });
@@ -563,6 +581,22 @@ export class PlanningPanelProvider {
     private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number): Promise<void> {
         // Race guard — track latest request per source
         this._latestRequestIds.set(sourceId, requestId);
+
+        // Handle local-folder directly without adapter
+        if (sourceId === 'local-folder') {
+            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            try {
+                const result = await localFolderService.fetchDocContent(docId);
+                if (result.success) {
+                    this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content: result.content || '', docName: result.docTitle });
+                } else {
+                    this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
+                }
+            } catch (err) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
+            }
+            return;
+        }
 
         const adapter = this._researchImportService.getAdapter(sourceId);
         if (!adapter) {
@@ -907,6 +941,31 @@ export class PlanningPanelProvider {
 
         this._importInProgress = true;
         try {
+            // Handle local-folder directly without adapter
+            if (sourceId === 'local-folder') {
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const result = await localFolderService.fetchDocContent(docId);
+                if (!result.success) {
+                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: result.error || 'Failed to fetch document' });
+                    return;
+                }
+                const writeResult = await this._plannerPromptWriter.writeContentToDocsDir(
+                    workspaceRoot,
+                    result.content || '',
+                    docName,
+                    sourceId
+                );
+                if (writeResult.error) {
+                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
+                    return;
+                }
+                if (this._cacheService && writeResult.success) {
+                    await this._cacheService.setDocumentImported(sourceId, docId);
+                }
+                this._panel?.webview.postMessage({ type: 'importFullDocResult', success: true, message: 'Document imported' });
+                return;
+            }
+
             const adapter = this._researchImportService.getAdapter(sourceId);
             if (!adapter) {
                 this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'Adapter not found' });
