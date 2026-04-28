@@ -818,10 +818,25 @@ export class KanbanDatabase {
     }
 
     public async updatePlanFile(sessionId: string, planFile: string): Promise<boolean> {
-        return this._persistedUpdate(
+        console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}`);
+        const result = this._persistedUpdate(
             'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
             [this._normalizePath(planFile), new Date().toISOString(), sessionId]
         );
+        // Verify the update took effect
+        if (this._db) {
+            try {
+                const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
+                if (stmt.step()) {
+                    const row = stmt.getAsObject();
+                    console.log(`[KanbanDatabase] updatePlanFile VERIFY: sessionId=${sessionId}, plan_file now=${row.plan_file}`);
+                }
+                stmt.free();
+            } catch (e) {
+                console.error(`[KanbanDatabase] updatePlanFile VERIFY failed:`, e);
+            }
+        }
+        return result;
     }
 
     public async updateLinearIssueId(sessionId: string, linearIssueId: string): Promise<boolean> {
@@ -886,7 +901,7 @@ export class KanbanDatabase {
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE workspace_id = ? AND status = 'active' AND kanban_column = ?
-             ORDER BY updated_at ASC`,
+             ORDER BY updated_at DESC`,
             [workspaceId, column]
         );
         return this._readRows(stmt);

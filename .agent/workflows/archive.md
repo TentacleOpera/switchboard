@@ -14,12 +14,12 @@ Enable historical research across archived plans using the DuckDB archive databa
    - What is the user looking for? (topic, complexity, date range, status)
    - Example: "What specific plans are you looking for?"
 
-2. **Choose the right tool**
-   - Simple keyword search → `search_archive`
-   - Specific filtering/sorting → `query_plan_archive`
+2. **Choose the right approach**
+   - Simple keyword search → use `duckdb` CLI with `ILIKE` (see `.agent/skills/query_archive/SKILL.md`)
+   - Specific filtering/sorting → use `duckdb` CLI with SQL query (see `.agent/skills/query_archive/SKILL.md`)
 
 3. **Execute the query**
-   - Call the appropriate MCP tool
+   - Run the appropriate `duckdb` CLI command against `.switchboard/archive.duckdb`
    - Present results in a readable format
 
 4. **Offer follow-up actions**
@@ -31,13 +31,13 @@ Enable historical research across archived plans using the DuckDB archive databa
 **User**: "/archive find high complexity plans"
 **You**: 
 ```
-query_plan_archive(sql: "SELECT topic, complexity, created_at FROM plans WHERE complexity = 'High' ORDER BY created_at DESC LIMIT 20")
+duckdb .switchboard/archive.duckdb "SELECT topic, complexity, created_at FROM plans WHERE complexity = 'High' ORDER BY created_at DESC LIMIT 20"
 ```
 
 **User**: "/archive search for database"
 **You**:
 ```
-search_archive(query: "database", limit: 10)
+duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%database%' LIMIT 10"
 ```
 
 **User**: "/export this conversation"

@@ -142,6 +142,29 @@ export class LocalFolderService {
         return ['.md', '.txt', '.markdown', '.rst', '.adoc'].includes(ext);
     }
 
+    // ── Delete ──────────────────────────────────────────────────
+
+    async deleteFile(relativePath: string): Promise<{ success: boolean; error?: string }> {
+        const folderPath = this.getFolderPath();
+        if (!folderPath) {
+            return { success: false, error: 'Local folder path not configured' };
+        }
+
+        const fullPath = path.join(folderPath, relativePath);
+        // Prevent path traversal
+        const resolved = path.resolve(fullPath);
+        if (!resolved.startsWith(path.resolve(folderPath))) {
+            return { success: false, error: 'Invalid file path' };
+        }
+
+        try {
+            await vscode.workspace.fs.delete(vscode.Uri.file(resolved), { useTrash: true, recursive: false });
+            return { success: true };
+        } catch (err: any) {
+            return { success: false, error: String(err) };
+        }
+    }
+
     // ── Fetch ───────────────────────────────────────────────────
 
     async fetchDocContent(relativePath: string): Promise<{ success: boolean; docTitle?: string; content?: string; error?: string }> {

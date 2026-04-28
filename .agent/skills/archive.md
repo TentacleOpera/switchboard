@@ -8,37 +8,37 @@ Query and manage the DuckDB archive of historical plans and conversations.
 - User wants historical research across past plans
 - User wants to export a conversation for later reference
 
-## Available Tools
+## Available Methods
 
-### 1. `query_plan_archive`
+### 1. DuckDB CLI (replaces `query_plan_archive`)
 **Use when**: User wants to search/query archived plans with specific criteria
 
-**Parameters**:
-- `sql` (required): SELECT query to run
-- `limit` (optional): Max rows to return (default 100)
+**Usage** (see `.agent/skills/query_archive/SKILL.md` for full reference):
+```bash
+duckdb .switchboard/archive.duckdb "<SQL_QUERY>"
+```
 
 **Example queries**:
-```sql
-SELECT * FROM plans WHERE complexity = 'High'
-SELECT topic, kanban_column, created_at FROM plans ORDER BY archived_at DESC LIMIT 10
-SELECT complexity, COUNT(*) FROM plans GROUP BY complexity
-SELECT * FROM plans WHERE topic ILIKE '%database%'
+```bash
+duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE complexity = 'High'"
+duckdb .switchboard/archive.duckdb "SELECT topic, kanban_column, created_at FROM plans ORDER BY archived_at DESC LIMIT 10"
+duckdb .switchboard/archive.duckdb -json "SELECT * FROM plans WHERE topic ILIKE '%database%'"
 ```
 
 **Security**: Only SELECT queries allowed. Blocked keywords: COPY, ATTACH, CREATE, DROP, INSERT, UPDATE, DELETE, etc.
 
-### 2. `search_archive`
+### 2. DuckDB CLI keyword search (replaces `search_archive`)
 **Use when**: User wants simple keyword search (easier than writing SQL)
 
-**Parameters**:
-- `query` (required): Search keywords
-- `limit` (optional): Max results (default 10)
+**Usage**:
+```bash
+duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%<keyword>%' LIMIT 10"
+```
 
 **Example**:
-```
-query: "database optimization"
-query: "MCP tools"
-query: "authentication"
+```bash
+duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%database optimization%' LIMIT 10"
+duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%authentication%' LIMIT 10"
 ```
 
 ### 3. `export_conversation`
@@ -63,16 +63,16 @@ query: "authentication"
 - `conversations` - Exported conversations (id, title, content, tags, project, etc.)
 - `archive_metadata` - Schema version tracking
 
-## Common User Phrases → Tool Mapping
+## Common User Phrases → Method Mapping
 
-| User says | Use tool |
-|-----------|----------|
-| "search the archives for X" | `search_archive` with query="X" |
-| "query the archive" | `query_plan_archive` with appropriate SQL |
-| "find old plans about X" | `query_plan_archive` with `SELECT * FROM plans WHERE topic ILIKE '%X%'` |
+| User says | Use method |
+|-----------|------------|
+| "search the archives for X" | `duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%X%' LIMIT 10"` |
+| "query the archive" | `duckdb .switchboard/archive.duckdb "<SQL>"` |
+| "find old plans about X" | `duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%X%'"` |
 | "export this conversation" | `export_conversation` (write conversation to temp file first) |
-| "show me completed plans" | `query_plan_archive` with `SELECT * FROM plans WHERE kanban_column = 'COMPLETED'` |
-| "what high complexity plans exist" | `query_plan_archive` with `SELECT * FROM plans WHERE complexity = 'High'` |
+| "show me completed plans" | `duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE kanban_column = 'COMPLETED'"` |
+| "what high complexity plans exist" | `duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE complexity = 'High'"` |
 
 ## Error Handling
 
@@ -86,13 +86,9 @@ query: "authentication"
 **User**: "Find all high complexity plans from last month"
 
 **You**:
-1. Call `query_plan_archive` with:
-   ```sql
-   SELECT topic, complexity, created_at, kanban_column 
-   FROM plans 
-   WHERE complexity = 'High' 
-   ORDER BY created_at DESC 
-   LIMIT 20
+1. Run:
+   ```bash
+   duckdb .switchboard/archive.duckdb "SELECT topic, complexity, created_at, kanban_column FROM plans WHERE complexity = 'High' ORDER BY created_at DESC LIMIT 20"
    ```
 2. Present results to user
 
@@ -115,5 +111,5 @@ query: "authentication"
 ## Related Files
 - Schema: `src/services/archiveSchema.sql`
 - Service: `src/services/ArchiveManager.ts`
-- Tools: `src/mcp-server/register-tools.js` (lines 3273-3450)
+- Tools: `src/mcp-server/register-tools.js` (archive MCP tools removed; use `.agent/skills/query_archive/` instead)
 - Config: `.vscode/settings.json` → `switchboard.archive.dbPath`

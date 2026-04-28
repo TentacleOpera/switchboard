@@ -181,7 +181,7 @@ export function buildKanbanBatchPrompt(
         const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics";
         const designDocLink = options?.designDocLink?.trim();
         let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}
-MANDATORY: You MUST read and strictly adhere to `.agent/workflows/improve-plan.md` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the workflow.
+MANDATORY: You MUST read and strictly adhere to \`.agent/workflows/improve-plan.md\` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the workflow.
 Do not add net-new product requirements or scope.
 You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
 

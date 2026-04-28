@@ -17,7 +17,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    - Read the target plan file and treat it as the single source of truth.
    - Read the actual code for any services, utilities, or modules referenced by the plan.
    - **Query active Kanban plans for dependencies (DO NOT scan the plans folder directly):**
-     - Call the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans grouped by Kanban column.
+     - Run `node .agent/skills/kanban_operations/get-state.js <workspace_id>` to retrieve all active plans grouped by Kanban column.
      - Inspect plans in **New** and **Planned** columns for potential dependencies and conflicts.
      - **Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns** — these are already implemented (or in final review) and irrelevant for dependency/conflict analysis.
      - Document any cross-plan conflicts with the active plan set only.
@@ -48,7 +48,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
       - **Race Conditions:** Analysis
       - **Security:** Analysis
       - **Side Effects:** Analysis
-      - **Dependencies & Conflicts:** Human-readable prose explaining WHY each dependency/conflict matters. Reference plans by session IDs (sess_XXXXXXXXXXXXX). If MCP tools are available, use `get_kanban_state` to retrieve active session IDs; otherwise, document the uncertainty.
+      - **Dependencies & Conflicts:** Human-readable prose explaining WHY each dependency/conflict matters. Reference plans by session IDs (sess_XXXXXXXXXXXXX). Use the `kanban_operations` skill (run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`) to retrieve active session IDs; if the query fails, document the uncertainty.
 
    6. **## Dependencies** - Machine-readable format (one per line): `sess_XXXXXXXXXXXXX — <topic>`. If no dependencies, write `None`.
 

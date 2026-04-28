@@ -32,7 +32,7 @@ export class PlannerPromptWriter {
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number } = {}
+        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         // Generate collision-resistant filename
         const rawSlug = (docTitle || sourceId)
@@ -53,6 +53,7 @@ docName: ${docTitle}
 sourceId: ${sourceId}
 slugPrefix: ${rawSlug}_${contentHash}
 order: ${order}
+parentDocName: ${options.parentDocName || docTitle}
 ---
 
 `;
@@ -115,7 +116,7 @@ order: ${order}
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number } = {}
+        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existingWrite = this._writeQueue.get(resolvedRoot);

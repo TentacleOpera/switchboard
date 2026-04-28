@@ -29,7 +29,7 @@ Before EVERY response, you MUST:
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
 3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `get_kanban_state` MCP tool to instantly identify the target plans.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `kanban_operations` skill (run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
@@ -65,7 +65,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer `move_kanban_card(sessionId, target)` over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
+Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer the `kanban_operations` skill (run `node .agent/skills/kanban_operations/move-card.js <session_id> <target_column>`) over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
 
 ### 📚 Available Skills
 
@@ -75,6 +75,9 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 |-------|-------------|
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
 | `review` | User asks to review code changes, a PR, or specific files |
+| `kanban_operations` | Move kanban cards or query kanban state via direct database access |
+| `query_archive` | Query the DuckDB archive directly using duckdb CLI |
+| `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 

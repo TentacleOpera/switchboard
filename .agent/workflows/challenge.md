@@ -43,7 +43,7 @@ Use this for:
 2. **Dependency & Conflict Check**
    - MANDATORY: Read the code of any service, utility, or module being modified or worked around.
    - **Query active Kanban plans for dependencies (DO NOT scan the plans folder directly):**
-     - Call the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans grouped by Kanban column.
+     - Run `node .agent/skills/kanban_operations/get-state.js <workspace_id>` to retrieve all active plans grouped by Kanban column.
      - Inspect plans in **New** and **Planned** columns for potential dependencies and conflicts.
      - **Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns** — these are already implemented (or in final review) and irrelevant for dependency/conflict analysis.
      - Document any cross-plan conflicts with the active plan set only.

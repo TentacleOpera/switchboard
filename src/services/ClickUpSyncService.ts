@@ -27,6 +27,8 @@ export interface ClickUpConfig {
   automationRules: ClickUpAutomationRule[];
   selectedListId: string;
   selectedListName: string;
+  selectedSpaceId: string;
+  selectedFolderId: string;
 }
 
 export interface KanbanPlanRecord {
@@ -222,7 +224,9 @@ export class ClickUpSyncService {
       pullIntervalMinutes: 60,
       automationRules: [],
       selectedListId: '',
-      selectedListName: ''
+      selectedListName: '',
+      selectedSpaceId: '',
+      selectedFolderId: ''
     };
   }
 
@@ -255,7 +259,9 @@ export class ClickUpSyncService {
       pullIntervalMinutes: normalizedInterval,
       automationRules: normalizeClickUpAutomationRules(raw.automationRules),
       selectedListId: raw.selectedListId || '',
-      selectedListName: raw.selectedListName || ''
+      selectedListName: raw.selectedListName || '',
+      selectedSpaceId: raw.selectedSpaceId || '',
+      selectedFolderId: raw.selectedFolderId || ''
     };
   }
 

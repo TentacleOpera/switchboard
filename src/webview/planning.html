@@ -525,6 +525,40 @@
             white-space: nowrap;
         }
 
+        .doc-delete-btn {
+            flex-shrink: 0;
+            width: 18px;
+            height: 18px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 14px;
+            line-height: 1;
+            cursor: pointer;
+            opacity: 0;
+            transition: all 0.15s;
+            margin-left: auto;
+        }
+
+        .tree-node:hover .doc-delete-btn {
+            opacity: 1;
+        }
+
+        .doc-delete-btn:hover {
+            background: #f14c4c;
+            border-color: #f14c4c;
+            color: white;
+        }
+
+        .doc-delete-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+
         .tree-children {
             margin-left: 16px;
         }
@@ -825,6 +859,15 @@
             color: var(--accent-teal);
             font-weight: 600;
             margin-bottom: 8px;
+        }
+
+        .imported-docs-doc-subheader {
+            padding: 6px 8px 2px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-weight: 500;
+            border-top: 1px solid var(--border-color);
+            margin-top: 4px;
         }
 
         .imported-doc-row {

@@ -218,3 +218,29 @@ MANDATORY: You MUST read and strictly adhere to \`.agent/workflows/improve-plan.
   - `agentPromptBuilder.ts` should reference `improve-plan.md` (for improving plans)
   - `TaskViewerProvider.ts` should reference `how_to_plan.md` (for writing new plans)
   - `implementation.html` should reference `how_to_plan.md` (for writing new plans)
+
+## Reviewer Pass Results
+
+### Findings
+| # | Severity | Description | Status |
+|---|----------|-------------|--------|
+| 1 | **CRITICAL** | `agentPromptBuilder.ts:184` — Raw backticks inside template literal break JavaScript. Original used escaped backticks `\`` but implementation used raw backticks, causing TS2339/TS2304/TS2552 errors. | **Fixed** |
+| 2 | NIT | `improve-plan.md:51` — `kanban_operations` skill reference uses CLI script, not MCP tool call. Consistent with plan intent. | No change needed |
+| 3 | NIT | `how_to_plan.md:25-26` — Grumpy/Balanced personas in Step 3 are process descriptions (not template). Template section was correctly updated. | No change needed |
+| 4 | MAJOR | TypeScript compilation broken (consequence of #1). | **Fixed** (via #1) |
+
+### Files Changed
+- `src/services/agentPromptBuilder.ts:184` — Escaped backticks: `` `.agent/workflows/improve-plan.md` `` → `` \`.agent/workflows/improve-plan.md\` ``
+
+### Validation Results
+- **TypeScript check:** `npx tsc --noEmit` — 0 errors in `agentPromptBuilder.ts` (2 pre-existing errors in unrelated files)
+- **Grep verification:** `grep -rn "how_to_plan" src/services/agentPromptBuilder.ts src/services/TaskViewerProvider.ts src/webview/implementation.html`
+  - `agentPromptBuilder.ts`: No references to `how_to_plan` ✅
+  - `TaskViewerProvider.ts`: 3 references in airlock bundler path ✅ (correct for new plans)
+  - `implementation.html`: 1 reference in Sprint/NotebookLM prompt ✅ (correct for new plans)
+- **MCP tool call removal:** `grep "complete_workflow_phase" .agent/workflows/improve-plan.md` — 0 results ✅
+- **Section requirements embedding:** `improve-plan.md` Step 2 contains all 9 required sections ✅
+- **Adversarial Synthesis template:** Both `improve-plan.md` and `how_to_plan.md` use Risk Summary format ✅
+
+### Remaining Risks
+- None. All plan requirements verified and CRITICAL/MAJOR findings resolved.

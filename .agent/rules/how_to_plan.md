@@ -13,7 +13,7 @@ Before writing any implementation steps, audit the system:
 *   **Complexity:** Rate the routine vs. complex/risky parts of the request.
 *   **Edge Cases:** Identify race conditions, security flaws, backward compatibility issues, and side effects.
 *   **Dependencies & Conflicts:** 
-    - Query the Kanban database via the `get_kanban_state` MCP tool (no column filter) to retrieve all active plans.
+    - Query the Kanban database via the `kanban_operations` skill (run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`) to retrieve all active plans.
     - Consider plans in **New** and **Planned** columns for dependencies and conflicts. Exclude plans in Completed, Intern, Lead Coder, Coder, and Reviewed columns — these are already implemented.
     - Identify if this plan relies on other active plans or conflicts with concurrent work.
     - If database query fails, document the uncertainty rather than scanning unfiltered.
@@ -63,7 +63,7 @@ Produce a complete, copy-paste-ready implementation spec. You must maximize your
 - **Race Conditions:** [Analysis]
 - **Security:** [Analysis]
 - **Side Effects:** [Analysis]
-- **Dependencies & Conflicts:** [Human-readable prose: explain WHY each dependency or conflict matters. Reference plans by their session IDs (sess_XXXXXXXXXXXXX) so the machine parser can link them. Use the `get_kanban_state` MCP tool to retrieve active session IDs.]
+- **Dependencies & Conflicts:** [Human-readable prose: explain WHY each dependency or conflict matters. Reference plans by their session IDs (sess_XXXXXXXXXXXXX) so the machine parser can link them. Use the `kanban_operations` skill (run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`) to retrieve active session IDs.]
 
 ## Dependencies
 > [!IMPORTANT]

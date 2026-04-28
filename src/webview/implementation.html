@@ -585,34 +585,6 @@
             content: '...';
         }
 
-        .project-issue-send-planner-btn {
-            display: inline-block;
-            background: transparent;
-            color: var(--accent-blue, var(--vscode-button-background));
-            border: 1px solid var(--accent-blue, var(--vscode-button-background));
-            padding: 2px 8px;
-            font-size: 9px;
-            font-family: var(--font-mono);
-            cursor: pointer;
-            margin-top: 6px;
-            letter-spacing: 0.5px;
-        }
-
-        .project-issue-send-planner-btn:hover {
-            background: var(--accent-blue, var(--vscode-button-background));
-            color: var(--panel-bg);
-        }
-
-        .project-issue-send-planner-btn:disabled,
-        .project-issue-send-planner-btn[data-sending] {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-
-        .project-issue-send-planner-btn[data-sending]::after {
-            content: '...';
-        }
-
         .project-task-header,
         .project-detail-section {
             display: flex;
@@ -1893,6 +1865,7 @@
         let linearTaskDetailsTimeoutId = null;
         let lastIntegrationProvider = null;
         let linearProjectPickerValue = '';
+        let _restoredLinearProjectPickerValue = '';  // Persisted value from initialState, not clobbered by renders
         let linearAvailableProjects = [];
         let currentWorkspaceRoot = '';
 
@@ -1915,6 +1888,7 @@
         let clickUpSelectedFolderId = '';
         let clickUpSelectedListId = '';
         let clickUpHierarchyLoading = false;
+        let _hierarchyRestorePending = false;
 
         // Task loading state
         let pendingClickUpDetailIssueId = '';
@@ -2462,6 +2436,31 @@
                         if (message.workspaceRoot) {
                             currentWorkspaceRoot = String(message.workspaceRoot).trim();
                         }
+                        // Restore ClickUp hierarchy state from persisted config
+                        if (message.clickupHierarchyState) {
+                            const hs = message.clickupHierarchyState;
+                            if (hs.selectedSpaceId) {
+                                clickUpSelectedSpaceId = hs.selectedSpaceId;
+                            }
+                            if (hs.selectedFolderId) {
+                                clickUpSelectedFolderId = hs.selectedFolderId;
+                            }
+                            if (hs.selectedListId) {
+                                clickUpSelectedListId = hs.selectedListId;
+                            }
+                            // Flag to distinguish restore cascade from normal user navigation
+                            _hierarchyRestorePending = !!(clickUpSelectedSpaceId);
+                        }
+                        // Restore Linear project picker value
+                        if (message.linearProjectPickerValue) {
+                            linearProjectPickerValue = message.linearProjectPickerValue;
+                            _restoredLinearProjectPickerValue = message.linearProjectPickerValue;
+                        }
+                        // If hierarchy state was restored, trigger data loading cascade
+                        if (clickUpSelectedSpaceId && lastIntegrationProvider === 'clickup') {
+                            // Load spaces first, then the cascade will continue in clickupSpacesLoaded handler
+                            loadClickUpSpaces();
+                        }
                     }
                     break;
                 case 'setupStatus':
@@ -2569,6 +2568,22 @@
                     if (message.status === 'loaded' && Array.isArray(message.projects)) {
                         linearAvailableProjects = message.projects;
                         renderSidebarLinearProjectPickerOptions();
+                        // Re-apply persisted picker value now that options are available
+                        // NOTE: The picker uses project NAMES as option values (not IDs),
+                        // so we compare against p.name, not p.id.
+                        // Use _restoredLinearProjectPickerValue (from initialState) because
+                        // renderSidebarLinearProjectPickerOptions may have already reset
+                        // linearProjectPickerValue to '' if the project wasn't in the
+                        // issue-derived picker options.
+                        const restoreValue = _restoredLinearProjectPickerValue || linearProjectPickerValue;
+                        if (restoreValue) {
+                            const { projectPicker } = getProjectTabElements();
+                            if (projectPicker && linearAvailableProjects.some(p => p.name === restoreValue)) {
+                                projectPicker.value = restoreValue;
+                                linearProjectPickerValue = restoreValue;
+                            }
+                            _restoredLinearProjectPickerValue = '';  // one-shot restore
+                        }
                     }
                     break;
                 case 'linearTaskDetailsLoaded':
@@ -2699,18 +2714,94 @@
                 case 'clickupSpacesLoaded':
                     clickUpHierarchyLoading = false;
                     clickUpAvailableSpaces = message.spaces || [];
-                    renderSidebarClickUpProjectPanel();
+                    // Continue hierarchy restore if a restore cascade is in progress
+                    if (_hierarchyRestorePending) {
+                        if (!clickUpSelectedFolderId && !clickUpSelectedListId) {
+                            // Only space was saved — just re-render, no further loading needed
+                            _hierarchyRestorePending = false;
+                            renderSidebarClickUpProjectPanel();
+                        } else {
+                            // Space + folder/list were saved — load folders for this space
+                            vscode.postMessage({
+                                type: 'clickupLoadFolders',
+                                spaceId: clickUpSelectedSpaceId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                        }
+                    } else {
+                        renderSidebarClickUpProjectPanel();
+                    }
                     break;
                 case 'clickupFoldersLoaded':
                     clickUpHierarchyLoading = false;
                     clickUpAvailableFolders = message.folders || [];
                     clickUpAvailableDirectLists = message.directLists || [];
-                    renderSidebarClickUpProjectPanel();
+                    // Continue hierarchy restore if we have a saved folder selected
+                    // NOTE: Root/folder-less lists have selectedFolderId = '' (empty string), NOT '_root_'.
+                    // The webview converts '_root_' to '' at attachHierarchyListeners line ~3779.
+                    if (_hierarchyRestorePending && clickUpSelectedSpaceId) {
+                        if (!clickUpSelectedFolderId) {
+                            // Root lists — directLists already loaded in this response
+                            if (clickUpSelectedListId) {
+                                const list = clickUpAvailableDirectLists.find(l => l.id === clickUpSelectedListId);
+                                if (list) {
+                                    _hierarchyRestorePending = false;
+                                    vscode.postMessage({
+                                        type: 'clickupSaveListSelection',
+                                        spaceId: clickUpSelectedSpaceId,
+                                        folderId: '',
+                                        listId: clickUpSelectedListId,
+                                        workspaceRoot: currentWorkspaceRoot || undefined
+                                    });
+                                    loadClickUpProject(false, clickUpSelectedListId);
+                                } else {
+                                    // Stale list ID — give up restore
+                                    _hierarchyRestorePending = false;
+                                    clickUpSelectedListId = '';
+                                    renderSidebarClickUpProjectPanel();
+                                }
+                            } else {
+                                _hierarchyRestorePending = false;
+                                renderSidebarClickUpProjectPanel();
+                            }
+                        } else {
+                            // Load lists for the selected folder
+                            vscode.postMessage({
+                                type: 'clickupLoadLists',
+                                spaceId: clickUpSelectedSpaceId,
+                                folderId: clickUpSelectedFolderId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                        }
+                    } else {
+                        renderSidebarClickUpProjectPanel();
+                    }
                     break;
                 case 'clickupListsLoaded':
                     clickUpHierarchyLoading = false;
                     clickUpAvailableListsInFolder = message.lists || [];
-                    renderSidebarClickUpProjectPanel();
+                    // Complete hierarchy restore if a restore cascade is in progress
+                    if (_hierarchyRestorePending && clickUpSelectedListId && clickUpSelectedSpaceId) {
+                        const list = clickUpAvailableListsInFolder.find(l => l.id === clickUpSelectedListId);
+                        if (list) {
+                            _hierarchyRestorePending = false;
+                            vscode.postMessage({
+                                type: 'clickupSaveListSelection',
+                                spaceId: clickUpSelectedSpaceId,
+                                folderId: clickUpSelectedFolderId,
+                                listId: clickUpSelectedListId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                            loadClickUpProject(false, clickUpSelectedListId);
+                        } else {
+                            // Stale list ID — give up restore, clear the bad ID
+                            _hierarchyRestorePending = false;
+                            clickUpSelectedListId = '';
+                            renderSidebarClickUpProjectPanel();
+                        }
+                    } else {
+                        renderSidebarClickUpProjectPanel();
+                    }
                     break;
                 case 'clickupTaskDetailsLoaded': {
                     const previousPendingId = pendingClickUpDetailIssueId;
@@ -3175,7 +3266,6 @@
                 detailAttachmentsList: document.getElementById('sidebar-detail-attachments-list'),
                 detailAskAgentButton: document.getElementById('sidebar-detail-ask-agent'),
                 detailImportTaskButton: document.getElementById('sidebar-detail-import-task'),
-                detailSendPlannerTaskButton: document.getElementById('sidebar-detail-send-planner-task'),
                 hierarchyNav: document.getElementById('sidebar-clickup-hierarchy-nav')
             };
         }
@@ -3310,7 +3400,6 @@
                     <div class="project-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                     <div style="display:flex; gap:4px;">
                         <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}" aria-label="Import ${escapeAttr(issue.identifier || issue.id)}">IMPORT</button>
-                        <button type="button" class="project-issue-send-planner-btn" data-send-planner-issue-id="${escapeAttr(issue.id)}" aria-label="Send ${escapeAttr(issue.identifier || issue.id)} to planner">SEND TO PLANNER</button>
                     </div>
                 </div>
             `).join('');
@@ -3333,8 +3422,7 @@
                 detailCommentsList,
                 detailAttachmentsList,
                 detailAskAgentButton,
-                detailImportTaskButton,
-                detailSendPlannerTaskButton
+                detailImportTaskButton
             } = getProjectTabElements();
             if (!detailTitle || !detailIdentifier || !detailState || !detailAssignee || !detailDescription) {
                 return;
@@ -3354,7 +3442,6 @@
                 if (detailAttachmentsList && _lastDetailAttachmentsHtml !== '') { detailAttachmentsList.innerHTML = ''; _lastDetailAttachmentsHtml = ''; }
                 if (detailAskAgentButton) detailAskAgentButton.disabled = true;
                 if (detailImportTaskButton) detailImportTaskButton.disabled = true;
-                if (detailSendPlannerTaskButton) detailSendPlannerTaskButton.disabled = true;
                 return;
             }
 
@@ -3429,9 +3516,6 @@
             }
             if (detailImportTaskButton) {
                 detailImportTaskButton.disabled = linearImportPending;
-            }
-            if (detailSendPlannerTaskButton) {
-                detailSendPlannerTaskButton.disabled = linearImportPending;
             }
         }
 
@@ -3765,6 +3849,11 @@
                     clickUpHierarchyLoading = true;
                     renderSidebarClickUpProjectPanel();
                     vscode.postMessage({
+                        type: 'clickupSaveSpaceSelection',
+                        spaceId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                    vscode.postMessage({
                         type: 'clickupLoadFolders',
                         spaceId,
                         workspaceRoot: currentWorkspaceRoot || undefined
@@ -3781,6 +3870,11 @@
                     clickUpAvailableListsInFolder = [];
                     clickUpHierarchyLoading = true;
                     renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'clickupSaveFolderSelection',
+                        folderId: clickUpSelectedFolderId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
                     if (folderId === '_root_') {
                         clickUpHierarchyLoading = false;
                         renderSidebarClickUpProjectPanel();
@@ -3908,6 +4002,9 @@
                             <div class="project-card-meta">
                                 ${task.assignees?.length ? `<span class="project-card-assignees">${escapeHtml(task.assignees.map(a => a.username || a.email).join(', '))}</span>` : ''}
                             </div>
+                            <div style="display:flex; gap:4px;">
+                                <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(task.id)}" aria-label="Import ${escapeAttr(task.identifier || task.id)}">IMPORT</button>
+                            </div>
                         </div>
                     `;
                 }).join('');
@@ -3915,27 +4012,20 @@
             if (_lastClickUpIssuesContainerHtml !== html) {
                 issuesContainer.innerHTML = html;
                 _lastClickUpIssuesContainerHtml = html;
-
-                issuesContainer.querySelectorAll('.project-card').forEach(card => {
-                    card.addEventListener('click', () => {
-                        const taskId = card.getAttribute('data-clickup-task-id');
-                        if (taskId) loadClickUpTaskDetails(taskId);
-                    });
-                });
             }
         }
 
         function renderSidebarClickUpTaskDetail() {
             const { detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
                     detailSubtasksList, detailCommentsList, detailAttachmentsList,
-                    detailAskAgentButton, detailImportTaskButton, detailSendPlannerTaskButton } = getProjectTabElements();
+                    detailAskAgentButton, detailImportTaskButton } = getProjectTabElements();
 
             if (!selectedClickUpIssue) {
                 [detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
                  detailSubtasksList, detailCommentsList, detailAttachmentsList].forEach(el => {
                     if (el) el.innerHTML = '';
                 });
-                [detailAskAgentButton, detailImportTaskButton, detailSendPlannerTaskButton].forEach(el => {
+                [detailAskAgentButton, detailImportTaskButton].forEach(el => {
                     if (el) el.disabled = true;
                 });
                 return;
@@ -4005,7 +4095,6 @@
 
             if (detailAskAgentButton) detailAskAgentButton.disabled = clickUpImportPending;
             if (detailImportTaskButton) detailImportTaskButton.disabled = clickUpImportPending;
-            if (detailSendPlannerTaskButton) detailSendPlannerTaskButton.disabled = clickUpImportPending;
         }
 
         function getFilteredClickUpTasks() {
@@ -4104,7 +4193,6 @@
                     <div class="project-detail-actions">
                         <button id="sidebar-detail-ask-agent" class="secondary-btn" type="button">ASK AGENT</button>
                         <button id="sidebar-detail-import-task" class="secondary-btn" type="button">IMPORT TASK + SUBTASKS</button>
-                        <button id="sidebar-detail-send-planner-task" class="secondary-btn" type="button">SEND TO PLANNER + SUBTASKS</button>
                     </div>
                     <div class="project-detail-section">
                         <div class="project-detail-heading">Subtasks</div>
@@ -4148,6 +4236,12 @@
                     linearProjectLoading = false;
                     linearProjectIssues = [];
                     renderSidebarLinearProjectPanel();
+                    // Persist the selection
+                    vscode.postMessage({
+                        type: 'linearSaveProjectSelection',
+                        projectName: linearProjectPickerValue,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
                 });
             }
             if (stateFilter) {
@@ -4180,23 +4274,17 @@
                     });
                     return;
                 }
-                const sendPlannerBtn = event.target.closest('.project-issue-send-planner-btn');
-                if (sendPlannerBtn && sendPlannerBtn.dataset.sendPlannerIssueId) {
-                    sendPlannerBtn.disabled = true;
-                    sendPlannerBtn.dataset.sending = '';
-                    vscode.postMessage({
-                        type: 'linearImportAndSendToPlanner',
-                        issueId: sendPlannerBtn.dataset.sendPlannerIssueId,
-                        includeSubtasks: true,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                    return;
-                }
                 const card = event.target.closest('[data-linear-issue-id]');
-                if (!card) {
+                if (card) {
+                    loadLinearTaskDetails(card.dataset.linearIssueId);
                     return;
                 }
-                loadLinearTaskDetails(card.dataset.linearIssueId);
+                const clickUpCard = event.target.closest('[data-clickup-task-id]');
+                if (clickUpCard) {
+                    const taskId = clickUpCard.getAttribute('data-clickup-task-id');
+                    if (taskId) loadClickUpTaskDetails(taskId);
+                    return;
+                }
             });
             detailSubtasksList?.addEventListener('click', (event) => {
                 const button = event.target.closest('[data-linear-subtask-id]');
@@ -4255,36 +4343,6 @@
                     renderSidebarLinearProjectPanel();
                     vscode.postMessage({
                         type: 'linearImportTask',
-                        issueId: selectedLinearIssue.issue.id,
-                        includeSubtasks: true,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                }
-            });
-            const detailSendPlannerTaskButton = container.querySelector('#sidebar-detail-send-planner-task');
-            detailSendPlannerTaskButton?.addEventListener('click', () => {
-                if (lastIntegrationProvider === 'clickup') {
-                    if (!selectedClickUpIssue?.task?.id) {
-                        vscode.postMessage({ type: 'showWarning', message: 'Load a ClickUp task first.' });
-                        return;
-                    }
-                    clickUpImportPending = true;
-                    renderSidebarClickUpProjectPanel();
-                    vscode.postMessage({
-                        type: 'linearImportAndSendToPlanner',
-                        issueId: selectedClickUpIssue.task.id,
-                        includeSubtasks: true,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                } else {
-                    if (!selectedLinearIssue?.issue?.id) {
-                        vscode.postMessage({ type: 'showWarning', message: 'Load a Linear task first.' });
-                        return;
-                    }
-                    linearImportPending = true;
-                    renderSidebarLinearProjectPanel();
-                    vscode.postMessage({
-                        type: 'linearImportAndSendToPlanner',
                         issueId: selectedLinearIssue.issue.id,
                         includeSubtasks: true,
                         workspaceRoot: currentWorkspaceRoot || undefined

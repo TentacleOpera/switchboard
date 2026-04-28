@@ -26,4 +26,4 @@ User types `/export` or "export this conversation"
 ## Notes
 - Temp file is automatically deleted after successful export
 - If export fails, temp file remains for debugging
-- User can search archived conversations with `search_archive` MCP tool
+- User can search archived conversations using `duckdb` CLI against `.switchboard/archive.duckdb` (see `.agent/skills/query_archive/SKILL.md`)

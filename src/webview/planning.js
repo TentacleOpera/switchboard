@@ -142,6 +142,9 @@
         filterRequestIds: {}
     };
 
+    // Saved browse filter containers from config (restored after containers load)
+    let _savedBrowseFilterContainers = {};
+
     const treePane = document.getElementById('tree-pane');
     const treePaneOnline = document.getElementById('tree-pane-online');
     const markdownPreview = document.getElementById('markdown-preview');
@@ -241,6 +244,7 @@
     }
 
     function renderNode(node, sourceId, depth = 0) {
+        let deleteBtnRef = null;
         const wrapper = document.createElement('div');
         wrapper.className = 'tree-node';
         wrapper.dataset.sourceId = sourceId;
@@ -284,10 +288,32 @@
             wrapper.addEventListener('click', () => {
                 loadDocumentPreview(sourceId, node.id, node.name);
             });
+
+            // Add delete button only for local-folder documents
+            if (sourceId === 'local-folder') {
+                const deleteBtn = document.createElement('button');
+                deleteBtn.className = 'doc-delete-btn';
+                deleteBtn.innerHTML = '×';
+                deleteBtn.title = 'Move to trash';
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteBtn.disabled = true;
+                    deleteBtn.textContent = '…';
+                    vscode.postMessage({
+                        type: 'deleteLocalDoc',
+                        docId: node.id,
+                        docName: node.name
+                    });
+                });
+                deleteBtnRef = deleteBtn;
+            }
         }
 
         wrapper.appendChild(icon);
         wrapper.appendChild(label);
+        if (deleteBtnRef) {
+            wrapper.appendChild(deleteBtnRef);
+        }
         wrapper.appendChild(childContainer);
 
         return { wrapper, childContainer };
@@ -479,12 +505,7 @@
         // Add separate imported docs section
         const importedSection = document.createElement('div');
         importedSection.className = 'imported-docs-section';
-        importedSection.innerHTML = `
-            <div class="imported-docs-header">IMPORTED DOCS</div>
-            <div id="imported-docs-list">
-                <div class="empty-state">No imported documents</div>
-            </div>
-        `;
+        importedSection.id = 'imported-docs-list';
         treePane.appendChild(importedSection);
 
         // Fetch imported docs on initial load
@@ -565,6 +586,8 @@
     }
 
     function handleOnlineDocsReady(msg) {
+        // Stash saved filter containers for re-application after containers load
+        _savedBrowseFilterContainers = msg.browseFilterContainers || {};
         renderOnlineDocs(msg.roots || [], msg.enabledSources || {
             clickup: true,
             linear: true,
@@ -647,7 +670,7 @@
                 pageListHtml += renderMarkdown(content);
                 pageListHtml += '</div>';
                 targetBtnAppend.disabled = false;
-                targetBtnImport.disabled = false;
+                if (btnImportFullDoc) btnImportFullDoc.disabled = false;
             } else {
                 pageListHtml += '<div class="empty-state" style="padding: 32px; text-align: center; color: var(--text-secondary);">Select a page above to view its content, or click "Import full doc" to import the entire document.</div>';
             }
@@ -673,7 +696,7 @@
 
             if (!content) {
                 targetBtnAppend.disabled = true;
-                targetBtnImport.disabled = true;
+                if (btnImportFullDoc) btnImportFullDoc.disabled = true;
             }
             return;
         }
@@ -683,7 +706,7 @@
         targetPreview.innerHTML = renderMarkdown(content);
 
         targetBtnAppend.disabled = false;
-        targetBtnImport.disabled = false;
+        if (btnImportFullDoc) btnImportFullDoc.disabled = false;
         targetStatus.textContent = '';
     }
 
@@ -784,6 +807,13 @@
                 state.activeContainers.delete(sourceId);
             }
 
+            // Persist the selection
+            vscode.postMessage({
+                type: 'savePlanningContainerSelection',
+                sourceId,
+                containerId: select.value
+            });
+
             if (docList) docList.innerHTML = '<div class="tree-placeholder">Loading...</div>';
             vscode.postMessage({
                 type: 'fetchFilteredDocs',
@@ -796,6 +826,28 @@
         if (controlsContainer) {
             controlsContainer.appendChild(select);
         }
+
+        // AFTER the select is fully populated, re-apply saved filter
+        const savedContainerId = _savedBrowseFilterContainers[sourceId];
+        if (savedContainerId && select.querySelector(`option[value="${savedContainerId}"]`)) {
+            select.value = savedContainerId;
+            state.activeContainers.set(sourceId, {
+                id: savedContainerId,
+                name: containerMap.get(savedContainerId) || 'Unknown'
+            });
+            // Trigger filtered doc load for the saved container
+            const filterKey = `filter:${sourceId}`;
+            state.filterRequestIds[filterKey] = (state.filterRequestIds[filterKey] || 0) + 1;
+            vscode.postMessage({
+                type: 'fetchFilteredDocs',
+                sourceId,
+                containerId: savedContainerId,
+                requestId: state.filterRequestIds[filterKey]
+            });
+        }
+
+        // Clear saved filter after applying (one-shot)
+        delete _savedBrowseFilterContainers[sourceId];
     }
 
     function handleFilteredDocsReady(msg) {
@@ -1001,87 +1053,98 @@
         // Sort docs by order field to preserve subpage order
         const sortedDocs = [...docs].sort((a, b) => (a.order || 0) - (b.order || 0));
 
-        // Group docs by sourceId to show subheaders for subpages
-        const docsBySource = new Map();
+        // Group docs: sourceId → parentDocName → docs[]
+        const docsBySourceAndParent = new Map();
         sortedDocs.forEach(doc => {
             const sourceKey = doc.sourceId || 'unknown';
-            if (!docsBySource.has(sourceKey)) {
-                docsBySource.set(sourceKey, []);
+            const parentKey = doc.parentDocName || doc.docName; // Backward compat fallback
+            if (!docsBySourceAndParent.has(sourceKey)) {
+                docsBySourceAndParent.set(sourceKey, new Map());
             }
-            docsBySource.get(sourceKey).push(doc);
+            if (!docsBySourceAndParent.get(sourceKey).has(parentKey)) {
+                docsBySourceAndParent.get(sourceKey).set(parentKey, []);
+            }
+            docsBySourceAndParent.get(sourceKey).get(parentKey).push(doc);
         });
 
-        // Render docs grouped by source
-        docsBySource.forEach((sourceDocs, sourceId) => {
-            // Add source subheader if there are multiple sources or multiple docs from this source
-            if (docsBySource.size > 1 || sourceDocs.length > 1) {
-                const subheader = document.createElement('div');
-                subheader.className = 'imported-docs-subheader';
-                subheader.textContent = SOURCE_DISPLAY_NAMES[sourceId] || sourceId;
-                subheader.style.cssText = 'padding: 8px 8px 4px; font-size: 10px; color: var(--text-secondary); text-transform: uppercase; letter-spacing: 0.5px; border-top: 1px solid var(--border-color); margin-top: 4px;';
-                importedDocsContainer.appendChild(subheader);
-            }
+        // Render docs grouped by source then by parentDocName
+        docsBySourceAndParent.forEach((parentGroups, sourceId) => {
+            // Create teal source header: "IMPORTED FROM {source}"
+            const sourceHeader = document.createElement('div');
+            sourceHeader.className = 'imported-docs-header';
+            sourceHeader.textContent = `IMPORTED FROM ${SOURCE_DISPLAY_NAMES[sourceId] || sourceId}`;
+            importedDocsContainer.appendChild(sourceHeader);
 
-            sourceDocs.forEach(doc => {
-            state.importedDocs.set(doc.docName, {
-                sourceId: doc.sourceId,
-                docId: doc.docId,
-                docName: doc.docName,
-                slugPrefix: doc.slugPrefix,
-                canSync: doc.canSync
-            });
-            state.importedDocs.set(doc.slugPrefix, {
-                sourceId: doc.sourceId,
-                docId: doc.docId,
-                docName: doc.docName,
-                slugPrefix: doc.slugPrefix,
-                canSync: doc.canSync
-            });
-
-            // Manually create doc item with same structure as renderNode
-            const wrapper = document.createElement('div');
-            wrapper.className = 'tree-node';
-            wrapper.dataset.sourceId = 'local-folder';
-            wrapper.dataset.docId = doc.slugPrefix;
-            wrapper.dataset.slugPrefix = doc.slugPrefix;
-            wrapper.style.cssText = 'padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 8px;';
-            
-            const icon = document.createElement('span');
-            icon.textContent = '📄';
-            icon.style.cssText = 'font-size: 14px;';
-            
-            const label = document.createElement('span');
-            label.textContent = doc.docName;
-            label.style.cssText = 'font-size: 12px; color: var(--text-primary);';
-            
-            wrapper.appendChild(icon);
-            wrapper.appendChild(label);
-            
-            // Add click handler to load preview from docs directory
-            wrapper.addEventListener('click', (e) => {
-                e.stopPropagation();
-                
-                // Apply selection highlighting
-                if (state.selectedEl) {
-                    state.selectedEl.classList.remove('selected');
+            parentGroups.forEach((groupDocs, parentDocName) => {
+                // Only show doc subheader if there are multiple pages in this group
+                if (groupDocs.length > 1) {
+                    const docSubheader = document.createElement('div');
+                    docSubheader.className = 'imported-docs-doc-subheader';
+                    docSubheader.textContent = parentDocName;
+                    importedDocsContainer.appendChild(docSubheader);
                 }
-                wrapper.classList.add('selected');
-                state.selectedEl = wrapper;
-                
-                state.activeSource = 'local-folder';
-                state.activeDocId = doc.slugPrefix;
-                state.activeDocName = doc.docName;
-                state.previewRequestId++;
-                
-                // Send message to load file from docs directory
-                vscode.postMessage({
-                    type: 'fetchDocsFile',
-                    slugPrefix: doc.slugPrefix,
-                    requestId: state.previewRequestId
+
+                groupDocs.forEach(doc => {
+                    state.importedDocs.set(doc.docName, {
+                        sourceId: doc.sourceId,
+                        docId: doc.docId,
+                        docName: doc.docName,
+                        slugPrefix: doc.slugPrefix,
+                        canSync: doc.canSync
+                    });
+                    state.importedDocs.set(doc.slugPrefix, {
+                        sourceId: doc.sourceId,
+                        docId: doc.docId,
+                        docName: doc.docName,
+                        slugPrefix: doc.slugPrefix,
+                        canSync: doc.canSync
+                    });
+
+                    // Manually create doc item with same structure as renderNode
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'tree-node';
+                    wrapper.dataset.sourceId = 'local-folder';
+                    wrapper.dataset.docId = doc.slugPrefix;
+                    wrapper.dataset.slugPrefix = doc.slugPrefix;
+                    wrapper.style.cssText = 'padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 8px;';
+
+                    const icon = document.createElement('span');
+                    icon.textContent = '📄';
+                    icon.style.cssText = 'font-size: 14px;';
+
+                    const label = document.createElement('span');
+                    label.textContent = doc.docName;
+                    label.style.cssText = 'font-size: 12px; color: var(--text-primary);';
+
+                    wrapper.appendChild(icon);
+                    wrapper.appendChild(label);
+
+                    // Add click handler to load preview from docs directory
+                    wrapper.addEventListener('click', (e) => {
+                        e.stopPropagation();
+
+                        // Apply selection highlighting
+                        if (state.selectedEl) {
+                            state.selectedEl.classList.remove('selected');
+                        }
+                        wrapper.classList.add('selected');
+                        state.selectedEl = wrapper;
+
+                        state.activeSource = 'local-folder';
+                        state.activeDocId = doc.slugPrefix;
+                        state.activeDocName = doc.docName;
+                        state.previewRequestId++;
+
+                        // Send message to load file from docs directory
+                        vscode.postMessage({
+                            type: 'fetchDocsFile',
+                            slugPrefix: doc.slugPrefix,
+                            requestId: state.previewRequestId
+                        });
+                    });
+
+                    importedDocsContainer.appendChild(wrapper);
                 });
-            });
-            
-            importedDocsContainer.appendChild(wrapper);
             });
         });
     }
@@ -1246,6 +1309,35 @@
                 }
                 const btnSAL = document.getElementById('btn-set-active-context-local');
                 if (btnSAL) btnSAL.disabled = false;
+                break;
+            case 'localDocDeleted':
+                if (msg.success) {
+                    statusEl.textContent = `Moved to trash: ${msg.docId}`;
+                    // If the deleted doc was the active selection, clear preview
+                    if (state.activeDocId === msg.docId) {
+                        state.activeDocId = null;
+                        state.activeDocName = null;
+                        state.activeSource = null;
+                        if (state.selectedEl) {
+                            state.selectedEl.classList.remove('selected');
+                            state.selectedEl = null;
+                        }
+                        const previewContent = document.getElementById('preview-content');
+                        if (previewContent) {
+                            previewContent.innerHTML = '<div class="empty-state">Select a document to preview</div>';
+                        }
+                        const activeDocName = document.getElementById('active-doc-name-local');
+                        if (activeDocName) { activeDocName.textContent = 'None'; }
+                        if (btnAppendToPrompts) { btnAppendToPrompts.disabled = true; }
+                    }
+                } else {
+                    statusEl.textContent = `Error: ${msg.error || 'Failed to delete file'}`;
+                    // Re-enable delete buttons that were disabled
+                    document.querySelectorAll('.doc-delete-btn').forEach(btn => {
+                        btn.disabled = false;
+                        btn.innerHTML = '×';
+                    });
+                }
                 break;
         }
     });

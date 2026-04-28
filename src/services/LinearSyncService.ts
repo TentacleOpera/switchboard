@@ -27,6 +27,7 @@ export interface LinearConfig {
   deleteSyncEnabled?: boolean;  // default: true — archive Linear issue when plan is deleted
   completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
   excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
+  selectedProjectName: string;  // Persisted project picker value for sidebar filter
 }
 
 export interface LinearApplyOptions {
@@ -166,7 +167,8 @@ export class LinearSyncService {
       pullIntervalMinutes: 60,
       automationRules: [],
       completeSyncEnabled: true,
-      excludeBacklog: true  // default to excluding backlog for lightweight sync
+      excludeBacklog: true,  // default to excluding backlog for lightweight sync
+      selectedProjectName: ''  // default to no project selected
     };
   }
 
@@ -206,7 +208,8 @@ export class LinearSyncService {
         ? (raw.setupComplete === true)  // default true for existing setups
         : raw.deleteSyncEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
-      excludeBacklog: raw.excludeBacklog !== false  // default true — exclude backlog issues
+      excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
+      selectedProjectName: raw.selectedProjectName || ''  // normalize missing/undefined to empty string
     };
   }
 

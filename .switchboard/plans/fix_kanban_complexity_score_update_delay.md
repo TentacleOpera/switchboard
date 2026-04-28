@@ -355,7 +355,7 @@ describe('Kanban Metadata File Watcher', () => {
 - Per-file debounce (300ms) + global board refresh debounce (100ms) = max ~400ms from edit to board update
 
 ## Validation Results
-- TypeScript compilation: ✅ Passed (1 pre-existing unrelated error at line 3218 for ArchiveManager import)
+- TypeScript compilation: ✅ Passed (2 pre-existing unrelated errors: ClickUpSyncService.ts:2008 and KanbanProvider.ts:3218 ArchiveManager import). No new errors introduced.
 - Implementation complete:
   1. ✅ Added `_metadataDebounceTimers` Map field at line 119
   2. ✅ Restructured `onDidChange` handler with hoisted plan lookup (lines 584-711)
@@ -363,8 +363,18 @@ describe('Kanban Metadata File Watcher', () => {
   4. ✅ Added timer cleanup in `dispose()` (lines 491-495)
 - Manual test checklist: pending user verification
 
+### Reviewer Pass (2026-04-28)
+- **Stage 1 (Grumpy)**: No CRITICAL findings. One downgraded MAJOR (`sanitizeTags` filtering is consistent with `getTagsFromPlan` — pre-existing design, not watcher bug). 4 NITs.
+- **Stage 2 (Balanced)**: All findings are NIT or defer. No code changes needed — implementation matches plan spec faithfully.
+- **Code fixes applied**: Updated Remaining Risks section (stale `require` reference → static import).
+- **Deferred items**:
+  - Redundant `_getKanbanDb` call at line 698 (harmless defensive pattern)
+  - Regression test `kanban-metadata-watcher.test.ts` not yet created
+  - Pre-existing `sanitizeTags.test.ts` compilation failure (not this plan's scope)
+- **Regex fidelity verified**: Inline complexity/tags/dependencies extraction regex patterns are identical to `getComplexityFromPlan` (line 2247), `getTagsFromPlan` (line 2360), and `getDependenciesFromPlan` (line 2375).
+
 ## Remaining Risks
-1. **Low**: The `require('./complexityScale')` call inside the timer callback uses dynamic require to avoid circular imports. If this module is refactored to ESM-only in the future, the call would need updating. However, the existing `getComplexityFromPlan` method already uses the same `legacyToScore` function, so the import pattern is consistent. `sanitizeTags` is a local function in KanbanProvider.ts (line 78) — no external import needed.
+1. **Low**: The `legacyToScore` function is imported via the existing static import at the top of KanbanProvider.ts (line 20: `import { legacyToScore, ... } from './complexityScale'`). No dynamic `require` is used — the original plan spec suggested `require('./complexityScale')` inside the timer callback, but the implementation correctly uses the top-level static import instead, eliminating the ESM refactoring risk. `sanitizeTags` is a module-level function in KanbanProvider.ts (line 80) — no external import needed.
 
 ## Recommendation
 **Send to Coder** — Complexity 5 (medium), single-file change with clear implementation spec.

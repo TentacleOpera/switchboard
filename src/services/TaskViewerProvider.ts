@@ -256,6 +256,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // TTL-based sets for reliable loop prevention (boolean flags reset before async watcher callbacks fire)
     private _recentMirrorWrites = new Map<string, NodeJS.Timeout>();  // mirror paths we just wrote
     private _recentBrainWrites = new Map<string, NodeJS.Timeout>();   // brain paths we just wrote
+    private _recentSourceWrites = new Map<string, NodeJS.Timeout>();   // managed-import source paths we just wrote
     private _brainDebounceTimers = new Map<string, NodeJS.Timeout>();  // debounce brain watcher events
     private _lastAntigravityRescanAt = 0;
     private _configuredPlanSyncTimer?: NodeJS.Timeout;
@@ -1704,18 +1705,49 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 let workingDir = '';
                 if (db) {
                     const plan = await db.getPlanBySessionId(sid);
-                    if (plan && plan.planFile) {
-                        planFile = plan.planFile;
+                    if (plan) {
+                        // Try plan_file first
+                        if (plan.planFile) {
+                            const absolutePath = path.resolve(workspaceRoot, plan.planFile);
+                            if (fs.existsSync(absolutePath)) {
+                                planFile = plan.planFile;
+                            } else {
+                                console.warn(`[TaskViewerProvider] plan_file not found: ${absolutePath}, trying fallbacks`);
+                            }
+                        }
+
+                        // Fallback to mirror_path
+                        if (!planFile && plan.mirrorPath) {
+                            const mirrorPath = path.join(workspaceRoot, '.switchboard', 'plans', plan.mirrorPath);
+                            if (fs.existsSync(mirrorPath)) {
+                                planFile = path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
+                                console.log(`[TaskViewerProvider] Using mirror_path fallback for session ${sid}`);
+                            }
+                        }
+
+                        // Fallback to brain_source_path
+                        if (!planFile && plan.brainSourcePath) {
+                            const brainPath = path.isAbsolute(plan.brainSourcePath)
+                                ? plan.brainSourcePath
+                                : path.resolve(workspaceRoot, plan.brainSourcePath);
+                            if (fs.existsSync(brainPath)) {
+                                planFile = path.relative(workspaceRoot, brainPath).replace(/\\/g, '/');
+                                console.log(`[TaskViewerProvider] Using brain_source_path fallback for session ${sid}`);
+                            }
+                        }
+
                         topic = plan.topic;
                         dependencies = plan.dependencies;
                         workingDir = plan.repoScope ? path.join(workspaceRoot, plan.repoScope) : '';
                     }
                 }
                 if (!planFile) {
+                    console.error(`[TaskViewerProvider] No valid plan file found for session ${sid}`);
                     continue;
                 }
                 const absolutePath = path.resolve(workspaceRoot, planFile);
                 if (!fs.existsSync(absolutePath)) {
+                    console.error(`[TaskViewerProvider] Plan file does not exist: ${absolutePath}`);
                     continue;
                 }
                 validPlans.push({
@@ -1725,8 +1757,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     dependencies: dependencies || '',
                     workingDir
                 });
-            } catch {
-                console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}`);
+            } catch (err) {
+                console.error(`[TaskViewerProvider] Failed to resolve plan for session ${sid}:`, err);
             }
         }
         return validPlans;
@@ -1768,6 +1800,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await vscode.env.clipboard.writeText(messagePayload);
 
         const workflowName = this._workflowNameForDispatchRole(role, options.instruction);
+        const db = await this._getKanbanDb(resolvedWorkspaceRoot);
         for (const plan of validPlans) {
             if (workflowName) {
                 await this._updateSessionRunSheet(plan.sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
@@ -1780,6 +1813,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 undefined,
                 true
             );
+
+            // After planner improves a plan, ensure plan_file points to the improved mirror
+            if (role === 'planner' && workflowName === 'improve-plan' && db) {
+                try {
+                    const planRecord = await db.getPlanBySessionId(plan.sessionId);
+                    if (planRecord?.planFile) {
+                        const absolutePath = path.resolve(resolvedWorkspaceRoot, planRecord.planFile);
+                        if (fs.existsSync(absolutePath)) {
+                            const stats = await fs.promises.stat(absolutePath);
+                            const modifiedRecently = (Date.now() - stats.mtime.getTime()) < 5 * 60 * 1000;
+                            if (modifiedRecently) {
+                                await db.updatePlanFile(plan.sessionId, planRecord.planFile);
+                                console.log(`[TaskViewerProvider] Updated plan_file for session ${plan.sessionId} after improvement`);
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.error(`[TaskViewerProvider] Failed to update plan_file for session ${plan.sessionId}:`, err);
+                }
+            }
         }
 
         this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
@@ -3826,9 +3879,43 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
 
 
-    private _sendInitialState() {
+    private async _sendInitialState() {
         const activeTab = this._context.workspaceState.get<string>(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, 'agents');
         const workspaceRoot = this._resolveWorkspaceRoot();
+
+        // Load ClickUp hierarchy state if available
+        let clickupHierarchyState: { selectedSpaceId?: string; selectedFolderId?: string; selectedListId?: string; selectedListName?: string } | undefined;
+        if (workspaceRoot) {
+            try {
+                const clickUp = this._getClickUpService(workspaceRoot);
+                const config = await clickUp.loadConfig();
+                if (config?.setupComplete) {
+                    clickupHierarchyState = {
+                        selectedSpaceId: config.selectedSpaceId || '',
+                        selectedFolderId: config.selectedFolderId || '',
+                        selectedListId: config.selectedListId || '',
+                        selectedListName: config.selectedListName || ''
+                    };
+                }
+            } catch {
+                // Ignore errors loading ClickUp config
+            }
+        }
+
+        // Load Linear project picker state if available
+        let linearProjectPickerValue: string | undefined;
+        if (workspaceRoot) {
+            try {
+                const linear = this._getLinearService(workspaceRoot);
+                const linearConfig = await linear.loadConfig();
+                if (linearConfig?.setupComplete && linearConfig.selectedProjectName) {
+                    linearProjectPickerValue = linearConfig.selectedProjectName;
+                }
+            } catch {
+                // Ignore errors loading Linear config
+            }
+        }
+
         this._view?.webview.postMessage({
             type: 'initialState',
             needsSetup: this._needsSetup,
@@ -3839,7 +3926,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             connected: this._mcpIdeConfigured && this._mcpToolReachable,
             currentIdeName: vscode.env.appName,
             activeTab,
-            workspaceRoot: workspaceRoot || undefined
+            workspaceRoot: workspaceRoot || undefined,
+            clickupHierarchyState,
+            linearProjectPickerValue
         });
     }
 
@@ -5961,7 +6050,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // webview has no handler for them (see R3).
                     const _sidebarInitT0 = Date.now();
                     console.log('[TaskViewerProvider] Sidebar init Phase 1 start');
-                    this._sendInitialState();
+                    await this._sendInitialState();
                     await Promise.all([
                         this._refreshSessionStatus(),
                         this._refreshTerminalStatuses(),
@@ -6013,8 +6102,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 switch (data.type) {
                     case 'ready':
                         // Dead-code `{ type: 'loading', ... }` posts removed; the webview
-                        // has no handler for that message (see implementation.html grep).
-                        this._sendInitialState();
+                        // has no handler for them (see implementation.html grep).
+                        await this._sendInitialState();
                         // CRITICAL: do NOT await `_initialSyncPromise` here. That
                         // promise wraps Phase-2's heavy `_syncFilesAndRefreshRunSheets`
                         // + `housekeepStaleTerminals`; awaiting it would block the
@@ -6484,6 +6573,67 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         } catch (error) {
                             console.error('Failed to save ClickUp list selection:', error);
+                        }
+                        break;
+                    }
+                    case 'clickupSaveSpaceSelection': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            break;
+                        }
+                        const clickUp = this._getClickUpService(workspaceRoot);
+
+                        try {
+                            const config = await clickUp.loadConfig();
+                            if (config) {
+                                config.selectedSpaceId = String(data.spaceId || '').trim();
+                                // Clear downstream selections — new space means old folder/list are invalid
+                                config.selectedFolderId = '';
+                                config.selectedListId = '';
+                                config.selectedListName = '';
+                                await clickUp.saveConfig(config);
+                            }
+                        } catch (error) {
+                            console.error('Failed to save ClickUp space selection:', error);
+                        }
+                        break;
+                    }
+                    case 'clickupSaveFolderSelection': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            break;
+                        }
+                        const clickUp = this._getClickUpService(workspaceRoot);
+
+                        try {
+                            const config = await clickUp.loadConfig();
+                            if (config) {
+                                config.selectedFolderId = String(data.folderId || '').trim();
+                                // Clear downstream selections — new folder means old list is invalid
+                                config.selectedListId = '';
+                                config.selectedListName = '';
+                                await clickUp.saveConfig(config);
+                            }
+                        } catch (error) {
+                            console.error('Failed to save ClickUp folder selection:', error);
+                        }
+                        break;
+                    }
+                    case 'linearSaveProjectSelection': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        if (!workspaceRoot) {
+                            break;
+                        }
+                        const linear = this._getLinearService(workspaceRoot);
+
+                        try {
+                            const config = await linear.loadConfig();
+                            if (config) {
+                                config.selectedProjectName = String(data.projectName || '').trim();
+                                await linear.saveConfig(config);
+                            }
+                        } catch (error) {
+                            console.error('Failed to save Linear project selection:', error);
                         }
                         break;
                     }
@@ -7449,8 +7599,9 @@ What would you like to find?`;
         try {
             this._stagingWatcher = fs.watch(stagingDir, (_eventType, filename) => {
                 if (!filename) return;
-                // Security: only process files matching the SHA-256 mirror pattern (brain_ + 64 hex chars)
-                if (!/^brain_[0-9a-f]{64}\.md$/.test(filename)) return;
+                const isBrainMirror = /^brain_[0-9a-f]{64}\.md$/.test(filename);
+                const isIngestedMirror = /^ingested_[0-9a-f]{64}\.md$/.test(filename);
+                if (!isBrainMirror && !isIngestedMirror) return;
                 const existing = mirrorDebounceTimers.get(filename);
                 if (existing) clearTimeout(existing);
                 mirrorDebounceTimers.set(filename, setTimeout(async () => {
@@ -7459,32 +7610,71 @@ What would you like to find?`;
                     if (!fs.existsSync(mirrorPath)) return;
 
                     const stableMirrorPath = this._getStablePath(mirrorPath);
-                    // Skip if we wrote this mirror file ourselves (brain→mirror direction)
+                    // Skip if we wrote this mirror file ourselves (brain/managed-import→mirror direction)
                     if (this._recentMirrorWrites.has(stableMirrorPath)) return;
 
-                    // Resolve brain source path from runsheet first, then registry fallback.
-                    const hash = filename.replace(/^brain_/, '').replace(/\.md$/, '');
-                    const resolvedBrainPath = await this._resolveBrainSourcePathForMirrorHash(workspaceRoot, hash, antigravityRoot);
-                    if (!resolvedBrainPath) return;
+                    if (isBrainMirror) {
+                        // Resolve brain source path from runsheet first, then registry fallback.
+                        const hash = filename.replace(/^brain_/, '').replace(/\.md$/, '');
+                        const resolvedBrainPath = await this._resolveBrainSourcePathForMirrorHash(workspaceRoot, hash, antigravityRoot);
+                        if (!resolvedBrainPath) return;
+
+                        try {
+                            const syncResult = await syncMirrorToBrain({
+                                mirrorPath,
+                                resolvedBrainPath,
+                                getStablePath: (p: string) => this._getStablePath(p),
+                                getResolvedSidecarPaths: (baseBrainPath: string) => this._getResolvedSidecarPaths(baseBrainPath),
+                                recentBrainWrites: this._recentBrainWrites,
+                                writeTtlMs: 2000
+                            });
+
+                            if (syncResult.updatedBase) {
+                                console.log(`[TaskViewerProvider] Synced mirror → brain: ${path.basename(resolvedBrainPath)}`);
+                            }
+                            if (syncResult.sidecarWrites > 0) {
+                                console.log(`[TaskViewerProvider] Synced mirror → brain sidecars: ${syncResult.sidecarWrites}`);
+                            }
+                        } catch (e) {
+                            console.error('[TaskViewerProvider] Mirror → brain sync failed:', e);
+                        }
+                        return;
+                    }
+
+                    // ingested branch: resolve external source via runsheet.brainSourcePath
+                    const relativeMirror = path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
+                    const log = this._getSessionLog(workspaceRoot);
+                    const runSheet = await log.findRunSheetByPlanFile(relativeMirror, { includeCompleted: false });
+                    const sourcePath: string | undefined = runSheet?.brainSourcePath;
+                    if (!sourcePath || !path.isAbsolute(sourcePath) || !fs.existsSync(sourcePath)) return;
+
+                    // Tombstone safety
+                    const sourceStable = this._getStablePath(sourcePath);
+                    const sourceHash = crypto.createHash('sha256').update(sourceStable).digest('hex');
+                    const db = await this._getKanbanDb(workspaceRoot);
+                    const isTombstoned = this._tombstones.has(sourceHash) || (db ? await db.isTombstoned(sourceHash) : false);
+                    if (isTombstoned) return;
 
                     try {
-                        const syncResult = await syncMirrorToBrain({
-                            mirrorPath,
-                            resolvedBrainPath,
-                            getStablePath: (p: string) => this._getStablePath(p),
-                            getResolvedSidecarPaths: (baseBrainPath: string) => this._getResolvedSidecarPaths(baseBrainPath),
-                            recentBrainWrites: this._recentBrainWrites,
-                            writeTtlMs: 2000
-                        });
+                        const mirrorContent = await fs.promises.readFile(mirrorPath, 'utf8');
+                        const sourceContent = await fs.promises.readFile(sourcePath, 'utf8');
+                        if (mirrorContent === sourceContent) return;
 
-                        if (syncResult.updatedBase) {
-                            console.log(`[TaskViewerProvider] Synced mirror → brain: ${path.basename(resolvedBrainPath)}`);
-                        }
-                        if (syncResult.sidecarWrites > 0) {
-                            console.log(`[TaskViewerProvider] Synced mirror → brain sidecars: ${syncResult.sidecarWrites}`);
-                        }
-                    } catch (e) {
-                        console.error('[TaskViewerProvider] Mirror → brain sync failed:', e);
+                        const existingTimer = this._recentSourceWrites.get(sourceStable);
+                        if (existingTimer) clearTimeout(existingTimer);
+                        this._recentSourceWrites.set(
+                            sourceStable,
+                            setTimeout(() => this._recentSourceWrites.delete(sourceStable), 2000)
+                        );
+
+                        await fs.promises.writeFile(sourcePath, mirrorContent);
+                        console.log(`[TaskViewerProvider] Synced mirror → managed-import source: ${path.basename(sourcePath)}`);
+                    } catch (e: any) {
+                        // Read-only or permission failure: leave the mirror authoritative, do not throw.
+                        console.warn(
+                            `[TaskViewerProvider] Mirror → source write failed for ${path.basename(sourcePath)}: ${e?.code || e?.message || e}. ` +
+                            `Mirror remains the source of truth.`
+                        );
                     }
                 }, 500));  // 500ms debounce
             });
@@ -7523,6 +7713,17 @@ What would you like to find?`;
         const stablePath = this._getStablePath(sourcePath);
         const hash = crypto.createHash('sha256').update(stablePath).digest('hex');
         return `${TaskViewerProvider.MANAGED_IMPORT_PREFIX}${hash}.md`;
+    }
+
+    private async _isManagedImportSourcePath(sourcePath: string, workspaceRoot: string): Promise<boolean> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return false;
+        const configuredFolder = this._normalizeConfiguredPlanFolder(
+            await this.getPlanIngestionFolder(resolvedRoot),
+            resolvedRoot
+        );
+        if (!configuredFolder) return false;
+        return this._isPathWithin(configuredFolder, sourcePath);
     }
 
     private async _listMarkdownFilesRecursively(rootDir: string): Promise<string[]> {
@@ -7589,6 +7790,7 @@ What would you like to find?`;
         }
 
         await this._activateWorkspaceContext(workspaceRoot);
+        await this._ensureTombstonesLoaded(workspaceRoot);
         const desiredMirrors = new Set<string>();
         const markdownFiles = await this._listMarkdownFilesRecursively(resolvedPlanFolder);
         for (const filePath of markdownFiles) {
@@ -7599,6 +7801,21 @@ What would you like to find?`;
             const mirrorFilename = this._getManagedImportMirrorFilename(filePath);
             desiredMirrors.add(mirrorFilename);
             const mirrorPath = path.join(stagingDir, mirrorFilename);
+
+            // Check tombstones BEFORE content comparison to prevent resurrection.
+            // If checked after the content-match early return, a tombstoned import
+            // with an existing mirror that still matches the source would bypass
+            // the tombstone check entirely, leaving the mirror alive on the kanban.
+            const sourceStablePath = this._getStablePath(filePath);
+            const sourcePathHash = crypto.createHash('sha256').update(sourceStablePath).digest('hex');
+            const db = await this._getKanbanDb(workspaceRoot);
+            const isTombstoned = this._tombstones.has(sourcePathHash) || (db ? await db.isTombstoned(sourcePathHash) : false);
+            if (isTombstoned) {
+                console.log(`[TaskViewerProvider] Skipping tombstoned managed import: ${path.basename(filePath)}`);
+                desiredMirrors.delete(mirrorFilename);
+                continue;
+            }
+
             const content = await fs.promises.readFile(filePath, 'utf8');
             const alreadyExists = fs.existsSync(mirrorPath);
 
@@ -7607,7 +7824,19 @@ What would you like to find?`;
                 if (existingContent === content) {
                     continue;
                 }
+
+                // With bidirectional sync, source and mirror should stay in lockstep.
+                // If they differ, the source was likely edited directly (legitimate update).
             }
+
+            // Mark mirror as recently written so staging watcher doesn't bounce content back
+            const stableMirrorPath = this._getStablePath(mirrorPath);
+            const existingTimer = this._recentMirrorWrites.get(stableMirrorPath);
+            if (existingTimer) clearTimeout(existingTimer);
+            this._recentMirrorWrites.set(
+                stableMirrorPath,
+                setTimeout(() => this._recentMirrorWrites.delete(stableMirrorPath), 2000)
+            );
 
             await fs.promises.writeFile(mirrorPath, content);
             const mirrorUri = vscode.Uri.file(mirrorPath);
@@ -7616,7 +7845,8 @@ What would you like to find?`;
             } else {
                 // Pass _internal=true so the mirror-file guard in _handlePlanCreation is bypassed.
                 // The plan watcher may also fire for this file; without _internal it correctly no-ops.
-                await this._handlePlanCreation(mirrorUri, workspaceRoot, true);
+                // Pass filePath as managedImportSourcePath so the runsheet records the source location.
+                await this._handlePlanCreation(mirrorUri, workspaceRoot, true, false, filePath);
             }
         }
 
@@ -7671,13 +7901,21 @@ What would you like to find?`;
             return;
         }
 
+        // Wrap scheduleSync with the same _recentSourceWrites echo guard used below
+        // so we don't trigger a redundant configured-folder rescan after every mirror→source write.
+        const guardedScheduleSync = (uri: vscode.Uri) => {
+            const stableSource = this._getStablePath(uri.fsPath);
+            if (this._recentSourceWrites.has(stableSource)) return;  // skip our own write echoes
+            scheduleSync();
+        };
+
         try {
             const configuredUri = vscode.Uri.file(configuredPlanFolder);
             const configuredPattern = new vscode.RelativePattern(configuredUri, '**/*.md');
             this._configuredPlanWatcher = vscode.workspace.createFileSystemWatcher(configuredPattern);
-            this._configuredPlanWatcher.onDidCreate(() => scheduleSync());
-            this._configuredPlanWatcher.onDidChange(() => scheduleSync());
-            this._configuredPlanWatcher.onDidDelete(() => scheduleSync());
+            this._configuredPlanWatcher.onDidCreate(guardedScheduleSync);
+            this._configuredPlanWatcher.onDidChange(guardedScheduleSync);
+            this._configuredPlanWatcher.onDidDelete(guardedScheduleSync);
         } catch (e) {
             console.error('[TaskViewerProvider] Configured plan watcher failed:', e);
         }
@@ -7685,6 +7923,9 @@ What would you like to find?`;
         try {
             this._configuredPlanFsWatcher = fs.watch(configuredPlanFolder, { recursive: true }, (_eventType, filename) => {
                 if (!filename || !/\.md$/i.test(String(filename))) return;
+                const fullPath = path.join(configuredPlanFolder, String(filename));
+                const stableSource = this._getStablePath(fullPath);
+                if (this._recentSourceWrites.has(stableSource)) return;  // skip our own write echoes
                 scheduleSync();
             });
         } catch (e) {
@@ -10089,7 +10330,8 @@ What would you like to find?`;
         uri: vscode.Uri,
         workspaceRoot?: string,
         _internal: boolean = false,
-        suppressFollowupSync: boolean = false
+        suppressFollowupSync: boolean = false,
+        managedImportSourcePath?: string
     ) {
         const basename = path.basename(uri.fsPath);
 
@@ -10243,7 +10485,7 @@ What would you like to find?`;
             const fileStat = await fs.promises.stat(uri.fsPath);
             const fileCreationTimeMs = fileStat.birthtimeMs || fileStat.mtimeMs;
 
-            const runSheet = {
+            const runSheet: any = {
                 sessionId,
                 planFile: planFileRelative,
                 topic,
@@ -10254,6 +10496,12 @@ What would you like to find?`;
                     action: 'start'
                 }]
             };
+
+            // Store managed import source path in runsheet for proper deletion handling
+            if (managedImportSourcePath) {
+                runSheet.brainSourcePath = managedImportSourcePath;
+                runSheet.source = 'managed-import';
+            }
 
             await log.createRunSheet(sessionId, runSheet);
             console.log(`[TaskViewerProvider] Created Run Sheet for session ${sessionId}: ${topic}`);
@@ -11396,9 +11644,12 @@ What would you like to find?`;
             }
 
             // AP-2: Windows-safe brain path guard — reject brainSourcePath outside expected dir
+            let isManagedImport = false;
             if (brainSourcePath) {
-                if (!this._isAntigravitySourcePath(brainSourcePath)) {
-                    console.warn(`[TaskViewerProvider] _handleDeletePlan: brainSourcePath outside expected Antigravity plan directories, treating as local plan. path=${brainSourcePath}`);
+                const isAntigravity = this._isAntigravitySourcePath(brainSourcePath);
+                isManagedImport = await this._isManagedImportSourcePath(brainSourcePath, resolvedWorkspaceRoot);
+                if (!isAntigravity && !isManagedImport) {
+                    console.warn(`[TaskViewerProvider] _handleDeletePlan: brainSourcePath outside expected directories, treating as local plan. path=${brainSourcePath}`);
                     brainSourcePath = undefined;
                 }
             }
@@ -11411,7 +11662,9 @@ What would you like to find?`;
             // AP-3: Two distinct dialog texts — accurate language for each plan type
             const reviewSuffix = reviewFiles.length > 0 ? ` and ${reviewFiles.length} associated review file${reviewFiles.length > 1 ? 's' : ''}` : '';
             const baseDialogText = brainSourcePath
-                ? `Delete this plan? This will permanently delete the brain file, plan mirror${reviewSuffix}. This cannot be undone.`
+                ? isManagedImport
+                    ? `Delete this plan? This will permanently delete the source file in the additional plan folder and the plan mirror${reviewSuffix}. This cannot be undone.`
+                    : `Delete this plan? This will permanently delete the brain file, plan mirror${reviewSuffix}. This cannot be undone.`
                 : `Delete this plan? The workspace plan file${reviewSuffix} will be removed.`;
             const dialogText = this._activeDispatchSessions.has(sessionId)
                 ? `This plan is currently being processed. Delete anyway?\n\n${baseDialogText}`
@@ -11421,7 +11674,9 @@ What would you like to find?`;
 
             // Write tombstone BEFORE deletion to prevent resurrection
             if (brainSourcePath) {
-                const stablePath = this._getStablePath(this._getBaseBrainPath(brainSourcePath));
+                const stablePath = isManagedImport
+                    ? this._getStablePath(brainSourcePath)
+                    : this._getStablePath(this._getBaseBrainPath(brainSourcePath));
                 const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
                 await this._addTombstone(resolvedWorkspaceRoot, pathHash, sessionId);
             }
@@ -11431,8 +11686,9 @@ What would you like to find?`;
                 try {
                     await fs.promises.unlink(brainSourcePath);
                 } catch (e: any) {
-                    console.error(`[TaskViewerProvider] _handleDeletePlan: failed to delete brain file: ${e}`);
-                    vscode.window.showErrorMessage(`Failed to delete brain file: ${brainSourcePath} — ${e?.message || e}`);
+                    const fileLabel = isManagedImport ? 'source file' : 'brain file';
+                    console.error(`[TaskViewerProvider] _handleDeletePlan: failed to delete ${fileLabel}: ${e}`);
+                    vscode.window.showErrorMessage(`Failed to delete ${fileLabel}: ${brainSourcePath} — ${e?.message || e}`);
                     return false;
                 }
             }
@@ -11487,17 +11743,17 @@ What would you like to find?`;
             await log.deleteRunSheet(sessionId);
             this._activeDispatchSessions.delete(sessionId);
 
-            if (db && !brainSourcePath) {
+            if (db && (!brainSourcePath || isManagedImport)) {
                 await db.deletePlan(sessionId);
             }
 
             // Update plan registry status to deleted
-            if (brainSourcePath) {
+            if (brainSourcePath && !isManagedImport) {
                 const stablePath = this._getStablePath(this._getBaseBrainPath(brainSourcePath));
                 const planId = this._getPlanIdFromStableBrainPath(stablePath);
                 await this._updatePlanRegistryStatus(resolvedWorkspaceRoot, planId, 'deleted');
             } else {
-                // Local plan: use sessionId as planId
+                // Local plan or managed import: use sessionId as planId
                 await this._updatePlanRegistryStatus(resolvedWorkspaceRoot, sessionId, 'deleted');
             }
 
@@ -13150,12 +13406,29 @@ Create this file exactly as specified, then continue your work.`);
         const hasMultiPlanMarkers = multiPlanDetect.test(text);
 
         if (!hasMultiPlanMarkers) {
-            // Single plan import (existing behavior, preserved exactly)
+            // Single plan import - try H1, then H2, then H3, then fall back to default
             const h1Match = text.match(/^#\s+(.+)$/m);
-            const title = h1Match ? h1Match[1].trim() : 'Imported Plan';
+            const h2Match = !h1Match ? text.match(/^##\s+(.+)$/m) : null;
+            const h3Match = !h1Match && !h2Match ? text.match(/^###\s+(.+)$/m) : null;
 
-            if (!h1Match) {
-                vscode.window.showWarningMessage('No "# Title" found in clipboard. Importing with default title.');
+            let title: string;
+            let warningMessage: string | null = null;
+
+            if (h1Match) {
+                title = h1Match[1].trim();
+            } else if (h2Match) {
+                title = h2Match[1].trim();
+                warningMessage = 'No "# Title" found. Using H2 header as title.';
+            } else if (h3Match) {
+                title = h3Match[1].trim();
+                warningMessage = 'No "# Title" or "## Title" found. Using H3 header as title.';
+            } else {
+                title = 'Imported Plan';
+                warningMessage = 'No header found in clipboard. Importing with default title.';
+            }
+
+            if (warningMessage) {
+                vscode.window.showWarningMessage(warningMessage);
             }
 
             try {
@@ -13169,7 +13442,9 @@ Create this file exactly as specified, then continue your work.`);
             return;
         }
 
-        // Multi-plan import
+        // Multi-plan import (note: uses H1-only title extraction; individual plans
+        // without H1 headers receive numbered default titles — see single-plan path
+        // above for H1→H2→H3 fallback, which is intentionally not applied here)
         await this._importMultiplePlansFromClipboard(text);
     }
 
@@ -14912,6 +15187,7 @@ Create this file exactly as specified, then continue your work.`);
         }
         this._recentMirrorWrites.forEach(t => clearTimeout(t));
         this._recentBrainWrites.forEach(t => clearTimeout(t));
+        this._recentSourceWrites.forEach(t => clearTimeout(t));
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
         this._recentActionDispatches.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();

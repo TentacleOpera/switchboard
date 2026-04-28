@@ -234,6 +234,36 @@ export class PlanningPanelProvider {
                 await this._handleFetchRoots(workspaceRoot);
                 break;
             }
+            case 'savePlanningContainerSelection': {
+                const sourceId = String(msg.sourceId || '').trim();
+                const containerId = String(msg.containerId || '').trim();
+                if (!sourceId || !workspaceRoot) { break; }
+
+                try {
+                    const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
+                    let config: any = {};
+                    try {
+                        const content = await fs.promises.readFile(configPath, 'utf8');
+                        config = JSON.parse(content);
+                    } catch { /* no existing config */ }
+
+                    // Store as browseFilterContainers: { [sourceId]: containerId }
+                    if (!config.browseFilterContainers) {
+                        config.browseFilterContainers = {};
+                    }
+                    if (containerId && containerId !== '__all__') {
+                        config.browseFilterContainers[sourceId] = containerId;
+                    } else {
+                        delete config.browseFilterContainers[sourceId];
+                    }
+
+                    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
+                    await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to save container selection:', error);
+                }
+                break;
+            }
             case 'fetchChildren': {
                 await this._handleFetchChildren(workspaceRoot, msg.sourceId, msg.parentId);
                 break;
@@ -468,6 +498,37 @@ export class PlanningPanelProvider {
                 await this._handleResolveDuplicate(workspaceRoot, docName, sourceId, docId, action);
                 break;
             }
+            case 'deleteLocalDoc': {
+                const docId = msg.docId;
+                const docName = msg.docName || docId;
+                const confirm = await vscode.window.showWarningMessage(
+                    `Move "${docName}" to trash?`,
+                    { modal: true },
+                    'Move to Trash'
+                );
+                if (confirm !== 'Move to Trash') {
+                    break;
+                }
+                const service = this._getLocalFolderService(workspaceRoot);
+                const result = await service.deleteFile(docId);
+                if (result.success) {
+                    // Refresh the local docs list
+                    await this._sendLocalDocsReady(workspaceRoot);
+                    this._panel?.webview.postMessage({
+                        type: 'localDocDeleted',
+                        docId,
+                        success: true
+                    });
+                } else {
+                    this._panel?.webview.postMessage({
+                        type: 'localDocDeleted',
+                        docId,
+                        success: false,
+                        error: result.error || 'Failed to delete file'
+                    });
+                }
+                break;
+            }
         }
     }
 
@@ -534,6 +595,9 @@ export class PlanningPanelProvider {
             await vscode.workspace.getConfiguration('switchboard').update(
                 'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
             );
+
+            // Update the active doc banner to reflect the new context
+            await this._sendActiveDesignDocState();
 
             this._panel?.webview.postMessage({ type: 'activeContextSet', success: true, message: 'Set as active planning context' });
         } catch (err) {
@@ -672,11 +736,23 @@ export class PlanningPanelProvider {
         }
     }
 
-    private _sendOnlineDocsReady(): void {
+    private async _sendOnlineDocsReady(): Promise<void> {
         const roots = this._researchImportService
             .getAvailableSources()
             .filter(sourceId => sourceId !== 'local-folder')
             .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
+
+        // Load saved browse filter containers
+        let browseFilterContainers: Record<string, string> = {};
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (workspaceRoot) {
+            try {
+                const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
+                const content = await fs.promises.readFile(configPath, 'utf8');
+                const config = JSON.parse(content);
+                browseFilterContainers = config.browseFilterContainers || {};
+            } catch { /* no config yet */ }
+        }
 
         if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length);
@@ -687,13 +763,14 @@ export class PlanningPanelProvider {
                 clickup: true,
                 linear: true,
                 notion: true
-            }
+            },
+            browseFilterContainers
         });
     }
 
     private async _handleFetchRoots(workspaceRoot: string): Promise<void> {
         await this._sendLocalDocsReady(workspaceRoot);
-        this._sendOnlineDocsReady();
+        await this._sendOnlineDocsReady();
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
@@ -901,6 +978,7 @@ export class PlanningPanelProvider {
                     let docId = slugPrefix;
                     let canSync = false;
                     let order = 0;
+                    let parentDocName = slugPrefix;
 
                     const frontMatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
                     if (frontMatterMatch) {
@@ -910,6 +988,13 @@ export class PlanningPanelProvider {
                         const docNameMatch = frontMatter.match(/^docName:\s*(.+)$/m);
                         if (docNameMatch) {
                             displayName = docNameMatch[1].trim();
+                        }
+
+                        // Extract parentDocName from front-matter (backward compat: falls back to docName)
+                        parentDocName = displayName;
+                        const parentDocNameMatch = frontMatter.match(/^parentDocName:\s*(.+)$/m);
+                        if (parentDocNameMatch) {
+                            parentDocName = parentDocNameMatch[1].trim();
                         }
 
                         // Extract sourceId from front-matter
@@ -945,6 +1030,7 @@ export class PlanningPanelProvider {
                         sourceId,
                         docId,
                         docName: displayName,
+                        parentDocName,
                         slugPrefix,
                         canSync,
                         order,
@@ -1162,7 +1248,7 @@ export class PlanningPanelProvider {
                                     result.content,
                                     pageDocName,
                                     sourceId,
-                                    { pageOrder: pageIndex }
+                                    { pageOrder: pageIndex, parentDocName: docName }
                                 );
                                 pageIndex++;
                                 

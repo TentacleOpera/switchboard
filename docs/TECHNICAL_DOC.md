@@ -431,7 +431,7 @@ Key inbound messages from the Kanban webview:
 
 ### MCP integration
 
-`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the `move_kanban_card` MCP tool. It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity.
+`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the VS Code UI dispatch pipeline (formerly triggered by the `move_kanban_card` MCP tool, now removed). It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity. Agents should use the `kanban_operations` skill script instead.
 
 ## 15) Complexity classification and auto-routing
 
@@ -449,7 +449,7 @@ Auto-routing behavior:
 - `_targetColumnForDispatchRole()`: `intern` → `INTERN CODED`, `coder` → `CODER CODED`, `lead` → `LEAD CODED`, `team-lead` → `TEAM LEAD CODED`
 - Both `moveSelected` and `moveAll` use this partition when the source column is `PLAN REVIEWED`
 
-The same complexity classification logic is duplicated in `register-tools.js` for the MCP `get_kanban_state` tool (kept aligned via the `normalizeBandBLine` helper).
+The same complexity classification logic is duplicated in `register-tools.js` for the `get_kanban_state` MCP tool (kept aligned via the `normalizeBandBLine` helper). Note: the `get_kanban_state` MCP tool was removed from agent-facing tool registrations; the helper logic remains for the Switchboard MCP server used by external clients.
 
 ### Team Lead routing override
 
@@ -564,25 +564,28 @@ The Review panel supports inline editing of plan metadata:
 - **Topic**: plan title
 - **Plan text**: full markdown editing with optimistic concurrency via `expectedMtimeMs`
 
-## 18) MCP Kanban tools
+## 18) Kanban skill scripts (replaces former MCP tools)
 
-### `get_kanban_state`
+The MCP tools `get_kanban_state`, `move_kanban_card`, `query_plan_archive`, and `search_archive` have been removed. Agents now use direct database access via skill scripts.
 
-Registered in `register-tools.js`. Returns the full Kanban board state or a filtered single-column view.
+### `kanban_operations` skill
 
-- **Parameters**: `column` (optional) — supports internal IDs (`CREATED`, `PLAN REVIEWED`, etc.) and UI labels (`New`, `Planned`, etc.)
-- **Column resolution**: `resolveRequestedKanbanColumn()` normalizes input through alias map (`KANBAN_COLUMN_ALIASES`), exact match, and label match
-- **Data source**: tries SQLite DB first via `readKanbanStateFromDb()`, falls back to file-derived state from run-sheets + plan registry
-- **Response format**: JSON map of column ID → `{ id, label, items[] }` where each item has `topic`, `sessionId`, `createdAt`
-- Custom agent columns are dynamically included via `getKanbanColumnDefinitions()` which merges built-in columns with `customAgents` from `state.json`
+Located at `.agent/skills/kanban_operations/`. Provides direct DB access for card movement and state queries.
 
-### `move_kanban_card`
+- **Move a card**: `node .agent/skills/kanban_operations/move-card.js <session_id> <target_column>`
+  - Validates column against `VALID_KANBAN_COLUMNS` export from `KanbanDatabase.ts`
+  - Calls `KanbanDatabase.updateColumn()` directly (no IPC)
+- **Get kanban state**: `node .agent/skills/kanban_operations/get-state.js <workspace_id>`
+  - Queries `KanbanDatabase.getPlansByColumn()` for each column
+  - Outputs JSON with columns as keys and plan arrays as values
 
-Registered in `register-tools.js`. Routes a plan to a target agent/column via the Kanban dispatch pipeline.
+### `query_archive` skill
 
-- **Parameters**: `sessionId` (required), `target` (required) — conversational destination string
-- **Dispatch path**: delegates to `KanbanProvider.handleMcpMove()` which resolves the target through the normalized alias map, checks role visibility/assignment, and dispatches via `switchboard.triggerAgentFromKanban`
-- **Complexity routing**: targets like `team` and `coded` use dynamic per-session complexity resolution
+Located at `.agent/skills/query_archive/`. Documents direct DuckDB CLI commands for archive queries.
+
+### Internal MCP helpers still in `register-tools.js`
+
+The `readKanbanStateFromDb()`, `resolveRequestedKanbanColumn()`, and `KANBAN_COLUMN_ALIASES` helpers remain in `register-tools.js` for internal use. The `handleMcpMove()` dispatch pipeline in `KanbanProvider` also remains for VS Code UI-driven card movement. Agents should use the `kanban_operations` skill scripts for direct DB access.
 
 ## 19) Batch prompt builder (`agentPromptBuilder.ts`)
 
@@ -679,6 +682,6 @@ Typical maintainer checks:
    - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
 7. Kanban DB vs file-derived state:
    - The SQLite DB is authoritative for column positions when available, but the file-derived fallback uses `deriveKanbanColumn()` which may disagree after manual DB column moves.
-   - `get_kanban_state` MCP tool has its own DB read path separate from `KanbanProvider._refreshBoard()`.
+   - The `get_kanban_state` MCP tool (now removed) had its own DB read path separate from `KanbanProvider._refreshBoard()`. The `kanban_operations` skill script now provides direct DB access for agents.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.

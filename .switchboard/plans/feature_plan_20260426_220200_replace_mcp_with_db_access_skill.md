@@ -284,18 +284,43 @@ Replace with references to the new skills: `kanban_operations`, `query_archive`
 
 ## Completion Status
 
-**Status:** COMPLETED
+**Status:** COMPLETED (with reviewer fixes applied)
 
 **Files Changed:**
 - `src/services/KanbanDatabase.ts` - Exported `VALID_KANBAN_COLUMNS`
 - `src/mcp-server/register-tools.js` - Deleted 4 MCP tools (`move_kanban_card`, `get_kanban_state`, `query_plan_archive`, `search_archive`), updated `init_workspace` description
-- `.agent/skills/kanban_operations/SKILL.md` - Created
-- `.agent/skills/kanban_operations/move-card.js` - Created
-- `.agent/skills/kanban_operations/get-state.js` - Created
-- `.agent/skills/query_archive/SKILL.md` - Created
+- `.agent/skills/kanban_operations/SKILL.md` - Created (updated by reviewer: valid columns now reference `VALID_KANBAN_COLUMNS` export)
+- `.agent/skills/kanban_operations/move-card.js` - Created (fixed by reviewer: require path `src/` → `out/`, imported `VALID_KANBAN_COLUMNS` instead of hardcoding, added `db.close()`)
+- `.agent/skills/kanban_operations/get-state.js` - Created (fixed by reviewer: require path `src/` → `out/`, imported `VALID_KANBAN_COLUMNS` instead of hardcoding, added `db.close()`)
+- `.agent/skills/query_archive/SKILL.md` - Created (fixed by reviewer: removed hardcoded absolute path, uses workspace-relative path)
 - `.agent/skills/get_kanban_state/` - Removed
+- `AGENTS.md` - Fixed by reviewer: replaced `get_kanban_state` MCP tool reference with `kanban_operations` skill, replaced `move_kanban_card` reference with skill script
+- `docs/TECHNICAL_DOC.md` - Fixed by reviewer: replaced Section 18 "MCP Kanban tools" with "Kanban skill scripts (replaces former MCP tools)", updated 3 additional references to deleted tools
+- `.agent/workflows/challenge.md` - Fixed by reviewer: replaced `get_kanban_state` MCP tool reference with `kanban_operations` skill script
+- `.agent/workflows/archive.md` - Fixed by reviewer: replaced `query_plan_archive` and `search_archive` MCP tool references with duckdb CLI commands
+- `.agent/workflows/export.md` - Fixed by reviewer: replaced `search_archive` MCP tool reference with duckdb CLI reference
+- `.agent/workflows/improve-plan.md` - Fixed by reviewer: replaced `get_kanban_state` MCP tool references with `kanban_operations` skill script
+- `.agent/rules/how_to_plan.md` - Fixed by reviewer: replaced `get_kanban_state` MCP tool references with `kanban_operations` skill script
+- `.agent/skills/archive.md` - Fixed by reviewer: replaced all `query_plan_archive` and `search_archive` MCP tool references with duckdb CLI commands
 
 **Validation Results:**
-- All 4 MCP tools successfully removed from register-tools.js
-- Skill scripts reference existing KanbanDatabase methods (`updateColumn`, `getPlansByColumn`)
-- `VALID_KANBAN_COLUMNS` constant is now exported for external use
+- All 4 MCP tools successfully removed from register-tools.js ✓
+- Skill scripts reference `out/services/KanbanDatabase.js` (compiled JS, not TypeScript source) ✓
+- `VALID_KANBAN_COLUMNS` constant imported from compiled output in both scripts ✓
+- Both scripts pass `node --check` syntax validation ✓
+- `KanbanDatabase.prototype.updateColumn` and `getPlansByColumn` confirmed as functions ✓
+- AGENTS.md no longer references deleted MCP tools ✓
+- TECHNICAL_DOC.md Section 18 updated to reflect skill scripts ✓
+- query_archive SKILL.md no longer contains hardcoded absolute paths ✓
+
+**Reviewer Findings (Fixed):**
+- CRITICAL-1: Scripts required `src/services/KanbanDatabase` (TypeScript, not compilable by Node). Fixed to `out/services/KanbanDatabase`.
+- CRITICAL-2: Scripts hardcoded `VALID_COLUMNS` instead of importing the exported `VALID_KANBAN_COLUMNS`. Fixed to import from compiled output.
+- MAJOR-1: `AGENTS.md` still referenced `get_kanban_state` and `move_kanban_card` MCP tools. Fixed with skill script references.
+- MAJOR-2: 6 workflow/rule/skill files still referenced deleted MCP tools (`get_kanban_state`, `query_plan_archive`, `search_archive`). Fixed in `.agent/workflows/challenge.md`, `.agent/workflows/archive.md`, `.agent/workflows/export.md`, `.agent/workflows/improve-plan.md`, `.agent/rules/how_to_plan.md`, `.agent/skills/archive.md`. Also fixed 3 additional references in `docs/TECHNICAL_DOC.md`.
+- MAJOR-3: `docs/TECHNICAL_DOC.md` Section 18 documented deleted MCP tools as existing. Replaced with skill script documentation.
+- MAJOR-4: `AGENTS.md` Available Skills table was missing `kanban_operations`, `query_archive`, and `complexity_scoring`. Added all three.
+- NIT-1: `query_archive/SKILL.md` hardcoded absolute path `/Users/patrickvuleta/...`. Fixed to workspace-relative path.
+
+**Remaining Risks:**
+- The `VALID_KANBAN_COLUMNS` set in `KanbanDatabase.ts` does not include `INTERN CODED` or `ACCEPTANCE TESTED`, which are valid built-in columns defined in `BUILTIN_KANBAN_COLUMN_DEFINITIONS` in `register-tools.js`. The scripts will reject moves to these columns. This is a pre-existing discrepancy (the export was already missing these columns before this plan), but agents using `INTERN CODED` or `ACCEPTANCE TESTED` via the skill will get "Invalid column" errors.
