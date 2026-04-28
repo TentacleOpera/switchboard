@@ -864,6 +864,31 @@ export class KanbanDatabase {
         return true;
     }
 
+    public async updateClickUpTaskId(sessionId: string, clickupTaskId: string): Promise<boolean> {
+        const normalizedTaskId = String(clickupTaskId || '').trim();
+        const persisted = await this._persistedUpdate(
+            'UPDATE plans SET clickup_task_id = ?, updated_at = ? WHERE session_id = ?',
+            [normalizedTaskId, new Date().toISOString(), sessionId]
+        );
+        if (!persisted) {
+            return false;
+        }
+
+        const updatedPlan = await this.getPlanBySessionId(sessionId);
+        if (!updatedPlan) {
+            console.error(`[KanbanDatabase] Failed to update clickup_task_id for missing session ${sessionId}.`);
+            return false;
+        }
+        if (String(updatedPlan.clickupTaskId || '').trim() !== normalizedTaskId) {
+            console.error(
+                `[KanbanDatabase] Failed to verify clickup_task_id update for session ${sessionId}. ` +
+                `Expected "${normalizedTaskId}", found "${String(updatedPlan.clickupTaskId || '').trim()}".`
+            );
+            return false;
+        }
+        return true;
+    }
+
     public async deletePlan(sessionId: string): Promise<boolean> {
         return this._persistedUpdate(
             'DELETE FROM plans WHERE session_id = ?',

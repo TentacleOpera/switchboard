@@ -539,6 +539,12 @@ export class PlanningPanelProvider {
                 false,
                 vscode.ConfigurationTarget.Workspace
             );
+            // Clear the designDocLink to remove stale references
+            await vscode.workspace.getConfiguration('switchboard').update(
+                'planner.designDocLink',
+                undefined,
+                vscode.ConfigurationTarget.Workspace
+            );
             // Send updated state back to panel
             await this._sendActiveDesignDocState();
         } catch (err) {

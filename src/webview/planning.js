@@ -1103,7 +1103,7 @@
                     // Manually create doc item with same structure as renderNode
                     const wrapper = document.createElement('div');
                     wrapper.className = 'tree-node';
-                    wrapper.dataset.sourceId = 'local-folder';
+                    wrapper.dataset.sourceId = doc.sourceId || 'local-folder';
                     wrapper.dataset.docId = doc.slugPrefix;
                     wrapper.dataset.slugPrefix = doc.slugPrefix;
                     wrapper.style.cssText = 'padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 8px;';
@@ -1130,7 +1130,7 @@
                         wrapper.classList.add('selected');
                         state.selectedEl = wrapper;
 
-                        state.activeSource = 'local-folder';
+                        state.activeSource = doc.sourceId || 'local-folder';
                         state.activeDocId = doc.slugPrefix;
                         state.activeDocName = doc.docName;
                         state.previewRequestId++;

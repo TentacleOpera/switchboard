@@ -332,6 +332,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _notionContentCache: Map<string, string | null> = new Map();
     private readonly _relayPromptService = new RelayPromptService();
 
+    // Last-accessed tracking for background prefetch
+    private _lastAccessedClickUpLists: string[] = [];
+    private _lastAccessedLinearProjects: string[] = [];
+    private _lastAccessedWriteTimer: NodeJS.Timeout | null = null;
+
     // Batched State Updates
     private _updateQueue: ((state: any) => void)[] = [];
     private _updateResolvers: (() => void)[] = [];
@@ -3813,6 +3818,167 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
     }
 
+    public async importClickUpTask(
+        workspaceRoot: string,
+        taskId: string,
+        includeSubtasks: boolean = true
+    ): Promise<{ success: boolean; sessionId?: string; importedSessionIds: string[]; error?: string; message?: string }> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return { success: false, importedSessionIds: [], error: 'No workspace open.' };
+        }
+
+        const effectiveRoot = await this._activateWorkspaceContext(resolvedRoot);
+        const db = await this._getKanbanDb(effectiveRoot);
+        if (!db) {
+            return { success: false, importedSessionIds: [], error: 'Kanban DB unavailable.' };
+        }
+
+        // Check if already imported
+        const workspaceId = await this._getOrCreateWorkspaceId(effectiveRoot);
+        const existingPlan = await db.findPlanByClickUpTaskId(workspaceId, taskId);
+        if (existingPlan) {
+            return {
+                success: false,
+                importedSessionIds: [],
+                error: `ClickUp task ${taskId} is already linked to session ${existingPlan.sessionId}.`
+            };
+        }
+
+        const clickUp = this._getClickUpService(effectiveRoot);
+
+        try {
+            const details = await clickUp.getTaskDetails(taskId);
+            const task = details.task;
+            const subtasks = includeSubtasks ? details.subtasks : [];
+
+            const importedSessionIds: string[] = [];
+
+            // Build plan content for the parent task
+            const planContent = this._buildClickUpImportPlanContent(task, subtasks, details.comments, details.attachments);
+            const { sessionId: rootSessionId } = await this._createInitiatedPlan(
+                task.name || `ClickUp Task ${task.id}`,
+                planContent,
+                false,
+                { skipBrainPromotion: true, suppressIntegrationSync: true }
+            );
+
+            // Link ClickUp task ID to the session
+            const linked = await db.updateClickUpTaskId(rootSessionId, task.id);
+            if (!linked) {
+                console.warn(`[TaskViewer] Failed to record ClickUp task ID for imported session ${rootSessionId}.`);
+            }
+
+            importedSessionIds.push(rootSessionId);
+
+            // Import subtasks as separate plans
+            for (const subtask of subtasks) {
+                const subtaskContent = this._buildClickUpImportPlanContent(subtask, [], [], []);
+                const { sessionId: subtaskSessionId } = await this._createInitiatedPlan(
+                    subtask.name || `ClickUp Subtask ${subtask.id}`,
+                    subtaskContent,
+                    false,
+                    { skipBrainPromotion: true, suppressIntegrationSync: true }
+                );
+                await db.updateClickUpTaskId(subtaskSessionId, subtask.id);
+                await db.updateDependencies(subtaskSessionId, rootSessionId);
+                importedSessionIds.push(subtaskSessionId);
+            }
+
+            for (const sessionId of importedSessionIds) {
+                await this._kanbanProvider?.queueIntegrationSyncForSession(effectiveRoot, sessionId, 'CREATED');
+            }
+            await this._syncFilesAndRefreshRunSheets(effectiveRoot);
+            this._view?.webview.postMessage({ type: 'selectSession', sessionId: rootSessionId });
+
+            const taskName = task.name || task.id;
+            return {
+                success: true,
+                sessionId: rootSessionId,
+                importedSessionIds,
+                message: importedSessionIds.length === 1
+                    ? `Imported ClickUp task "${taskName}".`
+                    : `Imported ClickUp task "${taskName}" with ${importedSessionIds.length - 1} subtasks.`
+            };
+        } catch (error) {
+            return {
+                success: false,
+                importedSessionIds: [],
+                error: error instanceof Error ? error.message : 'Failed to import ClickUp task.'
+            };
+        }
+    }
+
+    private _buildClickUpImportPlanContent(
+        task: any,
+        subtasks: any[] = [],
+        comments: any[] = [],
+        attachments: any[] = []
+    ): string {
+        const statusName = task.status?.status || 'Unknown';
+        const statusLower = statusName.toLowerCase();
+        const kanbanColumn = statusLower === 'backlog' ? 'BACKLOG' : 'CREATED';
+        const priority = task.priority?.priority || '';
+        const dueDate = task.due_date ? new Date(Number(task.due_date)).toLocaleDateString() : '';
+        const assignees = (task.assignees || []).map((a: any) => a.username || a.email || a.id).join(', ');
+        const tags = (task.tags || [])
+            .map((t: any) => t.name)
+            .filter((n: string) => n && !n.toLowerCase().startsWith('switchboard:'))
+            .join(', ');
+        const description = (task.markdown_description || task.description || '').trim();
+        const startDate = task.start_date ? new Date(Number(task.start_date)).toLocaleDateString() : '';
+        const timeEstimate = task.time_estimate ? `${Math.round(task.time_estimate / 60000)}m` : '';
+
+        const metaLines = [
+            `> Imported from ClickUp task \`${task.id}\``,
+            `> **ClickUp Task ID:** ${task.id}`,
+            task.url ? `> **URL:** ${task.url}` : '',
+            priority ? `> **Priority:** ${priority}` : '',
+            dueDate ? `> **Due:** ${dueDate}` : '',
+            assignees ? `> **Assignees:** ${assignees}` : '',
+            tags ? `> **Tags:** ${tags}` : '',
+        ].filter(Boolean).join('\n');
+
+        const subtaskLines = subtasks.map((s: any) => `- ${s.name || s.id} (\`${s.id}\`)`);
+        const commentLines = comments.map((c: any) => {
+            const author = c.user?.username || c.user?.email || 'Unknown';
+            return `- **${author}:** ${c.comment_text}`;
+        });
+        const attachmentLines = attachments.map((a: any) => `- ${a.title || a.filename || a.url}`);
+
+        const notesLines = [
+            '## ClickUp Ticket Notes',
+            '',
+            `**Status:** ${statusName}`,
+            startDate ? `**Start Date:** ${startDate}` : '',
+            timeEstimate ? `**Time Estimate:** ${timeEstimate}` : '',
+            ...(subtaskLines.length > 0 ? ['', '**Subtasks:**', ...subtaskLines] : []),
+            ...(commentLines.length > 0 ? ['', '**Comments:**', ...commentLines] : []),
+            ...(attachmentLines.length > 0 ? ['', '**Attachments:**', ...attachmentLines] : []),
+        ].filter(s => s !== '').join('\n');
+
+        return [
+            `# ${task.name || `ClickUp Task ${task.id}`}`,
+            '',
+            metaLines,
+            '',
+            '## Goal',
+            '',
+            description || 'TODO',
+            '',
+            '## Proposed Changes',
+            '',
+            'TODO',
+            '',
+            notesLines,
+            '',
+            '## Switchboard State',
+            '',
+            `**Kanban Column:** ${kanbanColumn}`,
+            '**Status:** active'
+        ].join('\n');
+    }
+
     public async handleApplyNotionConfig(
         token: string,
         options: { enableDesignDocFetching: boolean }
@@ -3916,6 +4082,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        // Load integration provider preference
+        const folderUri = vscode.workspace.workspaceFolders?.[0]?.uri;
+        const preferredProvider = vscode.workspace.getConfiguration('switchboard', folderUri).get<'linear' | 'clickup'>('integrations.preferredProvider') || 'linear';
+
         this._view?.webview.postMessage({
             type: 'initialState',
             needsSetup: this._needsSetup,
@@ -3928,7 +4098,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             activeTab,
             workspaceRoot: workspaceRoot || undefined,
             clickupHierarchyState,
-            linearProjectPickerValue
+            linearProjectPickerValue,
+            integrationProviderPreference: preferredProvider
         });
     }
 
@@ -4032,9 +4203,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existing = this._clickUpServices.get(resolvedRoot);
         if (existing) {
+            // Ensure cache service is injected on every retrieval
+            const cacheService = this._getCacheService(resolvedRoot);
+            existing.setCacheService(cacheService);
             return existing;
         }
         const service = new ClickUpSyncService(resolvedRoot, this._context.secrets);
+        const cacheService = this._getCacheService(resolvedRoot);
+        service.setCacheService(cacheService);
         this._clickUpServices.set(resolvedRoot, service);
         return service;
     }
@@ -4043,9 +4219,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existing = this._linearServices.get(resolvedRoot);
         if (existing) {
+            // Ensure cache service is injected on every retrieval
+            const cacheService = this._getCacheService(resolvedRoot);
+            existing.setCacheService(cacheService);
             return existing;
         }
         const service = new LinearSyncService(resolvedRoot, this._context.secrets);
+        const cacheService = this._getCacheService(resolvedRoot);
+        service.setCacheService(cacheService);
         this._linearServices.set(resolvedRoot, service);
         return service;
     }
@@ -4098,6 +4279,227 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._cacheServices.set(resolved, service);
         }
         return service;
+    }
+
+    // ==================== Last-Accessed Tracking & Prefetch ====================
+
+    /**
+     * Record a ClickUp list as last-accessed for background prefetch.
+     */
+    private _recordLastAccessedClickUpList(listId: string): void {
+        if (!listId) { return; }
+
+        // Remove if exists, add to end (most recent)
+        const idx = this._lastAccessedClickUpLists.indexOf(listId);
+        if (idx !== -1) {
+            this._lastAccessedClickUpLists.splice(idx, 1);
+        }
+        this._lastAccessedClickUpLists.push(listId);
+
+        // Keep only last 5
+        if (this._lastAccessedClickUpLists.length > 5) {
+            this._lastAccessedClickUpLists.shift();
+        }
+
+        this._persistLastAccessedDebounced();
+    }
+
+    /**
+     * Record a Linear project as last-accessed for background prefetch.
+     */
+    private _recordLastAccessedLinearProject(projectId: string): void {
+        if (!projectId) { return; }
+
+        const idx = this._lastAccessedLinearProjects.indexOf(projectId);
+        if (idx !== -1) {
+            this._lastAccessedLinearProjects.splice(idx, 1);
+        }
+        this._lastAccessedLinearProjects.push(projectId);
+
+        // Keep only last 5
+        if (this._lastAccessedLinearProjects.length > 5) {
+            this._lastAccessedLinearProjects.shift();
+        }
+
+        this._persistLastAccessedDebounced();
+    }
+
+    /**
+     * Persist last-accessed lists/projects to state.json with debouncing.
+     */
+    private _persistLastAccessedDebounced(): void {
+        if (this._lastAccessedWriteTimer) {
+            clearTimeout(this._lastAccessedWriteTimer);
+        }
+        this._lastAccessedWriteTimer = setTimeout(() => {
+            this._persistLastAccessed();
+        }, 2000);
+    }
+
+    /**
+     * Actually write last-accessed state to disk.
+     */
+    private async _persistLastAccessed(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoots()[0];
+        if (!workspaceRoot) { return; }
+
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            let state: any = {};
+            if (fs.existsSync(statePath)) {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                state = JSON.parse(content);
+            }
+
+            state.lastAccessedClickUpLists = this._lastAccessedClickUpLists;
+            state.lastAccessedLinearProjects = this._lastAccessedLinearProjects;
+
+            await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+        } catch (e) {
+            console.error('[TaskViewer] Failed to persist last-accessed:', e);
+        }
+    }
+
+    /**
+     * Load last-accessed lists/projects from state.json on startup.
+     */
+    public async loadLastAccessedFromState(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoots()[0];
+        if (!workspaceRoot) { return; }
+
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            if (!fs.existsSync(statePath)) { return; }
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+
+            if (Array.isArray(state.lastAccessedClickUpLists)) {
+                this._lastAccessedClickUpLists = state.lastAccessedClickUpLists;
+            }
+            if (Array.isArray(state.lastAccessedLinearProjects)) {
+                this._lastAccessedLinearProjects = state.lastAccessedLinearProjects;
+            }
+        } catch (e) {
+            console.warn('[TaskViewer] Failed to load last-accessed:', e);
+        }
+    }
+
+    /**
+     * Background prefetch of last-accessed ClickUp lists and Linear projects.
+     * Called on extension startup with delay.
+     */
+    public async prefetchIntegrationData(workspaceRoot: string): Promise<void> {
+        const resolvedRoot = path.resolve(workspaceRoot);
+
+        // Load from state if not already loaded
+        if (this._lastAccessedClickUpLists.length === 0 && this._lastAccessedLinearProjects.length === 0) {
+            await this.loadLastAccessedFromState();
+        }
+
+        const clickUpService = this._getClickUpService(resolvedRoot);
+        const linearService = this._getLinearService(resolvedRoot);
+
+        // Prefetch ClickUp lists
+        if (this._lastAccessedClickUpLists.length > 0) {
+            await this._prefetchClickUpTasks(clickUpService, this._lastAccessedClickUpLists.slice());
+        }
+
+        // Prefetch Linear projects
+        if (this._lastAccessedLinearProjects.length > 0) {
+            await this._prefetchLinearIssues(linearService, this._lastAccessedLinearProjects.slice());
+        }
+    }
+
+    /**
+     * Prefetch ClickUp tasks for given list IDs with concurrency limiting.
+     */
+    private async _prefetchClickUpTasks(
+        service: ClickUpSyncService,
+        listIds: string[]
+    ): Promise<void> {
+        const maxConcurrency = 3;
+        const queue = listIds.map(listId => async () => {
+            try {
+                await service.getListTasks(listId);
+            } catch (e) {
+                console.warn(`[Prefetch] ClickUp list ${listId} fetch failed:`, e);
+            }
+        });
+
+        await this._runWithConcurrency(queue, maxConcurrency);
+    }
+
+    /**
+     * Prefetch Linear issues for given project IDs with concurrency limiting.
+     */
+    private async _prefetchLinearIssues(
+        service: LinearSyncService,
+        projectIds: string[]
+    ): Promise<void> {
+        const maxConcurrency = 3;
+        const queue = projectIds.map(projectId => async () => {
+            try {
+                await service.queryIssues({ projectId, limit: 50 });
+            } catch (e) {
+                console.warn(`[Prefetch] Linear project ${projectId} fetch failed:`, e);
+            }
+        });
+
+        await this._runWithConcurrency(queue, maxConcurrency);
+    }
+
+    /**
+     * Run async functions with limited concurrency.
+     */
+    private async _runWithConcurrency(
+        queue: (() => Promise<void>)[],
+        maxConcurrency: number
+    ): Promise<void> {
+        let index = 0;
+        const workers: Promise<void>[] = [];
+
+        for (let i = 0; i < maxConcurrency && index < queue.length; i++) {
+            workers.push(this._runWorker(queue, () => index++));
+        }
+
+        await Promise.all(workers);
+    }
+
+    private async _runWorker(
+        queue: (() => Promise<void>)[],
+        getNextIndex: () => number
+    ): Promise<void> {
+        while (true) {
+            const idx = getNextIndex();
+            if (idx >= queue.length) { break; }
+            await queue[idx]();
+        }
+    }
+
+    /**
+     * Force refresh the integration cache (manual command).
+     */
+    public async forceRefreshIntegrationCache(workspaceRoot: string): Promise<void> {
+        const resolvedRoot = path.resolve(workspaceRoot);
+        const cacheService = this._getCacheService(resolvedRoot);
+        cacheService.clearAllTaskCache();
+
+        // Also clear the reverse-index maps on each sync service so stale
+        // taskId/issueId mappings don't misdirect the next mutation's
+        // targeted invalidation.
+        const clickUpService = this._clickUpServices.get(resolvedRoot);
+        if (clickUpService) {
+            clickUpService.clearTaskListIndex();
+        }
+        const linearService = this._linearServices.get(resolvedRoot);
+        if (linearService) {
+            linearService.clearIssueProjectIndex();
+        }
+
+        // Re-fetch last-accessed lists/projects
+        await this.prefetchIntegrationData(resolvedRoot);
+
+        vscode.window.showInformationMessage('Integration cache refreshed');
     }
 
     public getClickUpDocsAdapter(workspaceRoot: string): ClickUpDocsAdapter {
@@ -6189,12 +6591,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
 
                         try {
+                            // Track last-accessed project for prefetch (use first include name or team)
+                            const includeNames = config.includeProjectNames || [];
+                            if (includeNames.length > 0) {
+                                this._recordLastAccessedLinearProject(includeNames[0]);
+                            }
                             const issues = await linear.queryIssues({
                                 search: typeof data.search === 'string' ? data.search : '',
                                 stateId: typeof data.stateId === 'string' ? data.stateId : '',
                                 limit: 100
                             });
-                            const includeNames = config.includeProjectNames || [];
                             const excludeNames = config.excludeProjectNames || [];
                             const projectName = includeNames.length === 1 && excludeNames.length === 0
                                 ? includeNames[0]
@@ -6351,6 +6757,31 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                         break;
                     }
+                    case 'clickupImportTask': {
+                        const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        const taskId = String(data.taskId || '').trim();
+                        if (!workspaceRoot || !taskId) {
+                            this._view?.webview.postMessage({
+                                type: 'clickupTaskImported',
+                                success: false,
+                                importedSessionIds: [],
+                                error: 'Select a ClickUp task first.'
+                            });
+                            break;
+                        }
+
+                        const result = await this.importClickUpTask(workspaceRoot, taskId, data.includeSubtasks !== false);
+                        this._view?.webview.postMessage({
+                            type: 'clickupTaskImported',
+                            ...result
+                        });
+                        if (result.success) {
+                            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+                            this.refresh();
+                            await this._kanbanProvider?.refresh();
+                        }
+                        break;
+                    }
                     case 'linearImportAndSendToPlanner': {
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
                         const issueId = String(data.issueId || '').trim();
@@ -6413,8 +6844,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         break;
                     }
                     case 'clickupLoadProject': {
-                        const loadSeq = data.loadSeq;  // echo back for stale-response detection
+                        const loadSeq = data.loadSeq;
                         const workspaceRoot = this._resolveWorkspaceRoot(data.workspaceRoot);
+                        // Track last-accessed list if provided
+                        if (data.listId) {
+                            this._recordLastAccessedClickUpList(String(data.listId));
+                        }
                         if (!workspaceRoot) {
                             this._view?.webview.postMessage({
                                 type: 'clickupProjectLoaded',

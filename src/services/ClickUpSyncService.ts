@@ -150,8 +150,29 @@ export class ClickUpSyncService {
    */
   private _pendingCreateSessions: Set<string> = new Set();
 
+  // Cache service for task caching
+  private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
+
+  // Reverse map: taskId -> listId for efficient cache invalidation on updates
+  private _taskListIndex: Map<string, string> = new Map();
+
   public isCreating(sessionId: string): boolean {
     return this._pendingCreateSessions.has(sessionId);
+  }
+
+  /**
+   * Inject the cache service for task caching.
+   */
+  public setCacheService(cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService): void {
+    this._cacheService = cacheService;
+  }
+
+  /**
+   * Clear the taskId → listId reverse index. Used by manual cache refresh
+   * to avoid stale invalidation hints after the cache is wiped.
+   */
+  public clearTaskListIndex(): void {
+    this._taskListIndex.clear();
   }
 
   constructor(workspaceRoot: string, secretStorage: vscode.SecretStorage) {
@@ -883,8 +904,10 @@ export class ClickUpSyncService {
 
     const normalizedQuery = String(query || '').trim();
     const normalizedListId = String(listId || '').trim();
+
+    // Use getListTasks for cache benefits when query is empty (simple list fetch)
     if (!normalizedQuery && normalizedListId) {
-      return this._listTasksForQuery(normalizedListId);
+      return this.getListTasks(normalizedListId);
     }
 
     const workspaceId = String(config.workspaceId || '').trim() || await this._loadWorkspaceId();
@@ -1026,6 +1049,31 @@ export class ClickUpSyncService {
       .filter((list: { id: string; name: string }) => list.id.length > 0 && list.name.length > 0);
   }
 
+  /**
+   * Generate a fingerprint for list options to use in cache keys.
+   */
+  private _fingerprintListOptions(options: {
+    status?: string[];
+    assignee?: string;
+    archived?: boolean;
+    includeClosed?: boolean;
+  }): string {
+    const parts: string[] = [];
+    if (options.status?.length) {
+      parts.push(`status:${options.status.join(',')}`);
+    }
+    if (options.assignee) {
+      parts.push(`assignee:${options.assignee}`);
+    }
+    if (options.archived !== undefined) {
+      parts.push(`archived:${options.archived}`);
+    }
+    if (options.includeClosed !== undefined) {
+      parts.push(`includeClosed:${options.includeClosed}`);
+    }
+    return parts.length > 0 ? parts.join('|') : 'default';
+  }
+
   public async getListTasks(
     listId: string,
     options: {
@@ -1043,6 +1091,24 @@ export class ClickUpSyncService {
     const normalizedListId = String(listId || '').trim();
     if (!normalizedListId) {
       throw new Error('ClickUp task lookup requires a list ID.');
+    }
+
+    // Determine if this is a "simple" query that can use cache
+    // Filtered queries (status, assignee, archived) bypass cache
+    const isSimpleQuery = !options.status?.length && !options.assignee && options.archived === undefined;
+    const cacheKey = isSimpleQuery ? normalizedListId : `${normalizedListId}:${this._fingerprintListOptions(options)}`;
+
+    // Try cache first for simple queries
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        const cached = this._cacheService.getCachedTasks<ClickUpTask>('clickup', cacheKey);
+        if (cached) {
+          return cached;
+        }
+      } catch (e) {
+        // Fail-open: continue to API fetch
+        console.warn('[ClickUpSync] Cache read failed, falling back to API:', e);
+      }
     }
 
     const includeClosed = options.includeClosed !== false;
@@ -1070,7 +1136,25 @@ export class ClickUpSyncService {
       await this.delay(200);
     }
 
-    return this._dedupeTasks(tasks);
+    const dedupedTasks = this._dedupeTasks(tasks);
+
+    // Update cache and reverse map
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        this._cacheService.cacheTasks('clickup', cacheKey, dedupedTasks);
+        // Update reverse map: taskId -> listId
+        for (const task of dedupedTasks) {
+          if (task.id) {
+            this._taskListIndex.set(task.id, normalizedListId);
+          }
+        }
+      } catch (e) {
+        // Fail-open: cache errors are non-fatal
+        console.warn('[ClickUpSync] Cache write failed:', e);
+      }
+    }
+
+    return dedupedTasks;
   }
 
   public async getTaskDetails(taskId: string): Promise<{
@@ -1184,6 +1268,11 @@ export class ClickUpSyncService {
       throw new Error(`Failed to create ClickUp task in list ${normalizedListId}.`);
     }
 
+    // Invalidate list cache after creation
+    if (this._cacheService) {
+      this._cacheService.invalidateTaskCache('clickup', normalizedListId);
+    }
+
     const taskId = String(createResult.data?.id || '').trim();
     if (!taskId) {
       return createResult.data ? this._normalizeClickUpTask(createResult.data) : null;
@@ -1252,6 +1341,17 @@ export class ClickUpSyncService {
     );
     if (updateResult.status !== 200) {
       throw new Error(`Failed to update ClickUp task ${normalizedTaskId}.`);
+    }
+
+    // Invalidate cache for the list containing this task
+    if (this._cacheService) {
+      const listId = this._taskListIndex.get(normalizedTaskId);
+      if (listId) {
+        this._cacheService.invalidateTaskCache('clickup', listId);
+      } else {
+        // Fallback: invalidate all ClickUp cache if list unknown
+        this._cacheService.invalidateTaskCache('clickup');
+      }
     }
   }
 

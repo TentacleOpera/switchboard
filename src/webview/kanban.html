@@ -369,9 +369,9 @@
         }
 
         .column-icon-btn {
-            background: none;
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
             border: 1px solid transparent;
-            color: var(--text-secondary);
+            color: var(--accent-teal);
             cursor: pointer;
             padding: 4px;
             border-radius: 3px;
@@ -384,12 +384,12 @@
         .column-icon-btn img {
             width: 18px;
             height: 18px;
-            filter: brightness(0.8);
+            filter: brightness(1);
             transition: all 0.15s;
         }
 
         .column-icon-btn:hover {
-            background: var(--vscode-toolbar-hoverBackground, rgba(90, 93, 94, 0.31));
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
         .column-icon-btn:hover img {

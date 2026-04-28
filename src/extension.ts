@@ -2233,6 +2233,26 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(refreshDisposable);
 
+    // Manual refresh integration cache command
+    const refreshIntegrationCacheDisposable = vscode.commands.registerCommand('switchboard.refreshIntegrationCache', async () => {
+        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace folder found.');
+            return;
+        }
+        await taskViewerProvider.forceRefreshIntegrationCache(workspaceRoot);
+    });
+    context.subscriptions.push(refreshIntegrationCacheDisposable);
+
+    // Trigger prefetch of last-accessed integration data after activation (with delay)
+    if (workspaceRoot) {
+        setTimeout(() => {
+            taskViewerProvider.prefetchIntegrationData(workspaceRoot).catch((e) => {
+                console.warn('[Extension] Prefetch failed:', e);
+            });
+        }, 2000);
+    }
+
     // Manual MCP connection recheck (triggered from sidebar recheck icon)
     const recheckMcpDisposable = vscode.commands.registerCommand('switchboard.recheckMcp', async () => {
         // Send "checking" intermediate state so the UI shows CHECKING immediately

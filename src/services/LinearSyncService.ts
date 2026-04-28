@@ -115,6 +115,12 @@ export class LinearSyncService {
   private _lastRequestTime = 0;
   private readonly _minDelayMs = 50;
 
+  // Cache service for issue caching
+  private _cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService | null = null;
+
+  // Reverse map: issueId -> projectId for efficient cache invalidation
+  private _issueProjectIndex: Map<string, string> = new Map();
+
   private static readonly _transientMarkers = [
     'socket hang up',
     'ETIMEDOUT',
@@ -148,6 +154,13 @@ export class LinearSyncService {
     this._configPath = path.join(workspaceRoot, '.switchboard', 'linear-config.json');
     this._syncMapPath = path.join(workspaceRoot, '.switchboard', 'linear-sync.json');
     this._secretStorage = secretStorage;
+  }
+
+  /**
+   * Inject the cache service for issue caching.
+   */
+  public setCacheService(cacheService: import('./PlanningPanelCacheService').PlanningPanelCacheService): void {
+    this._cacheService = cacheService;
   }
 
   // ── Config I/O ───────────────────────────────────────────────
@@ -589,6 +602,57 @@ export class LinearSyncService {
     return undefined;
   }
 
+  /**
+   * Generate a fingerprint for issue filter options to use in cache keys.
+   */
+  private _fingerprintIssueFilter(options: {
+    search?: string;
+    stateId?: string;
+    assigneeId?: string;
+    projectId?: string;
+    limit?: number;
+  }): string {
+    const parts: string[] = [];
+    if (options.search) {
+      parts.push(`search:${options.search}`);
+    }
+    if (options.stateId) {
+      parts.push(`state:${options.stateId}`);
+    }
+    if (options.assigneeId) {
+      parts.push(`assignee:${options.assigneeId}`);
+    }
+    if (options.projectId) {
+      parts.push(`project:${options.projectId}`);
+    }
+    if (options.limit !== undefined) {
+      parts.push(`limit:${options.limit}`);
+    }
+    return parts.length > 0 ? parts.join('|') : 'default';
+  }
+
+  /**
+   * Generate a fingerprint for the LinearConfig filter inputs (include/exclude
+   * project names and team) so that cache keys do not collide across config
+   * changes. Without this, two callers with the same options but different
+   * include/exclude lists would share a cache entry and serve cross-config
+   * data.
+   */
+  private _fingerprintLinearFilterConfig(config: LinearConfig): string {
+    const inc = (config.includeProjectNames || []).slice().sort().join(',');
+    const exc = (config.excludeProjectNames || []).slice().sort().join(',');
+    const team = String(config.teamId || '').trim();
+    return `inc=${inc}|exc=${exc}|team=${team}`;
+  }
+
+  /**
+   * Clear the issueId → projectId reverse index. Used by manual cache
+   * refresh to avoid stale invalidation hints after the cache is wiped.
+   */
+  public clearIssueProjectIndex(): void {
+    this._issueProjectIndex.clear();
+  }
+
   public async queryIssues(options: {
     search?: string;
     stateId?: string;
@@ -604,10 +668,34 @@ export class LinearSyncService {
     const normalizedSearch = String(options.search || '').trim().toLowerCase();
     const normalizedStateId = String(options.stateId || '').trim();
     const normalizedAssigneeId = String(options.assigneeId || '').trim();
+    const normalizedProjectId = String(options.projectId || '').trim();
     const requestedLimit = Number(options.limit);
     const limit = Number.isFinite(requestedLimit) && requestedLimit > 0
       ? Math.min(Math.floor(requestedLimit), 100)
       : 50;
+
+    // Determine if this is a "simple" query that can use cache
+    // Simple: projectId provided, no search or stateId or assigneeId filters
+    const isSimpleQuery = normalizedProjectId && !normalizedSearch && !normalizedStateId && !normalizedAssigneeId;
+    // Cache key MUST include the filter-config fingerprint so that include/
+    // exclude project name changes invalidate the cache via key divergence.
+    const configFingerprint = this._fingerprintLinearFilterConfig(config);
+    const cacheKey = isSimpleQuery
+      ? `project:${normalizedProjectId}:${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`
+      : `${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`;
+
+    // Try cache first for simple queries
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        const cached = this._cacheService.getCachedTasks<LinearIssue>('linear', cacheKey);
+        if (cached) {
+          return cached;
+        }
+      } catch (e) {
+        // Fail-open: continue to API fetch
+        console.warn('[LinearSync] Cache read failed, falling back to API:', e);
+      }
+    }
 
     // Hybrid optimization: use server-side filter for single include, no excludes
     const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
@@ -667,7 +755,25 @@ export class LinearSyncService {
     }
 
     // Apply client-side project name filters
-    return this._applyProjectNameFilters(issues, config);
+    const filteredIssues = this._applyProjectNameFilters(issues, config);
+
+    // Update cache and reverse map for simple queries
+    if (isSimpleQuery && this._cacheService) {
+      try {
+        this._cacheService.cacheTasks('linear', cacheKey, filteredIssues);
+        // Update reverse map: issueId -> projectId
+        for (const issue of filteredIssues) {
+          if (issue.id && normalizedProjectId) {
+            this._issueProjectIndex.set(issue.id, normalizedProjectId);
+          }
+        }
+      } catch (e) {
+        // Fail-open: cache errors are non-fatal
+        console.warn('[LinearSync] Cache write failed:', e);
+      }
+    }
+
+    return filteredIssues;
   }
 
   public async getIssue(issueIdOrIdentifier: string): Promise<LinearIssue | null> {
@@ -864,6 +970,17 @@ export class LinearSyncService {
     if (!result.data?.issueUpdate?.success) {
       throw new Error(`Linear issue ${normalizedIssueId} rejected the requested state update.`);
     }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
+    }
   }
 
   public async addIssueComment(issueId: string, comment: string): Promise<void> {
@@ -911,6 +1028,17 @@ export class LinearSyncService {
 
     if (!result.data?.issueUpdate?.success) {
       throw new Error(`Linear issue ${normalizedIssueId} rejected the requested description update.`);
+    }
+
+    // Invalidate cache for the project containing this issue
+    if (this._cacheService) {
+      const projectId = this._issueProjectIndex.get(normalizedIssueId);
+      if (projectId) {
+        this._cacheService.invalidateTaskCache('linear', `project:${projectId}`);
+      } else {
+        // Fallback: invalidate all Linear cache if project unknown
+        this._cacheService.invalidateTaskCache('linear');
+      }
     }
   }
 

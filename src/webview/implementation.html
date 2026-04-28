@@ -422,14 +422,16 @@
         }
 
         .project-task-description {
-            overflow-x: hidden;
             word-break: break-word;
+            overflow-wrap: break-word;
+            word-wrap: break-word;
+            white-space: normal;
             max-width: 100%;
         }
 
-        /* Text overflow constraints for Linear issue cards */
+        /* Allow Linear issue cards to expand vertically with content */
         .project-issue-card {
-            overflow: hidden;
+            /* max-height: 200px; overflow-y: auto; - enable if content becomes too long */
         }
 
         /* Loading spinner for Linear cards */
@@ -457,24 +459,15 @@
         }
 
         .project-issue-title {
-            overflow: hidden;
-            text-overflow: ellipsis;
-            white-space: nowrap;
+            /* Removed: overflow, text-overflow, white-space constraints to allow wrapping */
         }
 
         .project-issue-meta {
-            overflow: hidden;
             word-break: break-word;
         }
 
         .project-issue-card .project-issue-meta:last-child {
-            display: -webkit-box;
-            -webkit-line-clamp: 2;
-            -webkit-box-orient: vertical;
             white-space: normal;
-            /* Fallback for non-WebKit: 2 lines × 11px font-size × 1.5 line-height */
-            max-height: calc(11px * 1.5 * 2);
-            overflow: hidden;
         }
 
         /* ClickUp project card styles - match Linear card styling */
@@ -490,7 +483,8 @@
             position: relative;
             cursor: pointer;
             margin-bottom: 8px;
-            overflow: hidden;
+            max-height: 250px;
+            overflow-y: auto;
         }
 
         .project-card:hover {
@@ -518,8 +512,8 @@
         }
 
         .project-card-title {
-            font-size: 12px;
-            font-weight: 700;
+            font-size: 11px;
+            font-weight: 600;
             color: var(--text-primary);
             overflow: hidden;
             text-overflow: ellipsis;
@@ -531,10 +525,11 @@
 
         .project-card-status {
             font-size: 10px;
-            font-weight: 600;
-            color: var(--panel-bg);
-            padding: 2px 6px;
-            border-radius: 3px;
+            font-weight: 500;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 0 4px;
+            border-left: 2px solid;
             white-space: nowrap;
             flex-shrink: 0;
         }
@@ -566,7 +561,6 @@
             font-size: 9px;
             font-family: var(--font-mono);
             cursor: pointer;
-            margin-top: 6px;
             letter-spacing: 0.5px;
         }
 
@@ -2456,6 +2450,13 @@
                             linearProjectPickerValue = message.linearProjectPickerValue;
                             _restoredLinearProjectPickerValue = message.linearProjectPickerValue;
                         }
+                        // Restore integration provider preference from initialState
+                        if (message.integrationProviderPreference !== undefined) {
+                            const newProvider = message.integrationProviderPreference;
+                            const providerChanged = lastIntegrationProvider !== null && lastIntegrationProvider !== newProvider;
+                            lastIntegrationProvider = newProvider;
+                            updateIntegrationTabLabel(newProvider);
+                        }
                         // If hierarchy state was restored, trigger data loading cascade
                         if (clickUpSelectedSpaceId && lastIntegrationProvider === 'clickup') {
                             // Load spaces first, then the cascade will continue in clickupSpacesLoaded handler
@@ -2657,6 +2658,23 @@
                         loadLinearProject(true);
                     }
                     renderSidebarLinearTaskDetail();
+                    break;
+                case 'clickupTaskImported':
+                    clickUpImportPending = false;
+                    if (message.success === false) {
+                        vscode.postMessage({
+                            type: 'showWarning',
+                            message: message.error || 'Failed to import the selected ClickUp task.'
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'showInfo',
+                            message: message.message || 'Imported the selected ClickUp task.'
+                        });
+                        loadClickUpProject(true);
+                    }
+                    renderSidebarClickUpProjectPanel();
+                    renderSidebarClickUpTaskDetail();
                     break;
                 case 'linearTaskImportedToPlanner':
                     linearImportPending = false;
@@ -3225,7 +3243,7 @@
                 vscode.postMessage({ type: 'getAggressivePairSetting' });
                 vscode.postMessage({ type: 'getDesignDocSetting' });
                 // NOTE: getDefaultPromptOverrides is not requested here — the
-                // prompt-override UI lives in the Kanban AGENTS tab, not the
+                // prompt-override UI lives in the Kanban Prompts tab, not the
                 // sidebar terminals tab. No handler or DOM target exists here.
             }
             Object.entries(tabs).forEach(([key, el]) => {
@@ -3398,7 +3416,7 @@
                     <div class="project-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                     <div class="project-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                     <div class="project-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
-                    <div style="display:flex; gap:4px;">
+                    <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
                         <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}" aria-label="Import ${escapeAttr(issue.identifier || issue.id)}">IMPORT</button>
                     </div>
                 </div>
@@ -3997,12 +4015,12 @@
                              data-clickup-task-url="${escapeAttr(task.url || '')}">
                             <div class="project-card-header">
                                 <span class="project-card-title">${escapeHtml(task.title || task.identifier)}</span>
-                                <span class="project-card-status" style="background-color: ${statusColor};">${escapeHtml(task.status)}</span>
+                                <span class="project-card-status" style="border-left-color: ${statusColor};">${escapeHtml(task.status)}</span>
                             </div>
                             <div class="project-card-meta">
                                 ${task.assignees?.length ? `<span class="project-card-assignees">${escapeHtml(task.assignees.map(a => a.username || a.email).join(', '))}</span>` : ''}
                             </div>
-                            <div style="display:flex; gap:4px;">
+                            <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
                                 <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(task.id)}" aria-label="Import ${escapeAttr(task.identifier || task.id)}">IMPORT</button>
                             </div>
                         </div>
@@ -4118,13 +4136,33 @@
 
         function getStatusColor(status) {
             const colors = {
-                'To Do': '#e0e0e0',
-                'In Progress': '#ffd700',
-                'Review': '#ff8c00',
-                'Done': '#4caf50',
-                'Closed': '#9e9e9e'
+                // Open states (neutral gray)
+                'To Do': '#8e8e93',
+                'Backlog': '#8e8e93',
+                'Open': '#8e8e93',
+                'Todo': '#8e8e93',
+                
+                // In Progress states (warm/progress tones)
+                'In Progress': '#ff9f0a',
+                'Active': '#ff9f0a',
+                'In Review': '#bf5af2',
+                'Review': '#bf5af2',
+                'Pending Review': '#bf5af2',
+                
+                // Blocked states (alert red/pink)
+                'Blocked': '#ff375f',
+                'On Hold': '#ff375f',
+                'Stuck': '#ff375f',
+                
+                // Closed states (success green/gray)
+                'Done': '#30d158',
+                'Complete': '#30d158',
+                'Completed': '#30d158',
+                'Closed': '#8e8e93',
+                'Cancelled': '#8e8e93',
+                'Canceled': '#8e8e93'
             };
-            return colors[status] || '#e0e0e0';
+            return colors[status] || '#8e8e93';
         }
 
         function buildLinearAskAgentText(detail) {
@@ -4266,12 +4304,23 @@
                 if (importBtn && importBtn.dataset.importIssueId) {
                     importBtn.disabled = true;
                     importBtn.dataset.importing = '';
-                    vscode.postMessage({
-                        type: 'linearImportTask',
-                        issueId: importBtn.dataset.importIssueId,
-                        includeSubtasks: true,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
+                    // Route to the correct import handler based on provider
+                    if (lastIntegrationProvider === 'clickup') {
+                        clickUpImportPending = true;
+                        vscode.postMessage({
+                            type: 'clickupImportTask',
+                            taskId: importBtn.dataset.importIssueId,
+                            includeSubtasks: true,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'linearImportTask',
+                            issueId: importBtn.dataset.importIssueId,
+                            includeSubtasks: true,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    }
                     return;
                 }
                 const card = event.target.closest('[data-linear-issue-id]');
@@ -4329,8 +4378,8 @@
                     clickUpImportPending = true;
                     renderSidebarClickUpProjectPanel();
                     vscode.postMessage({
-                        type: 'linearImportTask',
-                        issueId: selectedClickUpIssue.task.id,
+                        type: 'clickupImportTask',
+                        taskId: selectedClickUpIssue.task.id,
                         includeSubtasks: true,
                         workspaceRoot: currentWorkspaceRoot || undefined
                     });

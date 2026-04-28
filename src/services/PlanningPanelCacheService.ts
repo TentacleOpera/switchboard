@@ -12,6 +12,13 @@ export interface ImportRegistryEntry {
   remoteContentHash?: string;  // SHA-256 hash of content at last sync, for conflict detection
 }
 
+export interface TaskCacheEntry<T> {
+  data: T[];
+  timestamp: number;
+  sourceId: string;
+  key: string;
+}
+
 /**
  * PlanningPanelCacheService manages local caching of Planning Panel documents.
  * Documents are cached in .switchboard/planning-cache/{sourceId}/{docId}.md
@@ -21,6 +28,12 @@ export class PlanningPanelCacheService {
     private readonly _workspaceRoot: string;
     private readonly _cacheBaseDir: string;
     private _registryWriteQueue = new Map<string, Promise<void>>();
+
+    // Task/Issue caching with LRU eviction
+    private _taskCache = new Map<string, TaskCacheEntry<any>>();
+    private _taskCacheLruList: string[] = []; // Most recent at end
+    private readonly _taskCacheMaxSize = 100;
+    private readonly _taskCacheTtlMs = 5 * 60 * 1000; // 5 minutes
 
     constructor(workspaceRoot: string) {
         this._workspaceRoot = workspaceRoot;
@@ -444,5 +457,109 @@ cachedAt: ${new Date().toISOString()}
         } catch {
             return null;
         }
+    }
+
+    // ==================== Task/Issue Caching ====================
+
+    /**
+     * Cache tasks/issues with LRU eviction.
+     * @param sourceId - 'clickup' or 'linear'
+     * @param key - cache key (e.g., listId or projectId with fingerprint)
+     * @param data - array of tasks/issues to cache
+     */
+    public cacheTasks<T>(sourceId: string, key: string, data: T[]): void {
+        const fullKey = `${sourceId}:${key}`;
+
+        // Update cache
+        this._taskCache.set(fullKey, {
+            data,
+            timestamp: Date.now(),
+            sourceId,
+            key
+        });
+
+        // Update LRU list: remove if exists, then push to end (most recent)
+        const lruIndex = this._taskCacheLruList.indexOf(fullKey);
+        if (lruIndex !== -1) {
+            this._taskCacheLruList.splice(lruIndex, 1);
+        }
+        this._taskCacheLruList.push(fullKey);
+
+        // Evict oldest if over max size
+        if (this._taskCacheLruList.length > this._taskCacheMaxSize) {
+            const oldestKey = this._taskCacheLruList.shift();
+            if (oldestKey) {
+                this._taskCache.delete(oldestKey);
+            }
+        }
+    }
+
+    /**
+     * Get cached tasks/issues if present and not expired.
+     * @param sourceId - 'clickup' or 'linear'
+     * @param key - cache key
+     * @returns cached data or null if miss or expired
+     */
+    public getCachedTasks<T>(sourceId: string, key: string): T[] | null {
+        const fullKey = `${sourceId}:${key}`;
+        const entry = this._taskCache.get(fullKey);
+
+        if (!entry) {
+            return null;
+        }
+
+        // Check TTL
+        const now = Date.now();
+        if (now - entry.timestamp > this._taskCacheTtlMs) {
+            // Treat stale as miss: remove from cache
+            this._taskCache.delete(fullKey);
+            const lruIndex = this._taskCacheLruList.indexOf(fullKey);
+            if (lruIndex !== -1) {
+                this._taskCacheLruList.splice(lruIndex, 1);
+            }
+            return null;
+        }
+
+        // Update LRU: move to end (most recent)
+        const lruIndex = this._taskCacheLruList.indexOf(fullKey);
+        if (lruIndex !== -1) {
+            this._taskCacheLruList.splice(lruIndex, 1);
+        }
+        this._taskCacheLruList.push(fullKey);
+
+        return entry.data as T[];
+    }
+
+    /**
+     * Invalidate cache entries for a specific source/key pattern.
+     * @param sourceId - 'clickup' or 'linear'
+     * @param keyPattern - optional key pattern to match (e.g., listId)
+     */
+    public invalidateTaskCache(sourceId: string, keyPattern?: string): void {
+        const prefix = `${sourceId}:`;
+
+        for (const fullKey of this._taskCacheLruList.slice()) {
+            if (!fullKey.startsWith(prefix)) {
+                continue;
+            }
+
+            // If no keyPattern provided, invalidate all for this source
+            // If keyPattern provided, invalidate only matching keys
+            if (!keyPattern || fullKey === `${sourceId}:${keyPattern}` || fullKey.startsWith(`${sourceId}:${keyPattern}:`)) {
+                this._taskCache.delete(fullKey);
+                const lruIndex = this._taskCacheLruList.indexOf(fullKey);
+                if (lruIndex !== -1) {
+                    this._taskCacheLruList.splice(lruIndex, 1);
+                }
+            }
+        }
+    }
+
+    /**
+     * Clear all task cache entries.
+     */
+    public clearAllTaskCache(): void {
+        this._taskCache.clear();
+        this._taskCacheLruList.length = 0;
     }
 }
