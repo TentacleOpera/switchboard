@@ -149,6 +149,8 @@ export class KanbanProvider implements vscode.Disposable {
     private _repoScopeFilter: string | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
+    private _outputChannel?: vscode.OutputChannel;
+    private _nativeFsWatchers?: fs.FSWatcher[];
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
@@ -241,8 +243,10 @@ export class KanbanProvider implements vscode.Disposable {
 
     constructor(
         private readonly _extensionUri: vscode.Uri,
-        private readonly _context: vscode.ExtensionContext
+        private readonly _context: vscode.ExtensionContext,
+        outputChannel?: vscode.OutputChannel
     ) {
+        this._outputChannel = outputChannel;
         this._cliTriggersEnabled = this._context.workspaceState.get<boolean>('kanban.cliTriggersEnabled', true);
         this._dynamicComplexityRoutingEnabled = this._context.workspaceState.get<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
@@ -539,6 +543,12 @@ export class KanbanProvider implements vscode.Disposable {
         this._planContentWatchers = [];
         try { this._fsSessionWatcher?.close(); } catch { }
         try { this._fsStateWatcher?.close(); } catch { }
+        if (this._nativeFsWatchers) {
+            this._nativeFsWatchers.forEach(w => {
+                try { w.close(); } catch { }
+            });
+            this._nativeFsWatchers = undefined;
+        }
         this._integrationAutoPull.dispose();
         this._clickUpAutomationServices.clear();
         this._linearAutomationServices.clear();
@@ -617,81 +627,209 @@ export class KanbanProvider implements vscode.Disposable {
         this._fsStateWatcher = undefined;
     }
 
-    private _setupPlanContentWatcher(): void {
-        // Dispose all existing watchers
-        this._planContentWatchers.forEach(w => w.dispose());
-        this._planContentWatchers = [];
-
+    private _getWatchFolders(): string[] {
+        const folders: string[] = [];
         const workspaceRoot = this._currentWorkspaceRoot;
-        if (!workspaceRoot) { return; }
 
-        // Helper to expand ~ to home directory
+        if (!workspaceRoot) return folders;
+
         const expandHome = (p: string): string => {
             const trimmed = p.trim();
             return trimmed.startsWith('~')
-                ? path.join(require('os').homedir(), trimmed.slice(1))
+                ? path.join(os.homedir(), trimmed.slice(1))
                 : trimmed;
         };
 
-        // Collect all folders to watch
-        const foldersToWatch: string[] = [];
-
-        // Check if workspace mapping is enabled
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: any[] } | undefined;
+                .get('workspaceDatabaseMappings') as
+            { enabled?: boolean; mappings?: any[] } | undefined;
 
             if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-                // Watch all folders in all mappings
                 for (const mapping of cfg.mappings) {
                     if (Array.isArray(mapping.workspaceFolders)) {
                         for (const folder of mapping.workspaceFolders) {
                             const resolved = path.resolve(expandHome(folder));
-                            if (!foldersToWatch.includes(resolved)) {
-                                foldersToWatch.push(resolved);
+                            if (!folders.includes(resolved)) {
+                                folders.push(resolved);
                             }
                         }
                     }
                 }
             }
         } catch {
-            // Outside extension host - fall back to single folder
+            // Outside extension host
         }
 
-        // Fallback to current workspace root if no mappings or disabled
-        if (foldersToWatch.length === 0) {
-            foldersToWatch.push(workspaceRoot);
+        if (folders.length === 0) {
+            folders.push(workspaceRoot);
         }
 
-        // Create watchers for each folder
+        return folders;
+    }
+
+    private _setupPlanContentWatcher(): void {
+        this._outputChannel?.appendLine('[KanbanProvider] Setting up plan content watcher...');
+
+        // Dispose all existing watchers
+        this._planContentWatchers.forEach(w => w.dispose());
+        this._planContentWatchers = [];
+
+        // Dispose native watchers
+        if (this._nativeFsWatchers) {
+            this._nativeFsWatchers.forEach(w => {
+                try { w.close(); } catch { }
+            });
+            this._nativeFsWatchers = undefined;
+        }
+
+        const workspaceRoot = this._currentWorkspaceRoot;
+        if (!workspaceRoot) {
+            this._outputChannel?.appendLine('[KanbanProvider] No workspace root, skipping watcher setup');
+            return;
+        }
+
+        const foldersToWatch = this._getWatchFolders();
+        this._outputChannel?.appendLine(`[KanbanProvider] Watching folders: ${foldersToWatch.join(', ')}`);
+
+        // Get actual VS Code workspace folders for comparison
+        const workspaceFolderPaths = new Set(
+            (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
+        );
+
+        // Create VS Code file system watchers ONLY for actual workspace folders
+        // VS Code's RelativePattern only works reliably with workspace folders
         for (const folder of foldersToWatch) {
+            const resolvedFolder = path.resolve(folder);
+            if (!workspaceFolderPaths.has(resolvedFolder)) {
+                this._outputChannel?.appendLine(`[KanbanProvider] Skipping VS Code watcher for non-workspace folder: ${folder}`);
+                continue;
+            }
+
             const pattern = new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md');
+            this._outputChannel?.appendLine(`[KanbanProvider] Creating VS Code watcher for: ${folder}`);
+            this._outputChannel?.appendLine(`[KanbanProvider] Pattern: ${pattern.pattern}`);
+
             const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
 
-            // Reuse existing change handlers (they already handle the workspace context correctly)
-            watcher.onDidChange(async (uri: vscode.Uri) => {
+            watcher.onDidCreate(async (uri: vscode.Uri) => {
+                this._outputChannel?.appendLine(`[KanbanProvider] VS Code watcher - File created: ${uri.fsPath}`);
                 await this._handlePlanFileChange(uri, folder);
             });
 
-            watcher.onDidCreate(async (uri: vscode.Uri) => {
+            watcher.onDidChange(async (uri: vscode.Uri) => {
+                this._outputChannel?.appendLine(`[KanbanProvider] VS Code watcher - File changed: ${uri.fsPath}`);
                 await this._handlePlanFileChange(uri, folder);
             });
 
             watcher.onDidDelete(async (uri: vscode.Uri) => {
+                this._outputChannel?.appendLine(`[KanbanProvider] VS Code watcher - File deleted: ${uri.fsPath}`);
                 await this._handlePlanFileDelete(uri, folder);
             });
 
             this._planContentWatchers.push(watcher);
+            this._outputChannel?.appendLine(`[KanbanProvider] VS Code watcher registered for ${folder}`);
         }
+
+        this._outputChannel?.appendLine(`[KanbanProvider] Total VS Code watchers: ${this._planContentWatchers.length}`);
+
+        // Native fs.watch for all folders (including non-workspace mapped folders)
+        // VS Code's watcher respects .gitignore, which may exclude .switchboard/
+        this._nativeFsWatchers = [];
+        for (const folder of foldersToWatch) {
+            const plansDir = path.join(folder, '.switchboard', 'plans');
+
+            if (!fs.existsSync(plansDir)) {
+                this._outputChannel?.appendLine(`[KanbanProvider] Skipping fs.watch for missing dir: ${plansDir}`);
+                continue;
+            }
+
+            try {
+                const watcher = fs.watch(plansDir, { recursive: true }, (eventType, filename) => {
+                    if (!filename || !filename.endsWith('.md')) return;
+
+                    const fullPath = path.join(plansDir, filename);
+
+                    // Verify file still exists (fs.watch fires on both create and delete)
+                    if (eventType === 'rename' || !fs.existsSync(fullPath)) {
+                        if (!fs.existsSync(fullPath)) {
+                            this._outputChannel?.appendLine(`[KanbanProvider] Native fs.watch detected delete: ${fullPath}`);
+                            this._handlePlanFileDelete(vscode.Uri.file(fullPath), folder).catch((err) => {
+                                this._outputChannel?.appendLine(`[KanbanProvider] Error handling native delete: ${err}`);
+                            });
+                            return;
+                        }
+                    }
+
+                    this._outputChannel?.appendLine(`[KanbanProvider] Native fs.watch detected: ${fullPath}`);
+                    this._handlePlanFileChange(vscode.Uri.file(fullPath), folder).catch((err) => {
+                        this._outputChannel?.appendLine(`[KanbanProvider] Error handling native change: ${err}`);
+                    });
+                });
+
+                this._nativeFsWatchers.push(watcher);
+                this._outputChannel?.appendLine(`[KanbanProvider] Native fs.watch active for: ${plansDir}`);
+            } catch (e) {
+                this._outputChannel?.appendLine(`[KanbanProvider] fs.watch failed for ${plansDir}: ${e}`);
+            }
+        }
+
+        this._outputChannel?.appendLine(`[KanbanProvider] Total native fs.watchers: ${this._nativeFsWatchers.length}`);
+    }
+
+    public async triggerPlanScan(): Promise<void> {
+        this._outputChannel?.appendLine('[KanbanProvider] Manual plan scan triggered');
+
+        const workspaceRoot = this._currentWorkspaceRoot;
+        if (!workspaceRoot) {
+            this._outputChannel?.appendLine('[KanbanProvider] No workspace root for scan');
+            return;
+        }
+
+        const foldersToScan = this._getWatchFolders();
+
+        for (const folder of foldersToScan) {
+            const plansDir = path.join(folder, '.switchboard', 'plans');
+
+            if (!fs.existsSync(plansDir)) {
+                this._outputChannel?.appendLine(`[KanbanProvider] Plans directory not found: ${plansDir}`);
+                continue;
+            }
+
+            this._outputChannel?.appendLine(`[KanbanProvider] Scanning: ${plansDir}`);
+
+            try {
+                const entries = await fs.promises.readdir(plansDir, { withFileTypes: true });
+                let processed = 0;
+
+                for (const entry of entries) {
+                    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+
+                    const filePath = path.join(plansDir, entry.name);
+                    const uri = vscode.Uri.file(filePath);
+
+                    await this._handlePlanFileChange(uri, folder);
+                    processed++;
+                }
+
+                this._outputChannel?.appendLine(`[KanbanProvider] Scanned ${processed} files in ${folder}`);
+            } catch (err) {
+                this._outputChannel?.appendLine(`[KanbanProvider] Scan error in ${folder}: ${err}`);
+            }
+        }
+
+        await this._refreshBoard(workspaceRoot);
     }
 
     private async _handlePlanFileChange(uri: vscode.Uri, watchFolder: string): Promise<void> {
+        this._outputChannel?.appendLine(`[KanbanProvider] Handling file change: ${uri.fsPath} in ${watchFolder}`);
+
         try {
             // Determine which workspace root to use for DB operations
             // Use the watchFolder as the workspace root for proper context
             const db = this._getKanbanDb(watchFolder);
             const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            this._outputChannel?.appendLine(`[KanbanProvider] Resolved workspaceId: ${workspaceId}`);
 
             // Hoist plan lookup above ClickUp guard so both paths can use it.
             let plan: any = null;
@@ -808,7 +946,10 @@ export class KanbanProvider implements vscode.Disposable {
 
                 this._metadataDebounceTimers.set(filePath, timer);
             }
-        } catch { /* File watcher failures must never block operations */ }
+        } catch (err) {
+            this._outputChannel?.appendLine(`[KanbanProvider] Error handling file change: ${err}`);
+            console.error('[KanbanProvider] Error handling file change:', err);
+        }
 
         // Emit for continuous sync service (unchanged)
         this._planFileChangeEmitter.fire(uri);
@@ -4234,6 +4375,20 @@ export class KanbanProvider implements vscode.Disposable {
                     this._showingBacklog = false;
                     this._panel?.webview.postMessage({ type: 'backlogViewState', showing: false });
                 }
+
+                // LAZY CHANGE: Ensure DB exists before plan creation
+                try {
+                    const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot) || this._currentWorkspaceRoot;
+                    if (workspaceRoot) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        if (db) {
+                            await db.createIfMissing();
+                        }
+                    }
+                } catch (e) {
+                    console.error('[KanbanProvider] DB creation before plan creation failed:', e);
+                }
+
                 await vscode.commands.executeCommand('switchboard.initiatePlan');
                 break;
             case 'toggleBacklogView':

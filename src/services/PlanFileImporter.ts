@@ -90,7 +90,14 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
         const tags = extractTags(content);
         const embeddedRepoScope = extractRepoScope(content);
         const repoScope = file.repoScope || embeddedRepoScope;
-        const planFileNormalized = filePath.replace(/\\/g, '/');
+        let planFileNormalized = filePath.replace(/\\/g, '/');
+
+        // For control plane workspaces, store path relative to workspace root (not repo scope)
+        const isControlPlane = await detectControlPlaneWorkspace(workspaceRoot);
+        if (isControlPlane && file.repoScope && planFileNormalized.startsWith(`${file.repoScope}/`)) {
+            planFileNormalized = planFileNormalized.substring(`${file.repoScope}/`.length);
+        }
+
         if (file.repoScope && embeddedRepoScope && embeddedRepoScope !== file.repoScope) {
             console.warn(
                 `[PlanFileImporter] Repo scope mismatch in ${planFileNormalized}; using folder scope '${file.repoScope}' instead of embedded metadata '${embeddedRepoScope}'.`
@@ -284,6 +291,21 @@ function isRuntimeMirrorPlanFile(fileName: string): boolean {
 export function extractRepoScope(content: string): string {
     const match = content.match(/## Metadata[\s\S]*?\*\*Repo:\*\*\s*([^\r\n]+)/i);
     return sanitizeRepoScope(match ? match[1] : '');
+}
+
+async function detectControlPlaneWorkspace(workspaceRoot: string): Promise<boolean> {
+    // Check for workspace database mappings configuration
+    const mappingsPath = path.join(workspaceRoot, '.switchboard', 'workspace_database_mappings.json');
+    if (fs.existsSync(mappingsPath)) {
+        try {
+            const content = await fs.promises.readFile(mappingsPath, 'utf-8');
+            const config = JSON.parse(content);
+            return config.enabled === true && Array.isArray(config.mappings) && config.mappings.length > 0;
+        } catch {
+            return false;
+        }
+    }
+    return false;
 }
 
 async function readImportableKanbanColumns(workspaceRoot: string): Promise<Set<string>> {

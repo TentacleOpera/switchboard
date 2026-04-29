@@ -219,6 +219,10 @@ export class PlanningPanelProvider {
         return htmlContent;
     }
 
+    private _getWorkspaceRoots(): string[] {
+        return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+    }
+
     private async _handleMessage(msg: any): Promise<void> {
         const workspaceRoot = this._getWorkspaceRoot();
         if (!workspaceRoot) {
@@ -961,10 +965,49 @@ export class PlanningPanelProvider {
 
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
-            const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
-            if (!fs.existsSync(docsDir)) {
+            // In multi-repo workspaces, docs might be in a different folder than the active file's folder
+            // Search across all workspace roots with preference for active folder
+            const allRoots = this._getWorkspaceRoots();
+            let docsDir: string | null = null;
+            let docsSource: string = '';
+
+            // Try active workspace root first
+            const activeDocsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+            if (fs.existsSync(activeDocsDir)) {
+                docsDir = activeDocsDir;
+                docsSource = 'active workspace';
+            }
+            // Try first workspace root as fallback (existing behavior)
+            if (docsDir === null && allRoots.length > 0) {
+                const firstDocsDir = path.join(allRoots[0], '.switchboard', 'docs');
+                if (fs.existsSync(firstDocsDir)) {
+                    docsDir = firstDocsDir;
+                    docsSource = 'first workspace (fallback)';
+                }
+            }
+            // Search all other workspace roots
+            if (docsDir === null) {
+                for (const root of allRoots) {
+                    if (root === workspaceRoot) { continue; } // Already tried active
+                    if (root === allRoots[0]) { continue; } // Already tried first
+
+                    const candidateDocsDir = path.join(root, '.switchboard', 'docs');
+                    if (fs.existsSync(candidateDocsDir)) {
+                        docsDir = candidateDocsDir;
+                        docsSource = `workspace ${path.basename(root)}`;
+                        console.log(`[PlanningPanelProvider] Docs found in alternate workspace: ${root}`);
+                        break;
+                    }
+                }
+            }
+
+            if (!docsDir) {
                 this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: [] });
                 return;
+            }
+
+            if (docsSource !== 'active workspace') {
+                console.log(`[PlanningPanelProvider] Using docs from ${docsSource} (${docsDir})`);
             }
 
             const files = await fs.promises.readdir(docsDir);
@@ -1055,10 +1098,39 @@ export class PlanningPanelProvider {
 
     private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<void> {
         try {
-            const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
-            const filePath = path.join(docsDir, `${slugPrefix}.md`);
-            
-            if (!fs.existsSync(filePath)) {
+            // In multi-repo workspaces, the doc file might be in a different folder
+            // Search across all workspace roots with preference for active folder
+            const allRoots = this._getWorkspaceRoots();
+            let filePath: string | null = null;
+
+            // Try active workspace root first
+            const activeFilePath = path.join(workspaceRoot, '.switchboard', 'docs', `${slugPrefix}.md`);
+            if (fs.existsSync(activeFilePath)) {
+                filePath = activeFilePath;
+            }
+            // Try first workspace root as fallback
+            if (filePath === null && allRoots.length > 0) {
+                const firstFilePath = path.join(allRoots[0], '.switchboard', 'docs', `${slugPrefix}.md`);
+                if (fs.existsSync(firstFilePath)) {
+                    filePath = firstFilePath;
+                }
+            }
+            // Search all other workspace roots
+            if (filePath === null) {
+                for (const root of allRoots) {
+                    if (root === workspaceRoot) { continue; } // Already tried active
+                    if (root === allRoots[0]) { continue; } // Already tried first
+
+                    const candidatePath = path.join(root, '.switchboard', 'docs', `${slugPrefix}.md`);
+                    if (fs.existsSync(candidatePath)) {
+                        filePath = candidatePath;
+                        console.log(`[PlanningPanelProvider] Doc file found in alternate workspace: ${root}`);
+                        break;
+                    }
+                }
+            }
+
+            if (!filePath) {
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId: 'local-folder', requestId, error: 'File not found' });
                 return;
             }

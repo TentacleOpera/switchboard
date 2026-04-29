@@ -260,16 +260,8 @@ export class KanbanDatabase {
                 if (mapping?.dbPath) {
                     resolvedDbPath = path.resolve(expandHome(mapping.dbPath));
                     console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);
-                } else if (!KanbanDatabase._warnedUnmappedRoots.has(stable)) {
-                    KanbanDatabase._warnedUnmappedRoots.add(stable);
-                    vscode.window.showWarningMessage(
-                        `Switchboard: workspace mapping is enabled but '${stable}' is not in any mapping. Using default database location.`,
-                        'Configure Mappings'
-                    ).then((sel: string | undefined) => {
-                        if (sel === 'Configure Mappings') {
-                            vscode.commands.executeCommand('switchboard.openSetupPanel');
-                        }
-                    });
+                } else {
+                    console.log(`[KanbanDatabase] Workspace '${stable}' not in any mapping; using default database location`);
                 }
             }
         } catch { /* outside extension host */ }
@@ -606,6 +598,48 @@ export class KanbanDatabase {
         }
         await this._reloadIfStale(forceReload);
         return true;
+    }
+
+    /**
+     * Explicitly create the database file if it doesn't exist.
+     * Called by intentional initialization flows (setup wizard, plan creation, etc.)
+     * @returns true if DB now exists (created or already present), false on error
+     */
+    public async createIfMissing(): Promise<boolean> {
+        // Idempotent: already initialized
+        if (this._db) {
+            return true;
+        }
+
+        // If file exists, just load it normally
+        if (fs.existsSync(this._dbPath)) {
+            return await this.ensureReady();
+        }
+
+        try {
+            // Create parent directory
+            await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
+
+            // Initialize SQL.js and create empty database
+            const SQL = await KanbanDatabase._loadSqlJs();
+            this._db = new SQL.Database();
+
+            // Execute schema and migrations
+            this._db.exec(SCHEMA_SQL);
+            this._runMigrations();
+
+            // Persist to disk
+            await this._persist();
+
+            this._lastInitError = null;
+            console.log(`[KanbanDatabase] Explicitly created new DB at ${this._dbPath}`);
+            return true;
+        } catch (error) {
+            this._db = null;
+            this._lastInitError = error instanceof Error ? error.message : String(error);
+            console.error('[KanbanDatabase] Explicit creation failed:', error);
+            return false;
+        }
     }
 
     public async getMigrationVersion(): Promise<number> {
@@ -1691,10 +1725,11 @@ export class KanbanDatabase {
 
     private async _initialize(): Promise<boolean> {
         try {
-            await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
             const SQL = await KanbanDatabase._loadSqlJs();
 
             if (fs.existsSync(this._dbPath)) {
+                // Only create directory when loading existing file
+                await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
                 const stats = await fs.promises.stat(this._dbPath);
                 const fileMtime = stats.mtimeMs;
 
@@ -1717,10 +1752,13 @@ export class KanbanDatabase {
                 this._db = new SQL.Database(new Uint8Array(existing));
                 console.log(`[KanbanDatabase] Loaded existing DB from ${this._dbPath} (${existing.length} bytes)`);
             } else {
+                // LAZY CHANGE: Don't create the DB file - just mark as unavailable
                 KanbanDatabase._lastLoadedMtimes.delete(this._dbPath);
                 this._loadedMtime = 0;
-                this._db = new SQL.Database();
-                console.log(`[KanbanDatabase] Created new empty DB at ${this._dbPath}`);
+                this._db = null;
+                this._lastInitError = 'Database file does not exist (not auto-creating)';
+                console.log(`[KanbanDatabase] No DB exists at ${this._dbPath} - not creating`);
+                return false;  // <-- Key change: return false instead of creating
             }
 
             if (!this._db) {

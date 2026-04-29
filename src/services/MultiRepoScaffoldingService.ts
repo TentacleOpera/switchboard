@@ -261,9 +261,10 @@ export class MultiRepoScaffoldingService {
         await fs.promises.mkdir(options.parentDir, { recursive: true });
         await ControlPlaneMigrationService.bootstrapControlPlaneLayout(options.parentDir, extensionPath);
 
+        // LAZY CHANGE: Explicitly create control plane DB
         const db = KanbanDatabase.forWorkspace(options.parentDir);
-        const ready = await db.ensureReady();
-        if (!ready) {
+        const created = await db.createIfMissing();
+        if (!created) {
             return {
                 success: false,
                 repos,

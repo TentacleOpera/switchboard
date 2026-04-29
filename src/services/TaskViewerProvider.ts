@@ -1498,11 +1498,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 try {
                     const db = await this._getKanbanDb(workspaceRoot);
                     const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+                    // LAZY CHANGE: Only proceed if DB actually exists and loaded
                     if (db && wsId) {
                         const removed = await db.cleanupSpuriousMirrorPlans(wsId);
                         if (removed > 0) {
                             console.log(`[TaskViewerProvider] Cleaned up ${removed} spurious mirror plan(s) on startup`);
                         }
+                    } else {
+                        console.log(`[TaskViewerProvider] No DB exists for ${workspaceRoot} - skipping startup initialization`);
                     }
                 } catch (cleanupErr) {
                     console.error(`[TaskViewerProvider] Mirror plan cleanup failed for ${workspaceRoot}:`, cleanupErr);
@@ -4247,6 +4250,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         this._lastKanbanDbWarnings.set(resolvedRoot, null);
         return db;
+    }
+
+    /**
+     * Public accessor for KanbanDatabase instance.
+     * Used by external flows that need to explicitly create databases.
+     */
+    public async getKanbanDbForRoot(workspaceRoot: string): Promise<KanbanDatabase | null> {
+        const db = await this._getKanbanDb(workspaceRoot);
+        return db || null;
     }
 
     private _getNotionService(workspaceRoot: string): NotionFetchService {
@@ -11110,7 +11122,42 @@ What would you like to find?`;
             throw new Error('No plan file associated with this session.');
         }
 
-        const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planPath);
+        // Handle absolute paths directly
+        let planFileAbsolute = path.isAbsolute(planPath)
+            ? path.resolve(planPath)
+            : path.resolve(resolvedWorkspaceRoot, planPath);
+
+        // In multi-repo workspaces, the plan might be in a parent workspace
+        // Try to find the actual file if the initial resolution fails
+        if (!fs.existsSync(planFileAbsolute) && !path.isAbsolute(planPath)) {
+            const allRoots = this._getWorkspaceRoots();
+
+            // Only check parent workspaces (roots that are ancestors of current root)
+            // This limits search scope and matches expected multi-repo hierarchy
+            for (const root of allRoots) {
+                if (root === resolvedWorkspaceRoot) continue;
+
+                // Check if this root is a parent/ancestor of the current workspace root
+                const rel = path.relative(root, resolvedWorkspaceRoot);
+                if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+                    // This root is a parent of resolvedWorkspaceRoot
+                    const altPath = path.resolve(root, planPath);
+                    if (fs.existsSync(altPath)) {
+                        console.log(`[TaskViewerProvider] Plan path fallback: ${planPath} found in parent workspace ${root}`);
+
+                        // Use effective workspace root for consistency with codebase
+                        const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(root) || root;
+
+                        return {
+                            planFileAbsolute: altPath,
+                            topic: topic || path.basename(altPath),
+                            workspaceRoot: effectiveRoot
+                        };
+                    }
+                }
+            }
+        }
+
         if (!this._isPathWithinRoot(planFileAbsolute, resolvedWorkspaceRoot)) {
             throw new Error('Plan file path is outside the workspace boundary.');
         }
@@ -13885,6 +13932,19 @@ Create this file exactly as specified, then continue your work.`);
     }
 
     public async importPlanFromClipboard(): Promise<void> {
+        // LAZY CHANGE: Ensure DB exists before import
+        try {
+            const workspaceRoot = this._getWorkspaceRoot();
+            if (workspaceRoot) {
+                const db = await this._getKanbanDb(workspaceRoot);
+                if (db) {
+                    await db.createIfMissing();
+                }
+            }
+        } catch (e) {
+            console.error('[Import] DB creation failed:', e);
+        }
+
         const text = await vscode.env.clipboard.readText();
 
         if (!text || !text.trim()) {

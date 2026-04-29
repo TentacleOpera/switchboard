@@ -1088,7 +1088,10 @@ function syncSettingsToMcp() {
 export async function activate(context: vscode.ExtensionContext) {
     console.time('switchboard.activate');
     const workspaceRoot = getPreferredWorkspaceRoot();
-    const kanbanProvider = new KanbanProvider(context.extensionUri, context);
+    if (!mcpOutputChannel) {
+        mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
+    }
+    const kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
     const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
     const dispatchSigningKey = await getOrCreateDispatchSigningKey(context);
@@ -3779,6 +3782,23 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         // Run unified setup first (Project structure and .agent assets)
         if (token.isCancellationRequested) return;
         await performSetup(vscode.Uri.file(workspaceRoot), context.extensionUri, { silent: false });
+
+        // LAZY CHANGE: Explicitly create database after setup
+        if (token.isCancellationRequested) return;
+        if (taskViewerProvider) {
+            try {
+                const db = await taskViewerProvider.getKanbanDbForRoot(workspaceRoot);
+                if (db) {
+                    const created = await db.createIfMissing();
+                    if (created) {
+                        console.log(`[SetupWizard] Database initialized for ${workspaceRoot}`);
+                    }
+                }
+            } catch (dbErr) {
+                console.error(`[SetupWizard] Database creation failed (non-fatal):`, dbErr);
+            }
+        }
+
         if (taskViewerProvider) {
             try {
                 if (token.isCancellationRequested) return;

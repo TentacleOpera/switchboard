@@ -682,6 +682,9 @@
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Map multiple workspace folders to a shared kanban.db for centralized plan management.
                 </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-warning); border-radius: 2px;">
+                    <strong>Note:</strong> When enabled, any workspace folders <em>not</em> listed below will automatically use their own local database (located at <code>.switchboard/kanban.db</code> within each folder).
+                </div>
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
                     <input id="workspace-mapping-enabled" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <span>Enable workspace-to-database mapping</span>

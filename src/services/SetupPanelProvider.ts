@@ -194,6 +194,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                             cleanupConfirmed: Array.isArray(message.cleanupConfirmed) ? message.cleanupConfirmed : []
                         })
                     );
+
+                    // LAZY CHANGE: Ensure DB exists after migration
+                    if (result.success && workspaceRoot) {
+                        try {
+                            const db = await this._taskViewerProvider.getKanbanDbForRoot(workspaceRoot);
+                            if (db) {
+                                await db.createIfMissing();
+                            }
+                        } catch (e) {
+                            console.error('[SetupPanel] DB creation after migration failed:', e);
+                        }
+                    }
+
                     this._panel.webview.postMessage({ type: 'controlPlaneMigrationResult', ...result });
                     break;
                 }
@@ -211,6 +224,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                             generateWorkspaceFile: message.generateWorkspaceFile !== false
                         })
                     );
+
+                    // LAZY CHANGE: Ensure DB exists after fresh setup
+                    if (result.success && workspaceRoot) {
+                        try {
+                            const db = await this._taskViewerProvider.getKanbanDbForRoot(workspaceRoot);
+                            if (db) {
+                                await db.createIfMissing();
+                            }
+                        } catch (e) {
+                            console.error('[SetupPanel] DB creation after fresh setup failed:', e);
+                        }
+                    }
+
                     this._panel.webview.postMessage({ type: 'controlPlaneFreshSetupResult', ...result });
                     break;
                 }
