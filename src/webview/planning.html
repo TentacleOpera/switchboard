@@ -961,6 +961,143 @@
         }
         .duplicate-modal button:hover { background: var(--accent-teal-dim); }
         .duplicate-modal .modal-btn-replace { border-color: var(--accent-teal); color: var(--accent-teal); }
+
+        /* Research Tab Content */
+        #research-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        #research-content.active {
+            display: flex;
+        }
+
+        /* Prompt Buttons Container */
+        .prompt-buttons-container {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        /* Segmented Control */
+        .segmented-control {
+            display: flex;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .segmented-btn {
+            flex: 1;
+            padding: 8px 16px;
+            background: var(--panel-bg2);
+            border: none;
+            border-right: 1px solid var(--border-color);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+
+        .segmented-btn:last-child {
+            border-right: none;
+        }
+
+        .segmented-btn.active {
+            background: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        .segmented-btn:hover:not(.active) {
+            background: var(--card-bg-hover);
+        }
+
+        /* Radio Group */
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        /* Toggle Switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-primary);
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--accent-teal-dim);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+            background-color: var(--accent-teal);
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            color: var(--text-primary);
+        }
     </style>
 </head>
 <body>
@@ -969,6 +1106,7 @@
         <button class="research-tab-btn" data-tab="online">ONLINE DOCS</button>
         <button class="research-tab-btn" data-tab="clipboard">CLIPBOARD IMPORT</button>
         <button class="research-tab-btn" data-tab="notebook">NotebookLM</button>
+        <button class="research-tab-btn" data-tab="research">RESEARCH</button>
     </div>
     <div class="container">
         <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -983,7 +1121,6 @@
             <div class="controls-strip" id="controls-strip-local">
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
-                <button id="btn-append-to-prompts" class="strip-btn" disabled>Import and set as active planning context</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <span id="status"></span>
             </div>
@@ -1018,7 +1155,7 @@
             </div>
             <div class="controls-strip" id="controls-strip-online">
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
-                <button id="btn-append-to-prompts-online" class="strip-btn" disabled>Import and set as active planning context</button>
+                <button id="btn-append-to-prompts-online" class="strip-btn" disabled>Set as active planning context</button>
                 <span id="status-online"></span>
             </div>
             <div class="content-row">
@@ -1090,6 +1227,68 @@
                     <div class="planning-card-section-title">3. COPY SPRINT PLANNING PROMPT</div>
                     <div class="planning-card-description">Generate a prompt for NotebookLM to format sprint plans with the correct separators.</div>
                     <button id="btn-copy-sprint-prompt" class="planning-button secondary">COPY SPRINT PROMPT</button>
+                </div>
+            </div>
+        </div>
+        <div id="research-content" class="research-tab-content">
+            <div class="planning-card">
+                <div class="planning-card-header">RESEARCH PROMPTS</div>
+                <div class="planning-card-description">Generate AI-optimized prompts for web research and deep planning. Configure options below, then copy the prompt to use with your AI assistant.</div>
+
+                <!-- Prompt Copy Buttons -->
+                <div class="prompt-buttons-container">
+                    <button id="btn-copy-web-research" class="planning-button">COPY WEB RESEARCH PROMPT</button>
+                    <button id="btn-copy-deep-planning" class="planning-button">COPY DEEP PLANNING PROMPT</button>
+                </div>
+            </div>
+
+            <div class="planning-card">
+                <div class="planning-card-header">RESEARCH MODE</div>
+                <div class="planning-card-description">Select the research mode to use in the generated prompt.</div>
+
+                <!-- Segmented Control for Research Mode -->
+                <div class="segmented-control">
+                    <button class="segmented-btn active" data-mode="web">WEB RESEARCH</button>
+                    <button class="segmented-btn" data-mode="deep">DEEP PLANNING</button>
+                </div>
+            </div>
+
+            <div class="planning-card">
+                <div class="planning-card-header">COMPLEXITY LEVEL</div>
+                <div class="planning-card-description">Select the depth of research for the generated prompt.</div>
+
+                <!-- Radio Buttons for Complexity -->
+                <div class="radio-group">
+                    <label class="radio-option">
+                        <input type="radio" name="complexity" value="quick" checked>
+                        <span>Quick (5-10 sources)</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="complexity" value="standard">
+                        <span>Standard (15-30 sources)</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="complexity" value="deep">
+                        <span>Deep (50-100+ sources)</span>
+                    </label>
+                    <label class="radio-option">
+                        <input type="radio" name="complexity" value="academic">
+                        <span>Academic (100-200+ sources)</span>
+                    </label>
+                </div>
+            </div>
+
+            <div class="planning-card">
+                <div class="planning-card-header">IMPORT OPTIONS</div>
+                <div class="planning-card-description">When enabled, the prompt will instruct the agent to save research results to your local `.switchboard/docs/` folder for later viewing.</div>
+
+                <!-- Toggle Switch for Import -->
+                <div class="toggle-container">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="import-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">Save research results locally</span>
                 </div>
             </div>
         </div>

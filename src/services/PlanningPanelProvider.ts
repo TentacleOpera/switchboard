@@ -696,7 +696,7 @@ export class PlanningPanelProvider {
     private async _sendActiveDesignDocState(): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
         const enabled = config.get<boolean>('planner.designDocEnabled', false);
-        const docName = this._getDesignDocName();
+        const docName = enabled ? this._getDesignDocName() : null;
         this._panel?.webview.postMessage({
             type: 'activeDesignDocUpdated',
             enabled,

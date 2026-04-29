@@ -363,6 +363,28 @@
           "description": "Explicit Control Plane folder override. Must point to a folder containing .switchboard/kanban.db. Leave empty to use auto-detect.",
           "scope": "resource"
         },
+        "switchboard.workspaceDatabaseMappings": {
+          "type": "object",
+          "default": { "enabled": false, "mappings": [] },
+          "description": "Workspace-to-database mapping configuration. When enabled, redirects configured workspace folders to shared kanban.db paths.",
+          "properties": {
+            "enabled": { "type": "boolean", "default": false },
+            "mappings": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["id", "name", "dbPath", "workspaceFolders"],
+                "properties": {
+                  "id": { "type": "string" },
+                  "name": { "type": "string" },
+                  "dbPath": { "type": "string" },
+                  "workspaceFolders": { "type": "array", "items": { "type": "string" } }
+                }
+              }
+            }
+          },
+          "scope": "resource"
+        },
         "switchboard.workspace.ignoreStrategy": {
           "type": "string",
           "enum": [

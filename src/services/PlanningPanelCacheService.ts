@@ -35,9 +35,17 @@ export class PlanningPanelCacheService {
     private readonly _taskCacheMaxSize = 100;
     private readonly _taskCacheTtlMs = 5 * 60 * 1000; // 5 minutes
 
+    // File paths for persisted metadata
+    private readonly _clickupMetadataPath: string;
+    private readonly _linearMetadataPath: string;
+    private _metadataWriteTimer: NodeJS.Timeout | null = null;
+    private readonly _metadataWriteDebounceMs = 500;
+
     constructor(workspaceRoot: string) {
         this._workspaceRoot = workspaceRoot;
         this._cacheBaseDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
+        this._clickupMetadataPath = path.join(workspaceRoot, '.switchboard', 'clickup-tasks.json');
+        this._linearMetadataPath = path.join(workspaceRoot, '.switchboard', 'linear-tasks.json');
     }
 
     /**
@@ -492,6 +500,9 @@ cachedAt: ${new Date().toISOString()}
                 this._taskCache.delete(oldestKey);
             }
         }
+
+        // Trigger debounced metadata write
+        void this._writeMetadataToJson();
     }
 
     /**
@@ -558,8 +569,75 @@ cachedAt: ${new Date().toISOString()}
     /**
      * Clear all task cache entries.
      */
-    public clearAllTaskCache(): void {
+    public async clearAllTaskCache(): Promise<void> {
         this._taskCache.clear();
         this._taskCacheLruList.length = 0;
+
+        // Write empty metadata immediately (no debounce)
+        try {
+            await this._writeMetadataFile(this._clickupMetadataPath, 'clickup');
+            await this._writeMetadataFile(this._linearMetadataPath, 'linear');
+        } catch (err) {
+            console.warn('[PlanningPanelCache] Failed to write empty metadata to JSON:', err);
+        }
+    }
+
+    /**
+     * Write minimal task metadata to JSON files for agent access.
+     * Uses atomic write pattern (temp file + rename) to avoid corruption.
+     */
+    private async _writeMetadataToJson(): Promise<void> {
+        if (this._metadataWriteTimer) {
+            clearTimeout(this._metadataWriteTimer);
+        }
+        this._metadataWriteTimer = setTimeout(async () => {
+            try {
+                await this._writeMetadataFile(this._clickupMetadataPath, 'clickup');
+                await this._writeMetadataFile(this._linearMetadataPath, 'linear');
+            } catch (err) {
+                console.warn('[PlanningPanelCache] Failed to write metadata to JSON:', err);
+            }
+        }, this._metadataWriteDebounceMs);
+    }
+
+    /**
+     * Extract minimal metadata from cache entries for a specific source.
+     */
+    private async _writeMetadataFile(filePath: string, sourceId: string): Promise<void> {
+        const metadata: Array<{ id: string; name: string; status: string; listId?: string; projectId?: string; sprint?: string; lastUpdated: number }> = [];
+        const prefix = `${sourceId}:`;
+
+        for (const [fullKey, entry] of this._taskCache.entries()) {
+            if (fullKey.startsWith(prefix)) {
+                // Extract listId/projectId from cache key (format: "source:listId:..." or "source:projectId:...")
+                const keyParts = fullKey.split(':');
+                const listId = sourceId === 'clickup' ? keyParts[1] : undefined;
+                const projectId = sourceId === 'linear' ? keyParts[1] : undefined;
+
+                for (const task of entry.data) {
+                    metadata.push({
+                        id: task.id,
+                        name: task.name || '',
+                        status: task.status || '',
+                        listId,
+                        projectId,
+                        sprint: task.sprint || undefined,  // if available
+                        lastUpdated: entry.timestamp
+                    });
+                }
+            }
+        }
+
+        const metadataObject = {
+            version: 1,
+            sourceId,
+            metadata,
+            writtenAt: Date.now()
+        };
+
+        const tmpPath = `${filePath}.tmp`;
+        await fs.promises.mkdir(path.dirname(filePath), { recursive: true });
+        await fs.promises.writeFile(tmpPath, JSON.stringify(metadataObject, null, 2), 'utf8');
+        await fs.promises.rename(tmpPath, filePath);
     }
 }

@@ -190,13 +190,11 @@
             cursor: pointer;
             border-radius: 2px;
             transition: all 0.15s;
-            box-shadow: var(--glow-teal);
         }
 
         .btn-add-plan:hover {
             background: var(--accent-teal);
             color: var(--panel-bg);
-            box-shadow: 0 0 15px var(--accent-teal);
         }
 
         .btn-add-plan img {
@@ -750,7 +748,7 @@
         }
 
         .complexity-routing-btn.is-active {
-            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
 
@@ -1807,11 +1805,20 @@
                 >${escapeHtml(buildWorkspaceOptionLabel(item))}</option>
             `).join('');
             select.innerHTML = options;
-            const selectedValue = activeWorkspaceFilter
+            // Only update the selection if it's different from current selection (don't override user's manual selection)
+            const currentValue = select.value;
+            let selectedValue = activeWorkspaceFilter
                 ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
                 : currentWorkspaceRoot;
-            if (selectedValue) {
+            // If currentWorkspaceRoot doesn't match any option, select the first available
+            if (selectedValue && !workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
+                selectedValue = workspaceItems[0]?.workspaceRoot || '';
+            }
+            // Only set the value if it's different from what's currently selected (preserve user selection)
+            if (selectedValue && selectedValue !== currentValue && workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
                 select.value = selectedValue;
+            } else if (!currentValue && workspaceItems.length > 0) {
+                select.value = workspaceItems[0].workspaceRoot;
             }
         }
 

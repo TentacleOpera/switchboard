@@ -2458,7 +2458,7 @@
                             updateIntegrationTabLabel(newProvider);
                         }
                         // If hierarchy state was restored, trigger data loading cascade
-                        if (clickUpSelectedSpaceId && lastIntegrationProvider === 'clickup') {
+                        if (clickUpSelectedSpaceId) {
                             // Load spaces first, then the cascade will continue in clickupSpacesLoaded handler
                             loadClickUpSpaces();
                         }

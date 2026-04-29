@@ -1094,8 +1094,8 @@ export class ClickUpSyncService {
     }
 
     // Determine if this is a "simple" query that can use cache
-    // Filtered queries (status, assignee, archived) bypass cache
-    const isSimpleQuery = !options.status?.length && !options.assignee && options.archived === undefined;
+    // Filtered queries (status, assignee) bypass cache; archived:false is default/simple
+    const isSimpleQuery = !options.status?.length && !options.assignee && (options.archived === undefined || options.archived === false);
     const cacheKey = isSimpleQuery ? normalizedListId : `${normalizedListId}:${this._fingerprintListOptions(options)}`;
 
     // Try cache first for simple queries

@@ -674,6 +674,28 @@
         </div>
 
         <div class="startup-section">
+            <div class="startup-toggle" id="workspace-mapping-toggle">
+                <div class="section-label">Workspace Database Mappings</div>
+                <span class="chevron" id="workspace-mapping-chevron">▶</span>
+            </div>
+            <div class="startup-fields" id="workspace-mapping-fields" data-accordion="true">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    Map multiple workspace folders to a shared kanban.db for centralized plan management.
+                </div>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                    <input id="workspace-mapping-enabled" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <span>Enable workspace-to-database mapping</span>
+                </label>
+                <div id="workspace-mappings-container" style="margin-top:12px;"></div>
+                <div style="display:flex; gap:8px; margin-top:12px;">
+                    <button id="btn-add-mapping" class="secondary-btn" style="flex:1;">Add New Database</button>
+                    <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
+                </div>
+                <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
+            </div>
+        </div>
+
+        <div class="startup-section">
             <div class="startup-toggle" id="project-mgmt-toggle">
                 <div class="section-label">ClickUp, Linear and Notion Integration</div>
                 <span class="chevron" id="project-mgmt-chevron">▶</span>
@@ -3675,6 +3697,100 @@
         bindAccordion('planning-panel-toggle', 'planning-panel-fields', 'planning-panel-chevron', () => {
             vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
         });
+        bindAccordion('workspace-mapping-toggle', 'workspace-mapping-fields', 'workspace-mapping-chevron', () => {
+            vscode.postMessage({ type: 'getWorkspaceMappings' });
+        });
+
+        // Workspace database mapping handlers
+        let workspaceMappings = [];
+
+        function renderWorkspaceMappingItem(mapping, index) {
+            const container = document.getElementById('workspace-mappings-container');
+            if (!container) return;
+            const div = document.createElement('div');
+            div.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; padding:10px; margin-bottom:8px;';
+            div.innerHTML = `
+                <div style="display:flex; gap:8px; margin-bottom:8px;">
+                    <input type="text" data-field="name" placeholder="Mapping name" value="${mapping.name || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                    <div style="display:flex; flex:2; gap:4px;">
+                        <input type="text" data-field="dbPath" placeholder="Database path" value="${mapping.dbPath || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                        <button data-action="browseDbPath" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
+                    </div>
+                    <button data-action="remove" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Remove</button>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <textarea data-field="workspaceFolders" placeholder="Workspace folders (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
+                    <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
+                </div>
+                <input type="hidden" data-field="id" value="${mapping.id || ''}">
+            `;
+            container.appendChild(div);
+            div.querySelector('button[data-action="remove"]')?.addEventListener('click', () => {
+                div.remove();
+                workspaceMappings.splice(index, 1);
+            });
+            div.querySelector('button[data-action="browseDbPath"]')?.addEventListener('click', () => {
+                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
+                vscode.postMessage({ type: 'browseWorkspaceMappingDbPath', mappingId });
+            });
+            div.querySelector('button[data-action="browseFolders"]')?.addEventListener('click', () => {
+                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
+                vscode.postMessage({ type: 'browseWorkspaceMappingFolder', mappingId });
+            });
+        }
+
+        function renderWorkspaceMappings() {
+            const container = document.getElementById('workspace-mappings-container');
+            if (!container) return;
+            container.innerHTML = '';
+            workspaceMappings.forEach((mapping, index) => renderWorkspaceMappingItem(mapping, index));
+        }
+
+        document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
+            vscode.postMessage({
+                type: 'setWorkspaceMappingEnabled',
+                enabled: e.target.checked
+            });
+        });
+
+        function captureMappingsFromDom() {
+            const container = document.getElementById('workspace-mappings-container');
+            if (!container) return;
+            const mappingDivs = container.children;
+            const updatedMappings = [];
+            for (let i = 0; i < mappingDivs.length; i++) {
+                const div = mappingDivs[i];
+                const name = div.querySelector('[data-field="name"]')?.value.trim() || '';
+                const dbPath = div.querySelector('[data-field="dbPath"]')?.value.trim() || '';
+                const foldersText = div.querySelector('[data-field="workspaceFolders"]')?.value.trim() || '';
+                const id = div.querySelector('[data-field="id"]')?.value || ('mapping-' + Date.now() + '-' + i);
+                const workspaceFolders = foldersText.split('\n').map(f => f.trim()).filter(Boolean);
+                updatedMappings.push({ id, name, dbPath, workspaceFolders });
+            }
+            workspaceMappings = updatedMappings;
+        }
+
+        document.getElementById('btn-add-mapping')?.addEventListener('click', () => {
+            workspaceMappings.push({
+                id: 'mapping-' + Date.now(),
+                name: '',
+                dbPath: '',
+                workspaceFolders: []
+            });
+            renderWorkspaceMappings();
+        });
+
+        document.getElementById('btn-save-mappings')?.addEventListener('click', () => {
+            captureMappingsFromDom();
+            vscode.postMessage({
+                type: 'saveWorkspaceMappings',
+                payload: {
+                    enabled: document.getElementById('workspace-mapping-enabled')?.checked || false,
+                    mappings: workspaceMappings
+                }
+            });
+        });
+
         bindAccordion('planning-sources-toggle', 'planning-sources-fields', 'planning-sources-chevron', () => {
             vscode.postMessage({ type: 'getPlanningSources' });
         });
@@ -3788,6 +3904,58 @@
                         });
                     }
                     break;
+                case 'workspaceMappings': {
+                    runSetupHydration(() => {
+                        const enabledCheckbox = document.getElementById('workspace-mapping-enabled');
+                        if (enabledCheckbox) enabledCheckbox.checked = message.enabled === true;
+                        workspaceMappings = Array.isArray(message.mappings) ? message.mappings.slice() : [];
+                        renderWorkspaceMappings();
+                    });
+                    break;
+                }
+                case 'workspaceMappingEnabled': {
+                    runSetupHydration(() => {
+                        const enabledCheckbox = document.getElementById('workspace-mapping-enabled');
+                        if (enabledCheckbox) enabledCheckbox.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'workspaceMappingStatus': {
+                    const statusEl = document.getElementById('workspace-mapping-status');
+                    if (statusEl) {
+                        if (message.ok) {
+                            statusEl.textContent = 'Mappings saved.';
+                            statusEl.style.color = 'var(--accent-teal, #4fd1c5)';
+                        } else {
+                            statusEl.textContent = String(message.error || 'Failed to save mappings.');
+                            statusEl.style.color = 'var(--accent-red, #ff5c5c)';
+                        }
+                    }
+                    break;
+                }
+                case 'workspaceMappingDbPathSelected': {
+                    const container = document.getElementById('workspace-mappings-container');
+                    if (container && message.mappingId) {
+                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
+                        const mappingDiv = idInput?.parentElement;
+                        const dbInput = mappingDiv?.querySelector('[data-field="dbPath"]');
+                        if (dbInput) dbInput.value = message.path;
+                    }
+                    break;
+                }
+                case 'workspaceMappingFolderSelected': {
+                    const container = document.getElementById('workspace-mappings-container');
+                    if (container && message.mappingId) {
+                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
+                        const mappingDiv = idInput?.parentElement;
+                        const ta = mappingDiv?.querySelector('[data-field="workspaceFolders"]');
+                        if (ta) {
+                            const current = ta.value.trim();
+                            ta.value = current ? current + '\n' + message.path : message.path;
+                        }
+                    }
+                    break;
+                }
                 case 'teamLeadRoutingSettings':
                     runSetupHydration(() => {
                         if (teamLeadComplexityCutoffInput) {

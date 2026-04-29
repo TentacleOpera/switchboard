@@ -1,10 +1,12 @@
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
 import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import type { TaskViewerProvider } from './TaskViewerProvider';
+import { KanbanDatabase } from './KanbanDatabase';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;
@@ -582,6 +584,100 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'planningSources',
                         sources: enabledSources
                     });
+                    break;
+                }
+                case 'getWorkspaceMappings': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                    this._panel?.webview.postMessage({
+                        type: 'workspaceMappings',
+                        ...mappings
+                    });
+                    break;
+                }
+                case 'setWorkspaceMappingEnabled': {
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                    const enabled = typeof message.enabled === 'boolean' ? message.enabled : false;
+                    await config.update(
+                        'workspaceDatabaseMappings',
+                        { ...current, enabled },
+                        vscode.ConfigurationTarget.Workspace
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'workspaceMappingEnabled',
+                        enabled
+                    });
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'saveWorkspaceMappings': {
+                    const incoming = message.payload as { enabled?: boolean; mappings?: any[] };
+                    const errors: string[] = [];
+                    const seenFolders = new Set<string>();
+
+                    const expandHome = (p: string): string => {
+                        const trimmed = p.trim();
+                        return trimmed.startsWith('~')
+                            ? path.join(os.homedir(), trimmed.slice(1))
+                            : trimmed;
+                    };
+
+                    for (const m of incoming.mappings ?? []) {
+                        if (!m.id || !m.name?.trim()) errors.push(`Mapping is missing id/name`);
+                        for (const f of m.workspaceFolders ?? []) {
+                            const norm = path.resolve(expandHome(f));
+                            if (seenFolders.has(norm)) errors.push(`Folder ${norm} listed in multiple mappings`);
+                            seenFolders.add(norm);
+                        }
+                    }
+
+                    if (errors.length) {
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: false, error: errors.join('\n') });
+                        break;
+                    }
+
+                    const config = vscode.workspace.getConfiguration('switchboard');
+                    await config.update(
+                        'workspaceDatabaseMappings',
+                        incoming,
+                        vscode.ConfigurationTarget.Workspace
+                    );
+                    this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: true });
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'browseWorkspaceMappingDbPath': {
+                    const fileUri = await vscode.window.showOpenDialog({
+                        canSelectFiles: true,
+                        canSelectFolders: false,
+                        canSelectMany: false,
+                        filters: { 'Database files': ['db'] },
+                        title: 'Select kanban.db file'
+                    });
+                    if (fileUri?.[0]) {
+                        this._panel?.webview.postMessage({
+                            type: 'workspaceMappingDbPathSelected',
+                            path: fileUri[0].fsPath,
+                            mappingId: message.mappingId
+                        });
+                    }
+                    break;
+                }
+                case 'browseWorkspaceMappingFolder': {
+                    const folderUri = await vscode.window.showOpenDialog({
+                        canSelectFiles: false,
+                        canSelectFolders: true,
+                        canSelectMany: false,
+                        title: 'Select workspace folder'
+                    });
+                    if (folderUri?.[0]) {
+                        this._panel?.webview.postMessage({
+                            type: 'workspaceMappingFolderSelected',
+                            path: folderUri[0].fsPath,
+                            mappingId: message.mappingId
+                        });
+                    }
                     break;
                 }
                 default:

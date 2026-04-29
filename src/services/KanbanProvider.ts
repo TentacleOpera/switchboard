@@ -15,7 +15,7 @@ import {
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole } from './agentPromptBuilder';
-import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
 import { writePlanStateToFile } from './planStateUtils';
@@ -112,7 +112,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _sessionWatcher?: vscode.FileSystemWatcher;
     private _stateWatcher?: vscode.FileSystemWatcher;
-    private _planContentWatcher?: vscode.FileSystemWatcher;
+    private _planContentWatchers: vscode.FileSystemWatcher[] = [];
     private _fsSessionWatcher?: fs.FSWatcher;
     private _fsStateWatcher?: fs.FSWatcher;
     private _refreshDebounceTimer?: NodeJS.Timeout;
@@ -426,20 +426,41 @@ export class KanbanProvider implements vscode.Disposable {
 
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
         const roots = this._getWorkspaceRoots();
-        if (roots.length === 0) {
+        // Build allowed roots: actual VS Code folders + mapped workspace folders (if mapping enabled)
+        const allowedRoots = new Set<string>(roots);
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                const expandHome = (p: string): string => {
+                    const trimmed = p.trim();
+                    return trimmed.startsWith('~')
+                        ? path.join(require('os').homedir(), trimmed.slice(1))
+                        : trimmed;
+                };
+                for (const m of cfg.mappings) {
+                    for (const wf of m.workspaceFolders ?? []) {
+                        allowedRoots.add(path.resolve(expandHome(wf)));
+                    }
+                }
+            }
+        } catch { /* fall through */ }
+
+        if (allowedRoots.size === 0) {
             return null;
         }
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);
-            if (roots.includes(resolved)) {
+            if (allowedRoots.has(resolved)) {
                 this._currentWorkspaceRoot = resolved;
                 return resolved;
             }
         }
-        if (this._currentWorkspaceRoot && roots.includes(this._currentWorkspaceRoot)) {
+        if (this._currentWorkspaceRoot && allowedRoots.has(this._currentWorkspaceRoot)) {
             return this._currentWorkspaceRoot;
         }
-        this._currentWorkspaceRoot = roots[0];
+        this._currentWorkspaceRoot = roots[0] || Array.from(allowedRoots)[0];
         return this._currentWorkspaceRoot;
     }
 
@@ -479,10 +500,29 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
-        return (vscode.workspace.workspaceFolders || []).map(folder => ({
-            label: folder.name,
-            workspaceRoot: folder.uri.fsPath
-        }));
+        const folders = vscode.workspace.workspaceFolders || [];
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                const expandHome = (p: string): string => {
+                    const trimmed = p.trim();
+                    return trimmed.startsWith('~')
+                        ? path.join(require('os').homedir(), trimmed.slice(1))
+                        : trimmed;
+                };
+                const items = cfg.mappings
+                    .map(m => ({
+                        label: m.name,
+                        workspaceRoot: path.resolve(expandHome((m.workspaceFolders?.[0]) || folders[0]?.uri.fsPath || ''))
+                    }))
+                    .filter(item => item.workspaceRoot && item.workspaceRoot !== path.resolve(''));
+                if (items.length > 0) return items;
+                // Mappings exist but are all invalid - fall back to raw folders
+            }
+        } catch { /* fall through */ }
+        return folders.map(folder => ({ label: folder.name, workspaceRoot: folder.uri.fsPath }));
     }
 
     dispose() {
@@ -495,7 +535,8 @@ export class KanbanProvider implements vscode.Disposable {
         this._metadataDebounceTimers.clear();
         this._sessionWatcher?.dispose();
         this._stateWatcher?.dispose();
-        this._planContentWatcher?.dispose();
+        this._planContentWatchers.forEach(w => w.dispose());
+        this._planContentWatchers = [];
         try { this._fsSessionWatcher?.close(); } catch { }
         try { this._fsStateWatcher?.close(); } catch { }
         this._integrationAutoPull.dispose();
@@ -577,143 +618,220 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _setupPlanContentWatcher(): void {
-        this._planContentWatcher?.dispose();
-        this._planContentWatcher = undefined;
+        // Dispose all existing watchers
+        this._planContentWatchers.forEach(w => w.dispose());
+        this._planContentWatchers = [];
 
         const workspaceRoot = this._currentWorkspaceRoot;
         if (!workspaceRoot) { return; }
 
-        const pattern = new vscode.RelativePattern(workspaceRoot, '.switchboard/plans/**/*.md');
-        this._planContentWatcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
+        // Helper to expand ~ to home directory
+        const expandHome = (p: string): string => {
+            const trimmed = p.trim();
+            return trimmed.startsWith('~')
+                ? path.join(require('os').homedir(), trimmed.slice(1))
+                : trimmed;
+        };
 
-        this._planContentWatcher.onDidChange(async (uri) => {
+        // Collect all folders to watch
+        const foldersToWatch: string[] = [];
+
+        // Check if workspace mapping is enabled
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: any[] } | undefined;
+
+            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                // Watch all folders in all mappings
+                for (const mapping of cfg.mappings) {
+                    if (Array.isArray(mapping.workspaceFolders)) {
+                        for (const folder of mapping.workspaceFolders) {
+                            const resolved = path.resolve(expandHome(folder));
+                            if (!foldersToWatch.includes(resolved)) {
+                                foldersToWatch.push(resolved);
+                            }
+                        }
+                    }
+                }
+            }
+        } catch {
+            // Outside extension host - fall back to single folder
+        }
+
+        // Fallback to current workspace root if no mappings or disabled
+        if (foldersToWatch.length === 0) {
+            foldersToWatch.push(workspaceRoot);
+        }
+
+        // Create watchers for each folder
+        for (const folder of foldersToWatch) {
+            const pattern = new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md');
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern, true, false, true);
+
+            // Reuse existing change handlers (they already handle the workspace context correctly)
+            watcher.onDidChange(async (uri: vscode.Uri) => {
+                await this._handlePlanFileChange(uri, folder);
+            });
+
+            watcher.onDidCreate(async (uri: vscode.Uri) => {
+                await this._handlePlanFileChange(uri, folder);
+            });
+
+            watcher.onDidDelete(async (uri: vscode.Uri) => {
+                await this._handlePlanFileDelete(uri, folder);
+            });
+
+            this._planContentWatchers.push(watcher);
+        }
+    }
+
+    private async _handlePlanFileChange(uri: vscode.Uri, watchFolder: string): Promise<void> {
+        try {
+            // Determine which workspace root to use for DB operations
+            // Use the watchFolder as the workspace root for proper context
+            const db = this._getKanbanDb(watchFolder);
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+
+            // Hoist plan lookup above ClickUp guard so both paths can use it.
+            let plan: any = null;
+            if (workspaceId) {
+                plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
+                if (!plan) {
+                    const relativePath = path.relative(watchFolder, uri.fsPath).replace(/\\/g, '/');
+                    plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+                }
+            }
+
+            // ClickUp real-time sync (unchanged logic, reuses hoisted plan)
             try {
-                const db = this._getKanbanDb(workspaceRoot);
-                const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
-
-                // Hoist plan lookup above ClickUp guard so both paths can use it.
-                let plan: any = null;
-                if (workspaceId) {
-                    plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
-                    if (!plan) {
-                        const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-                        plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+                const clickUp = this._getClickUpService(watchFolder);
+                const clickUpConfig = await clickUp.loadConfig();
+                if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
+                    if (workspaceId && plan) {
+                        clickUp.debouncedSync(plan.sessionId, {
+                            planId: plan.planId,
+                            sessionId: plan.sessionId,
+                            topic: plan.topic,
+                            planFile: plan.planFile,
+                            kanbanColumn: plan.kanbanColumn,
+                            status: plan.status,
+                            complexity: plan.complexity,
+                            tags: plan.tags,
+                            dependencies: plan.dependencies,
+                            createdAt: plan.createdAt,
+                            updatedAt: plan.updatedAt,
+                            lastAction: plan.lastAction
+                        });
                     }
                 }
+            } catch { /* ClickUp sync failure must never block operations */ }
 
-                // ClickUp real-time sync (unchanged logic, reuses hoisted plan)
-                try {
-                    const clickUp = this._getClickUpService(workspaceRoot);
-                    const clickUpConfig = await clickUp.loadConfig();
-                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
-                        if (workspaceId && plan) {
-                            clickUp.debouncedSync(plan.sessionId, {
-                                planId: plan.planId,
-                                sessionId: plan.sessionId,
-                                topic: plan.topic,
-                                planFile: plan.planFile,
-                                kanbanColumn: plan.kanbanColumn,
-                                status: plan.status,
-                                complexity: plan.complexity,
-                                tags: plan.tags,
-                                dependencies: plan.dependencies,
-                                createdAt: plan.createdAt,
-                                updatedAt: plan.updatedAt,
-                                lastAction: plan.lastAction
-                            });
+            // Metadata update path: per-file debounced extraction + DB write + board refresh.
+            if (plan) {
+                const filePath = uri.fsPath;
+                const existingTimer = this._metadataDebounceTimers.get(filePath);
+                if (existingTimer) { clearTimeout(existingTimer); }
+
+                const timer = setTimeout(async () => {
+                    try {
+                        this._metadataDebounceTimers.delete(filePath);
+                        const content = await fs.promises.readFile(uri.fsPath, 'utf8');
+
+                        // Extract complexity
+                        let newComplexity: string | null = null;
+                        const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
+                        if (overrideMatch) {
+                            const val = overrideMatch[1];
+                            if (val.toLowerCase() === 'unknown') {
+                                // fall through to metadata section
+                            } else {
+                                const num = parseInt(val, 10);
+                                if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
+                                else {
+                                    const legacy = legacyToScore(val);
+                                    if (legacy > 0) newComplexity = String(legacy);
+                                }
+                            }
                         }
-                    }
-                } catch { /* ClickUp sync failure must never block operations */ }
+                        if (!newComplexity) {
+                            const metadataMatch = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
+                            if (metadataMatch) {
+                                const val = metadataMatch[1];
+                                const num = parseInt(val, 10);
+                                if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
+                                else {
+                                    const legacy = legacyToScore(val);
+                                    if (legacy > 0) newComplexity = String(legacy);
+                                }
+                            }
+                        }
 
-                // Metadata update path: per-file debounced extraction + DB write + board refresh.
-                // Reads the file ONCE and extracts complexity, tags, and dependencies from the
-                // in-memory content — avoids the triple file-read that calling
-                // getComplexityFromPlan/getTagsFromPlan/getDependenciesFromPlan would cause.
+                        // Extract tags
+                        let newTags: string | null = null;
+                        const tagsMatch = content.match(/\*\*Tags:\*\*\s*(.+)/i);
+                        if (tagsMatch) {
+                            newTags = sanitizeTags(tagsMatch[1]);
+                        }
+
+                        // Extract dependencies
+                        let newDeps: string | null = null;
+                        const sectionMatch = content.match(/^#{1,4}\s+Dependencies\b[^\n]*$/im);
+                        if (sectionMatch && sectionMatch.index !== undefined) {
+                            const afterHeading = content.slice(sectionMatch.index + sectionMatch[0].length);
+                            const nextHeadingMatch = afterHeading.match(/^\s*#{1,4}\s+/m);
+                            const sectionBody = nextHeadingMatch
+                                ? afterHeading.slice(0, nextHeadingMatch.index)
+                                : afterHeading;
+                            const deps = sectionBody
+                                .split(/\r?\n/)
+                                .map(line => line.trim())
+                                .map(line => line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim())
+                                .filter(line => line.length > 0)
+                                .filter(line => !/^(none|n\/a|na|unknown)$/i.test(line));
+                            newDeps = [...new Set(deps)].join(', ');
+                        }
+
+                        // Write to DB only if we extracted something
+                        const sessionId = plan.sessionId;
+                        const updateDb = this._getKanbanDb(watchFolder);
+                        if (newComplexity) { await updateDb.updateComplexity(sessionId, newComplexity); }
+                        if (newTags !== null) { await updateDb.updateTags(sessionId, newTags); }
+                        if (newDeps !== null) { await updateDb.updateDependencies(sessionId, newDeps); }
+
+                        // Push updated DB state to the board (~100ms debounce via _scheduleBoardRefresh)
+                        this._scheduleBoardRefresh(watchFolder);
+                    } catch (err) {
+                        console.warn('[KanbanProvider] Metadata update failed for', uri.fsPath, err);
+                    }
+                }, 300);
+
+                this._metadataDebounceTimers.set(filePath, timer);
+            }
+        } catch { /* File watcher failures must never block operations */ }
+
+        // Emit for continuous sync service (unchanged)
+        this._planFileChangeEmitter.fire(uri);
+    }
+
+    private async _handlePlanFileDelete(uri: vscode.Uri, watchFolder: string): Promise<void> {
+        try {
+            const db = this._getKanbanDb(watchFolder);
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+
+            if (workspaceId) {
+                const plan = await db.getPlanByPlanFile(uri.fsPath, workspaceId);
                 if (plan) {
-                    const filePath = uri.fsPath;
-                    const existingTimer = this._metadataDebounceTimers.get(filePath);
-                    if (existingTimer) { clearTimeout(existingTimer); }
+                    // Mark plan as deleted or remove from database
+                    await db.deletePlan(plan.sessionId);
 
-                    const timer = setTimeout(async () => {
-                        try {
-                            this._metadataDebounceTimers.delete(filePath);
-                            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
-
-                            // Extract complexity (same logic as getComplexityFromPlan, but from in-memory content)
-                            let newComplexity: string | null = null;
-                            const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
-                            if (overrideMatch) {
-                                const val = overrideMatch[1];
-                                if (val.toLowerCase() === 'unknown') {
-                                    // fall through to metadata section
-                                } else {
-                                    const num = parseInt(val, 10);
-                                    if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
-                                    else {
-                                        const legacy = legacyToScore(val);
-                                        if (legacy > 0) newComplexity = String(legacy);
-                                    }
-                                }
-                            }
-                            if (!newComplexity) {
-                                const metadataMatch = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
-                                if (metadataMatch) {
-                                    const val = metadataMatch[1];
-                                    const num = parseInt(val, 10);
-                                    if (!isNaN(num) && num >= 1 && num <= 10) newComplexity = String(num);
-                                    else {
-                                        const legacy = legacyToScore(val);
-                                        if (legacy > 0) newComplexity = String(legacy);
-                                    }
-                                }
-                            }
-
-                            // Extract tags (same regex as getTagsFromPlan; sanitizeTags is a local function in this class)
-                            let newTags: string | null = null;
-                            const tagsMatch = content.match(/\*\*Tags:\*\*\s*(.+)/i);
-                            if (tagsMatch) {
-                                newTags = sanitizeTags(tagsMatch[1]);
-                            }
-
-                            // Extract dependencies (same logic as getDependenciesFromPlan)
-                            let newDeps: string | null = null;
-                            const sectionMatch = content.match(/^#{1,4}\s+Dependencies\b[^\n]*$/im);
-                            if (sectionMatch && sectionMatch.index !== undefined) {
-                                const afterHeading = content.slice(sectionMatch.index + sectionMatch[0].length);
-                                const nextHeadingMatch = afterHeading.match(/^\s*#{1,4}\s+/m);
-                                const sectionBody = nextHeadingMatch
-                                    ? afterHeading.slice(0, nextHeadingMatch.index)
-                                    : afterHeading;
-                                const deps = sectionBody
-                                    .split(/\r?\n/)
-                                    .map(line => line.trim())
-                                    .map(line => line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim())
-                                    .filter(line => line.length > 0)
-                                    .filter(line => !/^(none|n\/a|na|unknown)$/i.test(line));
-                                newDeps = [...new Set(deps)].join(', ');
-                            }
-
-                            // Write to DB only if we extracted something
-                            const sessionId = plan.sessionId;
-                            const updateDb = this._getKanbanDb(workspaceRoot);
-                            if (newComplexity) { await updateDb.updateComplexity(sessionId, newComplexity); }
-                            if (newTags !== null) { await updateDb.updateTags(sessionId, newTags); }
-                            if (newDeps !== null) { await updateDb.updateDependencies(sessionId, newDeps); }
-
-                            // Push updated DB state to the board (~100ms debounce via _scheduleBoardRefresh)
-                            this._scheduleBoardRefresh(workspaceRoot);
-                        } catch (err) {
-                            console.warn('[KanbanProvider] Metadata update failed for', uri.fsPath, err);
-                        }
-                    }, 300);
-
-                    this._metadataDebounceTimers.set(filePath, timer);
+                    // Refresh the board
+                    await this._refreshBoard(this._currentWorkspaceRoot || watchFolder);
                 }
-            } catch { /* File watcher failures must never block operations */ }
-
-            // Emit for continuous sync service (unchanged)
-            this._planFileChangeEmitter.fire(uri);
-        });
+            }
+        } catch (err) {
+            console.error('[KanbanProvider] Failed to handle plan file delete:', err);
+        }
     }
 
     /**
@@ -785,10 +903,37 @@ export class KanbanProvider implements vscode.Disposable {
                 this._lastColumnsSignature = nextColumnsSignature;
             }
 
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            let selectionRoot = resolvedWorkspaceRoot;
+            try {
+                const cfg = vscode.workspace.getConfiguration('switchboard')
+                                 .get('workspaceDatabaseMappings') as
+                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                    const expandHome = (p: string): string => {
+                        const trimmed = p.trim();
+                        return trimmed.startsWith('~')
+                            ? path.join(require('os').homedir(), trimmed.slice(1))
+                            : trimmed;
+                    };
+                    // Find which mapping contains the resolvedWorkspaceRoot and use its workspaceRoot
+                    for (const m of cfg.mappings) {
+                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                            const mappedItem = workspaceItems.find(item => item.label === m.name);
+                            if (mappedItem) {
+                                selectionRoot = mappedItem.workspaceRoot;
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch { /* fall through */ }
+
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaceRoot: selectionRoot,
+                workspaces: workspaceItems
             });
 
             // THE critical message — sends cards to webview
@@ -1380,7 +1525,7 @@ export class KanbanProvider implements vscode.Disposable {
             // TaskViewerProvider reads DB ONCE → feeds BOTH sidebar and kanban.
             // This eliminates the dual-path bug where _refreshBoardImpl could
             // show different data than what the sidebar shows.
-            await vscode.commands.executeCommand('switchboard.refreshUI');
+            await vscode.commands.executeCommand('switchboard.refreshUI', _workspaceRoot);
         } finally {
             this._isRefreshing = false;
             if (this._refreshPending) {
@@ -1455,10 +1600,37 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
+
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            let selectionRoot = resolvedWorkspaceRoot;
+            try {
+                const cfg = vscode.workspace.getConfiguration('switchboard')
+                                 .get('workspaceDatabaseMappings') as
+                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                    const expandHome = (p: string): string => {
+                        const trimmed = p.trim();
+                        return trimmed.startsWith('~')
+                            ? path.join(require('os').homedir(), trimmed.slice(1))
+                            : trimmed;
+                    };
+                    for (const m of cfg.mappings) {
+                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                            const mappedItem = workspaceItems.find(item => item.label === m.name);
+                            if (mappedItem) {
+                                selectionRoot = mappedItem.workspaceRoot;
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch { /* fall through */ }
+
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaceRoot: selectionRoot,
+                workspaces: workspaceItems
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1537,10 +1709,37 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updateColumns', columns: filteredColumns });
                 this._lastColumnsSignature = nextColumnsSignature;
             }
+
+            // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
+            const workspaceItems = this._getWorkspaceItems();
+            let selectionRoot = resolvedWorkspaceRoot;
+            try {
+                const cfg = vscode.workspace.getConfiguration('switchboard')
+                                 .get('workspaceDatabaseMappings') as
+                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                    const expandHome = (p: string): string => {
+                        const trimmed = p.trim();
+                        return trimmed.startsWith('~')
+                            ? path.join(require('os').homedir(), trimmed.slice(1))
+                            : trimmed;
+                    };
+                    for (const m of cfg.mappings) {
+                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                            const mappedItem = workspaceItems.find(item => item.label === m.name);
+                            if (mappedItem) {
+                                selectionRoot = mappedItem.workspaceRoot;
+                                break;
+                            }
+                        }
+                    }
+                }
+            } catch { /* fall through */ }
+
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: resolvedWorkspaceRoot,
-                workspaces: this._getWorkspaceItems()
+                workspaceRoot: selectionRoot,
+                workspaces: workspaceItems
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });

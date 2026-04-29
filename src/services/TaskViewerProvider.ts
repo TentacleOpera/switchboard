@@ -39,6 +39,7 @@ import {
 } from './LinearSyncService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
+import { LocalApiServer } from './LocalApiServer';
 import {
     OllamaSetupService,
     DEFAULT_OLLAMA_CLAUDE_MODEL,
@@ -331,6 +332,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _ollamaServices: Map<string, OllamaSetupService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private readonly _relayPromptService = new RelayPromptService();
+    private _localApiServer: LocalApiServer | null = null;
 
     // Last-accessed tracking for background prefetch
     private _lastAccessedClickUpLists: string[] = [];
@@ -402,6 +404,46 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._julesStatusPollTimer = setInterval(() => {
             this._refreshJulesStatus();
         }, 30000);
+
+        // Start local API server for agent access
+        void this._startLocalApiServer();
+    }
+
+    /**
+     * Start the local API server for agent access.
+     */
+    private async _startLocalApiServer(): Promise<void> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            console.warn('[TaskViewerProvider] Cannot start local API server: no workspace root');
+            return;
+        }
+
+        const cacheService = this._getCacheService(workspaceRoot);
+
+        this._localApiServer = new LocalApiServer({
+            workspaceRoot: workspaceRoot,
+            clickupMetadataPath: cacheService['_clickupMetadataPath'],
+            linearMetadataPath: cacheService['_linearMetadataPath'],
+            getClickUpService: () => this._clickUpServices.get(workspaceRoot) || null,
+            getLinearService: () => this._linearServices.get(workspaceRoot) || null
+        });
+
+        try {
+            await this._localApiServer.start();
+        } catch (err) {
+            console.error('[TaskViewerProvider] Failed to start local API server:', err);
+        }
+    }
+
+    /**
+     * Stop the local API server.
+     */
+    private async _stopLocalApiServer(): Promise<void> {
+        if (this._localApiServer) {
+            await this._localApiServer.stop();
+            this._localApiServer = null;
+        }
     }
 
     private _getWorkspaceRoots(): string[] {
@@ -429,20 +471,41 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
         const roots = this._getWorkspaceRoots();
-        if (roots.length === 0) {
+        // Build allowed roots: actual VS Code folders + mapped workspace folders (if mapping enabled)
+        const allowedRoots = new Set<string>(roots);
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: { workspaceFolders?: string[] }[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                const expandHome = (p: string): string => {
+                    const trimmed = p.trim();
+                    return trimmed.startsWith('~')
+                        ? path.join(require('os').homedir(), trimmed.slice(1))
+                        : trimmed;
+                };
+                for (const m of cfg.mappings) {
+                    for (const wf of m.workspaceFolders ?? []) {
+                        allowedRoots.add(path.resolve(expandHome(wf)));
+                    }
+                }
+            }
+        } catch { /* fall through */ }
+
+        if (allowedRoots.size === 0) {
             return null;
         }
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);
-            if (roots.includes(resolved)) {
+            if (allowedRoots.has(resolved)) {
                 this._activeWorkspaceRoot = resolved;
                 return resolved;
             }
         }
-        if (this._activeWorkspaceRoot && roots.includes(this._activeWorkspaceRoot)) {
+        if (this._activeWorkspaceRoot && allowedRoots.has(this._activeWorkspaceRoot)) {
             return this._activeWorkspaceRoot;
         }
-        this._activeWorkspaceRoot = roots[0];
+        this._activeWorkspaceRoot = roots[0] || Array.from(allowedRoots)[0];
         return this._activeWorkspaceRoot;
     }
 
@@ -3885,9 +3948,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 importedSessionIds.push(subtaskSessionId);
             }
 
-            for (const sessionId of importedSessionIds) {
-                await this._kanbanProvider?.queueIntegrationSyncForSession(effectiveRoot, sessionId, 'CREATED');
-            }
             await this._syncFilesAndRefreshRunSheets(effectiveRoot);
             this._view?.webview.postMessage({ type: 'selectSession', sessionId: rootSessionId });
 
@@ -15624,7 +15684,7 @@ Create this file exactly as specified, then continue your work.`);
         this._recentBrainWrites.forEach(t => clearTimeout(t));
         this._recentSourceWrites.forEach(t => clearTimeout(t));
         this._recentMirrorProcessed.forEach(t => clearTimeout(t));
-        this._recentActionDispatches.forEach(t => clearTimeout(t));
         this._julesDiagnosticsChannel.dispose();
+        void this._stopLocalApiServer();
     }
 }

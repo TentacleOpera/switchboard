@@ -1120,6 +1120,16 @@ export async function activate(context: vscode.ExtensionContext) {
                 ) {
                     scheduleWorkspaceExcludeApply();
                 }
+                if (e.affectsConfiguration('switchboard.workspaceDatabaseMappings')) {
+                    // Invalidate cached database instances for all workspace folders
+                    (vscode.workspace.workspaceFolders || []).forEach(folder => {
+                        KanbanDatabase.invalidateWorkspace(folder.uri.fsPath).catch(err => {
+                            console.error(`[Switchboard] Failed to invalidate workspace ${folder.uri.fsPath}:`, err);
+                        });
+                    });
+                    // Refresh the Kanban UI
+                    kanbanProvider._scheduleBoardRefresh();
+                }
             })
         );
         context.subscriptions.push(new vscode.Disposable(() => {
@@ -1326,7 +1336,16 @@ export async function activate(context: vscode.ExtensionContext) {
         context.extensionUri,
         researchImportService,
         plannerPromptWriter,
-        () => vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+        () => {
+            const activeTextEditor = vscode.window.activeTextEditor;
+            if (activeTextEditor) {
+                const activeWorkspaceFolder = vscode.workspace.getWorkspaceFolder(activeTextEditor.document.uri);
+                if (activeWorkspaceFolder) {
+                    return activeWorkspaceFolder.uri.fsPath;
+                }
+            }
+            return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        },
         {
             getNotionService: (root) => (kanbanProvider as any)._getNotionService(root),
             getNotionBrowseService: (root) => (kanbanProvider as any)._getNotionBrowseService(root),
@@ -1554,8 +1573,8 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    const refreshUIDisposable = vscode.commands.registerCommand('switchboard.refreshUI', async () => {
-        await taskViewerProvider.refreshUI();
+    const refreshUIDisposable = vscode.commands.registerCommand('switchboard.refreshUI', async (workspaceRoot?: string) => {
+        await taskViewerProvider.refreshUI(workspaceRoot);
     });
     context.subscriptions.push(refreshUIDisposable);
 

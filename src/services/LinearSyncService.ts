@@ -675,14 +675,14 @@ export class LinearSyncService {
       : 50;
 
     // Determine if this is a "simple" query that can use cache
-    // Simple: projectId provided, no search or stateId or assigneeId filters
-    const isSimpleQuery = normalizedProjectId && !normalizedSearch && !normalizedStateId && !normalizedAssigneeId;
+    // Simple: no search, stateId, or assigneeId filters (project comes from config)
+    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedAssigneeId;
     // Cache key MUST include the filter-config fingerprint so that include/
     // exclude project name changes invalidate the cache via key divergence.
     const configFingerprint = this._fingerprintLinearFilterConfig(config);
-    const cacheKey = isSimpleQuery
+    const cacheKey = isSimpleQuery && normalizedProjectId
       ? `project:${normalizedProjectId}:${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`
-      : `${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`;
+      : `linear:${this._fingerprintIssueFilter(options)}|cfg=${configFingerprint}`;
 
     // Try cache first for simple queries
     if (isSimpleQuery && this._cacheService) {

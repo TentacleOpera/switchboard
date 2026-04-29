@@ -17,6 +17,16 @@
         });
     });
 
+    // Segmented Control for Research Mode
+    const segmentedBtns = document.querySelectorAll('.segmented-btn');
+    segmentedBtns.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const parent = btn.closest('.segmented-control');
+            parent.querySelectorAll('.segmented-btn').forEach(b => b.classList.remove('active'));
+            btn.classList.add('active');
+        });
+    });
+
     // Clipboard Import logic
     const separatorPreset = document.getElementById('airlock-separator-preset');
     const separatorCustomRow = document.getElementById('airlock-separator-custom-row');
@@ -75,6 +85,54 @@
     if (importPlansBtn) {
         importPlansBtn.addEventListener('click', () => {
             vscode.postMessage({ type: 'importPlansFromClipboard' });
+        });
+    }
+
+    // Research Tab: Web Research Copy Button
+    const copyWebResearchBtn = document.getElementById('btn-copy-web-research');
+    if (copyWebResearchBtn) {
+        copyWebResearchBtn.addEventListener('click', async () => {
+            if (copyWebResearchBtn.innerText === 'COPIED') return;
+
+            const prompt = generateResearchPrompt();
+            try {
+                await navigator.clipboard.writeText(prompt);
+                const originalText = copyWebResearchBtn.innerText;
+                copyWebResearchBtn.innerText = 'COPIED';
+                setTimeout(() => {
+                    if (copyWebResearchBtn) copyWebResearchBtn.innerText = originalText;
+                }, 2000);
+            } catch (err) {
+                console.error('[Research] Failed to copy to clipboard:', err);
+                copyWebResearchBtn.innerText = 'FAILED';
+                setTimeout(() => {
+                    if (copyWebResearchBtn) copyWebResearchBtn.innerText = originalText;
+                }, 2000);
+            }
+        });
+    }
+
+    // Research Tab: Deep Planning Copy Button
+    const copyDeepPlanningBtn = document.getElementById('btn-copy-deep-planning');
+    if (copyDeepPlanningBtn) {
+        copyDeepPlanningBtn.addEventListener('click', async () => {
+            if (copyDeepPlanningBtn.innerText === 'COPIED') return;
+
+            const prompt = generateResearchPrompt();
+            try {
+                await navigator.clipboard.writeText(prompt);
+                const originalText = copyDeepPlanningBtn.innerText;
+                copyDeepPlanningBtn.innerText = 'COPIED';
+                setTimeout(() => {
+                    if (copyDeepPlanningBtn) copyDeepPlanningBtn.innerText = originalText;
+                }, 2000);
+            } catch (err) {
+                console.error('[Research] Failed to copy to clipboard:', err);
+                copyDeepPlanningBtn.innerText = 'FAILED';
+                setTimeout(() => {
+                    if (copyDeepPlanningBtn) copyDeepPlanningBtn.innerText = originalText;
+                }, 2000);
+            }
         });
     }
 
@@ -1479,6 +1537,44 @@
                 slugPrefix: slugPrefix
             });
         });
+    }
+
+    // Research Tab: Prompt Generation Functions
+    function generateResearchPrompt() {
+        const complexityInput = document.querySelector('input[name="complexity"]:checked');
+        const importToggle = document.getElementById('import-toggle');
+        const modeBtn = document.querySelector('.segmented-btn.active');
+
+        // Fallbacks for missing elements
+        const complexity = complexityInput ? complexityInput.value : 'quick';
+        const importEnabled = importToggle ? importToggle.checked : false;
+        const mode = modeBtn ? modeBtn.dataset.mode : 'web';
+
+        const complexityLabels = {
+            quick: 'Quick (5-10 sources)',
+            standard: 'Standard (15-30 sources)',
+            deep: 'Deep (50-100+ sources)',
+            academic: 'Academic (100-200+ sources)'
+        };
+
+        const isWebMode = mode === 'web';
+        const skillName = isWebMode ? 'web_research' : 'deep_planning';
+        const taskType = isWebMode ? 'conduct comprehensive research on the following topic' : 'create a comprehensive implementation plan for the following task';
+        const depthLabel = isWebMode ? 'Research depth' : 'Planning depth';
+        const saveLocation = isWebMode ? '.switchboard/docs/' : '.switchboard/plans/';
+        const saveAction = isWebMode ? 'save the results' : 'save it';
+        const protocolAction = isWebMode ? 'proposing a research plan' : 'proposing a planning approach';
+
+        let prompt = `Use the ${skillName} skill to ${taskType}.\n\n`;
+        prompt += `${depthLabel}: ${complexityLabels[complexity] || complexity}\n\n`;
+
+        if (importEnabled) {
+            prompt += `IMPORTANT: After completing the ${isWebMode ? 'research' : 'plan'}, ${saveAction} to the local ${saveLocation} folder using the write_to_file tool so I can review them later.\n\n`;
+        }
+
+        prompt += `Please begin by ${protocolAction} for my approval, following the ${skillName} skill protocol.`;
+
+        return prompt;
     }
 
     // Initialize

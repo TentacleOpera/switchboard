@@ -4,6 +4,13 @@ import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
 
+export interface WorkspaceDatabaseMapping {
+    id: string;
+    name: string;
+    dbPath: string;
+    workspaceFolders: string[];
+}
+
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
 
 export interface KanbanPlanRecord {
@@ -219,6 +226,8 @@ function delay(ms: number): Promise<void> {
 
 export class KanbanDatabase {
     private static _instances = new Map<string, KanbanDatabase>();
+    private static _instancesByDbPath = new Map<string, KanbanDatabase>();
+    private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
@@ -228,35 +237,81 @@ export class KanbanDatabase {
             return existing;
         }
 
-        // Resolve the DB path — either from explicit parameter, VS Code setting, or default
-        let resolvedDbPath: string;
-        if (customDbPath !== undefined && customDbPath.trim() !== '') {
-            const trimmed = customDbPath.trim();
-            const expanded = trimmed.startsWith('~')
-                ? path.join(require('os').homedir(), trimmed.slice(1))
+        let resolvedDbPath: string | undefined;
+        
+        // Helper to expand ~ to home directory
+        const expandHome = (p: string): string => {
+            const trimmed = p.trim();
+            return trimmed.startsWith('~')
+                ? path.join(os.homedir(), trimmed.slice(1))
                 : trimmed;
-            resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
-        } else {
-            // Try reading from VS Code settings (safe to fail outside extension host)
-            let settingValue = '';
-            try {
-                const vscode = require('vscode');
-                settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
-            } catch {
-                // Outside extension host (e.g. unit tests) — use default
+        };
+
+        // Check workspace mappings if enabled
+        try {
+            const vscode = require('vscode');
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                const mapping = cfg.mappings.find(m =>
+                    Array.isArray(m.workspaceFolders) &&
+                    m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable));
+                if (mapping?.dbPath) {
+                    resolvedDbPath = path.resolve(expandHome(mapping.dbPath));
+                    console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);
+                } else if (!KanbanDatabase._warnedUnmappedRoots.has(stable)) {
+                    KanbanDatabase._warnedUnmappedRoots.add(stable);
+                    vscode.window.showWarningMessage(
+                        `Switchboard: workspace mapping is enabled but '${stable}' is not in any mapping. Using default database location.`,
+                        'Configure Mappings'
+                    ).then((sel: string | undefined) => {
+                        if (sel === 'Configure Mappings') {
+                            vscode.commands.executeCommand('switchboard.openSetupPanel');
+                        }
+                    });
+                }
             }
-            if (settingValue) {
-                const expanded = settingValue.startsWith('~')
-                    ? path.join(require('os').homedir(), settingValue.slice(1))
-                    : settingValue;
+        } catch { /* outside extension host */ }
+
+        // Fallback to customDbPath, VS Code setting, or default
+        if (!resolvedDbPath) {
+            if (customDbPath !== undefined && customDbPath.trim() !== '') {
+                const trimmed = customDbPath.trim();
+                const expanded = trimmed.startsWith('~')
+                    ? path.join(require('os').homedir(), trimmed.slice(1))
+                    : trimmed;
                 resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
             } else {
-                resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
+                // Try reading from VS Code settings (safe to fail outside extension host)
+                let settingValue = '';
+                try {
+                    const vscode = require('vscode');
+                    settingValue = String(vscode.workspace.getConfiguration('switchboard').get('kanban.dbPath') || '').trim();
+                } catch {
+                    // Outside extension host (e.g. unit tests) — use default
+                }
+                if (settingValue) {
+                    const expanded = settingValue.startsWith('~')
+                        ? path.join(require('os').homedir(), settingValue.slice(1))
+                        : settingValue;
+                    resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
+                } else {
+                    resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
+                }
             }
+        }
+
+        // Cache by resolved dbPath to prevent multiple instances writing to the same file
+        const cached = KanbanDatabase._instancesByDbPath.get(resolvedDbPath);
+        if (cached) {
+            KanbanDatabase._instances.set(stable, cached);
+            return cached;
         }
 
         const created = new KanbanDatabase(stable, resolvedDbPath);
         KanbanDatabase._instances.set(stable, created);
+        KanbanDatabase._instancesByDbPath.set(resolvedDbPath, created);
         return created;
     }
 
@@ -273,6 +328,8 @@ export class KanbanDatabase {
             try { await existing._writeTail; } catch { /* swallow — chain keeps alive internally */ }
             existing._db = null;
             existing._initPromise = null;
+            // Also remove from dbPath cache to prevent stale instances
+            KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             KanbanDatabase._instances.delete(stable);
             console.log(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
         }
