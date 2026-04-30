@@ -2767,15 +2767,13 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
-        // Use TaskViewerProvider's active workspace root, not the global variable set at startup
-        const activeWorkspaceRoot = taskViewerProvider['_getWorkspaceRoot']();
-        if (!activeWorkspaceRoot) {
+        if (!workspaceRoot) {
             vscode.window.showWarningMessage('No workspace folder found.');
             return;
         }
 
         // Resolve effective workspace root based on mappings to ensure terminals open in correct workspace
-        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(activeWorkspaceRoot);
+        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(workspaceRoot);
 
         const visibleAgents = await taskViewerProvider.getVisibleAgents();
         const includeJulesMonitor = visibleAgents.jules !== false;

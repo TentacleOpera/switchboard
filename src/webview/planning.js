@@ -207,7 +207,7 @@
     const treePaneOnline = document.getElementById('tree-pane-online');
     const markdownPreview = document.getElementById('markdown-preview');
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
-    const btnAppendToPrompts = document.getElementById('btn-append-to-prompts');
+    const btnAppendToPrompts = document.getElementById('btn-set-active-context-local');
     const btnAppendToPromptsOnline = document.getElementById('btn-append-to-prompts-online');
     const btnExportToSource = document.getElementById('btn-export-to-source');
     const statusEl = document.getElementById('status');
@@ -395,7 +395,8 @@
         state.activeDocName = docName;
         state.previewRequestId++;
 
-        btnAppendToPrompts.disabled = true;
+        if (btnAppendToPrompts) btnAppendToPrompts.disabled = true;
+        if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = true;
         
         if (sourceId === 'local-folder' && btnExportToSource) {
             const importedInfo = state.importedDocs.get(docName);
@@ -428,6 +429,7 @@
                     requestId: state.previewRequestId
                 });
             } else {
+                console.log('[PlanningPanel Webview] Sending fetchPreview:', { sourceId, docId, requestId: state.previewRequestId });
                 vscode.postMessage({
                     type: 'fetchPreview',
                     sourceId,
@@ -436,6 +438,7 @@
                 });
             }
         } else {
+            console.log('[PlanningPanel Webview] Sending fetchPreview (no page):', { sourceId, docId, requestId: state.previewRequestId });
             vscode.postMessage({
                 type: 'fetchPreview',
                 sourceId,
@@ -504,7 +507,14 @@
             }
 
             if (!nodes || nodes.length === 0) {
-                docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
+                // Check if there are imported docs from other sources (clickup, linear, notion)
+                const hasOtherImportedDocs = state.importedDocs.size > 0;
+                if (hasOtherImportedDocs) {
+                    // Don't show empty message - imported docs are displayed below
+                    docList.innerHTML = '';
+                } else {
+                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
+                }
             } else {
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
                 const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
@@ -1127,6 +1137,11 @@
 
         // Render docs grouped by source then by parentDocName
         docsBySourceAndParent.forEach((parentGroups, sourceId) => {
+            // Skip local-folder source - those docs appear in the main local docs tree
+            if (sourceId === 'local-folder') {
+                return;
+            }
+
             // Create teal source header: "IMPORTED FROM {source}"
             const sourceHeader = document.createElement('div');
             sourceHeader.className = 'imported-docs-header';
@@ -1174,8 +1189,25 @@
                     label.textContent = doc.docName;
                     label.style.cssText = 'font-size: 12px; color: var(--text-primary);';
 
+                    // Add delete button for imported docs
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.className = 'doc-delete-btn';
+                    deleteBtn.innerHTML = '×';
+                    deleteBtn.title = 'Delete imported document';
+                    deleteBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+                        deleteBtn.disabled = true;
+                        deleteBtn.textContent = '…';
+                        vscode.postMessage({
+                            type: 'deleteImportedDoc',
+                            slugPrefix: doc.slugPrefix,
+                            docName: doc.docName
+                        });
+                    });
+
                     wrapper.appendChild(icon);
                     wrapper.appendChild(label);
+                    wrapper.appendChild(deleteBtn);
 
                     // Add click handler to load preview from docs directory
                     wrapper.addEventListener('click', (e) => {
@@ -1256,6 +1288,10 @@
         console.log('[PlanningPanel Webview] Received message:', msg.type, msg);
 
         switch (msg.type) {
+            case 'error':
+                console.error('[PlanningPanel Webview] Backend error:', msg.message);
+                alert('Planning Panel Error: ' + msg.message);
+                break;
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
@@ -1386,15 +1422,27 @@
                         }
                         const activeDocName = document.getElementById('active-doc-name-local');
                         if (activeDocName) { activeDocName.textContent = 'None'; }
-                        if (btnAppendToPrompts) { btnAppendToPrompts.disabled = true; }
                     }
                 } else {
-                    statusEl.textContent = `Error: ${msg.error || 'Failed to delete file'}`;
-                    // Re-enable delete buttons that were disabled
-                    document.querySelectorAll('.doc-delete-btn').forEach(btn => {
-                        btn.disabled = false;
-                        btn.innerHTML = '×';
-                    });
+                    statusEl.textContent = `Failed to delete: ${msg.error || 'Unknown error'}`;
+                }
+                break;
+            case 'importedDocDeleted':
+                if (msg.success) {
+                    statusEl.textContent = `Deleted: ${msg.docName || msg.slugPrefix}`;
+                    // If the deleted doc was the active selection, clear preview
+                    if (state.activeDocId === msg.slugPrefix) {
+                        state.activeDocId = null;
+                        state.activeDocName = null;
+                        state.activeSource = null;
+                        if (state.selectedEl) {
+                            state.selectedEl.classList.remove('selected');
+                            state.selectedEl = null;
+                        }
+                        markdownPreview.innerHTML = '<div class="empty-state">Select a document to preview</div>';
+                    }
+                } else {
+                    statusEl.textContent = `Failed to delete: ${msg.error || 'Unknown error'}`;
                 }
                 break;
         }
@@ -1435,11 +1483,12 @@
     }
 
     // Button handlers
-    btnAppendToPrompts.addEventListener('click', () => {
-        if (!state.activeSource || !state.activeDocId) return;
+    if (btnAppendToPrompts) {
+        btnAppendToPrompts.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
 
-        btnAppendToPrompts.disabled = true;
-        statusEl.textContent = 'Appending to planning prompts...';
+            btnAppendToPrompts.disabled = true;
+            statusEl.textContent = 'Appending to planning prompts...';
 
         const payload = {
             type: 'appendToPlannerPrompt',
@@ -1451,7 +1500,8 @@
             payload.content = state.activeDocContent;
         }
         vscode.postMessage(payload);
-    });
+        });
+    }
 
     if (btnAppendToPromptsOnline) {
         btnAppendToPromptsOnline.addEventListener('click', () => {

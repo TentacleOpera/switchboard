@@ -57,7 +57,12 @@ export class PlanningPanelProvider {
         // Track if any roots changed to determine if we need to re-register
         // Clarification: Using JSON.stringify for deterministic comparison
         const rootsKey = JSON.stringify(allRoots);
-        if (this._registeredRootsKey === rootsKey) { return; }
+        if (this._registeredRootsKey === rootsKey) {
+            console.log('[PlanningPanel] Adapters already registered for roots:', allRoots);
+            return;
+        }
+
+        console.log('[PlanningPanel] Registering adapters for roots:', allRoots);
 
         // Clear existing adapters to avoid duplicates from previous registrations
         this._researchImportService.clearAdapters();
@@ -71,6 +76,7 @@ export class PlanningPanelProvider {
                     this._researchImportService.registerAdapter(
                         new NotionResearchAdapter(notionService, notionBrowseService)
                     );
+                    console.log('[PlanningPanel] Registered Notion adapter for:', workspaceRoot);
                 }
             } catch (err) {
                 // Clarification: Log at debug level for visibility without console spam
@@ -82,6 +88,7 @@ export class PlanningPanelProvider {
                 const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
                 if (linearAdapter) {
                     this._researchImportService.registerAdapter(linearAdapter);
+                    console.log('[PlanningPanel] Registered Linear adapter for:', workspaceRoot);
                 }
             } catch (err) {
                 console.debug('[PlanningPanel] Linear config not found or invalid for root:', workspaceRoot, err);
@@ -92,6 +99,7 @@ export class PlanningPanelProvider {
                 const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
                 if (clickUpAdapter) {
                     this._researchImportService.registerAdapter(clickUpAdapter);
+                    console.log('[PlanningPanel] Registered ClickUp adapter for:', workspaceRoot);
                 }
             } catch (err) {
                 console.debug('[PlanningPanel] ClickUp config not found or invalid for root:', workspaceRoot, err);
@@ -99,6 +107,7 @@ export class PlanningPanelProvider {
         }
 
         this._registeredRootsKey = rootsKey;
+        console.log('[PlanningPanel] Adapter registration complete. Available sources:', this._researchImportService.getAvailableSources());
     }
 
     private async _resolveSyncConfig(): Promise<{
@@ -222,7 +231,8 @@ export class PlanningPanelProvider {
         );
 
         // Start periodic sync if configured (unified config discovery across all roots)
-        const workspaceRoot = this._getWorkspaceRoot();
+        const allRoots = this._getWorkspaceRoots();
+        const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
         const { config, sourceRoot } = await this._resolveSyncConfig();
         const syncMode = config.syncMode || 'no-sync';
 
@@ -312,18 +322,21 @@ export class PlanningPanelProvider {
     }
 
     private async _handleMessage(msg: any): Promise<void> {
-        const workspaceRoot = this._getWorkspaceRoot();
-        if (!workspaceRoot) {
+        const allRoots = this._getWorkspaceRoots();
+        if (allRoots.length === 0) {
             this._panel?.webview.postMessage({ type: 'error', message: 'No workspace open' });
             return;
         }
+
+        // Use active workspace root if available, otherwise use first root
+        const workspaceRoot = this._getWorkspaceRoot() || allRoots[0];
 
         this._ensureAdaptersRegistered();
 
         switch (msg.type) {
             case 'fetchRoots': {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
-                await this._handleFetchRoots(workspaceRoot);
+                await this._handleFetchRoots();
                 break;
             }
             case 'savePlanningContainerSelection': {
@@ -428,7 +441,7 @@ export class PlanningPanelProvider {
                 await this._cacheService?.clearSourceCache(sourceId);
                 // Refresh only the affected pane to avoid cross-pane flicker
                 if (sourceId === 'local-folder') {
-                    await this._sendLocalDocsReady(workspaceRoot);
+                    await this._sendLocalDocsReady();
                 } else {
                     this._sendOnlineDocsReady();
                 }
@@ -619,7 +632,7 @@ export class PlanningPanelProvider {
                 const result = await service.deleteFile(docId);
                 if (result.success) {
                     // Refresh the local docs list
-                    await this._sendLocalDocsReady(workspaceRoot);
+                    await this._sendLocalDocsReady();
                     this._panel?.webview.postMessage({
                         type: 'localDocDeleted',
                         docId,
@@ -631,6 +644,37 @@ export class PlanningPanelProvider {
                         docId,
                         success: false,
                         error: result.error || 'Failed to delete file'
+                    });
+                }
+                break;
+            }
+            case 'deleteImportedDoc': {
+                const slugPrefix = msg.slugPrefix;
+                const docName = msg.docName || slugPrefix;
+                const confirm = await vscode.window.showWarningMessage(
+                    `Delete "${docName}" from .switchboard/docs?`,
+                    { modal: true },
+                    'Delete'
+                );
+                if (confirm !== 'Delete') {
+                    break;
+                }
+                try {
+                    const docsPath = path.join(workspaceRoot, '.switchboard', 'docs', `${slugPrefix}.md`);
+                    await fs.promises.unlink(docsPath);
+                    // Refresh imported docs list
+                    await this._handleFetchImportedDocs(workspaceRoot);
+                    this._panel?.webview.postMessage({
+                        type: 'importedDocDeleted',
+                        slugPrefix,
+                        success: true
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'importedDocDeleted',
+                        slugPrefix,
+                        success: false,
+                        error: String(err)
                     });
                 }
                 break;
@@ -824,15 +868,24 @@ export class PlanningPanelProvider {
         }));
     }
 
-    private async _sendLocalDocsReady(workspaceRoot: string): Promise<void> {
+    private async _sendLocalDocsReady(): Promise<void> {
         try {
-            // Clarification: Ignore passed workspaceRoot, scan all roots for consistency
             const allRoots = this._getWorkspaceRoots();
             const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }> = [];
+            const scannedPaths = new Set<string>();
 
             for (const root of allRoots) {
                 try {
                     const localFolderService = this._getLocalFolderService(root);
+                    const folderPath = localFolderService.getFolderPath();
+
+                    if (folderPath && scannedPaths.has(folderPath)) {
+                        continue;
+                    }
+                    if (folderPath) {
+                        scannedPaths.add(folderPath);
+                    }
+
                     const files = await localFolderService.listFiles();
                     // Tag files with their root for potential UI disambiguation
                     allFiles.push(...files.map(f => ({ ...f, _root: root })));
@@ -866,8 +919,10 @@ export class PlanningPanelProvider {
     }
 
     private async _sendOnlineDocsReady(): Promise<void> {
-        const roots = this._researchImportService
-            .getAvailableSources()
+        const availableSources = this._researchImportService.getAvailableSources();
+        console.log('[PlanningPanel] Available sources before filtering:', availableSources);
+
+        const roots = availableSources
             .filter(sourceId => sourceId !== 'local-folder')
             .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
 
@@ -876,7 +931,7 @@ export class PlanningPanelProvider {
         const browseFilterContainers = config.browseFilterContainers || {};
 
         if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
-        console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length);
+        console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length, 'roots:', roots);
         this._panel.webview.postMessage({
             type: 'onlineDocsReady',
             roots,
@@ -889,8 +944,8 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _handleFetchRoots(workspaceRoot: string): Promise<void> {
-        await this._sendLocalDocsReady(workspaceRoot);
+    private async _handleFetchRoots(): Promise<void> {
+        await this._sendLocalDocsReady();
         await this._sendOnlineDocsReady();
     }
 
@@ -933,13 +988,16 @@ export class PlanningPanelProvider {
         if (sourceId === 'local-folder') {
             const localFolderService = this._getLocalFolderService(workspaceRoot);
             try {
+                console.log('[PlanningPanel] Fetching local doc content:', { docId, requestId });
                 const result = await localFolderService.fetchDocContent(docId);
+                console.log('[PlanningPanel] Local doc fetch result:', { success: result.success, error: result.error, hasContent: !!result.content });
                 if (result.success) {
                     this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content: result.content || '', docName: result.docTitle });
                 } else {
                     this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
                 }
             } catch (err) {
+                console.error('[PlanningPanel] Error fetching local doc:', err);
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
             }
             return;

@@ -519,7 +519,7 @@ export class KanbanProvider implements vscode.Disposable {
                 const items = cfg.mappings
                     .map(m => ({
                         label: m.name,
-                        workspaceRoot: path.resolve(expandHome((m.workspaceFolders?.[0]) || folders[0]?.uri.fsPath || ''))
+                        workspaceRoot: path.resolve(expandHome((m.parentFolder) || (m.workspaceFolders?.[0]) || folders[0]?.uri.fsPath || ''))
                     }))
                     .filter(item => item.workspaceRoot && item.workspaceRoot !== path.resolve(''));
                 if (items.length > 0) return items;
@@ -1055,12 +1055,16 @@ export class KanbanProvider implements vscode.Disposable {
                     const expandHome = (p: string): string => {
                         const trimmed = p.trim();
                         return trimmed.startsWith('~')
-                            ? path.join(require('os').homedir(), trimmed.slice(1))
+                            ? path.join(require('os').homedir(), p.slice(1))
                             : trimmed;
                     };
                     // Find which mapping contains the resolvedWorkspaceRoot and use its workspaceRoot
                     for (const m of cfg.mappings) {
-                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                        // Check if this is the parent folder
+                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
+                        // Check if this is in the child folders list
+                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
+                        if (isParent || isChild) {
                             const mappedItem = workspaceItems.find(item => item.label === m.name);
                             if (mappedItem) {
                                 selectionRoot = mappedItem.workspaceRoot;
@@ -1757,7 +1761,11 @@ export class KanbanProvider implements vscode.Disposable {
                             : trimmed;
                     };
                     for (const m of cfg.mappings) {
-                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                        // Check if this is the parent folder
+                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
+                        // Check if this is in the child folders list
+                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
+                        if (isParent || isChild) {
                             const mappedItem = workspaceItems.find(item => item.label === m.name);
                             if (mappedItem) {
                                 selectionRoot = mappedItem.workspaceRoot;
@@ -1866,7 +1874,11 @@ export class KanbanProvider implements vscode.Disposable {
                             : trimmed;
                     };
                     for (const m of cfg.mappings) {
-                        if (m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot)) {
+                        // Check if this is the parent folder
+                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
+                        // Check if this is in the child folders list
+                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
+                        if (isParent || isChild) {
                             const mappedItem = workspaceItems.find(item => item.label === m.name);
                             if (mappedItem) {
                                 selectionRoot = mappedItem.workspaceRoot;
