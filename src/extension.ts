@@ -8,7 +8,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
-import { KanbanDatabase } from './services/KanbanDatabase';
+import { KanbanDatabase, WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { sendRobustText } from './services/terminalUtils';
@@ -884,16 +884,19 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string, stateR
  * This allows the extension to work without external CLI installation.
  */
 async function spawnBundledMcpServer(context: vscode.ExtensionContext, workspaceRoot: string, stateRoot: string = workspaceRoot): Promise<void> {
-    let serverPath: string;
-    try {
-        serverPath = await ensureWorkspaceMcpServerFiles(context.extensionPath, workspaceRoot);
-    } catch (e) {
-        console.error('Failed to prepare workspace MCP server files:', e);
-        return;
-    }
+    // Try workspace-local copy first, then extension bundle
+    const workspaceMcpPath = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
+    const bundledPath = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
 
-    if (!fs.existsSync(serverPath)) {
-        console.error('Bundled MCP server not found:', serverPath);
+    let serverPath: string;
+    if (fs.existsSync(workspaceMcpPath)) {
+        serverPath = workspaceMcpPath;
+    } else if (fs.existsSync(bundledPath)) {
+        serverPath = bundledPath;
+    } else {
+        const msg = 'MCP server files not found. Run "Switchboard: Setup MCP Server" command to configure MCP.';
+        vscode.window.showErrorMessage(msg);
+        console.error('[MCP] Server files not found:', { workspaceMcpPath, bundledPath });
         return;
     }
 
@@ -2764,10 +2767,15 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
-        if (!workspaceRoot) {
+        // Use TaskViewerProvider's active workspace root, not the global variable set at startup
+        const activeWorkspaceRoot = taskViewerProvider['_getWorkspaceRoot']();
+        if (!activeWorkspaceRoot) {
             vscode.window.showWarningMessage('No workspace folder found.');
             return;
         }
+
+        // Resolve effective workspace root based on mappings to ensure terminals open in correct workspace
+        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(activeWorkspaceRoot);
 
         const visibleAgents = await taskViewerProvider.getVisibleAgents();
         const includeJulesMonitor = visibleAgents.jules !== false;
@@ -2906,7 +2914,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const gridTermOpts: vscode.TerminalOptions = {
                         name: agent.name,
                         location: vscode.TerminalLocation.Panel,
-                        cwd: workspaceRoot
+                        cwd: effectiveWorkspaceRoot
                     };
                     terminal = vscode.window.createTerminal(gridTermOpts);
                 }
@@ -2978,7 +2986,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Auto-execute startup commands for each agent terminal
             try {
                 for (const agent of agents) {
-                    let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, workspaceRoot);
+                    let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
                     // Note: Agent-specific fallbacks (e.g., jules_monitor → 'jules', intern → Ollama model)
                     // are now handled centrally in TaskViewerProvider.getAgentStartupCommand
                     if (cmd && cmd.trim()) {
@@ -3024,13 +3032,52 @@ export async function activate(context: vscode.ExtensionContext) {
 }
 
 /**
+ * Resolve workspace root considering workspace database mappings.
+ * Returns the parent directory of the mapped database if a match is found.
+ */
+function resolveWorkspaceRootForMcp(workspaceRoot: string | null): string | null {
+    if (!workspaceRoot) return null;
+
+    try {
+        const cfg = vscode.workspace.getConfiguration('switchboard')
+                         .get('workspaceDatabaseMappings') as
+                         { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+
+        if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+            // Helper to expand ~ to home directory (matches KanbanDatabase.ts logic)
+            const expandHome = (p: string): string => {
+                const trimmed = p.trim();
+                return trimmed.startsWith('~')
+                    ? path.join(os.homedir(), trimmed.slice(1))
+                    : trimmed;
+            };
+
+            const stable = path.resolve(workspaceRoot);
+            const mapping = cfg.mappings.find(m =>
+                Array.isArray(m.workspaceFolders) &&
+                m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable));
+
+            if (mapping?.dbPath) {
+                // Use the parent directory of the mapped database as the workspace root
+                return path.dirname(path.resolve(expandHome(mapping.dbPath)));
+            }
+        }
+    } catch {
+        // Outside extension host - use default behavior
+    }
+
+    return workspaceRoot;
+}
+
+/**
  * Handle MCP Server Setup (Robust Audit-Compliant)
  */
 async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskViewerProvider, stateRootOverride?: string) {
     const folders = vscode.workspace.workspaceFolders || [];
     let serverPath: string | undefined;
-    const workspaceRoot = getPreferredWorkspaceRoot();
-    const stateRoot = stateRootOverride || (workspaceRoot ? workspaceRoot : undefined);
+    const preferredRoot = getPreferredWorkspaceRoot();
+    const workspaceRoot = resolveWorkspaceRootForMcp(preferredRoot);
+    const stateRoot = stateRootOverride || (preferredRoot ? preferredRoot : undefined);
 
     // 1. Auto-Detection Strategy (Multi-Root Support)
     for (const folder of folders) {
@@ -3051,22 +3098,9 @@ async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskVi
         if (serverPath) break;
     }
 
-    // 1b. Prefer workspace-local runtime copy for IDE MCP clients.
-    // This self-heals stale configs that point to .switchboard/MCP when the file is missing.
-    if (workspaceRoot) {
-        try {
-            serverPath = await ensureWorkspaceMcpServerFiles(context.extensionPath, workspaceRoot);
-        } catch {
-            // ensureWorkspaceMcpServerFiles failed — retain detected serverPath if available,
-            // otherwise try direct bundle path as a fallback.
-            if (!serverPath) {
-                const bundledCandidate = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
-                if (await fileExists(bundledCandidate)) {
-                    serverPath = bundledCandidate;
-                }
-            }
-        }
-    }
+    // REMOVED: Automatic file copying removed. Files are only copied when user explicitly
+    // runs 'switchboard.setupMcp' or when 'switchboard.enableMcpAutoSetup' is true.
+    // The serverPath detection above (lines 3074-3091) still finds existing files.
 
     // 2. Fallback: Manual File Picker
     if (!serverPath) {
@@ -3697,7 +3731,8 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' },
         { key: 'claude', name: 'Claude Code', description: 'Claude Code MCP server configuration' },
         { key: 'gemini', name: 'Gemini CLI', description: 'Gemini CLI MCP server configuration' },
-        { key: 'kiro', name: 'Kiro', description: 'Kiro IDE MCP server configuration' }
+        { key: 'kiro', name: 'Kiro', description: 'Kiro IDE MCP server configuration' },
+        { key: 'mcp', name: 'MCP Server', description: 'Switchboard MCP server setup (copies files and configures)' }
     ];
 
     // Build flattened quick pick — all options always visible
@@ -3939,14 +3974,16 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
             });
         }
 
-        // Auto-configure MCP as part of unified setup
-        if (token.isCancellationRequested) return;
-        progress.report({ message: 'Configuring MCP server...' });
-        try {
-            const stateRoot = workspaceRoot || undefined;
-            await handleMcpSetup(context, taskViewerProvider!, stateRoot);
-        } catch (e) {
-            mcpOutputChannel?.appendLine(`[Setup] MCP auto-configuration failed: ${e}`);
+        // Configure MCP only when user explicitly selects it
+        if (targets.includes('mcp')) {
+            if (token.isCancellationRequested) return;
+            progress.report({ message: 'Configuring MCP server...' });
+            try {
+                const stateRoot = workspaceRoot || undefined;
+                await handleMcpSetup(context, taskViewerProvider!, stateRoot);
+            } catch (e) {
+                mcpOutputChannel?.appendLine(`[Setup] MCP configuration failed: ${e}`);
+            }
         }
 
         // Always attempt to configure global Antigravity MCP config when a workspace root

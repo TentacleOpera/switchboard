@@ -253,4 +253,8 @@ export class ResearchImportService {
     getAvailableSources(): string[] {
         return Array.from(this._adapters.keys());
     }
+
+    clearAdapters(): void {
+        this._adapters.clear();
+    }
 }

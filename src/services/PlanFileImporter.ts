@@ -27,6 +27,9 @@ export interface ImportPlanFilesResult {
  * kanban column and status are used instead of defaulting to CREATED/active.
  */
 export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?: string): Promise<ImportPlanFilesResult> {
+    // Resolve effective root for shared database support
+    const effectiveRoot = effectiveStateRoot || workspaceRoot;
+
     const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
     if (!fs.existsSync(plansDir)) {
         return { count: 0, sessionIds: [], columns: {} };
@@ -38,7 +41,8 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
         return { count: 0, sessionIds: [], columns: {} };
     }
 
-    const db = KanbanDatabase.forWorkspace(workspaceRoot);
+    // Use effectiveRoot for DB and identity to ensure shared database consistency
+    const db = KanbanDatabase.forWorkspace(effectiveRoot);
     const ready = await db.ensureReady();
     if (!ready) {
         return { count: 0, sessionIds: [], columns: {} };
@@ -48,7 +52,7 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
         resolveImportableStateRoot(workspaceRoot, effectiveStateRoot)
     );
 
-    const workspaceId = await ensureWorkspaceIdentity(workspaceRoot);
+    const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
 
     const now = new Date().toISOString();
     const records: KanbanPlanRecord[] = [];

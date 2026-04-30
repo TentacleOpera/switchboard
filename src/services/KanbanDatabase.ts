@@ -8,6 +8,7 @@ export interface WorkspaceDatabaseMapping {
     id: string;
     name: string;
     dbPath: string;
+    parentFolder?: string;
     workspaceFolders: string[];
 }
 
@@ -254,9 +255,17 @@ export class KanbanDatabase {
                              .get('workspaceDatabaseMappings') as
                              { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                const mapping = cfg.mappings.find(m =>
-                    Array.isArray(m.workspaceFolders) &&
-                    m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable));
+                const mapping = cfg.mappings.find(m => {
+                    if (!Array.isArray(m.workspaceFolders)) return false;
+
+                    // Check if this is the parent folder
+                    const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === stable;
+
+                    // Check if this is in the child folders list
+                    const isChild = m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable);
+
+                    return isParent || isChild;
+                });
                 if (mapping?.dbPath) {
                     resolvedDbPath = path.resolve(expandHome(mapping.dbPath));
                     console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);

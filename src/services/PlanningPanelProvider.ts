@@ -27,13 +27,19 @@ export class PlanningPanelProvider {
     private _panel: vscode.WebviewPanel | undefined;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
-    private _registeredRoot: string | null = null;
+    private _registeredRootsKey: string | null = null;
     private _cacheService: PlanningPanelCacheService | undefined;
     private _periodicSyncTimer: NodeJS.Timeout | undefined;
     private _currentSyncMode: string = 'no-sync';
     private _syncCancellationSource: AbortController | undefined;
     private _importInProgress = false;
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
+
+    private _resolvedConfigCache: {
+        configPath: string | null;
+        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[] };
+        sourceRoot: string;
+    } | null = null;
 
     constructor(
         private _extensionUri: vscode.Uri,
@@ -44,44 +50,131 @@ export class PlanningPanelProvider {
         private _context: vscode.ExtensionContext
     ) {}
 
-    private _ensureAdaptersRegistered(workspaceRoot: string): void {
-        // Re-register when workspace root changes; adapters are workspace-scoped.
-        if (this._registeredRoot === workspaceRoot) { return; }
+    private _ensureAdaptersRegistered(): void {
+        const allRoots = this._getWorkspaceRoots();
+        if (allRoots.length === 0) { return; }
 
-        // Notion
-        try {
-            const notionService = this._adapterFactories.getNotionService?.(workspaceRoot);
-            const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
-            if (notionService && notionBrowseService) {
-                this._researchImportService.registerAdapter(
-                    new NotionResearchAdapter(notionService, notionBrowseService)
-                );
+        // Track if any roots changed to determine if we need to re-register
+        // Clarification: Using JSON.stringify for deterministic comparison
+        const rootsKey = JSON.stringify(allRoots);
+        if (this._registeredRootsKey === rootsKey) { return; }
+
+        // Clear existing adapters to avoid duplicates from previous registrations
+        this._researchImportService.clearAdapters();
+
+        for (const workspaceRoot of allRoots) {
+            // Notion
+            try {
+                const notionService = this._adapterFactories.getNotionService?.(workspaceRoot);
+                const notionBrowseService = this._adapterFactories.getNotionBrowseService?.(workspaceRoot);
+                if (notionService && notionBrowseService) {
+                    this._researchImportService.registerAdapter(
+                        new NotionResearchAdapter(notionService, notionBrowseService)
+                    );
+                }
+            } catch (err) {
+                // Clarification: Log at debug level for visibility without console spam
+                console.debug('[PlanningPanel] Notion config not found or invalid for root:', workspaceRoot, err);
             }
-        } catch (err) {
-            console.error('[PlanningPanel] Failed to register Notion adapter:', err);
+
+            // Linear
+            try {
+                const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
+                if (linearAdapter) {
+                    this._researchImportService.registerAdapter(linearAdapter);
+                }
+            } catch (err) {
+                console.debug('[PlanningPanel] Linear config not found or invalid for root:', workspaceRoot, err);
+            }
+
+            // ClickUp
+            try {
+                const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
+                if (clickUpAdapter) {
+                    this._researchImportService.registerAdapter(clickUpAdapter);
+                }
+            } catch (err) {
+                console.debug('[PlanningPanel] ClickUp config not found or invalid for root:', workspaceRoot, err);
+            }
         }
 
-        // Linear
-        try {
-            const linearAdapter = this._adapterFactories.getLinearDocsAdapter?.(workspaceRoot);
-            if (linearAdapter) {
-                this._researchImportService.registerAdapter(linearAdapter);
-            }
-        } catch (err) {
-            console.error('[PlanningPanel] Failed to register Linear adapter:', err);
+        this._registeredRootsKey = rootsKey;
+    }
+
+    private async _resolveSyncConfig(): Promise<{
+        configPath: string | null;
+        config: { syncMode?: string; browseFilterContainers?: Record<string, string>; selectedContainers?: string[] };
+        sourceRoot: string;
+    }> {
+        // Return cached result if available (resolves race condition on repeated calls)
+        if (this._resolvedConfigCache) {
+            return this._resolvedConfigCache;
         }
 
-        // ClickUp
-        try {
-            const clickUpAdapter = this._adapterFactories.getClickUpDocsAdapter?.(workspaceRoot);
-            if (clickUpAdapter) {
-                this._researchImportService.registerAdapter(clickUpAdapter);
+        const allRoots = this._getWorkspaceRoots();
+        const defaultConfig = { syncMode: 'no-sync', browseFilterContainers: {}, selectedContainers: [] as string[] };
+
+        // Search all roots for config
+        for (const root of allRoots) {
+            const configPath = path.join(root, '.switchboard', 'planning-sync-config.json');
+            try {
+                const raw = await fs.promises.readFile(configPath, 'utf8');
+                const config = JSON.parse(raw);
+                console.log(`[PlanningPanel] Using sync config from: ${root}`);
+                const result = { configPath, config, sourceRoot: root };
+                this._resolvedConfigCache = result;
+                return result;
+            } catch (err) {
+                // Config not found in this root, continue searching
+                // Clarification: Only swallow ENOENT errors; log others for debugging
+                if ((err as NodeJS.ErrnoException).code !== 'ENOENT') {
+                    console.warn(`[PlanningPanel] Error reading config from ${root}:`, err);
+                }
             }
-        } catch (err) {
-            console.error('[PlanningPanel] Failed to register ClickUp adapter:', err);
         }
 
-        this._registeredRoot = workspaceRoot;
+        // No config found in any root
+        const result = { configPath: null, config: defaultConfig, sourceRoot: '' };
+        this._resolvedConfigCache = result;
+        return result;
+    }
+
+    private async _resolveWorkspacePath(
+        relativePath: string,
+        options?: { preferActive?: boolean }
+    ): Promise<{ path: string | null; source: string }> {
+        const allRoots = this._getWorkspaceRoots();
+        const activeRoot = this._getWorkspaceRoot();
+
+        // Try active root first if preferActive is set (or by default)
+        if (options?.preferActive !== false && activeRoot) {
+            const resolvedPath = path.join(activeRoot, relativePath);
+            if (fs.existsSync(resolvedPath)) {
+                return { path: resolvedPath, source: 'active workspace' };
+            }
+        }
+
+        // Try first root as fallback
+        if (allRoots.length > 0) {
+            const firstRoot = allRoots[0];
+            const firstPath = path.join(firstRoot, relativePath);
+            if (fs.existsSync(firstPath)) {
+                return { path: firstPath, source: 'first workspace' };
+            }
+        }
+
+        // Search all remaining roots
+        for (const root of allRoots) {
+            if (root === activeRoot) { continue; } // Already tried active
+            if (root === allRoots[0]) { continue; } // Already tried first
+
+            const candidate = path.join(root, relativePath);
+            if (fs.existsSync(candidate)) {
+                return { path: candidate, source: `workspace ${path.basename(root)}` };
+            }
+        }
+
+        return { path: null, source: 'not found' };
     }
 
     public async open(): Promise<void> {
@@ -128,18 +221,13 @@ export class PlanningPanelProvider {
             this._disposables
         );
 
-        // Start periodic sync if configured
+        // Start periodic sync if configured (unified config discovery across all roots)
         const workspaceRoot = this._getWorkspaceRoot();
-        if (workspaceRoot) {
-            const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
-            try {
-                const raw = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(raw);
-                const syncMode = config.syncMode || 'no-sync';
-                if (syncMode !== 'no-sync') {
-                    await this.triggerSync(workspaceRoot, syncMode);
-                }
-            } catch { /* no config yet */ }
+        const { config, sourceRoot } = await this._resolveSyncConfig();
+        const syncMode = config.syncMode || 'no-sync';
+
+        if (syncMode !== 'no-sync' && sourceRoot) {
+            await this.triggerSync(sourceRoot, syncMode);
         }
 
         this._disposables.push(
@@ -230,7 +318,7 @@ export class PlanningPanelProvider {
             return;
         }
 
-        this._ensureAdaptersRegistered(workspaceRoot);
+        this._ensureAdaptersRegistered();
 
         switch (msg.type) {
             case 'fetchRoots': {
@@ -241,17 +329,24 @@ export class PlanningPanelProvider {
             case 'savePlanningContainerSelection': {
                 const sourceId = String(msg.sourceId || '').trim();
                 const containerId = String(msg.containerId || '').trim();
-                if (!sourceId || !workspaceRoot) { break; }
+                if (!sourceId) { break; }
 
                 try {
-                    const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
-                    let config: any = {};
-                    try {
-                        const content = await fs.promises.readFile(configPath, 'utf8');
-                        config = JSON.parse(content);
-                    } catch { /* no existing config */ }
+                    const { configPath, sourceRoot, config: existingConfig } = await this._resolveSyncConfig();
+                    let targetConfigPath = configPath;
+                    let targetRoot = sourceRoot;
 
-                    // Store as browseFilterContainers: { [sourceId]: containerId }
+                    // No existing config — create in first root
+                    if (!targetConfigPath) {
+                        const allRoots = this._getWorkspaceRoots();
+                        if (allRoots.length === 0) { break; }
+                        targetRoot = allRoots[0];
+                        targetConfigPath = path.join(targetRoot, '.switchboard', 'planning-sync-config.json');
+                        console.log(`[PlanningPanel] Creating new config in: ${targetRoot}`);
+                    }
+
+                    // Build updated config
+                    const config = { ...existingConfig };
                     if (!config.browseFilterContainers) {
                         config.browseFilterContainers = {};
                     }
@@ -261,8 +356,15 @@ export class PlanningPanelProvider {
                         delete config.browseFilterContainers[sourceId];
                     }
 
-                    await fs.promises.mkdir(path.dirname(configPath), { recursive: true });
-                    await fs.promises.writeFile(configPath, JSON.stringify(config, null, 2), 'utf8');
+                    await fs.promises.mkdir(path.dirname(targetConfigPath), { recursive: true });
+                    await fs.promises.writeFile(targetConfigPath, JSON.stringify(config, null, 2), 'utf8');
+
+                    // Update cache to reflect new state
+                    this._resolvedConfigCache = {
+                        configPath: targetConfigPath,
+                        config,
+                        sourceRoot: targetRoot
+                    };
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to save container selection:', error);
                 }
@@ -724,15 +826,32 @@ export class PlanningPanelProvider {
 
     private async _sendLocalDocsReady(workspaceRoot: string): Promise<void> {
         try {
-            const localFolderService = this._getLocalFolderService(workspaceRoot);
-            const files = await localFolderService.listFiles();
-            if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send localDocsReady'); }
-            console.log('[PlanningPanel] Sending localDocsReady, nodes count:', files.length);
+            // Clarification: Ignore passed workspaceRoot, scan all roots for consistency
+            const allRoots = this._getWorkspaceRoots();
+            const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }> = [];
+
+            for (const root of allRoots) {
+                try {
+                    const localFolderService = this._getLocalFolderService(root);
+                    const files = await localFolderService.listFiles();
+                    // Tag files with their root for potential UI disambiguation
+                    allFiles.push(...files.map(f => ({ ...f, _root: root })));
+                } catch (err) {
+                    // Log but continue — one bad root shouldn't break others
+                    console.debug('[PlanningPanel] Failed to list files for root:', root, err);
+                }
+            }
+
+            if (!this._panel) {
+                throw new Error('[PlanningPanel] _panel is undefined — cannot send localDocsReady');
+            }
+
+            console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPath: localFolderService.getFolderPath(),
-                nodes: this._mapLocalFilesToTreeNodes(files)
+                folderPath: allRoots[0] || '', // Clarification: Use first root as display path
+                nodes: this._mapLocalFilesToTreeNodes(allFiles)
             });
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
@@ -752,17 +871,9 @@ export class PlanningPanelProvider {
             .filter(sourceId => sourceId !== 'local-folder')
             .map(sourceId => ({ sourceId, nodes: [] as TreeNode[] }));
 
-        // Load saved browse filter containers
-        let browseFilterContainers: Record<string, string> = {};
-        const workspaceRoot = this._getWorkspaceRoot();
-        if (workspaceRoot) {
-            try {
-                const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
-                const content = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(content);
-                browseFilterContainers = config.browseFilterContainers || {};
-            } catch { /* no config yet */ }
-        }
+        // Load saved browse filter containers from unified config
+        const { config } = await this._resolveSyncConfig();
+        const browseFilterContainers = config.browseFilterContainers || {};
 
         if (!this._panel) { throw new Error('[PlanningPanel] _panel is undefined — cannot send onlineDocsReady'); }
         console.log('[PlanningPanel] Sending onlineDocsReady, roots count:', roots.length);
@@ -965,63 +1076,31 @@ export class PlanningPanelProvider {
 
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
-            // In multi-repo workspaces, docs might be in a different folder than the active file's folder
-            // Search across all workspace roots with preference for active folder
-            const allRoots = this._getWorkspaceRoots();
-            let docsDir: string | null = null;
-            let docsSource: string = '';
-
-            // Try active workspace root first
-            const activeDocsDir = path.join(workspaceRoot, '.switchboard', 'docs');
-            if (fs.existsSync(activeDocsDir)) {
-                docsDir = activeDocsDir;
-                docsSource = 'active workspace';
-            }
-            // Try first workspace root as fallback (existing behavior)
-            if (docsDir === null && allRoots.length > 0) {
-                const firstDocsDir = path.join(allRoots[0], '.switchboard', 'docs');
-                if (fs.existsSync(firstDocsDir)) {
-                    docsDir = firstDocsDir;
-                    docsSource = 'first workspace (fallback)';
-                }
-            }
-            // Search all other workspace roots
-            if (docsDir === null) {
-                for (const root of allRoots) {
-                    if (root === workspaceRoot) { continue; } // Already tried active
-                    if (root === allRoots[0]) { continue; } // Already tried first
-
-                    const candidateDocsDir = path.join(root, '.switchboard', 'docs');
-                    if (fs.existsSync(candidateDocsDir)) {
-                        docsDir = candidateDocsDir;
-                        docsSource = `workspace ${path.basename(root)}`;
-                        console.log(`[PlanningPanelProvider] Docs found in alternate workspace: ${root}`);
-                        break;
-                    }
-                }
-            }
+            const { path: docsDir, source } = await this._resolveWorkspacePath(
+                path.join('.switchboard', 'docs')
+            );
 
             if (!docsDir) {
                 this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: [] });
                 return;
             }
 
-            if (docsSource !== 'active workspace') {
-                console.log(`[PlanningPanelProvider] Using docs from ${docsSource} (${docsDir})`);
+            if (source !== 'active workspace') {
+                console.log(`[PlanningPanelProvider] Using imported docs from ${source} (${docsDir})`);
             }
 
             const files = await fs.promises.readdir(docsDir);
             console.log('[PlanningPanelProvider] Files in docs directory:', files);
             const docs = [];
-            
+
             for (const file of files) {
                 if (file.endsWith('.md')) {
                     const filePath = path.join(docsDir, file);
                     const stat = await fs.promises.stat(filePath);
                     const slugPrefix = path.basename(file, '.md');
                     const content = await fs.promises.readFile(filePath, 'utf-8');
-                    
-                    // Parse front-matter first
+
+                    // Parse front-matter (same logic as original)
                     let displayName = slugPrefix;
                     let sourceId = 'local-folder';
                     let docId = slugPrefix;
@@ -1033,20 +1112,17 @@ export class PlanningPanelProvider {
                     if (frontMatterMatch) {
                         const frontMatter = frontMatterMatch[1];
 
-                        // Extract docName from front-matter
                         const docNameMatch = frontMatter.match(/^docName:\s*(.+)$/m);
                         if (docNameMatch) {
                             displayName = docNameMatch[1].trim();
                         }
 
-                        // Extract parentDocName from front-matter (backward compat: falls back to docName)
                         parentDocName = displayName;
                         const parentDocNameMatch = frontMatter.match(/^parentDocName:\s*(.+)$/m);
                         if (parentDocNameMatch) {
                             parentDocName = parentDocNameMatch[1].trim();
                         }
 
-                        // Extract sourceId from front-matter
                         const sourceIdMatch = frontMatter.match(/^sourceId:\s*(.+)$/m);
                         if (sourceIdMatch) {
                             sourceId = sourceIdMatch[1].trim();
@@ -1054,19 +1130,17 @@ export class PlanningPanelProvider {
                             canSync = !!(adapter && adapter.updateContent);
                         }
 
-                        // Extract docId from front-matter
                         const docIdMatch = frontMatter.match(/^docId:\s*(.+)$/m);
                         if (docIdMatch) {
                             docId = docIdMatch[1].trim();
                         }
 
-                        // Extract order from front-matter
                         const orderMatch = frontMatter.match(/^order:\s*(\d+)$/m);
                         if (orderMatch) {
                             order = parseInt(orderMatch[1], 10);
                         }
                     }
-                    
+
                     // Fall back to H1 if no docName in front-matter
                     if (displayName === slugPrefix) {
                         const h1Match = content.match(/^#\s+(.+)$/m);
@@ -1074,7 +1148,7 @@ export class PlanningPanelProvider {
                             displayName = h1Match[1].trim();
                         }
                     }
-                    
+
                     docs.push({
                         sourceId,
                         docId,
@@ -1087,7 +1161,7 @@ export class PlanningPanelProvider {
                     });
                 }
             }
-            
+
             console.log('[PlanningPanelProvider] Sending importedDocsReady with docs:', docs);
             this._panel?.webview.postMessage({ type: 'importedDocsReady', docs });
         } catch (err) {
@@ -1098,55 +1172,35 @@ export class PlanningPanelProvider {
 
     private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<void> {
         try {
-            // In multi-repo workspaces, the doc file might be in a different folder
-            // Search across all workspace roots with preference for active folder
-            const allRoots = this._getWorkspaceRoots();
-            let filePath: string | null = null;
-
-            // Try active workspace root first
-            const activeFilePath = path.join(workspaceRoot, '.switchboard', 'docs', `${slugPrefix}.md`);
-            if (fs.existsSync(activeFilePath)) {
-                filePath = activeFilePath;
-            }
-            // Try first workspace root as fallback
-            if (filePath === null && allRoots.length > 0) {
-                const firstFilePath = path.join(allRoots[0], '.switchboard', 'docs', `${slugPrefix}.md`);
-                if (fs.existsSync(firstFilePath)) {
-                    filePath = firstFilePath;
-                }
-            }
-            // Search all other workspace roots
-            if (filePath === null) {
-                for (const root of allRoots) {
-                    if (root === workspaceRoot) { continue; } // Already tried active
-                    if (root === allRoots[0]) { continue; } // Already tried first
-
-                    const candidatePath = path.join(root, '.switchboard', 'docs', `${slugPrefix}.md`);
-                    if (fs.existsSync(candidatePath)) {
-                        filePath = candidatePath;
-                        console.log(`[PlanningPanelProvider] Doc file found in alternate workspace: ${root}`);
-                        break;
-                    }
-                }
-            }
+            const relativePath = path.join('.switchboard', 'docs', `${slugPrefix}.md`);
+            const { path: filePath, source } = await this._resolveWorkspacePath(relativePath);
 
             if (!filePath) {
-                this._panel?.webview.postMessage({ type: 'previewError', sourceId: 'local-folder', requestId, error: 'File not found' });
+                this._panel?.webview.postMessage({
+                    type: 'previewError',
+                    sourceId: 'local-folder',
+                    requestId,
+                    error: 'File not found'
+                });
                 return;
             }
 
+            if (source !== 'active workspace') {
+                console.log(`[PlanningPanelProvider] Doc file found in ${source}: ${filePath}`);
+            }
+
             const content = fs.readFileSync(filePath, 'utf-8');
-            
+
             // Parse docName from filename or front-matter
             let docName = slugPrefix;
             const frontMatterMatch = content.match(/^---\n[\s\S]*?docName:\s*(.+?)\n[\s\S]*?\n---/);
             if (frontMatterMatch) {
                 docName = frontMatterMatch[1].trim();
             }
-            
+
             // Strip front-matter for display
             const displayContent = content.replace(/^---\n[\s\S]*?\n---\n/, '');
-            
+
             this._panel?.webview.postMessage({
                 type: 'previewReady',
                 sourceId: 'local-folder',
@@ -1156,7 +1210,12 @@ export class PlanningPanelProvider {
             });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching docs file:', err);
-            this._panel?.webview.postMessage({ type: 'previewError', sourceId: 'local-folder', requestId, error: String(err) });
+            this._panel?.webview.postMessage({
+                type: 'previewError',
+                sourceId: 'local-folder',
+                requestId,
+                error: String(err)
+            });
         }
     }
 
@@ -1623,17 +1682,11 @@ export class PlanningPanelProvider {
     public async triggerSync(workspaceRoot: string, syncMode?: string): Promise<void> {
         this.stopPeriodicSync();
 
-        // If no mode provided, read from config
+        // If no mode provided, read from unified config
         let mode: string = syncMode || 'no-sync';
         if (!syncMode) {
-            const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
-            try {
-                const raw = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(raw);
-                mode = config.syncMode || 'no-sync';
-            } catch {
-                mode = 'no-sync';
-            }
+            const { config } = await this._resolveSyncConfig();
+            mode = config.syncMode || 'no-sync';
         }
 
         this._currentSyncMode = mode;
@@ -1642,14 +1695,11 @@ export class PlanningPanelProvider {
             await this.syncAllDocuments(workspaceRoot);
             this.startPeriodicSync(workspaceRoot);
         } else if (mode === 'sync-selected') {
-            const configPath = path.join(workspaceRoot, '.switchboard', 'planning-sync-config.json');
-            try {
-                const raw = await fs.promises.readFile(configPath, 'utf8');
-                const config = JSON.parse(raw);
-                if (Array.isArray(config.selectedContainers)) {
-                    await this.syncSelectedContainers(workspaceRoot, config.selectedContainers);
-                }
-            } catch { /* no containers selected yet */ }
+            // Use unified config discovery for selected containers
+            const { configPath, config } = await this._resolveSyncConfig();
+            if (configPath && Array.isArray(config.selectedContainers)) {
+                await this.syncSelectedContainers(workspaceRoot, config.selectedContainers);
+            }
             this.startPeriodicSync(workspaceRoot);
         }
     }

@@ -3722,7 +3722,15 @@
                     <button data-action="remove" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Remove</button>
                 </div>
                 <div style="margin-bottom:8px;">
-                    <textarea data-field="workspaceFolders" placeholder="Workspace folders (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Parent Workspace Folder (where .switchboard/ lives):</label>
+                    <div style="display:flex; gap:4px;">
+                        <input type="text" data-field="parentFolder" placeholder="e.g. /Users/patrickvuleta/Documents/Gitlab" value="${mapping.parentFolder || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                        <button data-action="browseParentFolder" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
+                    </div>
+                </div>
+                <div style="margin-bottom:8px;">
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Child Workspace Folders (one per line):</label>
+                    <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
                     <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
                 </div>
                 <input type="hidden" data-field="id" value="${mapping.id || ''}">
@@ -3735,6 +3743,10 @@
             div.querySelector('button[data-action="browseDbPath"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 vscode.postMessage({ type: 'browseWorkspaceMappingDbPath', mappingId });
+            });
+            div.querySelector('button[data-action="browseParentFolder"]')?.addEventListener('click', () => {
+                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
+                vscode.postMessage({ type: 'browseParentFolder', mappingId });
             });
             div.querySelector('button[data-action="browseFolders"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
@@ -3765,10 +3777,11 @@
                 const div = mappingDivs[i];
                 const name = div.querySelector('[data-field="name"]')?.value.trim() || '';
                 const dbPath = div.querySelector('[data-field="dbPath"]')?.value.trim() || '';
+                const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value.trim() || '';
                 const foldersText = div.querySelector('[data-field="workspaceFolders"]')?.value.trim() || '';
                 const id = div.querySelector('[data-field="id"]')?.value || ('mapping-' + Date.now() + '-' + i);
                 const workspaceFolders = foldersText.split('\n').map(f => f.trim()).filter(Boolean);
-                updatedMappings.push({ id, name, dbPath, workspaceFolders });
+                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders });
             }
             workspaceMappings = updatedMappings;
         }
@@ -3778,6 +3791,7 @@
                 id: 'mapping-' + Date.now(),
                 name: '',
                 dbPath: '',
+                parentFolder: '',
                 workspaceFolders: []
             });
             renderWorkspaceMappings();
@@ -3955,6 +3969,18 @@
                         if (ta) {
                             const current = ta.value.trim();
                             ta.value = current ? current + '\n' + message.path : message.path;
+                        }
+                    }
+                    break;
+                }
+                case 'parentFolderSelected': {
+                    const container = document.getElementById('workspace-mappings-container');
+                    if (container && message.mappingId) {
+                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
+                        const mappingDiv = idInput?.parentElement;
+                        const input = mappingDiv?.querySelector('[data-field="parentFolder"]');
+                        if (input) {
+                            input.value = message.path;
                         }
                     }
                     break;

@@ -706,6 +706,22 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     break;
                 }
+                case 'browseParentFolder': {
+                    const parentUri = await vscode.window.showOpenDialog({
+                        canSelectFiles: false,
+                        canSelectFolders: true,
+                        canSelectMany: false,
+                        title: 'Select parent workspace folder (where .switchboard/ lives)'
+                    });
+                    if (parentUri?.[0]) {
+                        this._panel?.webview.postMessage({
+                            type: 'parentFolderSelected',
+                            path: parentUri[0].fsPath,
+                            mappingId: message.mappingId
+                        });
+                    }
+                    break;
+                }
                 default:
                     break;
             }

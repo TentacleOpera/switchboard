@@ -2742,11 +2742,55 @@ export class KanbanProvider implements vscode.Disposable {
      * returns the same resolved path regardless of which child was passed in.
      */
     public resolveEffectiveWorkspaceRoot(workspaceRoot: string): string {
+        // First check explicit control plane root (legacy mechanism)
         const explicit = this._context.workspaceState.get<string>('kanban.controlPlaneRoot');
         if (explicit && explicit.trim()) {
             return path.resolve(explicit.trim());
         }
-        return path.resolve(workspaceRoot);
+
+        // Check workspaceDatabaseMappings configuration (shared database mechanism)
+        const resolvedRoot = path.resolve(workspaceRoot);
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string }> } | undefined;
+
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const mapping of cfg.mappings) {
+                    if (!Array.isArray(mapping.workspaceFolders)) continue;
+
+                    const matchingIndex = mapping.workspaceFolders.findIndex((f: string) => {
+                        const expanded = f.startsWith('~')
+                            ? path.join(os.homedir(), f.slice(1))
+                            : f;
+                        return path.resolve(expanded) === resolvedRoot;
+                    });
+
+                    if (matchingIndex !== -1) {
+                        // This root is in a mapping - use explicit parentFolder if set,
+                        // otherwise fall back to first entry for backward compatibility
+                        let parentEntry: string | undefined;
+                        if (mapping.parentFolder) {
+                            parentEntry = mapping.parentFolder;
+                        } else if (mapping.workspaceFolders.length > 0) {
+                            parentEntry = mapping.workspaceFolders[0];
+                        }
+
+                        if (!parentEntry) continue;
+
+                        return path.resolve(
+                            parentEntry.startsWith('~')
+                                ? path.join(os.homedir(), parentEntry.slice(1))
+                                : parentEntry
+                        );
+                    }
+                }
+            }
+        } catch {
+            // Outside extension host - can't read settings
+        }
+
+        return resolvedRoot;
     }
 
     public async ensureControlPlaneSelection(workspaceRoot: string): Promise<void> {
