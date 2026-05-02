@@ -39,6 +39,32 @@ export interface KanbanPlanRecord {
     linearIssueId?: string;
 }
 
+export interface ImportedDocEntry {
+    slugPrefix: string;
+    sourceId: string;
+    remoteDocId?: string;
+    docName: string;
+    parentDocName?: string;
+    filePath: string;
+    importedAt: string;
+    lastSyncedAt?: string;
+    contentHash?: string;
+    workspaceId: string;
+    displayOrder?: number;
+}
+
+export interface HealResult {
+    orphanedEntries: number;
+    orphanedFiles: number;
+    healedEntries: number;
+}
+
+export interface DuplicateCheckResult {
+    isDuplicate: boolean;
+    matchType?: 'exact_name' | 'case_insensitive_name' | 'same_doc_id';
+    existingDoc?: ImportedDocEntry;
+}
+
 type SqlJsDatabase = {
     exec: (sql: string) => void;
     run: (sql: string, params?: unknown[]) => void;
@@ -162,6 +188,33 @@ const MIGRATION_V14_SQL = [
         key   TEXT PRIMARY KEY,
         value TEXT NOT NULL
     )`,
+];
+
+const MIGRATION_V15_SQL = [
+    `CREATE TABLE IF NOT EXISTS imported_docs (
+        slug_prefix TEXT NOT NULL,
+        source_id TEXT NOT NULL,
+        remote_doc_id TEXT,
+        doc_name TEXT NOT NULL,
+        parent_doc_name TEXT,
+        file_path TEXT NOT NULL,
+        imported_at TEXT NOT NULL,
+        last_synced_at TEXT,
+        content_hash TEXT,
+        workspace_id TEXT NOT NULL,
+        display_order INTEGER DEFAULT 0,
+        PRIMARY KEY (slug_prefix, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_source ON imported_docs(source_id, workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_parent ON imported_docs(parent_doc_name, workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_workspace ON imported_docs(workspace_id)`,
+    `CREATE INDEX IF NOT EXISTS idx_imported_docs_doc_name ON imported_docs(doc_name, workspace_id)`,
+    `CREATE TABLE IF NOT EXISTS import_sync_meta (
+        workspace_id TEXT PRIMARY KEY,
+        last_heal_scan_at TEXT,
+        orphaned_entries INTEGER DEFAULT 0,
+        orphaned_files INTEGER DEFAULT 0
+    )`
 ];
 
 /**
@@ -642,6 +695,14 @@ export class KanbanDatabase {
 
             this._lastInitError = null;
             console.log(`[KanbanDatabase] Explicitly created new DB at ${this._dbPath}`);
+
+            // V15: Trigger background migration from JSON registry if needed
+            let wsId = await this.getWorkspaceId();
+            if (!wsId) {
+                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            }
+            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+
             return true;
         } catch (error) {
             this._db = null;
@@ -994,6 +1055,323 @@ export class KanbanDatabase {
             'DELETE FROM plans WHERE session_id = ?',
             [sessionId]
         );
+    }
+
+    // Core CRUD for imported documents
+    public async registerImport(entry: ImportedDocEntry): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            `INSERT OR REPLACE INTO imported_docs 
+             (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+              file_path, imported_at, last_synced_at, content_hash, workspace_id, display_order)
+             VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+            [
+                entry.slugPrefix,
+                entry.sourceId,
+                entry.remoteDocId || null,
+                entry.docName,
+                entry.parentDocName || entry.docName,
+                entry.filePath,
+                entry.importedAt,
+                entry.lastSyncedAt || null,
+                entry.contentHash || null,
+                entry.workspaceId,
+                entry.displayOrder ?? 0
+            ]
+        );
+        await this._persist();
+    }
+
+    public async removeImport(slugPrefix: string, workspaceId: string): Promise<void> {
+        if (!(await this.ensureReady()) || !this._db) return;
+        this._db.run(
+            'DELETE FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ?',
+            [slugPrefix, workspaceId]
+        );
+        await this._persist();
+    }
+
+    public async getImportedDocs(workspaceId: string): Promise<ImportedDocEntry[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            `SELECT * FROM imported_docs WHERE workspace_id = ? ORDER BY imported_at DESC`,
+            [workspaceId]
+        );
+        const rows: ImportedDocEntry[] = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                rows.push({
+                    slugPrefix: String(row.slug_prefix),
+                    sourceId: String(row.source_id),
+                    remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
+                    docName: String(row.doc_name),
+                    parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
+                    filePath: String(row.file_path),
+                    importedAt: String(row.imported_at),
+                    lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
+                    contentHash: row.content_hash ? String(row.content_hash) : undefined,
+                    workspaceId: String(row.workspace_id)
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+        return rows;
+    }
+
+    public async getImportBySlug(slugPrefix: string, workspaceId: string): Promise<ImportedDocEntry | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const stmt = this._db.prepare(
+            'SELECT * FROM imported_docs WHERE slug_prefix = ? AND workspace_id = ? LIMIT 1',
+            [slugPrefix, workspaceId]
+        );
+        try {
+            if (!stmt.step()) return null;
+            const row = stmt.getAsObject();
+            return {
+                slugPrefix: String(row.slug_prefix),
+                sourceId: String(row.source_id),
+                remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
+                docName: String(row.doc_name),
+                parentDocName: row.parent_doc_name ? String(row.parent_doc_name) : undefined,
+                filePath: String(row.file_path),
+                importedAt: String(row.imported_at),
+                lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
+                contentHash: row.content_hash ? String(row.content_hash) : undefined,
+                workspaceId: String(row.workspace_id)
+            };
+        } finally {
+            stmt.free();
+        }
+    }
+
+    // Healing / consistency
+    public async healImports(workspaceRoot: string, workspaceId: string): Promise<HealResult> {
+        if (!(await this.ensureReady()) || !this._db) {
+            return { orphanedEntries: 0, orphanedFiles: 0, healedEntries: 0 };
+        }
+        
+        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+        let files: string[] = [];
+        try {
+            files = await fs.promises.readdir(docsDir);
+        } catch {
+            return { orphanedEntries: 0, orphanedFiles: 0, healedEntries: 0 };
+        }
+        
+        const dbEntries = await this.getImportedDocs(workspaceId);
+        const fileSet = new Set(files.filter(f => f.endsWith('.md')));
+        
+        // Find orphaned DB entries (file deleted, entry remains)
+        const orphanedEntries = dbEntries.filter(e => !fileSet.has(path.basename(e.filePath)));
+        
+        // Find orphaned files (file exists, no DB entry)
+        const dbFileSet = new Set(dbEntries.map(e => path.basename(e.filePath)));
+        const orphanedFiles = files.filter(f => f.endsWith('.md') && !dbFileSet.has(f));
+        
+        // Auto-cleanup orphaned entries
+        let healedEntries = 0;
+        for (const entry of orphanedEntries) {
+            await this.removeImport(entry.slugPrefix, workspaceId);
+            healedEntries++;
+        }
+        
+        // Update sync meta
+        const now = new Date().toISOString();
+        this._db.run(
+            `INSERT OR REPLACE INTO import_sync_meta 
+             (workspace_id, last_heal_scan_at, orphaned_entries, orphaned_files)
+             VALUES (?, ?, ?, ?)`,
+            [workspaceId, now, orphanedEntries.length, orphanedFiles.length]
+        );
+        // Also set kanban_meta key for the 1-hour throttle in PlanningPanelProvider
+        await this.setMeta('last_heal_scan_' + workspaceId, now);
+        await this._persist();
+        
+        return { 
+            orphanedEntries: orphanedEntries.length, 
+            orphanedFiles: orphanedFiles.length,
+            healedEntries
+        };
+    }
+
+    public async checkForDuplicate(
+        docName: string, 
+        sourceId: string, 
+        workspaceId: string, 
+        docId?: string
+    ): Promise<DuplicateCheckResult> {
+        if (!(await this.ensureReady()) || !this._db) return { isDuplicate: false };
+        
+        const entries = await this.getImportedDocs(workspaceId);
+        const lowerName = docName.toLowerCase();
+        
+        for (const entry of entries) {
+            if (entry.docName.toLowerCase() === lowerName) {
+                // Same source + same docId = idempotent re-import, not a duplicate
+                if (entry.sourceId === sourceId && entry.remoteDocId === docId) {
+                    continue;
+                }
+                return {
+                    isDuplicate: true,
+                    matchType: entry.docName === docName ? 'exact_name' : 'case_insensitive_name',
+                    existingDoc: entry
+                };
+            }
+            if (docId && entry.remoteDocId === docId && entry.sourceId !== sourceId) {
+                return {
+                    isDuplicate: true,
+                    matchType: 'same_doc_id',
+                    existingDoc: entry
+                };
+            }
+        }
+        
+        return { isDuplicate: false };
+    }
+
+    // Batch operations for subpages
+    public async registerImportBatch(entries: ImportedDocEntry[]): Promise<{ succeeded: number; failed: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { succeeded: 0, failed: entries.length };
+        
+        let succeeded = 0;
+        let failed = 0;
+        
+        this._db.run('BEGIN');
+        try {
+            for (const entry of entries) {
+                try {
+                    this._db.run(
+                        `INSERT OR REPLACE INTO imported_docs 
+                         (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+                          file_path, imported_at, last_synced_at, content_hash, workspace_id)
+                         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                        [
+                            entry.slugPrefix,
+                            entry.sourceId,
+                            entry.remoteDocId || null,
+                            entry.docName,
+                            entry.parentDocName || entry.docName,
+                            entry.filePath,
+                            entry.importedAt,
+                            entry.lastSyncedAt || null,
+                            entry.contentHash || null,
+                            entry.workspaceId
+                        ]
+                    );
+                    succeeded++;
+                } catch {
+                    failed++;
+                }
+            }
+            this._db.run('COMMIT');
+        } catch {
+            try { this._db.run('ROLLBACK'); } catch {}
+            return { succeeded: 0, failed: entries.length };
+        }
+        
+        await this._persist();
+        return { succeeded, failed };
+    }
+
+    // Migration from legacy JSON registry
+    public async migrateFromJsonRegistry(workspaceRoot: string, workspaceId: string): Promise<{ migrated: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { migrated: 0, skipped: 0 };
+
+        const legacyPath = path.join(workspaceRoot, '.switchboard', 'imported-docs.json');
+        if (!fs.existsSync(legacyPath)) {
+            return { migrated: 0, skipped: 0 };
+        }
+        
+        // Check if already migrated
+        const alreadyMigrated = await this.getConfig('import_registry_migrated');
+        if (alreadyMigrated === 'true') {
+            return { migrated: 0, skipped: 0 };
+        }
+        
+        const raw = await fs.promises.readFile(legacyPath, 'utf8');
+        const legacy: Record<string, any> = JSON.parse(raw);
+        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+        
+        let migrated = 0;
+        let skipped = 0;
+        
+        // Prepare migration entries outside transaction to avoid blocking
+        const entriesToMigrate: any[] = [];
+        
+        for (const [slugPrefix, entry] of Object.entries(legacy)) {
+            const filePath = path.join(docsDir, `${slugPrefix}.md`);
+            
+            // Skip if file doesn't exist (orphaned entry)
+            if (!fs.existsSync(filePath)) {
+                skipped++;
+                continue;
+            }
+            
+            try {
+                // Calculate content hash from existing file
+                const content = await fs.promises.readFile(filePath, 'utf8');
+                const contentWithoutFm = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                const hash = crypto.createHash('sha256').update(contentWithoutFm).digest('hex');
+                
+                entriesToMigrate.push({
+                    slugPrefix,
+                    sourceId: entry.sourceId,
+                    docId: entry.docId || null,
+                    docName: entry.docName,
+                    parentDocName: entry.parentDocName || entry.docName,
+                    filePath,
+                    importedAt: entry.importedAt,
+                    lastSyncedAt: entry.lastSyncedAt || null,
+                    hash: entry.remoteContentHash || hash
+                });
+            } catch (err) {
+                console.error(`[KanbanDatabase] Failed to read legacy doc ${slugPrefix}:`, err);
+                skipped++;
+            }
+        }
+        
+        this._db.run('BEGIN');
+        try {
+            for (const item of entriesToMigrate) {
+                this._db.run(
+                    `INSERT OR IGNORE INTO imported_docs 
+                     (slug_prefix, source_id, remote_doc_id, doc_name, parent_doc_name, 
+                      file_path, imported_at, last_synced_at, content_hash, workspace_id)
+                     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+                    [
+                        item.slugPrefix,
+                        item.sourceId,
+                        item.docId,
+                        item.docName,
+                        item.parentDocName,
+                        item.filePath,
+                        item.importedAt,
+                        item.lastSyncedAt,
+                        item.hash,
+                        workspaceId
+                    ]
+                );
+                migrated++;
+            }
+            this._db.run('COMMIT');
+        } catch {
+            try { this._db.run('ROLLBACK'); } catch {}
+            return { migrated: 0, skipped: Object.keys(legacy).length };
+        }
+        
+        await this._persist();
+        await this.setConfig('import_registry_migrated', 'true');
+        
+        // Rename legacy file to .migrated
+        try {
+            await fs.promises.rename(legacyPath, legacyPath + '.migrated');
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to rename legacy registry ${legacyPath}:`, err);
+        }
+        
+        return { migrated, skipped };
     }
 
     public async getBoard(workspaceId: string): Promise<KanbanPlanRecord[]> {
@@ -1806,6 +2184,15 @@ export class KanbanDatabase {
             }
 
             this._lastInitError = null;
+
+            // V15: Trigger background migration from JSON registry if needed
+            let wsId = await this.getWorkspaceId();
+            if (!wsId) {
+                // Fallback: derived from root if not yet in config
+                wsId = crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+            }
+            void this.migrateFromJsonRegistry(this._workspaceRoot, wsId);
+
             return true;
         } catch (error) {
             this._db = null;
@@ -2009,6 +2396,14 @@ export class KanbanDatabase {
         // V14: add kanban_meta table for parser versioning and backfill tracking.
         for (const sql of MIGRATION_V14_SQL) {
             try { this._db.exec(sql); } catch { /* table already exists */ }
+        }
+
+        // V15: add imported_docs and import_sync_meta tables for centralized import registry.
+        for (const sql of MIGRATION_V15_SQL) {
+            try { this._db.exec(sql); } catch (e) { 
+                /* table/index already exists */ 
+                console.debug('[KanbanDatabase] V15 migration part skipped:', e);
+            }
         }
     }
 

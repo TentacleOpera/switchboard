@@ -1232,24 +1232,24 @@
         </div>
         <div id="research-content" class="research-tab-content">
             <div class="planning-card">
-                <div class="planning-card-header">RESEARCH PROMPTS</div>
-                <div class="planning-card-description">Generate AI-optimized prompts for web research and deep planning. Configure options below, then copy the prompt to use with your AI assistant.</div>
-
-                <!-- Prompt Copy Buttons -->
-                <div class="prompt-buttons-container">
-                    <button id="btn-copy-web-research" class="planning-button">COPY WEB RESEARCH PROMPT</button>
-                    <button id="btn-copy-deep-planning" class="planning-button">COPY DEEP PLANNING PROMPT</button>
-                </div>
-            </div>
-
-            <div class="planning-card">
                 <div class="planning-card-header">RESEARCH MODE</div>
-                <div class="planning-card-description">Select the research mode to use in the generated prompt.</div>
+                <div class="planning-card-description">Select research mode and configure options. The generated prompt will guide the AI through the selected research protocol.</div>
 
-                <!-- Segmented Control for Research Mode -->
-                <div class="segmented-control">
-                    <button class="segmented-btn active" data-mode="web">WEB RESEARCH</button>
-                    <button class="segmented-btn" data-mode="deep">DEEP PLANNING</button>
+                <!-- Mode Switch -->
+                <div class="segmented-control" role="tablist" aria-label="Research mode selection">
+                    <button class="segmented-btn active" data-mode="web" role="tab" aria-selected="true" aria-controls="research-mode-description">WEB RESEARCH</button>
+                    <button class="segmented-btn" data-mode="deep" role="tab" aria-selected="false" aria-controls="research-mode-description">DEEP PLANNING</button>
+                </div>
+
+                <!-- Mode Description -->
+                <div id="research-mode-description" class="mode-description" aria-live="polite">
+                    Comprehensive web research on any topic using iterative search strategies.
+                </div>
+
+                <!-- Action Buttons -->
+                <div class="prompt-buttons-container">
+                    <button id="btn-copy-research-prompt" class="planning-button" aria-describedby="research-mode-description">COPY PROMPT</button>
+                    <button id="btn-send-to-analyst" class="planning-button secondary" style="display: none;" title="Send prompt to analyst terminal">SEND TO ANALYST</button>
                 </div>
             </div>
 
@@ -1280,7 +1280,7 @@
 
             <div class="planning-card">
                 <div class="planning-card-header">IMPORT OPTIONS</div>
-                <div class="planning-card-description">When enabled, the prompt will instruct the agent to save research results to your local `.switchboard/docs/` folder for later viewing.</div>
+                <div class="planning-card-description">When enabled, the prompt will instruct the agent to save research results to your configured local docs folder for later viewing.</div>
 
                 <!-- Toggle Switch for Import -->
                 <div class="toggle-container">

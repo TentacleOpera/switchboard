@@ -15,11 +15,8 @@ This project relies on **Switchboard Workflows** defined in `.agent/workflows`.
 | Trigger Words | Workflow File | Description |
 | :--- | :--- | :--- |
 | `/accuracy` | **`accuracy.md`** | High accuracy mode with self-review (Standard Protocol). |
-| `/improve-plan` | **`improve-plan.md`** | Deep planning, dependency checks, and adversarial review. |
-| `/challenge`, `/challenge --self` | **`challenge.md`** | Internal adversarial review workflow (no delegation). |
+| `/improve-plan` | **`improve-plan.md`** | Deep planning with optional dependency checks and adversarial review. |
 | `/chat` | **`chat.md`** | Activate chat consultation workflow. |
-| `/archive` | **`archive.md`** | Query or search the plan archive. |
-| `/export` | **`export.md`** | Export current conversation to archive. |
 
 
 ### ⚠️ MANDATORY PRE-FLIGHT CHECK
@@ -58,7 +55,7 @@ Sending to non-existent recipients is always rejected (even when auto-routed).
 User ──► Switchboard Operator (chat.md)
               │  Plans captured in .switchboard/plans/
               │
-              ├──► /improve-plan   Deep planning, dependency checks, and adversarial review
+              ├──► /improve-plan   Deep planning with optional dependency checks and adversarial review
               └──► Kanban Board    Plans moved through workflow stages (Created → Coded → Reviewed → Done)
 
 All file writes to .switchboard/ MUST use IsArtifact: false.
@@ -78,6 +75,8 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `kanban_operations` | Move kanban cards or query kanban state via direct database access |
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |
 | `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
+| `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
+| `deep_planning` | User requests complex code changes requiring architecture understanding |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 

@@ -22,6 +22,19 @@ export class PlannerPromptWriter {
 
     constructor(private _options: PlannerPromptWriterOptions) {}
 
+    private async _getWorkspaceId(workspaceRoot: string): Promise<string> {
+        // Derive from workspace root or use KanbanDatabase.forWorkspace(workspaceRoot).getWorkspaceId()
+        try {
+            const { KanbanDatabase } = require('./KanbanDatabase');
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            const wsId = await db.getWorkspaceId();
+            if (wsId) return wsId;
+        } catch {
+            // Fallback: use normalized path
+        }
+        return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
+    }
+
     /**
      * Shared logic: write content to .switchboard/docs/ with hash-based filename.
      * Idempotent by design: same content → same hash → same filename → overwrite with identical content.
@@ -141,7 +154,11 @@ parentDocName: ${options.parentDocName || docTitle}
                             .replace(/^_+|_+$/g, '')
                             .slice(0, 60) || sourceId;
                         const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                        await cacheService.registerImport(sourceId, docTitle, docTitle, rawSlug, { remoteContentHash: contentHash });
+                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                        await cacheService.registerImport(sourceId, docTitle, docTitle, rawSlug, { 
+                            remoteContentHash: contentHash,
+                            workspaceId 
+                        });
                     } catch (regErr) {
                         console.warn('[PlannerPromptWriter] Failed to register import:', regErr);
                     }
@@ -198,7 +215,11 @@ parentDocName: ${options.parentDocName || docTitle}
                             .replace(/^_+|_+$/g, '')
                             .slice(0, 60) || sourceId;
                         const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                        await cacheService.registerImport(sourceId, docId, docName, rawSlug, { remoteContentHash: contentHash });
+                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                        await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
+                            remoteContentHash: contentHash,
+                            workspaceId 
+                        });
                     } catch (regErr) {
                         console.warn('[PlannerPromptWriter] Failed to register import:', regErr);
                     }

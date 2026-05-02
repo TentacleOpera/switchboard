@@ -1318,7 +1318,8 @@ export async function activate(context: vscode.ExtensionContext) {
         const resolved = path.resolve(root);
         let service = _cacheServiceInstances.get(resolved);
         if (!service) {
-            service = new PlanningPanelCacheService(resolved);
+            const kanbanDb = KanbanDatabase.forWorkspace(resolved);
+            service = new PlanningPanelCacheService(resolved, kanbanDb);
             _cacheServiceInstances.set(resolved, service);
         }
         return service;
@@ -1684,6 +1685,32 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.dispatchToCoderTerminal(prompt);
     });
     context.subscriptions.push(dispatchToCoderTerminalDisposable);
+
+    const sendToAnalystFromPlanningPanelDisposable = vscode.commands.registerCommand(
+        'switchboard.sendToAnalystFromPlanningPanel',
+        async (prompt: string): Promise<{ success: boolean; error?: string }> => {
+            try {
+                const result = await taskViewerProvider.handleSendToAnalystFromPlanningPanel(prompt);
+                return { success: result };
+            } catch (err) {
+                return { success: false, error: String(err) };
+            }
+        }
+    );
+    context.subscriptions.push(sendToAnalystFromPlanningPanelDisposable);
+
+    const checkAnalystAvailabilityDisposable = vscode.commands.registerCommand(
+        'switchboard.checkAnalystAvailability',
+        async (): Promise<{ available: boolean }> => {
+            const workspaceRoot = getPreferredWorkspaceRoot();
+            if (!workspaceRoot) {
+                return { available: false };
+            }
+            const analystAgent = await taskViewerProvider.getAgentNameForRole('analyst', workspaceRoot);
+            return { available: !!analystAgent };
+        }
+    );
+    context.subscriptions.push(checkAnalystAvailabilityDisposable);
 
     const setClickUpTokenDisposable = vscode.commands.registerCommand('switchboard.setClickUpToken', async () => {
         const token = await vscode.window.showInputBox({
@@ -2767,13 +2794,21 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
-        if (!workspaceRoot) {
+        // Use kanban's currently selected workspace, fall back to activation-time workspace, then to roots[0]
+        const currentWorkspaceRoot = kanbanProvider.getCurrentWorkspaceRoot() 
+            ?? workspaceRoot 
+            ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+
+        if (!currentWorkspaceRoot) {
             vscode.window.showWarningMessage('No workspace folder found.');
             return;
         }
 
+        // Verify workspace hasn't changed during async operations
+        const verifyWorkspace = () => kanbanProvider.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
+
         // Resolve effective workspace root based on mappings to ensure terminals open in correct workspace
-        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
 
         const visibleAgents = await taskViewerProvider.getVisibleAgents();
         const includeJulesMonitor = visibleAgents.jules !== false;

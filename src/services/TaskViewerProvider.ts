@@ -476,7 +476,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: { workspaceFolders?: string[] }[] } | undefined;
+                             { enabled?: boolean; mappings?: any[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 const expandHome = (p: string): string => {
                     const trimmed = p.trim();
@@ -485,8 +485,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         : trimmed;
                 };
                 for (const m of cfg.mappings) {
-                    for (const wf of m.workspaceFolders ?? []) {
-                        allowedRoots.add(path.resolve(expandHome(wf)));
+                    // Watch the PARENT workspace folder where .switchboard/ lives,
+                    // not the child workspaceFolders (which share the DB but shouldn't create plans)
+                    if (typeof m.parentWorkspaceFolder === 'string') {
+                        allowedRoots.add(path.resolve(expandHome(m.parentWorkspaceFolder)));
                     }
                 }
             }
@@ -502,9 +504,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return resolved;
             }
         }
+        // NEW: Check kanban first (source of truth), then cached state
+        if (this._kanbanProvider) {
+            const kanbanCurrent = this._kanbanProvider.getCurrentWorkspaceRoot();
+            if (kanbanCurrent && allowedRoots.has(kanbanCurrent)) {
+                // Only use kanban if different from cached (user explicitly switched)
+                if (kanbanCurrent !== this._activeWorkspaceRoot) {
+                    this._activeWorkspaceRoot = kanbanCurrent;
+                    return kanbanCurrent;
+                }
+            }
+        }
+        
         if (this._activeWorkspaceRoot && allowedRoots.has(this._activeWorkspaceRoot)) {
             return this._activeWorkspaceRoot;
         }
+
+        // ULTIMATE FALLBACK: roots[0] (original behavior)
         this._activeWorkspaceRoot = roots[0] || Array.from(allowedRoots)[0];
         return this._activeWorkspaceRoot;
     }
@@ -1048,6 +1064,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _normalizeLegacyKanbanColumn(column: string | null | undefined): string {
         const normalized = String(column || '').trim();
         return normalized === 'CODED' ? 'LEAD CODED' : normalized;
+    }
+
+    /**
+     * Map Kanban column ID to the agent role for prompt template selection.
+     * Mirrors the logic in KanbanProvider._columnToRole.
+     */
+    private _columnToRole(column: string): string | null {
+        switch (column) {
+            case 'PLAN REVIEWED': return 'planner';
+            case 'TEAM LEAD CODED': return 'team-lead';
+            case 'LEAD CODED': return 'lead';
+            case 'CODER CODED': return 'coder';
+            case 'INTERN CODED': return 'intern';
+            case 'CODED': return 'lead';
+            case 'CODE REVIEWED': return 'reviewer';
+            case 'ACCEPTANCE TESTED': return 'tester';
+            case 'CONTEXT GATHERER': return 'gatherer';
+            case 'COMPLETED': return null;
+            default: return column.startsWith('custom_agent_') ? column : null;
+        }
     }
 
     private _codedColumnForRole(role: string): string | null {
@@ -1686,7 +1722,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async dispatchConfiguredKanbanColumnAction(
-        role: string,
+        role: string | undefined,
         sessionIds: string[],
         options: ConfiguredKanbanDispatchOptions
     ): Promise<boolean> {
@@ -1702,6 +1738,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
 
+        // Infer role from column if not provided (prompt mode for built-in columns)
+        let effectiveRole = role;
+        if (!effectiveRole && options.dragDropMode === 'prompt') {
+            effectiveRole = this._columnToRole(normalizedTargetColumn) || undefined;
+        }
+
+        // CLI mode requires a role; prompt mode can proceed with inferred role
+        if (!effectiveRole) {
+            if (options.dragDropMode !== 'prompt') {
+                console.warn('[TaskViewerProvider] No role available for CLI dispatch to column:', normalizedTargetColumn);
+                return false;
+            }
+            // Even prompt mode needs a role for template selection
+            console.error('[TaskViewerProvider] Cannot infer role for prompt mode on column:', normalizedTargetColumn);
+            return false;
+        }
+
         const dispatchOptions: Partial<ConfiguredKanbanDispatchOptions> = {
             targetColumn: normalizedTargetColumn,
             dragDropMode: options.dragDropMode,
@@ -1711,15 +1764,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
 
         if (options.dragDropMode === 'prompt') {
-            return this._dispatchConfiguredKanbanColumnPrompt(role, sessionIds, dispatchOptions);
+            return this._dispatchConfiguredKanbanColumnPrompt(effectiveRole, sessionIds, dispatchOptions);
         }
 
         if (sessionIds.length === 1) {
-            return this._handleTriggerAgentAction(role, sessionIds[0], options.instruction, resolvedWorkspaceRoot, dispatchOptions);
+            return this._handleTriggerAgentAction(effectiveRole, sessionIds[0], options.instruction, resolvedWorkspaceRoot, dispatchOptions);
         }
 
         return this.handleKanbanBatchTrigger(
-            role,
+            effectiveRole,
             sessionIds,
             options.instruction,
             resolvedWorkspaceRoot,
@@ -2595,6 +2648,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return this._buildSetupKanbanStructure(customAgents, customKanbanColumns, visibleAgents);
     }
 
+    public async handleGetCustomKanbanColumns(workspaceRoot?: string): Promise<CustomKanbanColumnConfig[]> {
+        return this._getCustomKanbanColumns(workspaceRoot);
+    }
+
     public async handleGetStartupCommands(workspaceRoot?: string): Promise<{
         commands: Record<string, string>;
         planIngestionFolder: string;
@@ -2631,6 +2688,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             enabled: this._isDesignDocEnabled(),
             link: this._getDesignDocLink()
         };
+    }
+
+    /**
+     * Re-initializes the plan watcher for a specific workspace root.
+     * Called by KanbanProvider when the workspace changes via selectWorkspace.
+     */
+    public reinitializePlanWatcher(workspaceRoot: string): void {
+        this._resolveWorkspaceRoot(workspaceRoot);
+        this._setupPlanWatcher();
     }
 
     public async handleGetDefaultPromptOverrides(
@@ -5493,6 +5559,43 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    /** Public accessor for role resolution (used by command handlers) */
+    public async getAgentNameForRole(role: string, workspaceRoot?: string): Promise<string | undefined> {
+        return this._getAgentNameForRole(role, workspaceRoot);
+    }
+
+    /** Handle analyst dispatch from Planning Panel research tab */
+    public async handleSendToAnalystFromPlanningPanel(prompt: string): Promise<boolean> {
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showErrorMessage('No workspace root found.');
+            return false;
+        }
+
+        const targetAgent = await this._getAgentNameForRole('analyst', workspaceRoot);
+        if (!targetAgent) {
+            vscode.window.showErrorMessage("No agent assigned to role 'analyst'. Please assign a terminal first.");
+            return false;
+        }
+
+        // F-04 SECURITY: Validate agent name
+        if (!this._isValidAgentName(targetAgent)) {
+            vscode.window.showErrorMessage(`Invalid analyst agent name: ${targetAgent}`);
+            return false;
+        }
+
+        // Focus terminal for immediate feedback
+        await this._focusTerminalByName(targetAgent);
+
+        // Dispatch using existing pipeline
+        await this._dispatchExecuteMessage(workspaceRoot, targetAgent, prompt, {
+            source: 'planning-panel',
+            type: 'analyst-research'
+        });
+
+        return true;
+    }
+
     /** Column-to-role mapping for Autoban dispatches. */
     private _autobanColumnToRole(column: string): string | null {
         switch (column) {
@@ -5938,6 +6041,59 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this.postSetupPanelState(resolvedRoot)
         ]);
         this._postSharedWebviewMessage({ type: 'saveStartupCommandsResult', success: true });
+    }
+
+    public async handleSaveKanbanColumn(column: CustomKanbanColumnConfig, workspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return;
+        }
+        await this.updateState((state: any) => {
+            const existing = parseCustomKanbanColumns(state.customKanbanColumns);
+            const filtered = existing.filter((c: CustomKanbanColumnConfig) => c.id !== column.id);
+            filtered.push(column);
+            state.customKanbanColumns = filtered;
+        });
+        this._kanbanProvider?.sendVisibleAgents();
+        await Promise.all([
+            this._postSidebarConfigurationState(resolvedRoot),
+            this.postSetupPanelState(resolvedRoot)
+        ]);
+    }
+
+    public async handleDeleteKanbanColumn(columnId: string, workspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return;
+        }
+        await this.updateState((state: any) => {
+            const existing = parseCustomKanbanColumns(state.customKanbanColumns);
+            state.customKanbanColumns = existing.filter((c: CustomKanbanColumnConfig) => c.id !== columnId);
+        });
+        this._kanbanProvider?.sendVisibleAgents();
+        await Promise.all([
+            this._postSidebarConfigurationState(resolvedRoot),
+            this.postSetupPanelState(resolvedRoot)
+        ]);
+    }
+
+    public async handleToggleKanbanColumnVisibility(columnId: string, visible: boolean, workspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return;
+        }
+        // columnId is the role for built-in columns (e.g., 'coder', 'lead')
+        await this.updateState((state: any) => {
+            if (!state.visibleAgents) {
+                state.visibleAgents = {};
+            }
+            state.visibleAgents[columnId] = visible;
+        });
+        this._kanbanProvider?.sendVisibleAgents();
+        await Promise.all([
+            this._postSidebarConfigurationState(resolvedRoot),
+            this.postSetupPanelState(resolvedRoot)
+        ]);
     }
 
     public async handleSaveDefaultPromptOverrides(data: any): Promise<void> {
@@ -7727,9 +7883,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             // DuckDB not available
                         }
 
-                        const instruction = `Help me query the DuckDB archive. Available MCP tools:
-- query_plan_archive: Run SELECT queries on archived plans
-- search_archive: Keyword search across conversations
+                        const instruction = `Help me query the DuckDB archive. Use the DuckDB CLI directly:
+- Run queries: duckdb "${archivePath || '<db_path>'}" "SELECT * FROM conversations LIMIT 10;"
+- List tables: duckdb "${archivePath || '<db_path>'}" "SHOW TABLES;"
 
 Current status: ${archiveConfigured ? 'Archive configured at ' + archivePath : 'Archive not yet configured — help me set it up'}
 ${duckdbInstalled ? 'DuckDB CLI is installed and ready' : 'DuckDB CLI needs to be installed first'}
@@ -7869,17 +8025,63 @@ What would you like to find?`;
         this._recentNativePlanCreations.forEach(t => clearTimeout(t));
         this._recentNativePlanCreations.clear();
 
-        // Initialize plans directory
+        // Get all parent workspace folders to watch (from workspaceDatabaseMappings or fallback to current workspace)
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
-        const plansRootDir = path.join(workspaceRoot, '.switchboard', 'plans');
-        for (const dir of [plansRootDir]) {
-            if (!fs.existsSync(dir)) {
-                try {
-                    fs.mkdirSync(dir, { recursive: true });
-                } catch (e) {
-                    console.error(`[TaskViewerProvider] Failed to create directory '${dir}':`, e);
+
+        const foldersToWatch: string[] = [];
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                .get('workspaceDatabaseMappings') as
+                { enabled?: boolean; mappings?: any[] } | undefined;
+
+            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
+                const expandHome = (p: string): string => {
+                    const trimmed = p.trim();
+                    return trimmed.startsWith('~')
+                        ? path.join(require('os').homedir(), trimmed.slice(1))
+                        : trimmed;
+                };
+                for (const mapping of cfg.mappings) {
+                    // Watch the PARENT workspace folder where .switchboard/ lives
+                    if (typeof mapping.parentWorkspaceFolder === 'string') {
+                        const resolved = path.resolve(expandHome(mapping.parentWorkspaceFolder));
+                        if (!foldersToWatch.includes(resolved)) {
+                            foldersToWatch.push(resolved);
+                        }
+                    }
                 }
+            }
+        } catch {
+            // Outside extension host
+        }
+
+        // Fallback: if no mappings, watch the current workspace root
+        if (foldersToWatch.length === 0) {
+            foldersToWatch.push(workspaceRoot);
+        }
+
+        // Initialize plans directories for all folders to watch
+        const watchDirs: string[] = [];
+        for (const folder of foldersToWatch) {
+            const plansRootDir = path.join(folder, '.switchboard', 'plans');
+            if (!fs.existsSync(plansRootDir)) {
+                try {
+                    fs.mkdirSync(plansRootDir, { recursive: true });
+                } catch (e) {
+                    console.error(`[TaskViewerProvider] Failed to create directory '${plansRootDir}':`, e);
+                }
+            }
+            watchDirs.push(plansRootDir);
+            // Also watch subdirectories for migration layer support
+            try {
+                const childEntries = fs.readdirSync(plansRootDir, { withFileTypes: true });
+                for (const entry of childEntries) {
+                    if (!entry.isDirectory()) continue;
+                    watchDirs.push(path.join(plansRootDir, entry.name));
+                }
+            } catch (error) {
+                console.error(`[TaskViewerProvider] Failed to enumerate plan watcher directories under '${plansRootDir}':`, error);
             }
         }
 
@@ -7888,32 +8090,43 @@ What would you like to find?`;
         const debouncedTitleSync = (uri: vscode.Uri) => {
             if (titleSyncTimer) clearTimeout(titleSyncTimer);
             titleSyncTimer = setTimeout(() => {
-                this._handlePlanTitleSync(uri, workspaceRoot);
-                this._handlePlanMetadataSync(uri, workspaceRoot);
+                // Resolve which workspace root this file belongs to
+                const resolvedRoot = this._resolveWorkspaceRootForPath(uri.fsPath, workspaceRoot);
+                if (resolvedRoot) {
+                    this._handlePlanTitleSync(uri, resolvedRoot);
+                    this._handlePlanMetadataSync(uri, resolvedRoot);
+                }
             }, 300);
         };
 
-        // Control-plane migrations may place local plans in one immediate
-        // `.switchboard/plans/<repoName>/` layer, so watch recursively here.
-        this._planWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(workspaceRoot, '.switchboard/plans/**/*.md')
-        );
-        this._planWatcher.onDidCreate((uri) => {
-            // Mark this path in the native dedup map so the native fs.watch callback
-            // (which fires ~250ms later) sees it and suppresses its redundant call.
-            const stablePath = this._getStablePath(uri.fsPath);
-            if (this._recentNativePlanCreations.has(stablePath)) {
-                clearTimeout(this._recentNativePlanCreations.get(stablePath)!);
-            }
-            const ttlTimer = setTimeout(
-                () => this._recentNativePlanCreations.delete(stablePath),
-                4000
+        // Create VS Code watchers for each folder
+        const vsCodeWatchers: vscode.Disposable[] = [];
+        for (const folder of foldersToWatch) {
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md')
             );
-            this._recentNativePlanCreations.set(stablePath, ttlTimer);
+            watcher.onDidCreate((uri) => {
+                // Mark this path in the native dedup map so the native fs.watch callback
+                // (which fires ~250ms later) sees it and suppresses its redundant call.
+                const stablePath = this._getStablePath(uri.fsPath);
+                if (this._recentNativePlanCreations.has(stablePath)) {
+                    clearTimeout(this._recentNativePlanCreations.get(stablePath)!);
+                }
+                const ttlTimer = setTimeout(
+                    () => this._recentNativePlanCreations.delete(stablePath),
+                    4000
+                );
+                this._recentNativePlanCreations.set(stablePath, ttlTimer);
 
-            this._handlePlanCreation(uri, workspaceRoot);
-        });
-        this._planWatcher.onDidChange((uri) => debouncedTitleSync(uri));
+                this._handlePlanCreation(uri, folder);
+            });
+            watcher.onDidChange((uri) => debouncedTitleSync(uri));
+            vsCodeWatchers.push(watcher);
+        }
+        // Store multiple watchers in a custom dispose object
+        this._planWatcher = {
+            dispose: () => vsCodeWatchers.forEach(w => w.dispose())
+        } as any;
 
         // Native fs.watch fallback — VS Code's createFileSystemWatcher can miss .switchboard
         // events depending on workspace watcher exclusions and gitignore behavior.
@@ -7942,15 +8155,18 @@ What would you like to find?`;
                 this._recentNativePlanCreations.set(stablePath, nativeTtlTimer);
 
                 const uri = vscode.Uri.file(fullPath);
-                try {
-                    await this._handlePlanCreation(uri, workspaceRoot);
-                } catch (e) {
-                    console.error('[TaskViewerProvider] Native plan create sync failed:', e);
-                }
-                try {
-                    debouncedTitleSync(uri);
-                } catch (e) {
-                    console.error('[TaskViewerProvider] Native plan title sync failed:', e);
+                const resolvedRoot = this._resolveWorkspaceRootForPath(fullPath, workspaceRoot);
+                if (resolvedRoot) {
+                    try {
+                        await this._handlePlanCreation(uri, resolvedRoot);
+                    } catch (e) {
+                        console.error('[TaskViewerProvider] Native plan create sync failed:', e);
+                    }
+                    try {
+                        debouncedTitleSync(uri);
+                    } catch (e) {
+                        console.error('[TaskViewerProvider] Native plan title sync failed:', e);
+                    }
                 }
             }, 250));
         };
@@ -7967,17 +8183,6 @@ What would you like to find?`;
                 return undefined;
             }
         };
-
-        const watchDirs = [plansRootDir];
-        try {
-            const childEntries = fs.readdirSync(plansRootDir, { withFileTypes: true });
-            for (const entry of childEntries) {
-                if (!entry.isDirectory()) continue;
-                watchDirs.push(path.join(plansRootDir, entry.name));
-            }
-        } catch (error) {
-            console.error(`[TaskViewerProvider] Failed to enumerate plan watcher directories under '${plansRootDir}':`, error);
-        }
 
         this._fsPlansWatchers = watchDirs
             .map((dir) => watchPlanDirectory(dir))

@@ -33,6 +33,8 @@ export interface PromptBuilderOptions {
     aggressivePairProgramming?: boolean;
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
+    /** Whether dependency check instructions are injected (planner role). */
+    dependencyCheckEnabled?: boolean;
     /** When present, appends a Design Doc / PRD link to planner prompts. */
     designDocLink?: string;
     /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
@@ -142,6 +144,7 @@ export function buildKanbanBatchPrompt(
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
+    const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? true;
     const promptOverride = options?.defaultPromptOverrides?.[role] as DefaultPromptOverride | undefined;
 
     const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
@@ -178,9 +181,12 @@ export function buildKanbanBatchPrompt(
         const aggressiveDirective = aggressivePairProgramming
             ? `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`
             : '';
+        const dependencyCheckInstruction = dependencyCheckEnabled
+            ? `\n\n[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n`
+            : '';
         const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics";
         const designDocLink = options?.designDocLink?.trim();
-        let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}
+        let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}${dependencyCheckInstruction}
 MANDATORY: You MUST read and strictly adhere to \`.agent/workflows/improve-plan.md\` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the workflow.
 Do not add net-new product requirements or scope.
 You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.

@@ -464,17 +464,121 @@
             min-height: 120px;
             resize: vertical;
         }
+
+        /* Tab Navigation Styles */
+        .tab-nav {
+            display: flex;
+            gap: 4px;
+            padding: 8px 16px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
+            scrollbar-width: thin;
+            scrollbar-color: var(--border-color) transparent;
+            position: sticky;
+            top: 0;
+            z-index: 10;
+        }
+
+        .tab-nav::-webkit-scrollbar {
+            height: 4px;
+        }
+
+        .tab-nav::-webkit-scrollbar-thumb {
+            background: var(--border-color);
+            border-radius: 2px;
+        }
+
+        .tab-btn {
+            flex-shrink: 0;
+            padding: 8px 16px;
+            background: transparent;
+            border: none;
+            border-bottom: 2px solid transparent;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            cursor: pointer;
+            transition: all 0.15s ease;
+            white-space: nowrap;
+        }
+
+        .tab-btn:hover {
+            color: var(--text-primary);
+            border-bottom-color: var(--border-bright);
+        }
+
+        .tab-btn.active {
+            color: var(--accent-teal);
+            border-bottom-color: var(--accent-teal);
+        }
+
+        .tab-btn:focus-visible {
+            outline: 1px solid var(--accent-teal);
+            outline-offset: -1px;
+        }
+
+        /* Tab Content Styles */
+        .tab-content {
+            display: none;
+        }
+
+        .tab-content.open {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        /* Override accordion open display for tab mode */
+        .startup-fields.tab-content.open {
+            display: flex;
+        }
+
+        .db-sync-fields.tab-content.open {
+            display: flex;
+        }
+
+        /* Hide accordion toggles in tab mode */
+        .startup-toggle {
+            cursor: default;
+        }
+
+        .startup-toggle .chevron {
+            display: none !important;
+        }
+
+        /* Setup shell adjustment for tab layout */
+        .setup-shell {
+            padding-top: 0;
+        }
     </style>
 </head>
 
 <body>
     <div class="setup-shell">
+        <!-- Tab Navigation -->
+        <div class="tab-nav" role="tablist" aria-label="Setup sections">
+            <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
+            <button class="tab-btn" data-tab="custom-agents" role="tab" aria-selected="false">Custom Agents</button>
+            <button class="tab-btn" data-tab="ollama" role="tab" aria-selected="false">Ollama</button>
+            <button class="tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
+            <button class="tab-btn" data-tab="orchestration" role="tab" aria-selected="false">Orchestration</button>
+            <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
+            <button class="tab-btn" data-tab="workspace" role="tab" aria-selected="false">Workspace</button>
+            <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
+            <button class="tab-btn" data-tab="sources" role="tab" aria-selected="false">Sources</button>
+            <button class="tab-btn" data-tab="control" role="tab" aria-selected="false">Control Plane</button>
+            <button class="tab-btn" data-tab="sync" role="tab" aria-selected="false">Sync</button>
+        </div>
+
         <div class="startup-section">
             <div class="startup-toggle" id="setup-toggle">
                 <div class="section-label">Setup</div>
                 <span class="chevron" id="setup-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="startup-fields" data-accordion="true">
+            <div class="startup-fields tab-content open" id="startup-fields" data-accordion="true" data-tab-content="setup">
                 <div class="flex gap-2">
                     <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
                     <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
@@ -513,7 +617,7 @@
                 <div class="section-label">Custom Agents</div>
                 <span class="chevron" id="custom-agents-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="custom-agents-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="custom-agents-fields" data-accordion="true" data-tab-content="custom-agents">
                 <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
                 <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
             </div>
@@ -524,7 +628,7 @@
                 <div class="section-label">Ollama via Claude Code</div>
                 <span class="chevron" id="ollama-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="ollama-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="ollama-fields" data-accordion="true" data-tab-content="ollama">
                 <div id="ollama-setup-message" style="font-size:10px; color:var(--text-secondary); min-height:14px;"></div>
                 <div class="db-subsection">
                     <div class="subsection-header">
@@ -562,7 +666,7 @@
                 <div class="section-label">Kanban Structure</div>
                 <span class="chevron" id="kanban-structure-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="kanban-structure-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="kanban-structure-fields" data-accordion="true" data-tab-content="kanban">
                 <div class="flex gap-2" style="margin-bottom:8px;">
                     <button id="btn-add-kanban-column" class="secondary-btn w-full">ADD COLUMN</button>
                     <button id="btn-restore-kanban-defaults" class="secondary-btn w-full">RESTORE DEFAULTS</button>
@@ -579,7 +683,7 @@
                 <div class="section-label">Orchestration Framework Integration</div>
                 <span class="chevron" id="orchestration-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="orchestration-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="orchestration-fields" data-accordion="true" data-tab-content="orchestration">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     TEAM LEAD (OPENCODE)
                 </div>
@@ -612,7 +716,7 @@
                 <div class="section-label">Database Operations</div>
                 <span class="chevron" id="database-chevron">▶</span>
             </div>
-            <div class="db-sync-fields" id="db-sync-fields" data-accordion="true">
+            <div class="db-sync-fields tab-content" id="db-sync-fields" data-accordion="true" data-tab-content="database">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     PLAN INGESTION
                 </div>
@@ -678,7 +782,7 @@
                 <div class="section-label">Workspace Database Mappings</div>
                 <span class="chevron" id="workspace-mapping-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="workspace-mapping-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="workspace-mapping-fields" data-accordion="true" data-tab-content="workspace">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Map multiple workspace folders to a shared kanban.db for centralized plan management.
                 </div>
@@ -703,7 +807,7 @@
                 <div class="section-label">ClickUp, Linear and Notion Integration</div>
                 <span class="chevron" id="project-mgmt-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="project-mgmt-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="project-mgmt-fields" data-accordion="true" data-tab-content="integration">
 
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
@@ -968,7 +1072,7 @@
                 <div class="section-label">Planning Sources</div>
                 <span class="chevron" id="planning-sources-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="planning-sources-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="planning-sources-fields" data-accordion="true" data-tab-content="sources">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Select which research sources to show in the Planning panel.
                 </div>
@@ -1005,7 +1109,7 @@
                 <div class="section-label">Control Plane Setup</div>
                 <span class="chevron" id="control-plane-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="control-plane-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="control-plane-fields" data-accordion="true" data-tab-content="control">
                 <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
                     Use <strong>Migrate Existing</strong> when your repos already contain local Switchboard state. Use <strong>Fresh Setup</strong> when you want a new parent Control Plane root, either in-place or by scaffolding and cloning multiple repos into sibling folders.
                 </div>
@@ -1119,7 +1223,7 @@
                 <div class="section-label">PLANNING PANEL SYNC</div>
                 <span class="chevron" id="planning-panel-chevron">▶</span>
             </div>
-            <div class="startup-fields" id="planning-panel-fields" data-accordion="true">
+            <div class="startup-fields tab-content" id="planning-panel-fields" data-accordion="true" data-tab-content="sync">
                 <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
                     Choose how Planning Panel documents are cached locally for AI collaboration.
                 </div>
@@ -1384,6 +1488,31 @@
         }
 
         function openAccordion(fieldsId, chevronId, onOpen) {
+            // Map fields ID to tab ID for backward compatibility
+            const tabIdMap = {
+                'startup-fields': 'setup',
+                'custom-agents-fields': 'custom-agents',
+                'ollama-fields': 'ollama',
+                'kanban-structure-fields': 'kanban',
+                'orchestration-fields': 'orchestration',
+                'db-sync-fields': 'database',
+                'workspace-mapping-fields': 'workspace',
+                'project-mgmt-fields': 'integration',
+                'planning-sources-fields': 'sources',
+                'control-plane-fields': 'control',
+                'planning-panel-fields': 'sync'
+            };
+
+            const tabId = tabIdMap[fieldsId];
+            if (tabId) {
+                activateTab(tabId);
+                if (typeof onOpen === 'function') {
+                    onOpen();
+                }
+                return;
+            }
+
+            // Fallback to original accordion behavior for non-mapped IDs
             const fields = document.getElementById(fieldsId);
             const chevron = document.getElementById(chevronId);
             if (!fields || !chevron) return;
@@ -1393,6 +1522,105 @@
             chevron.classList.add('open');
             if (!wasOpen && typeof onOpen === 'function') {
                 onOpen();
+            }
+        }
+
+        // Tab State
+        let activeTabId = 'setup';
+
+        // Initialize tabs
+        function initTabs() {
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            // Restore persisted tab if available
+            const persistedState = vscode.getState?.() || {};
+            if (persistedState.activeTabId) {
+                activeTabId = persistedState.activeTabId;
+            }
+
+            // Bind tab button clicks
+            tabButtons.forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const tabId = btn.dataset.tab;
+                    activateTab(tabId);
+                });
+            });
+
+            // Show initial tab
+            activateTab(activeTabId, false);
+        }
+
+        // Activate specific tab
+        function activateTab(tabId, persist = true) {
+            const tabButtons = document.querySelectorAll('.tab-btn');
+            const tabContents = document.querySelectorAll('.tab-content');
+
+            // Update button states
+            tabButtons.forEach(btn => {
+                const isActive = btn.dataset.tab === tabId;
+                btn.classList.toggle('active', isActive);
+                btn.setAttribute('aria-selected', isActive ? 'true' : 'false');
+            });
+
+            // Update content visibility
+            tabContents.forEach(content => {
+                const isActive = content.dataset.tabContent === tabId;
+                content.classList.toggle('open', isActive);
+            });
+
+            // Persist active tab
+            activeTabId = tabId;
+            if (persist && vscode.setState) {
+                vscode.setState({ ...vscode.getState?.(), activeTabId });
+            }
+
+            // Trigger section-specific load callbacks based on tab
+            const tabLoadCallbacks = {
+                'setup': () => {
+                    vscode.postMessage({ type: 'getGitIgnoreConfig' });
+                },
+                'custom-agents': () => {
+                    vscode.postMessage({ type: 'getCustomAgents' });
+                    vscode.postMessage({ type: 'getVisibleAgents' });
+                },
+                'ollama': () => {
+                    vscode.postMessage({ type: 'getOllamaStatus' });
+                },
+                'kanban': () => {
+                    vscode.postMessage({ type: 'getVisibleAgents' });
+                    vscode.postMessage({ type: 'getCustomAgents' });
+                    vscode.postMessage({ type: 'getKanbanStructure' });
+                },
+                'orchestration': () => {
+                    vscode.postMessage({ type: 'getStartupCommands' });
+                    vscode.postMessage({ type: 'getVisibleAgents' });
+                    vscode.postMessage({ type: 'getTeamLeadRoutingSettings' });
+                },
+                'database': () => {
+                    vscode.postMessage({ type: 'getDbPath' });
+                    vscode.postMessage({ type: 'getStartupCommands' });
+                },
+                'integration': () => {
+                    requestIntegrationSetupStates();
+                },
+                'workspace': () => {
+                    vscode.postMessage({ type: 'getWorkspaceMappings' });
+                },
+                'sources': () => {
+                    vscode.postMessage({ type: 'getPlanningSources' });
+                },
+                'control': () => {
+                    requestControlPlaneStatus();
+                },
+                'sync': () => {
+                    vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+                }
+            };
+
+            const callback = tabLoadCallbacks[tabId];
+            if (callback) {
+                callback();
             }
         }
 
@@ -3667,42 +3895,8 @@
             vscode.postMessage({ type: 'resetDatabase' });
         });
 
-        bindAccordion('setup-toggle', 'startup-fields', 'setup-chevron', () => {
-            vscode.postMessage({ type: 'getGitIgnoreConfig' });
-        });
-        bindAccordion('control-plane-toggle', 'control-plane-fields', 'control-plane-chevron', () => {
-            requestControlPlaneStatus();
-        });
-        bindAccordion('custom-agents-toggle', 'custom-agents-fields', 'custom-agents-chevron', () => {
-            vscode.postMessage({ type: 'getCustomAgents' });
-            vscode.postMessage({ type: 'getVisibleAgents' });
-        });
-        bindAccordion('ollama-toggle', 'ollama-fields', 'ollama-chevron', () => {
-            vscode.postMessage({ type: 'getOllamaStatus' });
-        });
-        bindAccordion('kanban-structure-toggle', 'kanban-structure-fields', 'kanban-structure-chevron', () => {
-            vscode.postMessage({ type: 'getVisibleAgents' });
-            vscode.postMessage({ type: 'getCustomAgents' });
-            vscode.postMessage({ type: 'getKanbanStructure' });
-        });
-        bindAccordion('orchestration-toggle', 'orchestration-fields', 'orchestration-chevron', () => {
-            vscode.postMessage({ type: 'getStartupCommands' });
-            vscode.postMessage({ type: 'getVisibleAgents' });
-            vscode.postMessage({ type: 'getTeamLeadRoutingSettings' });
-        });
-        bindAccordion('database-toggle', 'db-sync-fields', 'database-chevron', () => {
-            vscode.postMessage({ type: 'getDbPath' });
-            vscode.postMessage({ type: 'getStartupCommands' });
-        });
-        bindAccordion('project-mgmt-toggle', 'project-mgmt-fields', 'project-mgmt-chevron', () => {
-            requestIntegrationSetupStates();
-        });
-        bindAccordion('planning-panel-toggle', 'planning-panel-fields', 'planning-panel-chevron', () => {
-            vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
-        });
-        bindAccordion('workspace-mapping-toggle', 'workspace-mapping-fields', 'workspace-mapping-chevron', () => {
-            vscode.postMessage({ type: 'getWorkspaceMappings' });
-        });
+        // Initialize tabs (replaces bindAccordion calls)
+        initTabs();
 
         // Workspace database mapping handlers
         let workspaceMappings = [];
@@ -3806,10 +4000,6 @@
                     mappings: workspaceMappings
                 }
             });
-        });
-
-        bindAccordion('planning-sources-toggle', 'planning-sources-fields', 'planning-sources-chevron', () => {
-            vscode.postMessage({ type: 'getPlanningSources' });
         });
 
         const providerSelector = document.getElementById('integration-provider-selector');

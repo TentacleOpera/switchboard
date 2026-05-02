@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import * as crypto from 'crypto';
+import { KanbanDatabase, ImportedDocEntry, DuplicateCheckResult } from './KanbanDatabase';
 
 export interface ImportRegistryEntry {
   sourceId: string;       // 'clickup' | 'notion' | 'linear' | 'local-folder'
@@ -28,6 +29,7 @@ export class PlanningPanelCacheService {
     private readonly _workspaceRoot: string;
     private readonly _cacheBaseDir: string;
     private _registryWriteQueue = new Map<string, Promise<void>>();
+    private _kanbanDb: KanbanDatabase | undefined;
 
     // Task/Issue caching with LRU eviction
     private _taskCache = new Map<string, TaskCacheEntry<any>>();
@@ -41,11 +43,21 @@ export class PlanningPanelCacheService {
     private _metadataWriteTimer: NodeJS.Timeout | null = null;
     private readonly _metadataWriteDebounceMs = 500;
 
-    constructor(workspaceRoot: string) {
+    constructor(workspaceRoot: string, kanbanDb?: KanbanDatabase) {
         this._workspaceRoot = workspaceRoot;
         this._cacheBaseDir = path.join(workspaceRoot, '.switchboard', 'planning-cache');
         this._clickupMetadataPath = path.join(workspaceRoot, '.switchboard', 'clickup-tasks.json');
         this._linearMetadataPath = path.join(workspaceRoot, '.switchboard', 'linear-tasks.json');
+        this._kanbanDb = kanbanDb;
+    }
+
+    private async _getEffectiveWorkspaceId(workspaceId?: string): Promise<string> {
+        if (workspaceId) return workspaceId;
+        if (this._kanbanDb) {
+            const wsId = await this._kanbanDb.getWorkspaceId();
+            if (wsId) return wsId;
+        }
+        return crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
     }
 
     /**
@@ -176,18 +188,38 @@ cachedAt: ${new Date().toISOString()}
     /**
      * Mark a document as imported (called when user clicks import buttons).
      */
-    public async setDocumentImported(sourceId: string, docId: string): Promise<void> {
-        const metadata = await this._readMetadata(sourceId);
-        metadata[docId] = { isImported: true, importedAt: new Date().toISOString() };
-        await this._writeMetadata(sourceId, metadata);
+    public async setDocumentImported(sourceId: string, docId: string, workspaceId?: string): Promise<void> {
+        if (!this._kanbanDb) return;
+        
+        const wsId = await this._getEffectiveWorkspaceId(workspaceId);
+        
+        // We register it as a minimal entry if it's just being marked as imported
+        // but not fully registered via registerImport (which provides more metadata)
+        const entry = await this._kanbanDb.getImportBySlug(docId, wsId);
+        if (!entry) {
+            const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
+            const filePath = path.join(docsDir, `${docId}.md`);
+            await this._kanbanDb.registerImport({
+                slugPrefix: docId,
+                sourceId,
+                remoteDocId: docId,
+                docName: docId,
+                filePath,
+                importedAt: new Date().toISOString(),
+                workspaceId: wsId
+            });
+        }
     }
 
     /**
      * Check if a document has been imported.
      */
-    public async isDocumentImported(sourceId: string, docId: string): Promise<boolean> {
-        const metadata = await this._readMetadata(sourceId);
-        return metadata[docId]?.isImported === true;
+    public async isDocumentImported(sourceId: string, docId: string, workspaceId?: string): Promise<boolean> {
+        if (!this._kanbanDb) return false;
+        
+        const wsId = await this._getEffectiveWorkspaceId(workspaceId);
+        const entry = await this._kanbanDb.getImportBySlug(docId, wsId);
+        return !!entry;
     }
 
     /**
@@ -309,74 +341,63 @@ cachedAt: ${new Date().toISOString()}
 
     // ── Import Registry Methods ─────────────────────────────────────
 
-    private _getRegistryPath(): string {
-        return path.join(this._workspaceRoot, '.switchboard', 'imported-docs.json');
-    }
-
-    private async _readRegistry(): Promise<Record<string, ImportRegistryEntry>> {
-        try {
-            const raw = await fs.promises.readFile(this._getRegistryPath(), 'utf8');
-            return JSON.parse(raw);
-        } catch {
-            return {};
-        }
-    }
-
-    private async _writeRegistry(registry: Record<string, ImportRegistryEntry>): Promise<void> {
-        const resolvedKey = this._getRegistryPath();
-        const existing = this._registryWriteQueue.get(resolvedKey);
-        const writePromise = (existing || Promise.resolve()).then(async () => {
-            await fs.promises.mkdir(path.dirname(this._getRegistryPath()), { recursive: true });
-            await fs.promises.writeFile(this._getRegistryPath(), JSON.stringify(registry, null, 2), 'utf8');
-        });
-        this._registryWriteQueue.set(resolvedKey, writePromise);
-        await writePromise;
-    }
-
     public async registerImport(
         sourceId: string,
         docId: string,
         docName: string,
         slugPrefix: string,
-        options: { remoteContentHash?: string } = {}
+        options: { remoteContentHash?: string; workspaceId?: string }
     ): Promise<void> {
-        const registry = await this._readRegistry();
-        registry[slugPrefix] = {
-            sourceId,
-            docId,
-            docName,
+        if (!this._kanbanDb) {
+            console.warn('[PlanningPanelCacheService] KanbanDatabase not available, skipping import registration');
+            return;
+        }
+        
+        const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
+        const filePath = path.join(docsDir, `${slugPrefix}.md`);
+        const workspaceId = await this._getEffectiveWorkspaceId(options.workspaceId);
+        
+        await this._kanbanDb.registerImport({
             slugPrefix,
+            sourceId,
+            remoteDocId: docId,
+            docName,
+            parentDocName: docName,
+            filePath,
             importedAt: new Date().toISOString(),
-            remoteContentHash: options.remoteContentHash
-        };
-        await this._writeRegistry(registry);
+            lastSyncedAt: new Date().toISOString(),
+            contentHash: options.remoteContentHash,
+            workspaceId
+        });
     }
 
-    public async getImportedDocs(): Promise<ImportRegistryEntry[]> {
-        const registry = await this._readRegistry();
-        return Object.values(registry);
+    public async getImportedDocs(workspaceId?: string): Promise<ImportedDocEntry[]> {
+        if (!this._kanbanDb) return [];
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        return this._kanbanDb.getImportedDocs(effectiveWsId);
     }
 
-    public async getImportBySlugPrefix(slugPrefix: string): Promise<ImportRegistryEntry | null> {
-        const registry = await this._readRegistry();
-        return registry[slugPrefix] || null;
+    public async getImportBySlugPrefix(slugPrefix: string, workspaceId?: string): Promise<ImportedDocEntry | null> {
+        if (!this._kanbanDb) return null;
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        return this._kanbanDb.getImportBySlug(slugPrefix, effectiveWsId);
     }
 
-    public async updateLastSynced(slugPrefix: string, remoteContentHash?: string): Promise<void> {
-        const registry = await this._readRegistry();
-        if (registry[slugPrefix]) {
-            registry[slugPrefix].lastSyncedAt = new Date().toISOString();
-            if (remoteContentHash) {
-                registry[slugPrefix].remoteContentHash = remoteContentHash;
-            }
-            await this._writeRegistry(registry);
+    public async updateLastSynced(slugPrefix: string, remoteContentHash: string, workspaceId?: string): Promise<void> {
+        if (!this._kanbanDb) return;
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        const entry = await this._kanbanDb.getImportBySlug(slugPrefix, effectiveWsId);
+        if (entry) {
+            entry.lastSyncedAt = new Date().toISOString();
+            entry.contentHash = remoteContentHash;
+            await this._kanbanDb.registerImport(entry); // INSERT OR REPLACE
         }
     }
 
-    public async removeImport(slugPrefix: string): Promise<void> {
-        const registry = await this._readRegistry();
-        delete registry[slugPrefix];
-        await this._writeRegistry(registry);
+    public async removeImport(slugPrefix: string, workspaceId?: string): Promise<void> {
+        if (!this._kanbanDb) return;
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        await this._kanbanDb.removeImport(slugPrefix, effectiveWsId);
     }
 
     /**
@@ -387,53 +408,24 @@ cachedAt: ${new Date().toISOString()}
     public async checkForDuplicate(
         docName: string,
         sourceId: string,
+        workspaceId?: string,
         docId?: string
-    ): Promise<{
-        isDuplicate: boolean;
-        matchType?: 'exact_name' | 'case_insensitive_name' | 'same_doc_id';
-        existingDoc?: ImportRegistryEntry;
-    }> {
-        const registry = await this._readRegistry();
-
-        // Check for docName match (case-insensitive)
-        for (const entry of Object.values(registry)) {
-            if (entry.docName.toLowerCase() === docName.toLowerCase()) {
-                // Same source + same docId = idempotent re-import, not a duplicate
-                if (entry.sourceId === sourceId && entry.docId === docId) {
-                    continue;
-                }
-                return {
-                    isDuplicate: true,
-                    matchType: entry.docName === docName ? 'exact_name' : 'case_insensitive_name',
-                    existingDoc: entry
-                };
-            }
-        }
-
-        // Check for same docId from a different source
-        if (docId) {
-            for (const entry of Object.values(registry)) {
-                if (entry.docId === docId && entry.sourceId !== sourceId) {
-                    return {
-                        isDuplicate: true,
-                        matchType: 'same_doc_id',
-                        existingDoc: entry
-                    };
-                }
-            }
-        }
-
-        return { isDuplicate: false };
+    ): Promise<DuplicateCheckResult> {
+        if (!this._kanbanDb) return { isDuplicate: false };
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        return this._kanbanDb.checkForDuplicate(docName, sourceId, effectiveWsId, docId);
     }
 
     /**
      * Find an import registry entry by document name (case-insensitive).
      * Returns the first match, or null if not found.
      */
-    public async getImportByDocName(docName: string): Promise<ImportRegistryEntry | null> {
-        const registry = await this._readRegistry();
+    public async getImportByDocName(docName: string, workspaceId?: string): Promise<ImportedDocEntry | null> {
+        if (!this._kanbanDb) return null;
+        const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+        const entries = await this._kanbanDb.getImportedDocs(effectiveWsId);
         const lowerName = docName.toLowerCase();
-        for (const entry of Object.values(registry)) {
+        for (const entry of entries) {
             if (entry.docName.toLowerCase() === lowerName) {
                 return entry;
             }
@@ -445,7 +437,17 @@ cachedAt: ${new Date().toISOString()}
      * Resolve the actual file path for an imported doc by scanning .switchboard/docs/
      * for files matching the slug prefix. Handles content-hash changes in filenames.
      */
-    public async resolveImportedDocPath(slugPrefix: string): Promise<string | null> {
+    public async resolveImportedDocPath(slugPrefix: string, workspaceId?: string): Promise<string | null> {
+        // Try DB first
+        if (this._kanbanDb) {
+            const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);
+            const entry = await this._kanbanDb.getImportBySlug(slugPrefix, effectiveWsId);
+            if (entry && fs.existsSync(entry.filePath)) {
+                return entry.filePath;
+            }
+        }
+        
+        // Fallback: scan directory for files starting with slugPrefix (backward compatibility)
         const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
         try {
             const files = await fs.promises.readdir(docsDir);

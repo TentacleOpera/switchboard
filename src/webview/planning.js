@@ -1,6 +1,9 @@
 (function() {
     const vscode = acquireVsCodeApi();
 
+    // Restore persisted state
+    const persistedState = vscode.getState() || {};
+
     // Tab management
     const tabButtons = document.querySelectorAll('.research-tab-btn');
     const tabContents = document.querySelectorAll('.research-tab-content');
@@ -19,13 +22,42 @@
 
     // Segmented Control for Research Mode
     const segmentedBtns = document.querySelectorAll('.segmented-btn');
+    const modeDescription = document.getElementById('research-mode-description');
+
+    const modeDescriptions = {
+        web: 'Comprehensive web research on any topic using iterative search strategies.',
+        deep: 'Deep architectural planning for complex code changes with dependency analysis.'
+    };
+
     segmentedBtns.forEach(btn => {
         btn.addEventListener('click', () => {
             const parent = btn.closest('.segmented-control');
-            parent.querySelectorAll('.segmented-btn').forEach(b => b.classList.remove('active'));
+            const mode = btn.dataset.mode;
+
+            // Update visual state
+            parent.querySelectorAll('.segmented-btn').forEach(b => {
+                b.classList.remove('active');
+                b.setAttribute('aria-selected', 'false');
+            });
             btn.classList.add('active');
+            btn.setAttribute('aria-selected', 'true');
+
+            // Update state and persist
+            state.researchMode = mode;
+            vscode.setState({ ...vscode.getState(), researchMode: mode });
+
+            // Update description
+            if (modeDescription) {
+                modeDescription.textContent = modeDescriptions[mode] || modeDescriptions.web;
+            }
         });
     });
+
+    // Initialize mode from state
+    const initialModeBtn = document.querySelector(`.segmented-btn[data-mode="${state.researchMode}"]`);
+    if (initialModeBtn && modeDescription) {
+        initialModeBtn.click(); // Trigger state synchronization
+    }
 
     // Clipboard Import logic
     const separatorPreset = document.getElementById('airlock-separator-preset');
@@ -88,53 +120,53 @@
         });
     }
 
-    // Research Tab: Web Research Copy Button
-    const copyWebResearchBtn = document.getElementById('btn-copy-web-research');
-    if (copyWebResearchBtn) {
-        copyWebResearchBtn.addEventListener('click', async () => {
-            if (copyWebResearchBtn.innerText === 'COPIED') return;
+    // Research Tab: Unified Copy Button
+    const copyResearchPromptBtn = document.getElementById('btn-copy-research-prompt');
+    if (copyResearchPromptBtn) {
+        copyResearchPromptBtn.addEventListener('click', async () => {
+            if (copyResearchPromptBtn.innerText === 'COPIED') return;
 
             const prompt = generateResearchPrompt();
+            const originalText = copyResearchPromptBtn.innerText;
             try {
                 await navigator.clipboard.writeText(prompt);
-                const originalText = copyWebResearchBtn.innerText;
-                copyWebResearchBtn.innerText = 'COPIED';
+                copyResearchPromptBtn.innerText = 'COPIED';
                 setTimeout(() => {
-                    if (copyWebResearchBtn) copyWebResearchBtn.innerText = originalText;
+                    if (copyResearchPromptBtn) copyResearchPromptBtn.innerText = originalText;
                 }, 2000);
             } catch (err) {
                 console.error('[Research] Failed to copy to clipboard:', err);
-                copyWebResearchBtn.innerText = 'FAILED';
+                copyResearchPromptBtn.innerText = 'FAILED';
                 setTimeout(() => {
-                    if (copyWebResearchBtn) copyWebResearchBtn.innerText = originalText;
+                    if (copyResearchPromptBtn) copyResearchPromptBtn.innerText = originalText;
                 }, 2000);
             }
         });
     }
 
-    // Research Tab: Deep Planning Copy Button
-    const copyDeepPlanningBtn = document.getElementById('btn-copy-deep-planning');
-    if (copyDeepPlanningBtn) {
-        copyDeepPlanningBtn.addEventListener('click', async () => {
-            if (copyDeepPlanningBtn.innerText === 'COPIED') return;
-
+    // Research Tab: Send to Analyst Button
+    const sendToAnalystBtn = document.getElementById('btn-send-to-analyst');
+    if (sendToAnalystBtn) {
+        sendToAnalystBtn.addEventListener('click', () => {
             const prompt = generateResearchPrompt();
-            try {
-                await navigator.clipboard.writeText(prompt);
-                const originalText = copyDeepPlanningBtn.innerText;
-                copyDeepPlanningBtn.innerText = 'COPIED';
-                setTimeout(() => {
-                    if (copyDeepPlanningBtn) copyDeepPlanningBtn.innerText = originalText;
-                }, 2000);
-            } catch (err) {
-                console.error('[Research] Failed to copy to clipboard:', err);
-                copyDeepPlanningBtn.innerText = 'FAILED';
-                setTimeout(() => {
-                    if (copyDeepPlanningBtn) copyDeepPlanningBtn.innerText = originalText;
-                }, 2000);
-            }
+            vscode.postMessage({
+                type: 'sendToAnalyst',
+                prompt: prompt
+            });
+            sendToAnalystBtn.innerText = 'SENT';
+            setTimeout(() => {
+                if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+            }, 2000);
         });
     }
+
+    // Check analyst availability on load
+    function checkAnalystAvailability() {
+        vscode.postMessage({ type: 'checkAnalystAvailability' });
+    }
+
+    // Call after DOM ready
+    checkAnalystAvailability();
 
     // NotebookLM button handlers
     const bundleCodeBtn = document.getElementById('btn-bundle-code');
@@ -197,7 +229,10 @@
         previewRequestId: 0,
         docPagesRequestId: 0,
         selectedEl: null,
-        filterRequestIds: {}
+        filterRequestIds: {},
+        researchMode: persistedState.researchMode || 'web',
+        localFolderPath: '',
+        analystAvailable: false
     };
 
     // Saved browse filter containers from config (restored after containers load)
@@ -309,6 +344,9 @@
         wrapper.dataset.nodeId = node.id;
         wrapper.dataset.kind = node.kind || '';
         wrapper.dataset.name = node.name;
+        if (node.metadata && node.metadata.root) {
+            wrapper.dataset.root = node.metadata.root;
+        }
         wrapper.style.marginLeft = `${depth * 16}px`;
 
         const icon = document.createElement('span');
@@ -360,7 +398,8 @@
                     vscode.postMessage({
                         type: 'deleteLocalDoc',
                         docId: node.id,
-                        docName: node.name
+                        docName: node.name,
+                        workspaceRoot: node.metadata ? node.metadata.root : undefined
                     });
                 });
                 deleteBtnRef = deleteBtn;
@@ -645,6 +684,7 @@
 
     function handleLocalDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
+        state.localFolderPath = msg.folderPath || '';
         renderLocalDocs({
             sourceId: msg.sourceId || 'local-folder',
             nodes: msg.nodes || [],
@@ -957,6 +997,7 @@
 
     function handleLocalFolderPathUpdated(msg) {
         const { folderPath, nodes } = msg;
+        state.localFolderPath = folderPath || '';
         const pathInput = document.getElementById('local-folder-path');
         if (pathInput) {
             pathInput.value = folderPath || '';
@@ -1186,7 +1227,25 @@
                     icon.style.cssText = 'font-size: 14px;';
 
                     const label = document.createElement('span');
-                    label.textContent = doc.docName;
+                    let displayLabel = doc.docName;
+                    
+                    // Deduplicate parent title if it prefixes the subpage title or if they are exactly identical
+                    if (parentDocName && parentDocName !== 'unknown' && groupDocs.length > 1) {
+                        if (displayLabel === parentDocName) {
+                            displayLabel = 'Overview'; // If identical, call it overview instead of repeating the parent title
+                        } else if (displayLabel.startsWith(parentDocName)) {
+                            let stripped = displayLabel.substring(parentDocName.length).trim();
+                            if (stripped.startsWith('-') || stripped.startsWith(':')) {
+                                stripped = stripped.substring(1).trim();
+                            }
+                            if (stripped) {
+                                displayLabel = stripped;
+                            }
+                        }
+                    }
+                    
+                    label.textContent = displayLabel;
+                    label.title = doc.docName; // Hover shows the full original title
                     label.style.cssText = 'font-size: 12px; color: var(--text-primary);';
 
                     // Add delete button for imported docs
@@ -1445,6 +1504,33 @@
                     statusEl.textContent = `Failed to delete: ${msg.error || 'Unknown error'}`;
                 }
                 break;
+            case 'analystAvailabilityResult':
+                const analystBtn = document.getElementById('btn-send-to-analyst');
+                if (analystBtn) {
+                    analystBtn.style.display = msg.available ? 'inline-block' : 'none';
+                    if (!msg.available) {
+                        analystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
+                    }
+                }
+                break;
+            case 'sendToAnalystResult': {
+                const sendToAnalystBtn = document.getElementById('btn-send-to-analyst');
+                if (sendToAnalystBtn) {
+                    if (msg.success) {
+                        sendToAnalystBtn.innerText = 'SENT';
+                        setTimeout(() => {
+                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+                        }, 2000);
+                    } else {
+                        sendToAnalystBtn.innerText = 'FAILED';
+                        console.error('[Research] Failed to send to analyst:', msg.error);
+                        setTimeout(() => {
+                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+                        }, 2000);
+                    }
+                }
+                break;
+            }
         }
     });
 
@@ -1593,12 +1679,11 @@
     function generateResearchPrompt() {
         const complexityInput = document.querySelector('input[name="complexity"]:checked');
         const importToggle = document.getElementById('import-toggle');
-        const modeBtn = document.querySelector('.segmented-btn.active');
 
-        // Fallbacks for missing elements
+        // Use state instead of DOM query for mode
         const complexity = complexityInput ? complexityInput.value : 'quick';
         const importEnabled = importToggle ? importToggle.checked : false;
-        const mode = modeBtn ? modeBtn.dataset.mode : 'web';
+        const mode = state.researchMode; // Use stored mode
 
         const complexityLabels = {
             quick: 'Quick (5-10 sources)',
@@ -1611,15 +1696,22 @@
         const skillName = isWebMode ? 'web_research' : 'deep_planning';
         const taskType = isWebMode ? 'conduct comprehensive research on the following topic' : 'create a comprehensive implementation plan for the following task';
         const depthLabel = isWebMode ? 'Research depth' : 'Planning depth';
-        const saveLocation = isWebMode ? '.switchboard/docs/' : '.switchboard/plans/';
-        const saveAction = isWebMode ? 'save the results' : 'save it';
+
+        // Use configured local docs folder path with fallback
+        const configuredPath = state.localFolderPath;
+        const saveLocation = configuredPath || '[CONFIGURE LOCAL DOCS FOLDER]';
+        const saveAction = 'save the results';
         const protocolAction = isWebMode ? 'proposing a research plan' : 'proposing a planning approach';
 
         let prompt = `Use the ${skillName} skill to ${taskType}.\n\n`;
         prompt += `${depthLabel}: ${complexityLabels[complexity] || complexity}\n\n`;
 
         if (importEnabled) {
-            prompt += `IMPORTANT: After completing the ${isWebMode ? 'research' : 'plan'}, ${saveAction} to the local ${saveLocation} folder using the write_to_file tool so I can review them later.\n\n`;
+            if (!configuredPath) {
+                prompt += `NOTE: Local docs folder not configured. Please configure it in the Local Docs tab before saving.\n\n`;
+            } else {
+                prompt += `IMPORTANT: After completing the ${isWebMode ? 'research' : 'plan'}, ${saveAction} to ${saveLocation} using the write_to_file tool so I can review them later.\n\n`;
+            }
         }
 
         prompt += `Please begin by ${protocolAction} for my approval, following the ${skillName} skill protocol.`;

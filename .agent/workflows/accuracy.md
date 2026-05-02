@@ -13,7 +13,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
 
 ## Steps
 
-1. **Start** — Call `start_workflow(name: "accuracy", force: true)` to auto-replace any stale workflows
+1. **Start** — Activate accuracy mode via the `/accuracy` command. This workflow operates without MCP tool dependencies.
 
 2. **Deep Context Gathering** (invest time here to avoid rework):
    - MUST read ALL files that will be modified or depend on changes.
@@ -21,7 +21,7 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - MUST identify every dependency and side-effect BEFORE writing any code.
    - Read `.agent/rules/switchboard_modes.md` for the "Lead Engineer" persona.
    - **WHY**: Missing context causes mistakes. Mistakes cause rework. Rework costs extra prompts.
-   - Call `complete_workflow_phase(phase: 1, workflow: "accuracy", notes: "Context gathered")`
+   - Mark Phase 1 complete in your task tracking (e.g., update task.md or use Kanban UI if available).
 
 3. **Thorough Plan**:
    - MUST create a detailed plan listing every change, which files are affected, and how to verify each.
@@ -55,10 +55,8 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - MUST run final compile/test across the whole project via `run_command`.
    - Review the complete diff for consistency.
    - Output: `**ACCURACY VERIFICATION COMPLETE**`
-   - **Call `complete_workflow_phase(phase: 5, workflow: "accuracy")`** (Auto-stops workflow).
+   - Mark Phase 5 complete in your task tracking. The workflow automatically terminates when all phases are done.
 
 ## Final-Phase Recovery Rule
-- Phase 5 is terminal for `accuracy`. Do NOT call phase 6.
-- If phase 5 succeeded but summary still shows active:
-  - Call `get_workflow_state`.
-  - If still active, call `stop_workflow(reason: "Recovery: final phase completed but workflow remained active")`.
+- Phase 5 is terminal for `accuracy`. Do NOT proceed to phase 6.
+- If phase 5 succeeded but workflow state still appears active, use the Kanban UI to manually move the card to the appropriate column, or run: `node .agent/skills/kanban_operations/move-card.js <session_id> done`

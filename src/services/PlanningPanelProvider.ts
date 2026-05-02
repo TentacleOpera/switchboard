@@ -620,6 +620,7 @@ export class PlanningPanelProvider {
             case 'deleteLocalDoc': {
                 const docId = msg.docId;
                 const docName = msg.docName || docId;
+                const docRoot = msg.workspaceRoot || workspaceRoot;
                 const confirm = await vscode.window.showWarningMessage(
                     `Move "${docName}" to trash?`,
                     { modal: true },
@@ -628,7 +629,7 @@ export class PlanningPanelProvider {
                 if (confirm !== 'Move to Trash') {
                     break;
                 }
-                const service = this._getLocalFolderService(workspaceRoot);
+                const service = this._getLocalFolderService(docRoot);
                 const result = await service.deleteFile(docId);
                 if (result.success) {
                     // Refresh the local docs list
@@ -660,8 +661,29 @@ export class PlanningPanelProvider {
                     break;
                 }
                 try {
-                    const docsPath = path.join(workspaceRoot, '.switchboard', 'docs', `${slugPrefix}.md`);
-                    await fs.promises.unlink(docsPath);
+                    // **CRITICAL FIX**: Look up actual file path from DB
+                    let filePath: string | null = null;
+                    if (this._cacheService) {
+                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                        filePath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
+                    }
+                    
+                    if (!filePath) {
+                        // Fallback: construct path (legacy behavior)
+                        filePath = path.join(workspaceRoot, '.switchboard', 'docs', `${slugPrefix}.md`);
+                    }
+                    
+                    // Delete the file
+                    if (fs.existsSync(filePath)) {
+                        await fs.promises.unlink(filePath);
+                    }
+                    
+                    // Remove DB entry
+                    if (this._cacheService) {
+                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                        await this._cacheService.removeImport(slugPrefix, workspaceId);
+                    }
+                    
                     // Refresh imported docs list
                     await this._handleFetchImportedDocs(workspaceRoot);
                     this._panel?.webview.postMessage({
@@ -673,6 +695,53 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'importedDocDeleted',
                         slugPrefix,
+                        success: false,
+                        error: String(err)
+                    });
+                }
+                break;
+            }
+            case 'checkAnalystAvailability': {
+                try {
+                    const result = await vscode.commands.executeCommand<{ available: boolean }>(
+                        'switchboard.checkAnalystAvailability'
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'analystAvailabilityResult',
+                        available: result?.available ?? false
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'analystAvailabilityResult',
+                        available: false
+                    });
+                }
+                break;
+            }
+            case 'sendToAnalyst': {
+                const prompt = msg.prompt;
+                if (!prompt) {
+                    this._panel?.webview.postMessage({
+                        type: 'sendToAnalystResult',
+                        success: false,
+                        error: 'No prompt provided'
+                    });
+                    break;
+                }
+
+                try {
+                    const result = await vscode.commands.executeCommand<{ success: boolean; error?: string }>(
+                        'switchboard.sendToAnalystFromPlanningPanel',
+                        prompt
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'sendToAnalystResult',
+                        success: result?.success ?? false,
+                        error: result?.error
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'sendToAnalystResult',
                         success: false,
                         error: String(err)
                     });
@@ -736,7 +805,8 @@ export class PlanningPanelProvider {
                         .replace(/[^a-z0-9]+/g, '_')
                         .replace(/^_+|_+$/g, '')
                         .slice(0, 60) || sourceId;
-                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug);
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug, workspaceId);
                 }
             }
 
@@ -779,12 +849,13 @@ export class PlanningPanelProvider {
             if (action === 'replace') {
                 // Remove existing import entry and file before re-importing
                 if (this._cacheService) {
-                    const existing = await this._cacheService.getImportByDocName(docName);
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    const existing = await this._cacheService.getImportByDocName(docName, workspaceId);
                     if (existing) {
-                        await this._cacheService.removeImport(existing.slugPrefix);
+                        await this._cacheService.removeImport(existing.slugPrefix, workspaceId);
                         // Delete the old file from .switchboard/docs/
                         try {
-                            const resolvedPath = await this._cacheService.resolveImportedDocPath(existing.slugPrefix);
+                            const resolvedPath = await this._cacheService.resolveImportedDocPath(existing.slugPrefix, workspaceId);
                             if (resolvedPath) {
                                 await fs.promises.unlink(resolvedPath);
                             }
@@ -804,8 +875,9 @@ export class PlanningPanelProvider {
                 let newName = docName;
                 let counter = 2;
                 if (this._cacheService) {
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
                     while (true) {
-                        const check = await this._cacheService.checkForDuplicate(newName, sourceId, docId);
+                        const check = await this._cacheService.checkForDuplicate(newName, sourceId, workspaceId, docId);
                         if (!check.isDuplicate) break;
                         newName = `${docName} (${counter})`;
                         counter++;
@@ -858,13 +930,14 @@ export class PlanningPanelProvider {
         return new LocalFolderService(workspaceRoot);
     }
 
-    private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string }>): TreeNode[] {
+    private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }>): TreeNode[] {
         return files.map(f => ({
             id: f.relativePath || f.id,
             name: f.name,
             kind: f.isFolder ? 'folder' : 'document',
             parentId: f.parentId,
-            hasChildren: f.isFolder === true
+            hasChildren: f.isFolder === true,
+            metadata: f._root ? { root: f._root } : undefined
         }));
     }
 
@@ -1120,7 +1193,12 @@ export class PlanningPanelProvider {
                 result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName);
             }
             if (result.success && this._cacheService) {
-                await this._cacheService.setDocumentImported(sourceId, docId);
+                const adapter = this._researchImportService.getAdapter(sourceId);
+                if (adapter && (adapter as any).setDocumentImported) {
+                    await (adapter as any).setDocumentImported(docId);
+                } else {
+                    await this._cacheService.setDocumentImported(sourceId, docId);
+                }
             }
             this._panel?.webview.postMessage({ type: 'plannerPromptState', ...result });
             // Send updated active design doc state after import
@@ -1132,94 +1210,54 @@ export class PlanningPanelProvider {
         }
     }
 
+    private async _getWorkspaceId(workspaceRoot: string): Promise<string> {
+        // Derive from workspace root or use KanbanDatabase.forWorkspace(workspaceRoot).getWorkspaceId()
+        try {
+            const { KanbanDatabase } = require('./KanbanDatabase');
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            const wsId = await db.getWorkspaceId();
+            if (wsId) return wsId;
+        } catch {
+            // Fallback: hash of path
+        }
+        return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
+    }
+
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
-            const { path: docsDir, source } = await this._resolveWorkspacePath(
-                path.join('.switchboard', 'docs')
-            );
-
-            if (!docsDir) {
-                this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: [] });
-                return;
-            }
-
-            if (source !== 'active workspace') {
-                console.log(`[PlanningPanelProvider] Using imported docs from ${source} (${docsDir})`);
-            }
-
-            const files = await fs.promises.readdir(docsDir);
-            console.log('[PlanningPanelProvider] Files in docs directory:', files);
-            const docs = [];
-
-            for (const file of files) {
-                if (file.endsWith('.md')) {
-                    const filePath = path.join(docsDir, file);
-                    const stat = await fs.promises.stat(filePath);
-                    const slugPrefix = path.basename(file, '.md');
-                    const content = await fs.promises.readFile(filePath, 'utf-8');
-
-                    // Parse front-matter (same logic as original)
-                    let displayName = slugPrefix;
-                    let sourceId = 'local-folder';
-                    let docId = slugPrefix;
-                    let canSync = false;
-                    let order = 0;
-                    let parentDocName = slugPrefix;
-
-                    const frontMatterMatch = content.match(/^---\n([\s\S]*?)\n---/);
-                    if (frontMatterMatch) {
-                        const frontMatter = frontMatterMatch[1];
-
-                        const docNameMatch = frontMatter.match(/^docName:\s*(.+)$/m);
-                        if (docNameMatch) {
-                            displayName = docNameMatch[1].trim();
-                        }
-
-                        parentDocName = displayName;
-                        const parentDocNameMatch = frontMatter.match(/^parentDocName:\s*(.+)$/m);
-                        if (parentDocNameMatch) {
-                            parentDocName = parentDocNameMatch[1].trim();
-                        }
-
-                        const sourceIdMatch = frontMatter.match(/^sourceId:\s*(.+)$/m);
-                        if (sourceIdMatch) {
-                            sourceId = sourceIdMatch[1].trim();
-                            const adapter = this._researchImportService.getAdapter(sourceId);
-                            canSync = !!(adapter && adapter.updateContent);
-                        }
-
-                        const docIdMatch = frontMatter.match(/^docId:\s*(.+)$/m);
-                        if (docIdMatch) {
-                            docId = docIdMatch[1].trim();
-                        }
-
-                        const orderMatch = frontMatter.match(/^order:\s*(\d+)$/m);
-                        if (orderMatch) {
-                            order = parseInt(orderMatch[1], 10);
-                        }
+            const workspaceId = await this._getWorkspaceId(workspaceRoot);
+            
+            // Run heal scan first (idempotent, fast if recent)
+            if (this._cacheService) {
+                const kanbanDb = (this._cacheService as any)._kanbanDb;
+                if (kanbanDb) {
+                    // Check if heal needed (last scan > 1 hour ago)
+                    const lastScan = await kanbanDb.getMeta('last_heal_scan_' + workspaceId);
+                    const oneHourAgo = Date.now() - (60 * 60 * 1000);
+                    if (!lastScan || new Date(lastScan).getTime() < oneHourAgo) {
+                        await kanbanDb.healImports(workspaceRoot, workspaceId);
                     }
-
-                    // Fall back to H1 if no docName in front-matter
-                    if (displayName === slugPrefix) {
-                        const h1Match = content.match(/^#\s+(.+)$/m);
-                        if (h1Match) {
-                            displayName = h1Match[1].trim();
-                        }
-                    }
-
-                    docs.push({
-                        sourceId,
-                        docId,
-                        docName: displayName,
-                        parentDocName,
-                        slugPrefix,
-                        canSync,
-                        order,
-                        lastSyncedAt: stat.mtime.toISOString()
-                    });
                 }
             }
-
+            
+            // Query DB for imported docs
+            let dbEntries: any[] = [];
+            if (this._cacheService) {
+                dbEntries = await this._cacheService.getImportedDocs(workspaceId);
+            }
+            
+            // Map to expected format
+            const docs = dbEntries.map(entry => ({
+                sourceId: entry.sourceId,
+                docId: entry.remoteDocId || entry.slugPrefix,
+                docName: entry.docName,
+                parentDocName: entry.parentDocName || entry.docName,
+                slugPrefix: entry.slugPrefix,
+                canSync: ['clickup', 'linear', 'notion'].includes(entry.sourceId),
+                order: entry.displayOrder || 0,
+                lastSyncedAt: entry.lastSyncedAt || entry.importedAt
+            }));
+            
             console.log('[PlanningPanelProvider] Sending importedDocsReady with docs:', docs);
             this._panel?.webview.postMessage({ type: 'importedDocsReady', docs });
         } catch (err) {
@@ -1284,7 +1322,8 @@ export class PlanningPanelProvider {
                 return;
             }
 
-            const importEntry = await this._cacheService.getImportBySlugPrefix(slugPrefix);
+            const workspaceId = await this._getWorkspaceId(workspaceRoot);
+            const importEntry = await this._cacheService.getImportBySlugPrefix(slugPrefix, workspaceId);
             if (!importEntry) {
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Import entry not found' });
                 return;
@@ -1296,7 +1335,7 @@ export class PlanningPanelProvider {
                 return;
             }
 
-            const localPath = await this._cacheService.resolveImportedDocPath(slugPrefix);
+            const localPath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
             if (!localPath) {
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: 'Local file not found' });
                 return;
@@ -1306,16 +1345,16 @@ export class PlanningPanelProvider {
             const localContentHash = crypto.createHash('sha256').update(localContent).digest('hex');
 
             // Conflict detection: check if remote has changed since last sync
-            if (importEntry.remoteContentHash && adapter.fetchContent) {
+            if (importEntry.contentHash && adapter.fetchContent) {
                 try {
-                    const remoteContent = await adapter.fetchContent(importEntry.docId);
+                    const remoteContent = await adapter.fetchContent(importEntry.remoteDocId || importEntry.slugPrefix);
                     const remoteContentHash = crypto.createHash('sha256').update(remoteContent).digest('hex');
 
-                    if (remoteContentHash !== importEntry.remoteContentHash) {
+                    if (remoteContentHash !== importEntry.contentHash) {
                         // Remote has changed since last sync
-                        if (localContentHash === importEntry.remoteContentHash) {
+                        if (localContentHash === importEntry.contentHash) {
                             // Only remote changed — no push needed, just update the stored hash
-                            await this._cacheService.updateLastSynced(slugPrefix, remoteContentHash);
+                            await this._cacheService.updateLastSynced(slugPrefix, remoteContentHash, workspaceId);
                             this._panel?.webview.postMessage({
                                 type: 'syncResult', slugPrefix, success: true,
                                 message: 'Remote was updated. Local content is unchanged. Registry updated.'
@@ -1347,9 +1386,9 @@ export class PlanningPanelProvider {
                 }
             }
 
-            const result = await adapter.updateContent(importEntry.docId, localContent);
+            const result = await adapter.updateContent(importEntry.remoteDocId || importEntry.slugPrefix, localContent);
             if (result.success) {
-                await this._cacheService.updateLastSynced(slugPrefix, localContentHash);
+                await this._cacheService.updateLastSynced(slugPrefix, localContentHash, workspaceId);
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: true });
             } else {
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: result.error });
@@ -1371,9 +1410,11 @@ export class PlanningPanelProvider {
 
         this._importInProgress = true;
         try {
+            const workspaceId = await this._getWorkspaceId(workspaceRoot);
+
             // Duplicate check for online sources (skip for local-folder)
             if (sourceId !== 'local-folder' && this._cacheService) {
-                const duplicateCheck = await this._cacheService.checkForDuplicate(docName, sourceId, safeDocId);
+                const duplicateCheck = await this._cacheService.checkForDuplicate(docName, sourceId, workspaceId, safeDocId);
                 if (duplicateCheck.isDuplicate) {
                     this._panel?.webview.postMessage({
                         type: 'duplicateDetected',
@@ -1429,6 +1470,7 @@ export class PlanningPanelProvider {
                     // Import each page as a separate doc
                     let importedCount = 0;
                     let errorCount = 0;
+                    const batchEntries: any[] = [];
                     
                     // Track page index for order preservation
                     let pageIndex = 0;
@@ -1447,23 +1489,30 @@ export class PlanningPanelProvider {
                                 );
                                 pageIndex++;
                                 
-                                if (writeResult.success) {
+                                if (writeResult.success && writeResult.savedPath) {
                                     importedCount++;
-                                    // Register each page import
-                                    if (this._cacheService) {
-                                        try {
-                                            const rawSlug = pageDocName
-                                                .toLowerCase()
-                                                .replace(/[^a-z0-9]+/g, '_')
-                                                .replace(/^_+|_+$/g, '')
-                                                .slice(0, 60) || sourceId;
-                                            const contentWithoutFrontMatter = result.content.replace(/^---\n[\s\S]*?\n---\n*/, '');
-                                            const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                                            await this._cacheService.registerImport(sourceId, page.id, pageDocName, rawSlug, { remoteContentHash: contentHash });
-                                        } catch (regErr) {
-                                            console.warn('[PlanningPanelProvider] Failed to register page import:', regErr);
-                                        }
-                                    }
+                                    // Prepare batch entry
+                                    const rawSlug = pageDocName
+                                        .toLowerCase()
+                                        .replace(/[^a-z0-9]+/g, '_')
+                                        .replace(/^_+|_+$/g, '')
+                                        .slice(0, 60) || sourceId;
+                                    const contentWithoutFrontMatter = result.content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                                    const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
+                                    
+                                    batchEntries.push({
+                                        slugPrefix: rawSlug,
+                                        sourceId,
+                                        remoteDocId: page.id,
+                                        docName: pageDocName,
+                                        parentDocName: docName,
+                                        filePath: writeResult.savedPath,
+                                        importedAt: new Date().toISOString(),
+                                        lastSyncedAt: new Date().toISOString(),
+                                        contentHash: contentHash,
+                                        workspaceId: workspaceId,
+                                        displayOrder: pageIndex - 1
+                                    });
                                 } else {
                                     errorCount++;
                                 }
@@ -1471,6 +1520,14 @@ export class PlanningPanelProvider {
                         } catch (pageErr) {
                             console.warn(`[PlanningPanelProvider] Failed to import page ${page.id}:`, pageErr);
                             errorCount++;
+                        }
+                    }
+                    
+                    // Register all subpages in one batch
+                    if (this._cacheService && batchEntries.length > 0) {
+                        const kanbanDb = (this._cacheService as any)._kanbanDb;
+                        if (kanbanDb) {
+                            await kanbanDb.registerImportBatch(batchEntries);
                         }
                     }
                     
@@ -1507,7 +1564,10 @@ export class PlanningPanelProvider {
                         .slice(0, 60) || sourceId;
                     const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                    await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, { remoteContentHash: contentHash });
+                    await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, { 
+                        remoteContentHash: contentHash,
+                        workspaceId: workspaceId
+                    });
                 } catch (regErr) {
                     console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
                 }
@@ -1530,7 +1590,8 @@ export class PlanningPanelProvider {
         sourceId: string,
         docId: string,
         docName: string,
-        content: string
+        content: string,
+        workspaceRoot: string
     ): Promise<void> {
         if (!cacheService) return;
         try {
@@ -1541,7 +1602,11 @@ export class PlanningPanelProvider {
                 .slice(0, 60) || sourceId;
             const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
             const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-            await cacheService.registerImport(sourceId, docId, docName, rawSlug, { remoteContentHash: contentHash });
+            const workspaceId = await this._getWorkspaceId(workspaceRoot);
+            await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
+                remoteContentHash: contentHash,
+                workspaceId: workspaceId
+            });
         } catch (regErr) {
             console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
         }
