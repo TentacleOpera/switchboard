@@ -367,34 +367,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     break;
                 }
-                case 'getOllamaStatus': {
-                    const state = await this._taskViewerProvider.handleGetOllamaSetupState();
-                    this._panel.webview.postMessage({ type: 'ollamaSetupState', state });
-                    break;
-                }
-                case 'openOllamaInstall': {
-                    const result = await this._taskViewerProvider.handleOpenOllamaInstall();
-                    this._panel.webview.postMessage({ type: 'ollamaActionResult', action: 'install', ...result });
-                    break;
-                }
-                case 'ollamaSignIn': {
-                    const result = await this._taskViewerProvider.handleOllamaSignIn();
-                    this._panel.webview.postMessage({ type: 'ollamaActionResult', action: 'signin', ...result });
-                    await this._taskViewerProvider.postSetupPanelState();
-                    break;
-                }
-                case 'setOllamaInternModel': {
-                    const result = await this._taskViewerProvider.handleSetOllamaInternModel({
-                        enabled: typeof message.enabled === 'boolean' ? message.enabled : undefined,
-                        mode: message.mode === 'local' ? 'local' : message.mode === 'cloud' ? 'cloud' : undefined,
-                        model: typeof message.model === 'string' ? message.model : undefined
-                    });
-                    this._panel.webview.postMessage({ type: 'ollamaInternModelSaved', ...result });
-                    if (result.success) {
-                        await this._taskViewerProvider.postSetupPanelState();
-                    }
-                    break;
-                }
                 case 'applyNotionConfig': {
                     const result = await this._taskViewerProvider.handleApplyNotionConfig(
                         message.token,
@@ -439,11 +411,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'getKanbanStructure': {
                     const items = await this._taskViewerProvider.handleGetKanbanStructure();
                     this._panel.webview.postMessage({ type: 'kanbanStructure', items });
-                    break;
-                }
-                case 'getTeamLeadRoutingSettings': {
-                    const settings = this._taskViewerProvider.handleGetTeamLeadRoutingSettings();
-                    this._panel.webview.postMessage({ type: 'teamLeadRoutingSettings', ...settings });
                     break;
                 }
                 case 'getAccurateCodingSetting':

@@ -350,17 +350,6 @@ ${planList}`, accurateCodingEnabled);
         return applyPromptOverride(coderPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
-    if (role === 'team-lead') {
-        return applyPromptOverride(`You are a Team Lead orchestrator. Spin up a team of specialist agents and drive the following plan(s) to completion.
-
-You own all internal coordination: decomposing work, assigning tasks, routing between specialists, running your own review cycles, and handling retries. Do NOT escalate to the user for task routing decisions or intermediate failures — those are yours to resolve internally. Only escalate if the plan genuinely requires external credentials, access, or human approval that is outside the codebase.
-
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
-
-PLANS TO PROCESS:
-${planList}`, dispatchContextBlock, planList, promptOverride);
-    }
-
     return applyPromptOverride(`Please process the following ${plans.length} plans.
 
 ${batchExecutionRules}

@@ -4,6 +4,23 @@
     // Restore persisted state
     const persistedState = vscode.getState() || {};
 
+    // State object (must be declared before use)
+    const state = {
+        activeSource: null,
+        activeDocId: null,
+        activeDocName: null,
+        activeDocContent: null,
+        activeContainers: new Map(),
+        importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
+        previewRequestId: 0,
+        docPagesRequestId: 0,
+        selectedEl: null,
+        filterRequestIds: {},
+        researchMode: persistedState.researchMode || 'web',
+        localFolderPath: '',
+        analystAvailable: false
+    };
+
     // Tab management
     const tabButtons = document.querySelectorAll('.research-tab-btn');
     const tabContents = document.querySelectorAll('.research-tab-content');
@@ -217,22 +234,6 @@
         'linear': 'Linear',
         'notion': 'Notion',
         'local-folder': 'Cowork/local'
-    };
-
-    const state = {
-        activeSource: null,
-        activeDocId: null,
-        activeDocName: null,
-        activeDocContent: null,
-        activeContainers: new Map(),
-        importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
-        previewRequestId: 0,
-        docPagesRequestId: 0,
-        selectedEl: null,
-        filterRequestIds: {},
-        researchMode: persistedState.researchMode || 'web',
-        localFolderPath: '',
-        analystAvailable: false
     };
 
     // Saved browse filter containers from config (restored after containers load)
@@ -806,6 +807,7 @@
                 targetBtnAppend.disabled = true;
                 if (btnImportFullDoc) btnImportFullDoc.disabled = true;
             }
+            targetStatus.textContent = '';
             return;
         }
 
@@ -1720,6 +1722,7 @@
     }
 
     // Initialize
+    console.log('[PlanningPanel Webview] Initializing, sending fetchRoots');
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'fetchImportedDocs' });
 })();

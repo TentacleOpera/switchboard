@@ -333,7 +333,7 @@ export class SessionActionLog {
             }
 
             let descriptiveAction = action.toUpperCase().replace(/[_-]/g, ' ');
-            if (action === 'delegate_task') descriptiveAction = 'STARTED HANDOFF';
+            if (action === 'delegate_task') descriptiveAction = 'DELEGATED TASK';
             if (action === 'start_workflow') descriptiveAction = 'STARTED WORKFLOW';
 
             const workflowSuffix = workflow ? ` (${workflow.toUpperCase()})` : '';

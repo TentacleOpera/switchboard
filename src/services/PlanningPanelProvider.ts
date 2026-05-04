@@ -50,6 +50,9 @@ export class PlanningPanelProvider {
         private _context: vscode.ExtensionContext
     ) {}
 
+    // ⚠️ CRITICAL: This method MUST ONLY be called during initialization (panel open) or when workspace folders change.
+    // DO NOT call this in _handleMessage() or on every message - it causes race conditions and breaks online docs.
+    // Adapters are registered once and only re-registered when workspace folders actually change.
     private _ensureAdaptersRegistered(): void {
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) { return; }
@@ -58,8 +61,14 @@ export class PlanningPanelProvider {
         // Clarification: Using JSON.stringify for deterministic comparison
         const rootsKey = JSON.stringify(allRoots);
         if (this._registeredRootsKey === rootsKey) {
-            console.log('[PlanningPanel] Adapters already registered for roots:', allRoots);
-            return;
+            // Check if adapters are actually registered before returning early
+            const availableSources = this._researchImportService.getAvailableSources();
+            if (availableSources.length > 0) {
+                console.log('[PlanningPanel] Adapters already registered for roots:', allRoots);
+                return;
+            }
+            // If no sources available despite matching roots, re-register
+            console.log('[PlanningPanel] Roots match but no adapters registered, re-registering...');
         }
 
         console.log('[PlanningPanel] Registering adapters for roots:', allRoots);
@@ -230,6 +239,9 @@ export class PlanningPanelProvider {
             this._disposables
         );
 
+        // Register adapters when panel opens
+        this._ensureAdaptersRegistered();
+
         // Start periodic sync if configured (unified config discovery across all roots)
         const allRoots = this._getWorkspaceRoots();
         const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
@@ -243,6 +255,14 @@ export class PlanningPanelProvider {
         this._disposables.push(
             vscode.window.onDidChangeActiveColorTheme(() => {
                 this._panel?.webview.postMessage({ type: 'themeChanged' });
+            })
+        );
+
+        // Re-register adapters when workspace folders change
+        this._disposables.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
+                this._ensureAdaptersRegistered();
             })
         );
 
@@ -331,11 +351,11 @@ export class PlanningPanelProvider {
         // Use active workspace root if available, otherwise use first root
         const workspaceRoot = this._getWorkspaceRoot() || allRoots[0];
 
-        this._ensureAdaptersRegistered();
-
         switch (msg.type) {
             case 'fetchRoots': {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
+                const sources = this._researchImportService.getAvailableSources();
+                console.log('[PlanningPanel] Available sources at fetchRoots:', sources);
                 await this._handleFetchRoots();
                 break;
             }
@@ -1188,9 +1208,9 @@ export class PlanningPanelProvider {
             let result;
             if (content) {
                 // Use provided content directly (for pages that aren't cached)
-                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, content, docName, sourceId);
+                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, content, docName, sourceId, { skipDesignDocLink: true });
             } else {
-                result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName);
+                result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName, { skipDesignDocLink: true });
             }
             if (result.success && this._cacheService) {
                 const adapter = this._researchImportService.getAdapter(sourceId);
@@ -1268,10 +1288,21 @@ export class PlanningPanelProvider {
 
     private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<void> {
         try {
-            const relativePath = path.join('.switchboard', 'docs', `${slugPrefix}.md`);
-            const { path: filePath, source } = await this._resolveWorkspacePath(relativePath);
+            // Use cache service to resolve the actual file path (handles hash-based filenames)
+            let filePath: string | null = null;
+            if (this._cacheService) {
+                const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                filePath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
+            }
 
             if (!filePath) {
+                // Fallback: construct path directly (for non-imported docs)
+                const relativePath = path.join('.switchboard', 'docs', `${slugPrefix}.md`);
+                const resolved = await this._resolveWorkspacePath(relativePath);
+                filePath = resolved.path;
+            }
+
+            if (!filePath || !fs.existsSync(filePath)) {
                 this._panel?.webview.postMessage({
                     type: 'previewError',
                     sourceId: 'local-folder',
@@ -1279,10 +1310,6 @@ export class PlanningPanelProvider {
                     error: 'File not found'
                 });
                 return;
-            }
-
-            if (source !== 'active workspace') {
-                console.log(`[PlanningPanelProvider] Doc file found in ${source}: ${filePath}`);
             }
 
             const content = fs.readFileSync(filePath, 'utf-8');
@@ -1442,7 +1469,8 @@ export class PlanningPanelProvider {
                     workspaceRoot,
                     result.content || '',
                     docName,
-                    sourceId
+                    sourceId,
+                    { skipDesignDocLink: true }
                 );
                 if (writeResult.error) {
                     this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
@@ -1467,6 +1495,9 @@ export class PlanningPanelProvider {
                 const pages = await adapter.listDocPages(docId);
                 
                 if (pages && pages.length > 1) {
+                    // Reverse pages so first page gets order 0 (ClickUp API returns pages in reverse order)
+                    const reversedPages = [...pages].reverse();
+                    
                     // Import each page as a separate doc
                     let importedCount = 0;
                     let errorCount = 0;
@@ -1474,7 +1505,7 @@ export class PlanningPanelProvider {
                     
                     // Track page index for order preservation
                     let pageIndex = 0;
-                    for (const page of pages) {
+                    for (const page of reversedPages) {
                         try {
                             const result = await adapter.fetchPageContent!(docId, page.id);
                             if (result.success && result.content) {
@@ -1485,9 +1516,8 @@ export class PlanningPanelProvider {
                                     result.content,
                                     pageDocName,
                                     sourceId,
-                                    { pageOrder: pageIndex, parentDocName: docName }
+                                    { pageOrder: pageIndex, parentDocName: docName, skipDesignDocLink: true }
                                 );
-                                pageIndex++;
                                 
                                 if (writeResult.success && writeResult.savedPath) {
                                     importedCount++;
@@ -1511,8 +1541,9 @@ export class PlanningPanelProvider {
                                         lastSyncedAt: new Date().toISOString(),
                                         contentHash: contentHash,
                                         workspaceId: workspaceId,
-                                        displayOrder: pageIndex - 1
+                                        displayOrder: pageIndex
                                     });
+                                    pageIndex++;
                                 } else {
                                     errorCount++;
                                 }
@@ -1546,7 +1577,8 @@ export class PlanningPanelProvider {
                 workspaceRoot,
                 content,
                 docName,
-                sourceId
+                sourceId,
+                { skipDesignDocLink: true }
             );
 
             if (writeResult.error) {

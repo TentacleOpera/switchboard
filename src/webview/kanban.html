@@ -1777,7 +1777,7 @@
           { key:'planner', label:'Planner' }, { key:'lead', label:'Lead Coder' },
           { key:'coder', label:'Coder' }, { key:'reviewer', label:'Reviewer' },
           { key:'tester', label:'Acceptance Tester' }, { key:'intern', label:'Intern' },
-          { key:'analyst', label:'Analyst' }, { key:'team-lead', label:'Team Lead' },
+          { key:'analyst', label:'Analyst' },
         ];
         let promptsTabOverrides = {};
         let promptsTabPreviews = {};
@@ -2095,7 +2095,7 @@
             { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
-        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': false, jules: true, gatherer: false };
+        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: false };
         let columns = columnDefinitions
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
@@ -3394,7 +3394,7 @@
                     const dropMode = columnDragDropModes[resolvedTarget] || 'cli';
                     const dispatchType = tgtIdx < srcIdx
                         ? 'backward'
-                        : (!cliTriggersEnabled ? 'move' : (dropMode === 'prompt' ? 'prompt' : 'cli'));
+                        : (dropMode === 'prompt' ? 'prompt' : (!cliTriggersEnabled ? 'move' : 'cli'));
                     const groupKey = dispatchType === 'prompt'
                         ? `${dispatchType}::${resolvedTarget}::${sourceColumnForPrompt}`
                         : `${dispatchType}::${resolvedTarget}`;
@@ -3608,28 +3608,28 @@
             });
 
             // Check for CONTEXT GATHERER -> coded column transition for execute prompt copy
-            const codedColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED', 'TEAM LEAD CODED'];
+            const codedColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
             const isGatherToCoded = sourceColumnForPrompt === 'CONTEXT GATHERER' && codedColumns.includes(effectiveTargetColumn);
 
             if (validIds.length > 0) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 setTimeout(() => {
-                    if (cliTriggersEnabled && forwardIds.length > 0) {
+                    if (forwardIds.length > 0) {
                         if (dropMode === 'prompt') {
-                            // Prompt mode: copy prompt to clipboard + visual advance (no CLI dispatch)
-                            // sourceColumnForPrompt was captured before the optimistic card.column update
+                            // Prompt mode: copy prompt to clipboard + visual advance (no CLI dispatch needed)
                             postKanbanMessage({ type: 'promptOnDrop', sessionIds: forwardIds, sourceColumn: sourceColumnForPrompt, targetColumn: effectiveTargetColumn, workspaceRoot });
-                        } else {
+                        } else if (cliTriggersEnabled) {
                             // CLI mode: dispatch to CLI agent (existing behaviour)
                             if (forwardIds.length === 1) {
                                 postKanbanMessage({ type: 'triggerAction', sessionId: forwardIds[0], targetColumn: effectiveTargetColumn, workspaceRoot });
                             } else {
                                 postKanbanMessage({ type: 'triggerBatchAction', sessionIds: forwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                             }
+                        } else {
+                            // No CLI triggers and not prompt mode — just move the card forward
+                            postKanbanMessage({ type: 'moveCardForward', sessionIds: forwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                         }
-                    } else if (forwardIds.length > 0) {
-                        postKanbanMessage({ type: 'moveCardForward', sessionIds: forwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
                     }
 
                     // Silent clipboard copy for gather -> coded transition (single card only)

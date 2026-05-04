@@ -2086,36 +2086,7 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }));
 
-        // 9. LEASE SYSTEM: Heartbeat every 60s to update lastSeen for all locally-owned
-        // terminals. This prevents Window A from pruning Window B's still-active terminals
-        // (Window B will have heartbeated recently, keeping its lastSeen fresh).
-        const HEARTBEAT_INTERVAL_MS = 60_000;
-        const heartbeatInterval = setInterval(async () => {
-            // Parallelize PID resolution so the heartbeat completes in ~5s max
-            // regardless of terminal count. Sequential awaits made this O(N*5s)
-            // and could block the event loop every 60s with many terminals.
-            const entries = Array.from(registeredTerminals.entries());
-            const pids = await Promise.all(
-                entries.map(([, terminal]) =>
-                    waitWithTimeout(terminal.processId, 5000, undefined).catch(() => undefined)
-                )
-            );
-            for (let i = 0; i < entries.length; i++) {
-                const [name] = entries[i];
-                const pid = pids[i];
-                if (pid && mcpServerProcess) {
-                    mcpServerProcess.send({
-                        type: 'registerTerminal',
-                        name,
-                        pid,
-                        friendlyName: name,
-                        skipParentResolution: true,
-                        ideName: vscode.env.appName
-                    });
-                }
-            }
-        }, HEARTBEAT_INTERVAL_MS);
-        context.subscriptions.push({ dispose: () => clearInterval(heartbeatInterval) });
+        // 9. LEASE SYSTEM: Heartbeat removed — only used for MCP server re-registration.
     }
 
     /**
@@ -2154,6 +2125,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
+        // TODO: Remove PID resolution when MCP server is removed — use name + ideName matching instead
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         if (!fs.existsSync(statePath)) return;
 
@@ -2814,7 +2786,6 @@ export async function activate(context: vscode.ExtensionContext) {
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents();
         const startupCommands = await taskViewerProvider.getStartupCommands();
-        const teamLeadCommand = (startupCommands['team-lead'] || '').trim();
         const allBuiltInAgents = [
             { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
@@ -2823,9 +2794,6 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Analyst', role: 'analyst' }
         ];
-        if (visibleAgents['team-lead'] === true && teamLeadCommand) {
-            allBuiltInAgents.push({ name: 'Team Lead', role: 'team-lead' });
-        }
 
         const agents: { name: string; role: string }[] = [];
         
@@ -2894,9 +2862,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
                 const healthy: vscode.Terminal[] = [];
                 for (const term of matches) {
-                    const pid = await waitWithTimeout(term.processId, 5000, undefined);
-                    if (!pid) {
-                        mcpOutputChannel?.appendLine(`[Extension] Disposing stale grid terminal '${term.name}' for agent '${agent.name}' (PID unresolved)`);
+                    // Use exitStatus instead of PID — terminals with undefined exitStatus are alive
+                    if (term.exitStatus !== undefined) {
+                        mcpOutputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
                         term.dispose();
                         continue;
                     }
@@ -2952,23 +2920,17 @@ export async function activate(context: vscode.ExtensionContext) {
                     terminal = vscode.window.createTerminal(gridTermOpts);
                 }
 
-                let pid: number | undefined;
-                try {
-                    pid = await waitWithTimeout(terminal.processId, 5000, undefined);
-                } catch (e) {
-                    mcpOutputChannel?.appendLine(`[Extension] Warning: Could not resolve PID for grid terminal '${agent.name}': ${e}`);
-                }
-                // Always register — skipParentResolution handles null/unresolved PIDs gracefully
+                // Skip PID resolution for agent grid terminals — not needed for terminal messaging
                 batchRegistrations.push({
                     name: suffixedName(agent.name),
                     purpose: 'agent-grid',
                     role: agent.role,
-                    pid: pid ?? null,
+                    pid: null,
                     friendlyName: agent.name,
                     skipParentResolution: true,
                     ideName: vscode.env.appName
                 });
-                mcpOutputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: ${pid ?? 'unresolved'}) for batch registration`);
+                mcpOutputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
 
                 registeredTerminals.set(suffixedName(agent.name), terminal);
                 createdTerminals.push(terminal);
@@ -3020,13 +2982,11 @@ export async function activate(context: vscode.ExtensionContext) {
             try {
                 for (const agent of agents) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
-                    // Note: Agent-specific fallbacks (e.g., jules_monitor → 'jules', intern → Ollama model)
-                    // are now handled centrally in TaskViewerProvider.getAgentStartupCommand
+                    // Note: Agent-specific fallbacks (e.g., jules_monitor → 'jules')
+                    // are handled inside TaskViewerProvider.getAgentStartupCommand.
                     if (cmd && cmd.trim()) {
                         const terminal = registeredTerminals.get(suffixedName(agent.name));
                         if (terminal) {
-                            // Delay to ensure shell process is ready
-                            await new Promise(r => setTimeout(r, 1000));
                             terminal.sendText(cmd.trim(), true);
                             mcpOutputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
                         }
@@ -3706,6 +3666,7 @@ async function autoRegisterTerminals(workspaceRoot: string) {
         if (registeredTerminals.has(name)) continue;
 
         try {
+            // TODO: Remove PID resolution when MCP server is removed
             const pid = await waitWithTimeout(terminal.processId, 5000, undefined);
             if (!pid) continue;
 

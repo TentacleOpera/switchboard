@@ -40,15 +40,6 @@ import {
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
 import { LocalApiServer } from './LocalApiServer';
-import {
-    OllamaSetupService,
-    DEFAULT_OLLAMA_CLAUDE_MODEL,
-    OLLAMA_CLOUD_BASE_URL,
-    OLLAMA_LOCAL_BASE_URL,
-    type OllamaInternConfig as ImportedOllamaInternConfig,
-    type OllamaMode,
-    type OllamaSetupState as ImportedOllamaSetupState
-} from './OllamaSetupService';
 import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { RelayPromptService, RelayConfig } from './RelayPromptService';
 import { KanbanMigration } from './KanbanMigration';
@@ -197,16 +188,12 @@ type NotionSetupState = {
     designDocLink: string;
 };
 
-type OllamaInternConfig = ImportedOllamaInternConfig;
-type OllamaSetupState = ImportedOllamaSetupState;
-
 type LinearImportNode = {
     issue: LinearIssue;
     comments: LinearComment[];
     attachments: LinearAttachment[];
     subtasks: LinearImportNode[];
 };
-
 type PlanRegistryEntry = {
     planId: string;
     ownerWorkspaceId: string;
@@ -268,6 +255,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _pendingPlanCreations = new Set<string>(); // suppress watcher for internally created plans
     private _planCreationInFlight = new Set<string>(); // same-file mutex for watcher/direct create races
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
+    private _clickUpConfigCache: Map<string, any> = new Map();
     private _recentNativePlanCreations = new Map<string, NodeJS.Timeout>(); // 4s TTL dedup: prevents native fs.watch double-fire after VS Code watcher has already handled the creation
     private _postRegistrationCleanupTimer: NodeJS.Timeout | undefined;      // deferred duplicate-row cleanup after watcher-triggered registrations
     private _sessionWatcher?: vscode.FileSystemWatcher;
@@ -329,7 +317,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _notionServices: Map<string, NotionFetchService> = new Map();
     private _clickUpServices: Map<string, ClickUpSyncService> = new Map();
     private _linearServices: Map<string, LinearSyncService> = new Map();
-    private _ollamaServices: Map<string, OllamaSetupService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
     private readonly _relayPromptService = new RelayPromptService();
     private _localApiServer: LocalApiServer | null = null;
@@ -845,8 +832,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         switch (role) {
             case 'lead':
                 return ['lead coder', 'lead'];
-            case 'team-lead':
-                return ['team lead', 'team-lead'];
             case 'coder':
                 return ['coder'];
             case 'reviewer':
@@ -1073,7 +1058,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _columnToRole(column: string): string | null {
         switch (column) {
             case 'PLAN REVIEWED': return 'planner';
-            case 'TEAM LEAD CODED': return 'team-lead';
             case 'LEAD CODED': return 'lead';
             case 'CODER CODED': return 'coder';
             case 'INTERN CODED': return 'intern';
@@ -1091,8 +1075,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'lead':
             case 'team':
                 return 'LEAD CODED';
-            case 'team-lead':
-                return 'TEAM LEAD CODED';
             case 'coder':
             case 'jules':
                 return 'CODER CODED';
@@ -1104,7 +1086,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _codedColumnForDispatchRoles(roles: string[]): string {
-        if (roles.includes('team-lead')) return 'TEAM LEAD CODED';
         if (roles.includes('lead')) return 'LEAD CODED';
         if (roles.includes('intern')) return 'INTERN CODED';
         return 'CODER CODED';
@@ -1112,7 +1093,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _isCompletedCodingColumn(column: string | null | undefined): boolean {
         const normalizedColumn = this._normalizeLegacyKanbanColumn(column);
-        return normalizedColumn === 'TEAM LEAD CODED' || normalizedColumn === 'LEAD CODED' || normalizedColumn === 'CODER CODED' || normalizedColumn === 'INTERN CODED';
+        return normalizedColumn === 'LEAD CODED' || normalizedColumn === 'CODER CODED' || normalizedColumn === 'INTERN CODED';
     }
 
     private _targetColumnForRole(role: string): string | null {
@@ -1124,7 +1105,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'intern':
             case 'jules':
             case 'team':
-            case 'team-lead':
                 return this._codedColumnForRole(role);
             case 'reviewer':
                 return 'CODE REVIEWED';
@@ -1147,8 +1127,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'coder';
             case 'INTERN CODED':
                 return 'intern';
-            case 'TEAM LEAD CODED':
-                return 'team-lead';
             case 'CODE REVIEWED':
                 return 'reviewer';
             case 'ACCEPTANCE TESTED':
@@ -1158,7 +1136,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _resolvePlanReviewedDispatchRole(sessionId: string, workspaceRoot: string): Promise<'lead' | 'coder' | 'intern' | 'team-lead'> {
+    private async _resolvePlanReviewedDispatchRole(sessionId: string, workspaceRoot: string): Promise<'lead' | 'coder' | 'intern'> {
         if (!this._kanbanProvider) {
             return 'lead';
         }
@@ -1171,13 +1149,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, sheet.planFile);
         const score = parseComplexityScore(complexity);
         return this._kanbanProvider.resolveRoutedRole(score);
-    }
-
-    public handleGetTeamLeadRoutingSettings(): { complexityCutoff: number; kanbanOrder: number } {
-        return this._kanbanProvider?.getTeamLeadRoutingSettings() ?? {
-            complexityCutoff: 0,
-            kanbanOrder: 170
-        };
     }
 
     private _buildKanbanColumnsForWorkspace(
@@ -1291,7 +1262,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'LEAD CODED':
             case 'CODER CODED':
             case 'INTERN CODED':
-            case 'TEAM LEAD CODED':
                 return 'CODE REVIEWED';
             case 'CODE REVIEWED':
                 return await this._isAcceptanceTesterActive(workspaceRoot) ? 'ACCEPTANCE TESTED' : null;
@@ -1807,7 +1777,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             'reviewer': 'reviewer-pass',
             'tester': 'tester-pass',
             'lead': 'handoff-lead',
-            'team-lead': 'handoff-lead',
             'coder': 'handoff',
             'intern': 'handoff',
             'jules': 'jules'
@@ -2512,24 +2481,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const config = await this.getStartupCommands(workspaceRoot);
         let cmd = config[role] || '';
 
-        // Apply strict fallback for Ollama Intern if explicitly configured but command is missing
-        if (role === 'intern' && (!cmd || cmd.trim() === '')) {
-            const ollamaModel = this._resolveOllamaInternModel(workspaceRoot);
-            if (ollamaModel) {
-                // SECURITY: validate model name against a strict whitelist before shell
-                // interpolation. The command is passed via terminal.sendText() which the
-                // user's shell interprets — an unvalidated value containing `;`, `&&`,
-                // `$(...)`, backticks, etc. would execute arbitrary shell.
-                // Ollama model names conform to `[<registry>/]<name>[:<tag>]` — safe chars only.
-                if (/^[A-Za-z0-9._:\/\-]+$/.test(ollamaModel)) {
-                    cmd = `ollama run ${ollamaModel}`;
-                    console.log(`[TaskViewerProvider] Repaired missing Ollama Intern command: ${cmd}`);
-                } else {
-                    console.error(`[TaskViewerProvider] Rejected Ollama Intern model name (invalid characters): ${JSON.stringify(ollamaModel)}`);
-                }
-            }
-        }
-
         // Fallback: jules_monitor defaults to 'jules' when configured command is missing/blank
         if (role === 'jules_monitor' && (!cmd || cmd.trim() === '')) {
             cmd = 'jules';
@@ -2537,46 +2488,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         return cmd;
-    }
-
-    /**
-     * Resolve the configured Ollama intern model name. Source of truth is VS Code
-     * workspace configuration (`switchboard.ollama.intern.model`), which is where
-     * OllamaSetupService writes the value. A secondary read of `.switchboard/state.json`
-     * is retained only for compatibility with older state shapes; it is NOT written by
-     * the current codebase.
-     */
-    private _resolveOllamaInternModel(workspaceRoot?: string): string | undefined {
-        // Primary: VS Code workspace configuration (authoritative — written by OllamaSetupService).
-        try {
-            const resolvedRoot = this._resolveStateWorkspaceRoot(workspaceRoot);
-            const configuration = resolvedRoot
-                ? vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot))
-                : vscode.workspace.getConfiguration('switchboard');
-            const fromSettings = configuration.get<string>('ollama.intern.model');
-            if (typeof fromSettings === 'string' && fromSettings.trim()) {
-                return fromSettings.trim();
-            }
-        } catch (e) {
-            console.error(`[TaskViewerProvider] Failed to read switchboard.ollama.intern.model from VS Code settings`, e);
-        }
-
-        // Secondary (legacy/compat): state.json. Nothing in the current codebase writes here,
-        // but external tooling or hand-edits may populate it.
-        const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (statePath) {
-            try {
-                const content = fs.readFileSync(statePath, 'utf8');
-                const state = JSON.parse(content);
-                const legacy = state?.switchboard?.ollama?.intern?.model;
-                if (typeof legacy === 'string' && legacy.trim()) {
-                    return legacy.trim();
-                }
-            } catch (e) {
-                console.error(`[TaskViewerProvider] Failed to read Ollama state for intern command correction`, e);
-            }
-        }
-        return undefined;
     }
 
     public async getPlanIngestionFolder(workspaceRoot?: string): Promise<string> {
@@ -2594,7 +2505,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async getVisibleAgents(workspaceRoot?: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': false, jules: true, gatherer: false };
+        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: false };
         const statePath = this._resolveStateFilePath(workspaceRoot);
         if (!statePath) return defaults;
         try {
@@ -2708,7 +2619,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async handleGetDefaultPromptPreviews(): Promise<Record<string, string>> {
-        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'team-lead'];
+        const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
         const placeholder: BatchPromptPlan = {
             topic: '[your selected plans]',
             absolutePath: '/path/to/plan.md',
@@ -2929,10 +2840,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             type: 'julesAutoSyncSetting',
             enabled: this.handleGetJulesAutoSyncSetting()
         });
-        this._setupPanelProvider.postMessage({
-            type: 'teamLeadRoutingSettings',
-            ...this.handleGetTeamLeadRoutingSettings()
-        });
 
         // Send planning sources configuration
         const config = vscode.workspace.getConfiguration('switchboard');
@@ -2983,9 +2890,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const integrationStates = await this.getIntegrationSetupStates(workspaceRoot);
         this._setupPanelProvider.postMessage({ type: 'integrationSetupStates', ...integrationStates });
-
-        const ollamaSetupState = await this.handleGetOllamaSetupState(workspaceRoot);
-        this._setupPanelProvider.postMessage({ type: 'ollamaSetupState', state: ollamaSetupState });
     }
 
     public async getIntegrationSetupStates(workspaceRoot?: string): Promise<{
@@ -3161,271 +3065,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
     }
 
-    private _getDefaultOllamaInternConfig(): OllamaInternConfig {
-        return {
-            enabled: false,
-            mode: 'cloud',
-            model: DEFAULT_OLLAMA_CLAUDE_MODEL,
-            baseUrl: OLLAMA_CLOUD_BASE_URL
-        };
-    }
-
-    private _buildUnavailableOllamaSetupState(intern: OllamaInternConfig, error: string): OllamaSetupState {
-        return {
-            installed: false,
-            daemonReachable: false,
-            authState: 'unknown',
-            cloudModels: [{
-                name: DEFAULT_OLLAMA_CLAUDE_MODEL,
-                displayName: 'Gemma 4 31B Cloud',
-                mode: 'cloud',
-                installed: false,
-                requiresDownload: false,
-                description: 'Recommended cloud model for Claude Code through Ollama.',
-                recommendedForClaudeLaunch: true
-            }],
-            localModels: [],
-            intern,
-            error
-        };
-    }
-
-    private _baseUrlForOllamaMode(mode: OllamaMode): string {
-        return mode === 'local' ? OLLAMA_LOCAL_BASE_URL : OLLAMA_CLOUD_BASE_URL;
-    }
-
-    private _getOllamaInternConfig(workspaceRoot?: string): OllamaInternConfig {
-        const defaults = this._getDefaultOllamaInternConfig();
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        const configuration = resolvedRoot
-            ? vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(resolvedRoot))
-            : vscode.workspace.getConfiguration('switchboard');
-        const mode = configuration.get<OllamaMode>('ollama.intern.mode', defaults.mode) === 'local' ? 'local' : 'cloud';
-        const defaultBaseUrl = this._baseUrlForOllamaMode(mode);
-        return {
-            enabled: configuration.get<boolean>('ollama.intern.enabled', defaults.enabled),
-            mode,
-            model: String(configuration.get<string>('ollama.intern.model', defaults.model) || defaults.model).trim() || defaults.model,
-            baseUrl: String(configuration.get<string>('ollama.intern.baseUrl', defaultBaseUrl) || defaultBaseUrl).trim() || defaultBaseUrl
-        };
-    }
-
-    private async _saveOllamaInternConfig(workspaceRoot: string, config: OllamaInternConfig): Promise<void> {
-        const configuration = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(workspaceRoot));
-        await Promise.all([
-            configuration.update('ollama.intern.enabled', config.enabled, vscode.ConfigurationTarget.Workspace),
-            configuration.update('ollama.intern.mode', config.mode, vscode.ConfigurationTarget.Workspace),
-            configuration.update('ollama.intern.model', config.model, vscode.ConfigurationTarget.Workspace),
-            configuration.update('ollama.intern.baseUrl', config.baseUrl, vscode.ConfigurationTarget.Workspace)
-        ]);
-    }
-
-    private _findOllamaModel(state: OllamaSetupState, mode: OllamaMode, modelName: string) {
-        const catalog = mode === 'local' ? state.localModels : state.cloudModels;
-        return catalog.find((model) => model.name === modelName);
-    }
-
-    public async handleGetOllamaSetupState(workspaceRoot?: string): Promise<OllamaSetupState> {
-        const intern = this._getOllamaInternConfig(workspaceRoot);
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            return this._buildUnavailableOllamaSetupState(intern, 'No workspace open.');
-        }
-
-        try {
-            return await this._getOllamaService(resolvedRoot).getSetupState(intern);
-        } catch (error) {
-            return this._buildUnavailableOllamaSetupState(
-                intern,
-                error instanceof Error ? error.message : String(error)
-            );
-        }
-    }
-
-    public async handleOpenOllamaInstall(): Promise<{ success: boolean; message?: string; error?: string }> {
-        try {
-            await new OllamaSetupService(this._resolveWorkspaceRoot() || this._extensionUri.fsPath).openInstallPage();
-            return { success: true, message: 'Opened the Ollama download page.' };
-        } catch (error) {
-            return { success: false, error: error instanceof Error ? error.message : String(error) };
-        }
-    }
-
-    public async handleOllamaSignIn(workspaceRoot?: string): Promise<{ success: boolean; message?: string; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            return { success: false, error: 'No workspace open.' };
-        }
-
-        try {
-            await this._getOllamaService(resolvedRoot).signIn();
-            return { success: true, message: 'Opened an Ollama terminal. Complete the sign-in flow there.' };
-        } catch (error) {
-            return { success: false, error: error instanceof Error ? error.message : String(error) };
-        }
-    }
-
-    public async handleOllamaSignOut(workspaceRoot?: string): Promise<{ success: boolean; message?: string; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            return { success: false, error: 'No workspace open.' };
-        }
-
-        try {
-            await this._getOllamaService(resolvedRoot).signOut();
-            return { success: true, message: 'Signed out of Ollama.' };
-        } catch (error) {
-            return { success: false, error: error instanceof Error ? error.message : String(error) };
-        }
-    }
-
-    public async handleOllamaPullModel(
-        modelName: string,
-        workspaceRoot?: string
-    ): Promise<{ success: boolean; model: string; message?: string; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        const normalizedModel = String(modelName || '').trim();
-        if (!resolvedRoot) {
-            return { success: false, model: normalizedModel, error: 'No workspace open.' };
-        }
-
-        const state = await this.handleGetOllamaSetupState(resolvedRoot);
-        const selectedModel = this._findOllamaModel(state, 'local', normalizedModel);
-        if (!selectedModel) {
-            return { success: false, model: normalizedModel, error: 'Select a known local Ollama model before downloading.' };
-        }
-        if (selectedModel.installed) {
-            return { success: true, model: normalizedModel, message: `${normalizedModel} is already available locally.` };
-        }
-
-        const result = await this._getOllamaService(resolvedRoot).pullModel(normalizedModel);
-        if (!result.started) {
-            return { success: false, model: normalizedModel, error: result.error || 'Failed to start the Ollama download.' };
-        }
-
-        return {
-            success: true,
-            model: normalizedModel,
-            message: `Started downloading ${normalizedModel}.`
-        };
-    }
-
-    public async handleGetOllamaPullProgress(
-        modelName: string,
-        workspaceRoot?: string
-    ): Promise<{ success: boolean; model: string; progress?: OllamaSetupState['activePull']; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        const normalizedModel = String(modelName || '').trim();
-        if (!resolvedRoot) {
-            return { success: false, model: normalizedModel, error: 'No workspace open.' };
-        }
-
-        try {
-            const progress = normalizedModel
-                ? this._getOllamaService(resolvedRoot).getPullProgress(normalizedModel)
-                : undefined;
-            return { success: true, model: normalizedModel, progress };
-        } catch (error) {
-            return {
-                success: false,
-                model: normalizedModel,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-
-    public async handleSetOllamaInternModel(
-        payload: {
-            enabled?: boolean;
-            mode?: OllamaMode;
-            model?: string;
-        },
-        workspaceRoot?: string
-    ): Promise<{ success: boolean; intern?: OllamaInternConfig; message?: string; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            return { success: false, error: 'No workspace open.' };
-        }
-
-        const currentConfig = this._getOllamaInternConfig(resolvedRoot);
-        const nextMode = payload.mode === 'local' ? 'local' : payload.mode === 'cloud' ? 'cloud' : currentConfig.mode;
-        const state = await this.handleGetOllamaSetupState(resolvedRoot);
-
-        let nextModel = String(payload.model || currentConfig.model || '').trim();
-        if (!nextModel && nextMode === 'cloud') {
-            nextModel = DEFAULT_OLLAMA_CLAUDE_MODEL;
-        }
-        if (!nextModel && nextMode === 'local') {
-            nextModel = state.localModels.find(model => model.installed)?.name || '';
-        }
-
-        if (!nextModel) {
-            return { success: false, error: 'Select an Ollama model first.' };
-        }
-
-        const selectedModel = this._findOllamaModel(state, nextMode, nextModel);
-        if (!selectedModel) {
-            return { success: false, error: 'Select a known Ollama model first.' };
-        }
-        if (nextMode === 'local' && !selectedModel.installed) {
-            return { success: false, error: `Download ${nextModel} before saving it for the intern.` };
-        }
-
-        const intern: OllamaInternConfig = {
-            enabled: payload.enabled ?? currentConfig.enabled,
-            mode: nextMode,
-            model: nextModel,
-            baseUrl: this._baseUrlForOllamaMode(nextMode)
-        };
-        await this._saveOllamaInternConfig(resolvedRoot, intern);
-
-        // Also update the intern startup command to match the Ollama config
-        await this.updateState(async (state) => {
-            if (!state.startupCommands) {
-                state.startupCommands = {};
-            }
-            state.startupCommands.intern = intern.enabled
-                ? `ollama launch claude --model ${nextModel}`
-                : '';
-        });
-
-        return {
-            success: true,
-            intern,
-            message: intern.enabled
-                ? `Saved ${intern.model} for the intern.`
-                : `Saved ${intern.model}; the Ollama intern is currently disabled.`
-        };
-    }
-
-    public async handleLaunchClaudeCodeWithOllama(
-        modelName?: string,
-        workspaceRoot?: string
-    ): Promise<{ success: boolean; model?: string; message?: string; error?: string }> {
-        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedRoot) {
-            return { success: false, error: 'No workspace open.' };
-        }
-
-        const savedConfig = this._getOllamaInternConfig(resolvedRoot);
-        const selectedModel = String(modelName || savedConfig.model || DEFAULT_OLLAMA_CLAUDE_MODEL).trim() || DEFAULT_OLLAMA_CLAUDE_MODEL;
-
-        try {
-            await this._getOllamaService(resolvedRoot).launchClaudeCode(selectedModel);
-            return {
-                success: true,
-                model: selectedModel,
-                message: `Launched Claude Code with ${selectedModel}.`
-            };
-        } catch (error) {
-            return {
-                success: false,
-                model: selectedModel,
-                error: error instanceof Error ? error.message : String(error)
-            };
-        }
-    }
-
     public async handleApplyClickUpConfig(
         token: string,
         options: ClickUpApplyOptions
@@ -3449,6 +3088,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (result.success) {
             await this._kanbanProvider?.initializeIntegrationAutoPull();
             await this._kanbanProvider?.applyLiveSyncConfig(resolvedRoot);
+            this._invalidateClickUpConfigCache(resolvedRoot);
         }
         return result;
     }
@@ -3465,6 +3105,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 .map((item) => item.id);
             await this._getClickUpService(resolvedRoot).saveColumnMappings(selections, columns);
             await this._kanbanProvider?.initializeIntegrationAutoPull();
+            this._invalidateClickUpConfigCache(resolvedRoot);
             return { success: true };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -3482,6 +3123,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             await this._getClickUpService(resolvedRoot).saveAutomationSettings(automationRules);
             await this._kanbanProvider?.initializeIntegrationAutoPull();
+            this._invalidateClickUpConfigCache(resolvedRoot);
             return { success: true };
         } catch (error) {
             return { success: false, error: error instanceof Error ? error.message : String(error) };
@@ -4353,6 +3995,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return service;
     }
 
+    private async _getCachedClickUpConfig(workspaceRoot: string): Promise<any> {
+        const cached = this._clickUpConfigCache.get(workspaceRoot);
+        if (cached) {
+            return cached;
+        }
+        const clickUp = this._getClickUpService(workspaceRoot);
+        const config = await clickUp.loadConfig();
+        if (config) {
+            this._clickUpConfigCache.set(workspaceRoot, config);
+        }
+        return config;
+    }
+
+    private _invalidateClickUpConfigCache(workspaceRoot: string): void {
+        this._clickUpConfigCache.delete(workspaceRoot);
+    }
+
     private _getLinearService(workspaceRoot: string): LinearSyncService {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existing = this._linearServices.get(resolvedRoot);
@@ -4652,17 +4311,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public getLocalFolderService(workspaceRoot: string): LocalFolderService {
         return new LocalFolderService(workspaceRoot);
-    }
-
-    private _getOllamaService(workspaceRoot: string): OllamaSetupService {
-        const resolvedRoot = path.resolve(workspaceRoot);
-        const existing = this._ollamaServices.get(resolvedRoot);
-        if (existing) {
-            return existing;
-        }
-        const service = new OllamaSetupService(resolvedRoot);
-        this._ollamaServices.set(resolvedRoot, service);
-        return service;
     }
 
     private async _logAndPostRecentActivityBackfill(workspaceRoot?: string): Promise<void> {
@@ -5601,7 +5249,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         switch (column) {
             case 'CREATED': return 'planner';
             case 'PLAN REVIEWED': return 'lead';
-            case 'TEAM LEAD CODED':
             case 'INTERN CODED':
             case 'LEAD CODED':
             case 'CODER CODED':
@@ -5637,7 +5284,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _autobanRoutePlanReviewedCard(
         complexity: string,
         routingMode: AutobanConfigState['routingMode']
-    ): 'intern' | 'coder' | 'lead' | 'team-lead' {
+    ): 'intern' | 'coder' | 'lead' {
         if (routingMode === 'all_coder') {
             return 'coder';
         }
@@ -5734,7 +5381,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
         const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
         const designDocLink = this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined;
-        const designDocContent = workspaceRoot ? (await this._getDesignDocContent(workspaceRoot)) || undefined : undefined;
+        const designDocContent = (this._isDesignDocEnabled() && workspaceRoot) ? (await this._getDesignDocContent(workspaceRoot)) || undefined : undefined;
         return buildKanbanBatchPrompt(role, plans, {
             instruction,
             includeInlineChallenge,
@@ -5977,15 +5624,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     data.designDocLink || undefined,
                     vscode.ConfigurationTarget.Workspace
                 );
-            }
-            if (this._kanbanProvider) {
-                const workspaceRoot = this._resolveWorkspaceRoot() ?? undefined;
-                if (data.teamLeadComplexityCutoff !== undefined) {
-                    await this._kanbanProvider.setTeamLeadComplexityCutoff(Number(data.teamLeadComplexityCutoff), workspaceRoot);
-                }
-                if (data.teamLeadKanbanOrder !== undefined) {
-                    await this._kanbanProvider.setTeamLeadKanbanOrder(Number(data.teamLeadKanbanOrder), workspaceRoot);
-                }
             }
 
             if (typeof data.planIngestionFolder === 'string' && !validationError) {
@@ -6533,8 +6171,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            const routedSessions: Record<'intern' | 'coder' | 'lead' | 'team-lead', Array<{ sessionId: string; sourceColumn: string }>> = {
-                'team-lead': [],
+            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; sourceColumn: string }>> = {
                 intern: [],
                 coder: [],
                 lead: []
@@ -6544,16 +6181,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 routedSessions[targetRole].push({ sessionId: card.sessionId, sourceColumn: card.sourceColumn });
             }
 
-            console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions['team-lead'].length} → team-lead, ${routedSessions.intern.length} → intern, ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
+            console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions.intern.length} → intern, ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
 
             // Dispatch sequentially to avoid file and terminal lock contention.
             // Fallback chain: if the preferred role has no terminal, escalate via getFallbackRole
             // until lead (which has no further fallback).
-            for (const role of ['team-lead', 'intern', 'coder', 'lead'] as const) {
+            for (const role of ['intern', 'coder', 'lead'] as const) {
                 if (routedSessions[role].length > 0) {
-                    let targetRole: 'team-lead' | 'intern' | 'coder' | 'lead' = role;
+                    let targetRole: 'intern' | 'coder' | 'lead' = role;
                     let ok = await dispatchWithAutobanTerminal(targetRole, routedSessions[role]);
-                    while (!ok && targetRole !== 'lead' && targetRole !== 'team-lead') {
+                    while (!ok && targetRole !== 'lead') {
                         const fallback = getFallbackRole(targetRole);
                         console.log(`[Autoban] ${targetRole} dispatch failed, falling back to ${fallback}`);
                         targetRole = fallback;
@@ -7089,13 +6726,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
 
                         const clickUp = this._getClickUpService(workspaceRoot);
-                        const config = await clickUp.loadConfig();
+                        const config = await this._getCachedClickUpConfig(workspaceRoot);
 
                         if (!config?.setupComplete) {
                             this._view?.webview.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'setup-required',
-                                message: 'Set up ClickUp in Setup before using the Project tab.',
+                                message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
                                 loadSeq
                             });
                             break;
@@ -7107,7 +6744,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({
                                 type: 'clickupProjectLoaded',
                                 status: 'setup-required',
-                                message: 'Select a Space, Folder, and List to view tasks.',
+                                message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
                                 loadSeq
                             });
                             break;
@@ -7233,6 +6870,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 config.selectedListId = String(data.listId || '').trim();
                                 config.selectedListName = String(data.listName || '').trim();
                                 await clickUp.saveConfig(config);
+                                this._invalidateClickUpConfigCache(workspaceRoot);
                             }
                         } catch (error) {
                             console.error('Failed to save ClickUp list selection:', error);
@@ -7255,6 +6893,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 config.selectedListId = '';
                                 config.selectedListName = '';
                                 await clickUp.saveConfig(config);
+                                this._invalidateClickUpConfigCache(workspaceRoot);
                             }
                         } catch (error) {
                             console.error('Failed to save ClickUp space selection:', error);
@@ -7276,6 +6915,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 config.selectedListId = '';
                                 config.selectedListName = '';
                                 await clickUp.saveConfig(config);
+                                this._invalidateClickUpConfigCache(workspaceRoot);
                             }
                         } catch (error) {
                             console.error('Failed to save ClickUp folder selection:', error);
@@ -11500,7 +11140,6 @@ What would you like to find?`;
             'CREATED': 'Planner',
             'PLAN REVIEWED': 'Planner',
             'LEAD CODED': 'Lead Coder',
-            'TEAM LEAD CODED': 'Team Lead',
             'CODER CODED': 'Coder',
             'CODE REVIEWED': 'Reviewer',
             'ACCEPTANCE TESTED': 'Acceptance Tester'
@@ -13760,7 +13399,7 @@ What would you like to find?`;
                 instruction: plannerInstruction,
                 aggressivePairProgramming: this._isAggressivePairProgrammingEnabled(),
                 designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
-                designDocContent: await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined,
+                designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides
             });
 
@@ -13812,18 +13451,13 @@ What would you like to find?`;
             }
             messagePayload = buildKanbanBatchPrompt('tester', [dispatchPlan], {
                 designDocLink: this._getDesignDocLink().trim(),
-                designDocContent: await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined,
+                designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
             messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { includeInlineChallenge, defaultPromptOverrides: this._cachedDefaultPromptOverrides });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
-        } else if (role === 'team-lead') {
-            messagePayload = buildKanbanBatchPrompt('team-lead', [dispatchPlan], {
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
-            });
-            messageMetadata.phase_gate = { enforce_persona: 'team-lead' };
         } else if (role === 'coder') {
             if (baseInstruction === 'create-signal-file') {
                 messagePayload = this._withCoderAccuracyInstruction(`The first implementation phase has passed. As your next step, create a signal file to notify the Reviewer:
@@ -15584,7 +15218,7 @@ Create this file exactly as specified, then continue your work.`);
                 const leadAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
                 const coderAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
                 const teamReady = !!(leadAgent && (leadAgent as any).alive && coderAgent && (coderAgent as any).alive);
-                const roles = ['lead', 'team-lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
+                const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
                 const roleCandidates = Object.fromEntries(customAgents.map(agent => [agent.role, [agent.name, agent.role]]));
                 const dispatchReadiness = this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
 

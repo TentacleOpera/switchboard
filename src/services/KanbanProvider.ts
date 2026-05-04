@@ -99,6 +99,8 @@ export interface KanbanCard {
     lastActivity: string;
     complexity: string;
     workspaceRoot: string;
+    dependencies: string[];
+    hasBlockingDependencies: boolean;
 }
 
 /**
@@ -141,8 +143,6 @@ export class KanbanProvider implements vscode.Disposable {
     private _showingBacklog: boolean = false;
     private _allowUnknownComplexityAutoMove: boolean;
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
-    private _teamLeadComplexityCutoff: number;
-    private _teamLeadKanbanOrder: number;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
     private _relayPromptService: RelayPromptService;
@@ -151,6 +151,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
     private _nativeFsWatchers?: fs.FSWatcher[];
+    private _workspaceSaveTimeout: NodeJS.Timeout | null = null;
 
     public setTaskViewerProvider(provider: TaskViewerProvider) {
         this._taskViewerProvider = provider;
@@ -247,6 +248,8 @@ export class KanbanProvider implements vscode.Disposable {
         outputChannel?: vscode.OutputChannel
     ) {
         this._outputChannel = outputChannel;
+        const persistedWorkspace = this._context.workspaceState.get<{ index: number; name: string } | null>('kanban.lastSelectedWorkspace', null);
+        this._currentWorkspaceRoot = this._resolvePersistedWorkspace(persistedWorkspace);
         this._cliTriggersEnabled = this._context.workspaceState.get<boolean>('kanban.cliTriggersEnabled', true);
         this._dynamicComplexityRoutingEnabled = this._context.workspaceState.get<boolean>(
             'kanban.dynamicComplexityRoutingEnabled',
@@ -255,8 +258,6 @@ export class KanbanProvider implements vscode.Disposable {
         this._columnDragDropModes = this._context.workspaceState.get<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
         this._routingMapConfig = this._context.workspaceState.get<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
         this._allowUnknownComplexityAutoMove = this._context.workspaceState.get<boolean>('kanban.allowUnknownComplexityAutoMove', false);
-        this._teamLeadComplexityCutoff = this._context.workspaceState.get<number>('kanban.teamLeadComplexityCutoff', 0);
-        this._teamLeadKanbanOrder = this._context.workspaceState.get<number>('kanban.teamLeadKanbanOrder', 170);
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._context.workspaceState.get<Record<string, number>>('kanban.orderOverrides', {})
         );
@@ -345,34 +346,6 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
-    public getTeamLeadRoutingSettings(): { complexityCutoff: number; kanbanOrder: number } {
-        const effectiveOverrides = this._getEffectiveKanbanOrderOverrides();
-        return {
-            complexityCutoff: this._teamLeadComplexityCutoff,
-            kanbanOrder: effectiveOverrides['TEAM LEAD CODED'] ?? this._teamLeadKanbanOrder
-        };
-    }
-
-    public async setTeamLeadComplexityCutoff(cutoff: number, workspaceRoot?: string): Promise<void> {
-        const normalized = Number.isFinite(cutoff) ? Math.max(0, Math.min(10, Math.round(cutoff))) : 0;
-        this._teamLeadComplexityCutoff = normalized;
-        await this._context.workspaceState.update('kanban.teamLeadComplexityCutoff', normalized);
-        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (resolvedWorkspaceRoot) {
-            this._scheduleBoardRefresh(resolvedWorkspaceRoot);
-        }
-    }
-
-    public async setTeamLeadKanbanOrder(order: number, workspaceRoot?: string): Promise<void> {
-        const normalized = Number.isFinite(order) ? Math.max(0, Math.round(order)) : 170;
-        this._teamLeadKanbanOrder = normalized;
-        await this._context.workspaceState.update('kanban.teamLeadKanbanOrder', normalized);
-        await this.setKanbanOrderOverrides({
-            ...this._getEffectiveKanbanOrderOverrides(),
-            'TEAM LEAD CODED': normalized
-        }, workspaceRoot);
-    }
-
     public getKanbanOrderOverrides(): Record<string, number> {
         return { ...this._getEffectiveKanbanOrderOverrides() };
     }
@@ -381,10 +354,6 @@ export class KanbanProvider implements vscode.Disposable {
         const normalized = this._sanitizeKanbanOrderOverrides(overrides);
         this._kanbanOrderOverrides = normalized;
         await this._context.workspaceState.update('kanban.orderOverrides', normalized);
-        if (typeof normalized['TEAM LEAD CODED'] === 'number') {
-            this._teamLeadKanbanOrder = normalized['TEAM LEAD CODED'];
-            await this._context.workspaceState.update('kanban.teamLeadKanbanOrder', this._teamLeadKanbanOrder);
-        }
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (resolvedWorkspaceRoot) {
             this._scheduleBoardRefresh(resolvedWorkspaceRoot);
@@ -392,14 +361,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getEffectiveKanbanOrderOverrides(): Record<string, number> {
-        const effectiveOverrides = { ...this._kanbanOrderOverrides };
-        if (
-            typeof this._teamLeadKanbanOrder === 'number'
-            && effectiveOverrides['TEAM LEAD CODED'] === undefined
-        ) {
-            effectiveOverrides['TEAM LEAD CODED'] = this._teamLeadKanbanOrder;
-        }
-        return effectiveOverrides;
+        return { ...this._kanbanOrderOverrides };
     }
 
     private _sanitizeKanbanOrderOverrides(overrides: Record<string, number> | undefined): Record<string, number> {
@@ -468,6 +430,56 @@ export class KanbanProvider implements vscode.Disposable {
         return this._currentWorkspaceRoot;
     }
 
+    private _resolvePersistedWorkspace(persisted: unknown): string | null {
+        // Runtime schema validation
+        if (!persisted || typeof persisted !== 'object') { return null; }
+        const p = persisted as Record<string, unknown>;
+        if (typeof p.index !== 'number' || !Array.isArray(p.pathSegments)) {
+            this._outputChannel?.appendLine('[KanbanProvider] Invalid persisted workspace schema');
+            return null;
+        }
+        const pathSegments = p.pathSegments as string[];
+        if (!pathSegments.every(s => typeof s === 'string')) {
+            this._outputChannel?.appendLine('[KanbanProvider] Invalid pathSegments in persisted workspace');
+            return null;
+        }
+
+        const roots = this._getWorkspaceRoots();
+        if (roots.length === 0) { return null; }
+
+        // Try by index first (fast path)
+        if (p.index >= 0 && p.index < roots.length) {
+            const candidate = roots[p.index];
+            // Validate pathSegments match (handles reordered workspaces)
+            const candidateSegments = this._getPathSegments(candidate);
+            if (this._pathSegmentsMatch(candidateSegments, pathSegments)) {
+                return candidate;
+            }
+        }
+
+        // Fallback: find by path segment match (more specific than basename)
+        for (const root of roots) {
+            const segments = this._getPathSegments(root);
+            if (this._pathSegmentsMatch(segments, pathSegments)) {
+                return root;
+            }
+        }
+
+        this._outputChannel?.appendLine(`[KanbanProvider] Persisted workspace not found, falling back to roots[0]`);
+        return null; // Will trigger fallback to roots[0]
+    }
+
+    private _getPathSegments(workspacePath: string): string[] {
+        const normalized = path.normalize(workspacePath);
+        const parts = normalized.split(path.sep).filter(p => p);
+        return parts.slice(-2); // Last 2 segments for cross-machine compatibility
+    }
+
+    private _pathSegmentsMatch(a: string[], b: string[]): boolean {
+        if (a.length !== b.length) return false;
+        return a.every((seg, i) => seg === b[i]);
+    }
+
     /**
      * Public getter for the currently selected workspace root.
      * Used by other providers to coordinate workspace selection.
@@ -481,11 +493,7 @@ export class KanbanProvider implements vscode.Disposable {
      * routing map (if configured) and the pair-programming intern→coder bypass.
      * This is the single source of truth for score→role resolution.
      */
-    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' | 'team-lead' {
-        if (this._teamLeadComplexityCutoff > 0 && score >= this._teamLeadComplexityCutoff) {
-            return 'team-lead';
-        }
-
+    public resolveRoutedRole(score: number): 'lead' | 'coder' | 'intern' {
         let role: 'lead' | 'coder' | 'intern';
 
         // Apply custom routing map if configured
@@ -1010,15 +1018,22 @@ export class KanbanProvider implements vscode.Disposable {
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
-            const cards: KanbanCard[] = activeRows.map(row => ({
-                sessionId: row.sessionId,
-                topic: row.topic || row.planFile || 'Untitled',
-                planFile: row.planFile || '',
-                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                lastActivity: row.updatedAt || row.createdAt || '',
-                complexity: row.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
-            }));
+            const cards: KanbanCard[] = activeRows.map(row => {
+                const deps = (typeof row.dependencies === 'string')
+                    ? row.dependencies.split(',').map(d => d.trim()).filter(Boolean)
+                    : [];
+                return {
+                    sessionId: row.sessionId,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
+                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                    lastActivity: row.updatedAt || row.createdAt || '',
+                    complexity: row.complexity || 'Unknown',
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    dependencies: deps,
+                    hasBlockingDependencies: deps.length > 0
+                };
+            });
 
             cards.push(...completedRows.map(rec => ({
                 sessionId: rec.sessionId,
@@ -1027,9 +1042,12 @@ export class KanbanProvider implements vscode.Disposable {
                 column: 'COMPLETED',
                 lastActivity: rec.updatedAt || rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
+                workspaceRoot: resolvedWorkspaceRoot,
+                dependencies: [],
+                hasBlockingDependencies: false
             })));
 
+            this._calculateBlockingDependencies(cards);
             this._lastCards = cards;
 
             // Build columns (with fallback to defaults)
@@ -1597,7 +1615,6 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<void> {
         const roleFromColumn: Record<string, string> = {
             'PLAN REVIEWED': 'planner',
-            'TEAM LEAD CODED': 'team-lead',
             'LEAD CODED': 'lead',
             'CODER CODED': 'coder',
             'INTERN CODED': 'intern',
@@ -1636,6 +1653,29 @@ export class KanbanProvider implements vscode.Disposable {
     private _normalizeLegacyKanbanColumn(column: string | null | undefined): string {
         const normalized = String(column || '').trim();
         return normalized === 'CODED' ? 'LEAD CODED' : normalized;
+    }
+
+    private _calculateBlockingDependencies(cards: KanbanCard[]): void {
+        const sessionIdToCard = new Map<string, KanbanCard>();
+        for (const card of cards) {
+            sessionIdToCard.set(card.sessionId, card);
+        }
+
+        for (const card of cards) {
+            if (!card.dependencies || card.dependencies.length === 0) {
+                card.hasBlockingDependencies = false;
+                continue;
+            }
+
+            const blocking = card.dependencies.some(dep => {
+                const depCard = sessionIdToCard.get(dep);
+                if (!depCard) return false;
+                // Dependencies in COMPLETED or CODE REVIEWED are not blocking
+                return depCard.column !== 'COMPLETED' && depCard.column !== 'CODE REVIEWED';
+            });
+
+            card.hasBlockingDependencies = blocking;
+        }
     }
 
     private _deriveLastAction(events: any[]): string {
@@ -1718,15 +1758,22 @@ export class KanbanProvider implements vscode.Disposable {
                 const dbRows = await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
-                cards = dbRows.map(row => ({
-                    sessionId: row.sessionId,
-                    topic: row.topic || row.planFile || 'Untitled',
-                    planFile: row.planFile || '',
-                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                    lastActivity: row.updatedAt || row.createdAt || '',
-                    complexity: row.complexity || 'Unknown',
-                    workspaceRoot: resolvedWorkspaceRoot
-                }));
+                cards = dbRows.map(row => {
+                    const deps = (typeof row.dependencies === 'string')
+                        ? row.dependencies.split(',').map(d => d.trim()).filter(Boolean)
+                        : [];
+                    return {
+                        sessionId: row.sessionId,
+                        topic: row.topic || row.planFile || 'Untitled',
+                        planFile: row.planFile || '',
+                        column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                        lastActivity: row.updatedAt || row.createdAt || '',
+                        complexity: row.complexity || 'Unknown',
+                        workspaceRoot: resolvedWorkspaceRoot,
+                        dependencies: deps,
+                        hasBlockingDependencies: deps.length > 0
+                    };
+                });
 
                 // Completed plans from DB
                 const completedRecords = await db.getCompletedPlans(workspaceId, completedLimit);
@@ -1737,8 +1784,12 @@ export class KanbanProvider implements vscode.Disposable {
                     column: 'COMPLETED',
                     lastActivity: rec.updatedAt || rec.createdAt || '',
                     complexity: rec.complexity || 'Unknown',
-                    workspaceRoot: resolvedWorkspaceRoot
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    dependencies: [],
+                    hasBlockingDependencies: false
                 })));
+
+                this._calculateBlockingDependencies(cards);
             } else if (workspaceId) {
                 console.warn(`[KanbanProvider] Kanban DB unavailable: ${db.lastInitError || 'unknown error'}`);
                 dbUnavailable = true;
@@ -1838,15 +1889,22 @@ export class KanbanProvider implements vscode.Disposable {
             ]);
             const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
 
-            const cards: KanbanCard[] = activeRows.map(row => ({
-                sessionId: row.sessionId,
-                topic: row.topic || row.planFile || 'Untitled',
-                planFile: row.planFile || '',
-                column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
-                lastActivity: row.updatedAt || row.createdAt || '',
-                complexity: row.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
-            }));
+            const cards: KanbanCard[] = activeRows.map(row => {
+                const deps = (typeof row.dependencies === 'string')
+                    ? row.dependencies.split(',').map(d => d.trim()).filter(Boolean)
+                    : [];
+                return {
+                    sessionId: row.sessionId,
+                    topic: row.topic || row.planFile || 'Untitled',
+                    planFile: row.planFile || '',
+                    column: this._normalizeLegacyKanbanColumn(row.kanbanColumn) || 'CREATED',
+                    lastActivity: row.updatedAt || row.createdAt || '',
+                    complexity: row.complexity || 'Unknown',
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    dependencies: deps,
+                    hasBlockingDependencies: deps.length > 0
+                };
+            });
 
             cards.push(...completedRows.map(rec => ({
                 sessionId: rec.sessionId,
@@ -1855,8 +1913,12 @@ export class KanbanProvider implements vscode.Disposable {
                 column: 'COMPLETED',
                 lastActivity: rec.updatedAt || rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
-                workspaceRoot: resolvedWorkspaceRoot
+                workspaceRoot: resolvedWorkspaceRoot,
+                dependencies: [],
+                hasBlockingDependencies: false
             })));
+
+            this._calculateBlockingDependencies(cards);
 
             const agentNames = await this._getAgentNames(resolvedWorkspaceRoot);
             const visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
@@ -2034,7 +2096,7 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<Record<string, string>> {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'team-lead'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
         for (const role of roles) {
             try {
                 // Build preview with empty plans and no options so only the base template
@@ -2109,7 +2171,12 @@ export class KanbanProvider implements vscode.Disposable {
                 await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);
             }
             if (typeof msg.dependencyCheckEnabled === 'boolean') {
-                await config.update('planner.dependencyCheckEnabled', msg.dependencyCheckEnabled, true);
+                await config.update("planner.dependencyCheckEnabled", msg.dependencyCheckEnabled, vscode.ConfigurationTarget.Global);
+                // Verify persistence
+                const readBack = config.get<boolean>("planner.dependencyCheckEnabled", true);
+                if (readBack !== msg.dependencyCheckEnabled) {
+                    console.warn("[KanbanProvider] dependencyCheckEnabled persistence failed: wrote " + msg.dependencyCheckEnabled + ", read back " + readBack);
+                }
             }
             if (typeof msg.designDocEnabled === 'boolean') {
                 await config.update('planner.designDocEnabled', msg.designDocEnabled, true);
@@ -2132,7 +2199,7 @@ export class KanbanProvider implements vscode.Disposable {
         if (designDocEnabled && designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
             try {
                 const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = (await notionService.loadCachedContent()) || undefined;
+                designDocContent = designDocEnabled ? (await notionService.loadCachedContent()) || undefined : undefined;
             } catch { /* non-fatal — fallback to URL */ }
         }
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
@@ -2257,7 +2324,6 @@ export class KanbanProvider implements vscode.Disposable {
         switch (column) {
             case 'CREATED': return 'improve-plan';
             case 'PLAN REVIEWED': return 'handoff';
-            case 'TEAM LEAD CODED': return 'review';
             case 'LEAD CODED': return 'review';
             case 'CODER CODED': return 'review';
             case 'CODE REVIEWED':
@@ -2432,8 +2498,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _isParallelCodedLane(columnId: string): boolean {
-        return columnId === 'TEAM LEAD CODED'
-            || columnId === 'LEAD CODED'
+        return columnId === 'LEAD CODED'
             || columnId === 'CODER CODED'
             || columnId === 'INTERN CODED';
     }
@@ -2532,7 +2597,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': false, jules: true, gatherer: false };
+        const defaults: Record<string, boolean> = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: false };
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
@@ -2610,6 +2675,10 @@ export class KanbanProvider implements vscode.Disposable {
             }
         }
 
+        const deps = (typeof sheet.dependencies === 'string')
+            ? sheet.dependencies.split(',').map((d: string) => d.trim()).filter(Boolean)
+            : (Array.isArray(sheet.dependencies) ? sheet.dependencies : []);
+
         return {
             sessionId: sheet.sessionId || '',
             topic: sheet.topic || sheet.planFile || 'Untitled',
@@ -2617,7 +2686,9 @@ export class KanbanProvider implements vscode.Disposable {
             column,
             lastActivity,
             complexity,
-            workspaceRoot
+            workspaceRoot,
+            dependencies: deps,
+            hasBlockingDependencies: false // Will be recalculated if passed through refresh logic
         };
     }
 
@@ -3048,7 +3119,7 @@ export class KanbanProvider implements vscode.Disposable {
         return aliases;
     }
 
-    private async _resolveComplexityRoutedRole(workspaceRoot: string, sessionId: string): Promise<'lead' | 'coder' | 'intern' | 'team-lead'> {
+    private async _resolveComplexityRoutedRole(workspaceRoot: string, sessionId: string): Promise<'lead' | 'coder' | 'intern'> {
         // When dynamic complexity routing is disabled, all tasks route to lead
         if (!this._dynamicComplexityRoutingEnabled) {
             return 'lead';
@@ -3113,9 +3184,8 @@ export class KanbanProvider implements vscode.Disposable {
     private async _partitionByComplexityRoute(
         workspaceRoot: string,
         sessionIds: string[]
-    ): Promise<Map<'lead' | 'coder' | 'intern' | 'team-lead', string[]>> {
-        const groups = new Map<'lead' | 'coder' | 'intern' | 'team-lead', string[]>([
-            ['team-lead', []],
+    ): Promise<Map<'lead' | 'coder' | 'intern', string[]>> {
+        const groups = new Map<'lead' | 'coder' | 'intern', string[]>([
             ['lead', []],
             ['coder', []],
             ['intern', []]
@@ -3166,8 +3236,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** Map a resolved dispatch role to its target Kanban column. */
-    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern' | 'team-lead'): string {
-        if (role === 'team-lead') return 'TEAM LEAD CODED';
+    private _targetColumnForDispatchRole(role: 'lead' | 'coder' | 'intern'): string {
         if (role === 'intern') return 'INTERN CODED';
         return role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
     }
@@ -3256,7 +3325,6 @@ export class KanbanProvider implements vscode.Disposable {
         // Record dispatch identity for MCP path (no terminal name available)
         const roleToCol: Record<string, string> = {
             'lead': 'LEAD CODED', 'coder': 'CODER CODED', 'intern': 'INTERN CODED',
-            'team-lead': 'TEAM LEAD CODED',
             'planner': 'PLANNED', 'reviewer': 'CODE REVIEWED', 'tester': 'ACCEPTANCE TESTED',
         };
         const targetColumn = roleToCol[resolvedTarget.role];
@@ -3288,6 +3356,18 @@ export class KanbanProvider implements vscode.Disposable {
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
                     this._resolveWorkspaceRoot(msg.workspaceRoot);
+
+                    // Debounce the persistence to prevent race conditions on rapid switches
+                    if (this._workspaceSaveTimeout) {
+                        clearTimeout(this._workspaceSaveTimeout);
+                    }
+                    this._workspaceSaveTimeout = setTimeout(async () => {
+                        const roots = this._getWorkspaceRoots();
+                        const index = roots.indexOf(msg.workspaceRoot);
+                        const pathSegments = this._getPathSegments(msg.workspaceRoot);
+                        await this._context.workspaceState.update('kanban.lastSelectedWorkspace', { index, pathSegments });
+                    }, 100);
+
                     this._setupSessionWatcher();
                     this._setupPlanContentWatcher();
                     // Sync TaskViewerProvider's plan watcher to the new workspace
@@ -4891,7 +4971,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     private _columnToRole(column: string): string | null {
         switch (column) {
             case 'PLAN REVIEWED': return 'planner';
-            case 'TEAM LEAD CODED': return 'team-lead';
             case 'LEAD CODED': return 'lead';
             case 'CODER CODED': return 'coder';
             case 'INTERN CODED': return 'intern';
@@ -4927,7 +5006,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
             try {
                 const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = (await notionService.loadCachedContent()) || undefined;
+                designDocContent = designDocEnabled ? (await notionService.loadCachedContent()) || undefined : undefined;
             } catch {
                 designDocContent = undefined;
             }

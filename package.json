@@ -308,34 +308,6 @@
           "description": "(Dev only) Allow MCP server to run from mutable workspace copy instead of immutable extension bundle.",
           "scope": "application"
         },
-        "switchboard.ollama.intern.enabled": {
-          "type": "boolean",
-          "default": false,
-          "description": "Enable the Ollama-backed intern launch target for this workspace.",
-          "scope": "resource"
-        },
-        "switchboard.ollama.intern.mode": {
-          "type": "string",
-          "enum": [
-            "cloud",
-            "local"
-          ],
-          "default": "cloud",
-          "description": "Preferred Ollama runtime for the intern profile in this workspace.",
-          "scope": "resource"
-        },
-        "switchboard.ollama.intern.model": {
-          "type": "string",
-          "default": "gemma4:31b-cloud",
-          "description": "Saved Ollama model for the intern profile in this workspace.",
-          "scope": "resource"
-        },
-        "switchboard.ollama.intern.baseUrl": {
-          "type": "string",
-          "default": "https://ollama.com/api",
-          "description": "Resolved Ollama API base URL for the saved intern profile.",
-          "scope": "resource"
-        },
         "mcpServers": {
           "type": "object",
           "default": {},

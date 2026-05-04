@@ -89,14 +89,6 @@
             margin-bottom: 4px;
         }
 
-        .ollama-status-line {
-            font-size: 10px;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-            margin-top: 6px;
-            line-height: 1.4;
-        }
-
         .setup-shell {
             max-width: 980px;
             margin: 0 auto;
@@ -105,40 +97,18 @@
             gap: 12px;
         }
 
-        .startup-section {
-            border: 1px solid var(--border-color);
-            background: var(--panel-bg);
-        }
-
-        .startup-toggle {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            cursor: pointer;
-            user-select: none;
-            padding: 12px 14px;
-        }
-
-        .startup-toggle .chevron {
-            font-size: 10px;
-            color: var(--text-secondary);
-            transition: transform 0.15s;
-        }
-
-        .startup-toggle .chevron.open {
-            transform: rotate(90deg);
-        }
-
-        .startup-fields {
+        /* Tab content panels */
+        .tab-content {
             display: none;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            padding: 14px;
+        }
+
+        .tab-content.open {
+            display: flex;
             flex-direction: column;
             gap: 8px;
-            padding: 0 14px 14px;
-        }
-
-        .startup-fields.open,
-        .db-sync-fields.open {
-            display: flex;
         }
 
         .section-label {
@@ -277,13 +247,6 @@
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
             color: var(--accent-teal);
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
-        }
-
-        .db-sync-fields {
-            display: none;
-            flex-direction: column;
-            gap: 12px;
-            padding: 0 14px 14px;
         }
 
         .db-subsection {
@@ -520,35 +483,6 @@
             outline-offset: -1px;
         }
 
-        /* Tab Content Styles */
-        .tab-content {
-            display: none;
-        }
-
-        .tab-content.open {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        /* Override accordion open display for tab mode */
-        .startup-fields.tab-content.open {
-            display: flex;
-        }
-
-        .db-sync-fields.tab-content.open {
-            display: flex;
-        }
-
-        /* Hide accordion toggles in tab mode */
-        .startup-toggle {
-            cursor: default;
-        }
-
-        .startup-toggle .chevron {
-            display: none !important;
-        }
-
         /* Setup shell adjustment for tab layout */
         .setup-shell {
             padding-top: 0;
@@ -562,9 +496,7 @@
         <div class="tab-nav" role="tablist" aria-label="Setup sections">
             <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
             <button class="tab-btn" data-tab="custom-agents" role="tab" aria-selected="false">Custom Agents</button>
-            <button class="tab-btn" data-tab="ollama" role="tab" aria-selected="false">Ollama</button>
             <button class="tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
-            <button class="tab-btn" data-tab="orchestration" role="tab" aria-selected="false">Orchestration</button>
             <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
             <button class="tab-btn" data-tab="workspace" role="tab" aria-selected="false">Workspace</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
@@ -573,12 +505,7 @@
             <button class="tab-btn" data-tab="sync" role="tab" aria-selected="false">Sync</button>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="setup-toggle">
-                <div class="section-label">Setup</div>
-                <span class="chevron" id="setup-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content open" id="startup-fields" data-accordion="true" data-tab-content="setup">
+        <div class="tab-content open" id="startup-fields" data-tab-content="setup">
                 <div class="flex gap-2">
                     <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
                     <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
@@ -610,63 +537,15 @@
                 </div>
                 <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
             </div>
-        </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="custom-agents-toggle">
-                <div class="section-label">Custom Agents</div>
-                <span class="chevron" id="custom-agents-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="custom-agents-fields" data-accordion="true" data-tab-content="custom-agents">
+        <div class="tab-content" id="custom-agents-fields" data-tab-content="custom-agents">
                 <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
                 <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="ollama-toggle">
-                <div class="section-label">Ollama via Claude Code</div>
-                <span class="chevron" id="ollama-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="ollama-fields" data-accordion="true" data-tab-content="ollama">
-                <div id="ollama-setup-message" style="font-size:10px; color:var(--text-secondary); min-height:14px;"></div>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Workspace Status</span>
-                    </div>
-                    <div class="hint-text">
-                        Use Ollama cloud models or a local daemon-backed model to drive the intern and launch Claude Code.
-                    </div>
-                    <div id="ollama-install-status" class="ollama-status-line">CLI: Checking...</div>
-                    <div id="ollama-daemon-status" class="ollama-status-line">Daemon: Checking...</div>
-                    <div id="ollama-auth-status" class="ollama-status-line">Cloud auth: Unknown</div>
-                    <div id="ollama-intern-config" class="ollama-status-line">Intern: Not configured</div>
-                    <div class="flex gap-2" style="margin-top:8px;">
-                        <button id="btn-ollama-install" class="secondary-btn w-full">OPEN OLLAMA DOWNLOAD PAGE</button>
-                        <button id="btn-ollama-signin" class="secondary-btn w-full">SIGN IN TO OLLAMA</button>
-                    </div>
-                </div>
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Intern Configuration</span>
-                    </div>
-                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin:0 0 8px;">
-                        <input id="ollama-use-gemma-cloud" type="checkbox" style="width:auto; margin:0;">
-                        <span>Use Gemma 4 31B Cloud for intern</span>
-                    </label>
-                    <div id="ollama-effective-command" class="ollama-status-line" style="margin-top:8px; padding:6px 8px; background:var(--panel-bg2); border-radius:4px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);">
-                        No active configuration
-                    </div>
-                </div>
-            </div>
-        </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="kanban-structure-toggle">
-                <div class="section-label">Kanban Structure</div>
-                <span class="chevron" id="kanban-structure-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="kanban-structure-fields" data-accordion="true" data-tab-content="kanban">
+        <div class="tab-content" id="kanban-structure-fields" data-tab-content="kanban">
                 <div class="flex gap-2" style="margin-bottom:8px;">
                     <button id="btn-add-kanban-column" class="secondary-btn w-full">ADD COLUMN</button>
                     <button id="btn-restore-kanban-defaults" class="secondary-btn w-full">RESTORE DEFAULTS</button>
@@ -678,45 +557,8 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="orchestration-toggle">
-                <div class="section-label">Orchestration Framework Integration</div>
-                <span class="chevron" id="orchestration-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="orchestration-fields" data-accordion="true" data-tab-content="orchestration">
-                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    TEAM LEAD (OPENCODE)
-                </div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                    Use this section when Switchboard is acting as a GUI for OpenCode, GitHub Squads, or other multi-agent orchestration frameworks.
-                </div>
-                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                    Team Lead is the orchestration agent that receives instructions and coordinates the rest of the system.
-                </div>
-                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                    <input id="team-lead-visible-toggle" type="checkbox" style="width:auto; margin:0;">
-                    <span>Enable Team Lead agent</span>
-                </label>
-                <label class="startup-row" style="display:block; margin-top:6px;">
-                    <span style="display:block; margin-bottom:4px;">Team Lead startup command</span>
-                    <input id="team-lead-command-input" type="text" placeholder="e.g. opencode" style="width:100%;">
-                </label>
-                <label class="startup-row" style="display:block; margin-top:6px;">
-                    <span style="display:block; margin-bottom:4px;">Team Lead complexity cutoff</span>
-                    <input id="team-lead-complexity-cutoff" type="range" min="0" max="10" step="1" value="0" style="width:100%; padding:0;">
-                    <span id="team-lead-complexity-cutoff-label" style="display:block; margin-top:4px; font-size:10px; color:var(--text-secondary);">
-                        0 (disabled)
-                    </span>
-                </label>
-            </div>
-        </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="database-toggle">
-                <div class="section-label">Database Operations</div>
-                <span class="chevron" id="database-chevron">▶</span>
-            </div>
-            <div class="db-sync-fields tab-content" id="db-sync-fields" data-accordion="true" data-tab-content="database">
+        <div class="tab-content" id="db-sync-fields" data-tab-content="database">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     PLAN INGESTION
                 </div>
@@ -777,12 +619,7 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="workspace-mapping-toggle">
-                <div class="section-label">Workspace Database Mappings</div>
-                <span class="chevron" id="workspace-mapping-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="workspace-mapping-fields" data-accordion="true" data-tab-content="workspace">
+        <div class="tab-content" id="workspace-mapping-fields" data-tab-content="workspace">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Map multiple workspace folders to a shared kanban.db for centralized plan management.
                 </div>
@@ -802,12 +639,7 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="project-mgmt-toggle">
-                <div class="section-label">ClickUp, Linear and Notion Integration</div>
-                <span class="chevron" id="project-mgmt-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="project-mgmt-fields" data-accordion="true" data-tab-content="integration">
+        <div class="tab-content" id="project-mgmt-fields" data-tab-content="integration">
 
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Configure ClickUp, Linear, and Notion integrations for plan sync, issue import, and design-doc retrieval.
@@ -1067,12 +899,7 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="planning-sources-toggle">
-                <div class="section-label">Planning Sources</div>
-                <span class="chevron" id="planning-sources-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="planning-sources-fields" data-accordion="true" data-tab-content="sources">
+        <div class="tab-content" id="planning-sources-fields" data-tab-content="sources">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Select which research sources to show in the Planning panel.
                 </div>
@@ -1104,12 +931,7 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="control-plane-toggle">
-                <div class="section-label">Control Plane Setup</div>
-                <span class="chevron" id="control-plane-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="control-plane-fields" data-accordion="true" data-tab-content="control">
+        <div class="tab-content" id="control-plane-fields" data-tab-content="control">
                 <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
                     Use <strong>Migrate Existing</strong> when your repos already contain local Switchboard state. Use <strong>Fresh Setup</strong> when you want a new parent Control Plane root, either in-place or by scaffolding and cloning multiple repos into sibling folders.
                 </div>
@@ -1218,12 +1040,7 @@
             </div>
         </div>
 
-        <div class="startup-section">
-            <div class="startup-toggle" id="planning-panel-toggle">
-                <div class="section-label">PLANNING PANEL SYNC</div>
-                <span class="chevron" id="planning-panel-chevron">▶</span>
-            </div>
-            <div class="startup-fields tab-content" id="planning-panel-fields" data-accordion="true" data-tab-content="sync">
+        <div class="tab-content" id="planning-panel-fields" data-tab-content="sync">
                 <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
                     Choose how Planning Panel documents are cached locally for AI collaboration.
                 </div>
@@ -1383,29 +1200,12 @@
         const dbCustomPathInput = document.getElementById('db-custom-path-input');
         const dbPathDisplay = document.getElementById('current-db-path');
         const setupSaveStatus = document.getElementById('setup-save-status');
-        const teamLeadVisibleToggle = document.getElementById('team-lead-visible-toggle');
-        const teamLeadCommandInput = document.getElementById('team-lead-command-input');
-        const teamLeadComplexityCutoffInput = document.getElementById('team-lead-complexity-cutoff');
-        const teamLeadComplexityCutoffLabel = document.getElementById('team-lead-complexity-cutoff-label');
         const controlPlaneExplicitRootInput = document.getElementById('control-plane-explicit-root-input');
-        const controlPlaneModeMigrateButton = document.getElementById('btn-control-plane-mode-migrate');
-        const controlPlaneModeFreshButton = document.getElementById('btn-control-plane-mode-fresh');
-        const multiRepoParentDirInput = document.getElementById('multi-repo-parent-dir');
-        const multiRepoWorkspaceNameInput = document.getElementById('multi-repo-workspace-name');
-        const multiRepoRepoUrlsInput = document.getElementById('multi-repo-repo-urls');
-        const multiRepoPatInput = document.getElementById('multi-repo-pat');
-        const multiRepoScaffoldButton = document.getElementById('btn-scaffold-multi-repo');
-        const multiRepoScaffoldStatus = document.getElementById('multi-repo-scaffold-status');
-        const ollamaSetupMessage = document.getElementById('ollama-setup-message');
-        const ollamaInstallStatus = document.getElementById('ollama-install-status');
-        const ollamaDaemonStatus = document.getElementById('ollama-daemon-status');
-        const ollamaAuthStatus = document.getElementById('ollama-auth-status');
-        const ollamaInternConfig = document.getElementById('ollama-intern-config');
 
         let editingCustomAgentId = null;
         let editingKanbanColumnId = null;
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, 'team-lead': false, jules: true, gatherer: false };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: false };
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
@@ -1430,7 +1230,6 @@
         let lastLinearSetupState = null;
         let lastNotionSetupState = null;
         let selectedIntegrationProvider = 'linear';
-        let lastOllamaSetupState = null;
         let lastControlPlaneCandidate = null;
         let lastControlPlaneStatus = null;
         let lastControlPlanePreview = null;
@@ -1446,7 +1245,6 @@
             { key: 'tester', label: 'Acceptance Tester' },
             { key: 'intern', label: 'Intern' },
             { key: 'analyst', label: 'Analyst' },
-            { key: 'team-lead', label: 'Team Lead' },
         ];
 
         const BUILT_IN_KANBAN_ASSIGNABLE_AGENTS = [
@@ -1456,8 +1254,7 @@
             { role: 'reviewer', label: 'Reviewer' },
             { role: 'tester', label: 'Acceptance Tester' },
             { role: 'intern', label: 'Intern' },
-            { role: 'analyst', label: 'Analyst' },
-            { role: 'team-lead', label: 'Team Lead' }
+            { role: 'analyst', label: 'Analyst' }
         ];
 
         function collapseAllAccordions(exceptFieldsId) {
@@ -1492,9 +1289,7 @@
             const tabIdMap = {
                 'startup-fields': 'setup',
                 'custom-agents-fields': 'custom-agents',
-                'ollama-fields': 'ollama',
                 'kanban-structure-fields': 'kanban',
-                'orchestration-fields': 'orchestration',
                 'db-sync-fields': 'database',
                 'workspace-mapping-fields': 'workspace',
                 'project-mgmt-fields': 'integration',
@@ -1584,18 +1379,10 @@
                     vscode.postMessage({ type: 'getCustomAgents' });
                     vscode.postMessage({ type: 'getVisibleAgents' });
                 },
-                'ollama': () => {
-                    vscode.postMessage({ type: 'getOllamaStatus' });
-                },
                 'kanban': () => {
                     vscode.postMessage({ type: 'getVisibleAgents' });
                     vscode.postMessage({ type: 'getCustomAgents' });
                     vscode.postMessage({ type: 'getKanbanStructure' });
-                },
-                'orchestration': () => {
-                    vscode.postMessage({ type: 'getStartupCommands' });
-                    vscode.postMessage({ type: 'getVisibleAgents' });
-                    vscode.postMessage({ type: 'getTeamLeadRoutingSettings' });
                 },
                 'database': () => {
                     vscode.postMessage({ type: 'getDbPath' });
@@ -2610,14 +2397,6 @@
             );
         }
 
-        function describeTeamLeadCutoff(value) {
-            const numeric = Number(value);
-            if (numeric <= 0) return '0 (disabled)';
-            if (numeric <= 1) return '1 (all plans)';
-            if (numeric >= 7) return `${numeric} (high only)`;
-            if (numeric >= 5) return `${numeric} (medium and above)`;
-            return `${numeric} (low+ scores also route to Team Lead)`;
-        }
 
         function sanitizeGitIgnoreRules(raw) {
             return Array.from(new Set(
@@ -2676,11 +2455,9 @@
             // Preserve existing settings from cached state
             const commands = {
                 ...lastStartupCommands,
-                'team-lead': teamLeadCommandInput?.value.trim() || ''
             };
             const visibleAgents = {
                 ...getCustomVisibleAgentsPatch(),
-                'team-lead': !!teamLeadVisibleToggle?.checked,
                 // gatherer is a built-in column toggled via the Kanban structure list,
                 // not a custom agent — include it explicitly so the server persists the user's preference.
                 gatherer: lastVisibleAgents['gatherer'] !== false
@@ -2698,7 +2475,6 @@
                 customKanbanColumns: getPersistedCustomKanbanColumns(),
                 commands,
                 visibleAgents,
-                teamLeadComplexityCutoff: Number(teamLeadComplexityCutoffInput?.value || 0),
                 gitIgnoreStrategy,
                 gitIgnoreRules
             };
@@ -2815,84 +2591,6 @@
             return state ? JSON.parse(JSON.stringify(state)) : null;
         }
 
-        function cloneOllamaSetupState(state) {
-            return state ? JSON.parse(JSON.stringify(state)) : null;
-        }
-
-        function setOllamaSetupMessage(message, isError = false, source = 'action') {
-            if (!ollamaSetupMessage) return;
-            ollamaSetupMessage.style.color = isError ? 'var(--accent-red)' : 'var(--text-secondary)';
-            ollamaSetupMessage.textContent = message || '';
-            ollamaSetupMessage.dataset.source = message ? source : '';
-        }
-
-        function getOllamaSavedIntern() {
-            return lastOllamaSetupState?.intern || {
-                enabled: false,
-                mode: 'cloud',
-                model: 'gemma4:31b-cloud',
-                baseUrl: 'https://ollama.com/api'
-            };
-        }
-
-        function updateOllamaCommandPreview() {
-            const el = document.getElementById('ollama-effective-command');
-            if (!el) return;
-            const useGemma = document.getElementById('ollama-use-gemma-cloud')?.checked;
-            if (!useGemma) {
-                el.textContent = 'No active configuration';
-            } else {
-                // Always use Claude Code launch — ollama run cannot write files
-                const model = (lastOllamaSetupState?.intern?.model) || 'gemma4:31b-cloud';
-                el.textContent = `ollama launch claude --model ${model}`;
-            }
-        }
-
-
-
-        function renderOllamaSetupState() {
-            const state = lastOllamaSetupState;
-            if (!state) return;
-
-            if (ollamaInstallStatus) {
-                ollamaInstallStatus.textContent = state.installed
-                    ? `CLI: ${state.version || 'Installed'}`
-                    : 'CLI: Not installed';
-                ollamaInstallStatus.style.color = state.installed ? 'var(--accent-green)' : 'var(--accent-orange)';
-            }
-            if (ollamaDaemonStatus) {
-                ollamaDaemonStatus.textContent = state.daemonReachable
-                    ? 'Daemon: Running locally'
-                    : 'Daemon: Not reachable';
-                ollamaDaemonStatus.style.color = state.daemonReachable ? 'var(--accent-green)' : 'var(--text-secondary)';
-            }
-            if (ollamaAuthStatus) {
-                const authText = state.authState === 'signed-in'
-                    ? 'Cloud auth: Signed in'
-                    : state.authState === 'signed-out'
-                        ? 'Cloud auth: Signed out'
-                        : 'Cloud auth: Unknown';
-                ollamaAuthStatus.textContent = authText;
-                ollamaAuthStatus.style.color = state.authState === 'signed-in' ? 'var(--accent-green)' : 'var(--text-secondary)';
-            }
-            if (ollamaInternConfig) {
-                const saved = state.intern || {};
-                ollamaInternConfig.textContent = saved.enabled
-                    ? `Intern: ${saved.mode} / ${saved.model} / ${saved.baseUrl}`
-                    : 'Intern: disabled';
-            }
-
-            const useGemmaCheckbox = document.getElementById('ollama-use-gemma-cloud');
-            if (useGemmaCheckbox) {
-                useGemmaCheckbox.checked = !!state.intern?.enabled && state.intern?.model === 'gemma4:31b-cloud';
-            }
-
-            updateOllamaCommandPreview();
-
-            if (state.error && ollamaSetupMessage) {
-                setOllamaSetupMessage(state.error, true, 'state');
-            }
-        }
 
         function setClickupSetupMessage(message, isError = false) {
             const errorEl = document.getElementById('clickup-setup-error');
@@ -3678,14 +3376,6 @@
             updatePromptOverrideSummary();
             closeCustomPromptsModal();
         });
-        teamLeadComplexityCutoffInput?.addEventListener('input', () => {
-            if (teamLeadComplexityCutoffLabel) {
-                teamLeadComplexityCutoffLabel.textContent = describeTeamLeadCutoff(teamLeadComplexityCutoffInput.value);
-            }
-        });
-        teamLeadVisibleToggle?.addEventListener('change', () => {
-            renderKanbanStructureList();
-        });
         document.getElementById('git-ignore-strategy')?.addEventListener('change', () => {
             const strategy = document.getElementById('git-ignore-strategy')?.value || 'targetedGitignore';
             lastGitIgnoreConfig = { ...lastGitIgnoreConfig, strategy };
@@ -3693,12 +3383,10 @@
         });
         const instantAutosaveSelectors = [
             '#git-ignore-strategy',
-            '#team-lead-visible-toggle',
-            '#team-lead-complexity-cutoff'
         ];
         const textAutosaveSelectors = [
             '#git-ignore-rules',
-            '#team-lead-command-input',
+        ];
             '#plan-ingestion-folder-input'
         ];
         instantAutosaveSelectors.forEach(selector => {
@@ -4016,31 +3704,6 @@
         }
         setControlPlaneSetupMode(controlPlaneSetupMode);
 
-        document.getElementById('btn-ollama-install')?.addEventListener('click', () => {
-            setOllamaSetupMessage('Opening the Ollama download page...');
-            vscode.postMessage({ type: 'openOllamaInstall' });
-        });
-
-        document.getElementById('btn-ollama-signin')?.addEventListener('click', () => {
-            setOllamaSetupMessage('Sign-in opened in your browser — complete the flow there.');
-            vscode.postMessage({ type: 'ollamaSignIn' });
-        });
-        let pendingOllamaSaveTimer = null;
-        document.getElementById('ollama-use-gemma-cloud')?.addEventListener('change', () => {
-            const useGemma = document.getElementById('ollama-use-gemma-cloud')?.checked;
-            if (pendingOllamaSaveTimer) {
-                clearTimeout(pendingOllamaSaveTimer);
-            }
-            pendingOllamaSaveTimer = setTimeout(() => {
-                vscode.postMessage({
-                    type: 'setOllamaInternModel',
-                    enabled: !!useGemma,
-                    mode: 'cloud',
-                    model: 'gemma4:31b-cloud'
-                });
-            }, 200);
-            updateOllamaCommandPreview();
-        });
 
         // Planning Panel sync mode selection
         const syncModeRadios = document.querySelectorAll('input[name="planning-sync-mode"]');
@@ -4078,9 +3741,6 @@
                         if (input) {
                             input.value = lastPlanIngestionFolder;
                         }
-                        if (teamLeadCommandInput) {
-                            teamLeadCommandInput.value = lastStartupCommands['team-lead'] || '';
-                        }
                     });
                     break;
                 }
@@ -4088,9 +3748,6 @@
                     if (message.agents) {
                         runSetupHydration(() => {
                             lastVisibleAgents = { ...lastVisibleAgents, ...message.agents };
-                            if (teamLeadVisibleToggle) {
-                                teamLeadVisibleToggle.checked = lastVisibleAgents['team-lead'] !== false;
-                            }
                             renderCustomAgentConfigList();
                             renderKanbanStructureList();
                         });
@@ -4175,16 +3832,6 @@
                     }
                     break;
                 }
-                case 'teamLeadRoutingSettings':
-                    runSetupHydration(() => {
-                        if (teamLeadComplexityCutoffInput) {
-                            teamLeadComplexityCutoffInput.value = String(message.complexityCutoff ?? 0);
-                        }
-                        if (teamLeadComplexityCutoffLabel) {
-                            teamLeadComplexityCutoffLabel.textContent = describeTeamLeadCutoff(message.complexityCutoff ?? 0);
-                        }
-                    });
-                    break;
                 case 'customAgents':
                     if (Array.isArray(message.customAgents)) {
                         runSetupHydration(() => {
@@ -4417,42 +4064,6 @@
                         }
                         updateIntegrationProviderVisibility();
                     }
-                    break;
-                case 'ollamaSetupState':
-                    runSetupHydration(() => {
-                        lastOllamaSetupState = cloneOllamaSetupState(message.state);
-                        renderOllamaSetupState();
-                    });
-                    break;
-                case 'ollamaActionResult':
-                    setOllamaSetupMessage(
-                        message.success === false
-                            ? (message.error || 'Ollama action failed.')
-                            : (message.message || 'Ollama action completed.'),
-                        message.success === false
-                    );
-                    break;
-                case 'ollamaInternModelSaved':
-                    if (message.success === false) {
-                        setOllamaSetupMessage(message.error || 'Failed to save the Ollama intern model.', true);
-                        break;
-                    }
-                    if (message.intern) {
-                        if (!lastOllamaSetupState) {
-                            lastOllamaSetupState = cloneOllamaSetupState({
-                                installed: false,
-                                daemonReachable: false,
-                                authState: 'unknown',
-                                cloudModels: [],
-                                localModels: [],
-                                intern: message.intern
-                            });
-                        } else {
-                            lastOllamaSetupState.intern = message.intern;
-                        }
-                    }
-                    renderOllamaSetupState();
-                    setOllamaSetupMessage(message.message || 'Saved the Ollama intern model.');
                     break;
                 case 'clickupApplyResult':
                     setApplyButtonBusy('clickup', false);

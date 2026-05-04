@@ -239,7 +239,8 @@ parentDocName: ${options.parentDocName || docTitle}
 
     async writeFromCache(
         workspaceRoot: string,
-        sourceId: string
+        sourceId: string,
+        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         // Serialize planner prompt writes per workspace to prevent race conditions
         const resolvedRoot = path.resolve(workspaceRoot);
@@ -312,7 +313,7 @@ parentDocName: ${options.parentDocName || docTitle}
                     return { error: 'Cache file not found. Please fetch content first.' };
                 }
 
-                return await this._writeDocToDocsDir(workspaceRoot, content, docTitle, sourceId);
+                return await this._writeDocToDocsDir(workspaceRoot, content, docTitle, sourceId, options);
             } catch (err) {
                 return { error: String(err) };
             } finally {

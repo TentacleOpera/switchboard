@@ -105,7 +105,7 @@ function testNoRepoContextForUnscopedPlans() {
 
 function testSingleWorkingDirectoryContext() {
     console.log('Testing shared working directory directive...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'team-lead', 'unknown_role'];
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'unknown_role'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, sameDirPlans);
         assert.ok(prompt.includes('WORKING DIRECTORY: /workspace/be'), `Role ${role} should include the shared working directory`);

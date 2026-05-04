@@ -1300,14 +1300,37 @@ export class KanbanDatabase {
         // Prepare migration entries outside transaction to avoid blocking
         const entriesToMigrate: any[] = [];
         
+        let filesInDocsDir: string[] = [];
+        try {
+            filesInDocsDir = await fs.promises.readdir(docsDir);
+        } catch (err) {
+            console.warn(`[KanbanDatabase] Failed to read docs directory:`, err);
+        }
+
         for (const [slugPrefix, entry] of Object.entries(legacy)) {
-            const filePath = path.join(docsDir, `${slugPrefix}.md`);
+            // Find file starting with slugPrefix (could have _hash suffix)
+            const matches = filesInDocsDir.filter(f => f.startsWith(slugPrefix) && f.endsWith('.md'));
             
             // Skip if file doesn't exist (orphaned entry)
-            if (!fs.existsSync(filePath)) {
+            if (matches.length === 0) {
                 skipped++;
                 continue;
             }
+            
+            // Use the most recently modified if multiple
+            let latest = matches[0];
+            let latestMtime = 0;
+            for (const match of matches) {
+                try {
+                    const stat = await fs.promises.stat(path.join(docsDir, match));
+                    if (stat.mtimeMs > latestMtime) {
+                        latestMtime = stat.mtimeMs;
+                        latest = match;
+                    }
+                } catch {}
+            }
+            
+            const filePath = path.join(docsDir, latest);
             
             try {
                 // Calculate content hash from existing file

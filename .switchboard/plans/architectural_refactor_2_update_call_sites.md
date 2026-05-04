@@ -131,6 +131,38 @@ public getChildren(element?: vscode.TreeItem): vscode.ProviderResult<vscode.Tree
 }
 ```
 
+#### [DELETE] `src/services/InboxWatcher.ts` — Remove dead cross-IDE messaging system
+
+**Context:** The InboxWatcher implements a file-based cross-IDE messaging protocol for dispatching commands to terminals across VS Code windows. However:
+- No UI element exists for manual inbox message creation
+- MCP tools (the agent-side writers) were discontinued
+- Single-workspace-per-window model makes cross-window dispatch unnecessary
+- Entire system is effectively dead code
+
+**Logic:** Remove InboxWatcher and all related infrastructure. Simplifies the workspace refactor by eliminating a component that tracked workspace state.
+
+**Files to delete:**
+- `src/services/InboxWatcher.ts` (1,089 lines)
+- `src/services/SessionActionLog.ts` (only consumer of InboxWatcher)
+
+**Files to modify:**
+- `src/extension.ts`: Remove all `inboxWatcher` references (~15 locations), cleanup timers, and inbox initialization
+- `src/services/TaskViewerProvider.ts`: Remove `_executeRemote()` method and inbox fallback logic in `_dispatchExecuteMessage()`
+- `src/lifecycle/cleanWorkspace.ts`: Keep inbox/outbox cleanup for existing installs, but remove from TRANSIENT_DIRS after migration period
+- `src/services/terminalUtils.ts`: Remove comment referencing InboxWatcher
+
+**Implementation:**
+```typescript
+// In TaskViewerProvider.ts - simplify dispatch to direct-only:
+private async _dispatchExecuteMessage(...): Promise<void> {
+    // REMOVED: inbox fallback path - all terminals must be local now
+    const pushed = await this._attemptDirectTerminalPush(targetAgent, payload, messageId, meta);
+    if (!pushed) {
+        throw new Error(`Terminal '${targetAgent}' not found. Inbox fallback removed.`);
+    }
+}
+```
+
 ## Verification Plan
 
 ### Unit Tests
@@ -165,3 +197,6 @@ it('should show error when opening terminals with no workspace selected', async 
 2. Terminals always open in kanban-selected workspace.
 3. File watchers correctly re-register on workspace switch.
 4. Sidebar shows placeholder when no workspace selected.
+5. InboxWatcher and SessionActionLog removed (~1,150 lines deleted).
+6. No inbox/outbox directory references remain in active code paths.
+7. Terminal dispatch is direct-only (no cross-window fallback).

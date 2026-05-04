@@ -31,14 +31,12 @@ async function getNextStage(
         return { role: 'planner', instruction: 'improve-plan', label: 'Planner' };
     } else if (lastWorkflow === 'sidebar-review' || lastWorkflow === 'Enhanced plan' || lastWorkflow === 'Improved plan') {
         return { role: 'lead', label: 'Lead Coder' };
-    } else if (lastWorkflow === 'handoff-lead' || lastWorkflow === 'handoff') {
-        return { role: 'reviewer', label: 'Reviewer' };
     } else if (lastWorkflow === 'reviewer-pass') {
         if (isAcceptanceTesterActive && await isAcceptanceTesterActive(sheet)) {
             return { role: 'tester', label: 'Acceptance Tester' };
         }
         return 'done';
-    } else if (lastWorkflow === 'challenge' || lastWorkflow === 'tester-pass') {
+    } else if (lastWorkflow === 'tester-pass') {
         return 'done';
     } else {
         // Unknown last workflow — fall back to planner

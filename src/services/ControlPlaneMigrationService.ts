@@ -657,7 +657,6 @@ export class ControlPlaneMigrationService {
             fs.promises.mkdir(path.join(parentDir, '.agent'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'plans'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'inbox'), { recursive: true }),
-            fs.promises.mkdir(path.join(parentDir, '.switchboard', 'handoff'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'archive'), { recursive: true }),
         ]);
 
