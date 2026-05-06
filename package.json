@@ -154,6 +154,10 @@
         "command": "switchboard.openResearchPanel",
         "title": "Switchboard: Open Research Panel",
         "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.forceOpenFile",
+        "title": "Override Open"
       }
     ],
     "configuration": {
@@ -236,6 +240,11 @@
           "type": "boolean",
           "default": false,
           "description": "When enabled, the planner classifies more tasks as Band A (routine), shifting work to the cheaper Coder agent. Only genuinely complex work stays on the Lead."
+        },
+        "switchboard.terminal.clearBeforePrompt": {
+          "type": "boolean",
+          "default": false,
+          "description": "When enabled, sends /clear to the terminal 2 seconds before dispatching prompts. Only effective for CLI agents that accept slash commands (e.g., Claude Code, Gemini CLI)."
         },
         "switchboard.jules.autoSync": {
           "type": "boolean",
@@ -400,8 +409,27 @@
           "default": true,
           "description": "Automatically archive plans when moved to COMPLETED column.",
           "scope": "resource"
+        },
+        "switchboard.preventAgentFileOpening": {
+          "type": "boolean",
+          "default": false,
+          "description": "Auto-close any file that gets opened in the editor."
         }
       }
+    },
+    "menus": {
+      "editor/context": [
+        {
+          "command": "switchboard.forceOpenFile",
+          "when": "switchboard.preventAgentFileOpening"
+        }
+      ],
+      "explorer/context": [
+        {
+          "command": "switchboard.forceOpenFile",
+          "when": "switchboard.preventAgentFileOpening"
+        }
+      ]
     }
   },
   "scripts": {

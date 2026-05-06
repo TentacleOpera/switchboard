@@ -6,7 +6,6 @@ Fix the Planning Panel documents view so it uses the active workspace folder ins
 ## Metadata
 **Tags:** backend, bugfix
 **Complexity:** 2
-**Repo:** switchboard
 
 ## User Review Required
 None. This is a transparent bugfix with no breaking changes or manual steps required.

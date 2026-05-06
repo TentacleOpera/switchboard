@@ -6,7 +6,6 @@ Remove the Ollama integration, Orchestration framework integration, and Team Lea
 ## Metadata
 **Tags:** backend, frontend, database, workflow, reliability
 **Complexity:** 7
-**Repo:** switchboard
 
 ## User Review Required
 - [ ] Confirm that existing `state.json` entries for `team-lead`, `ollama`, and `orchestration` can remain as orphaned (harmless, silently ignored after removal)
@@ -398,6 +397,52 @@ grep -r "team-lead\|teamLead\|TeamLead" src/ --include="*.ts" --include="*.js"
 - [ ] Setup panel loads correctly
 - [ ] Kanban board displays correctly without Team Lead column
 - [ ] ClickUp/Linear automation still works (PipelineOrchestrator intact)
+
+---
+
+## Review Pass Results (2026-05-05)
+
+### Stage 1: Adversarial Findings
+
+| # | File | Finding | Severity |
+|---|------|---------|----------|
+| 1 | `src/services/planStateUtils.ts` L30 | `'TEAM LEAD CODED'` still in `DEFAULT_VALID_COLUMNS` Set — validates removed column as valid, allowing ghost plans to pass validation while invisible in UI | **CRITICAL** |
+| 2 | `src/services/agentPromptBuilder.ts` L408 | `case 'TEAM LEAD CODED':` dead switch case in `columnToPromptRole()` — falls through to `LEAD CODED` return, functionally harmless but maintenance trap | **MAJOR** |
+| 3 | `src/services/planStateUtils.ts` L30 | `'BACKLOG'` in `DEFAULT_VALID_COLUMNS` but not in `DEFAULT_KANBAN_COLUMNS` — false alarm, BACKLOG is a virtual toggle column | **NIT** (keep) |
+| 4 | Multiple files | 4 pre-existing TypeScript errors unrelated to this plan | **NIT** (defer) |
+
+### Stage 2: Balanced Synthesis — Fixes Applied
+
+| Finding | Action | Result |
+|---------|--------|--------|
+| CRITICAL: `TEAM LEAD CODED` in `planStateUtils.ts` `DEFAULT_VALID_COLUMNS` | Removed `'TEAM LEAD CODED'` from Set | Fixed |
+| MAJOR: `case 'TEAM LEAD CODED':` in `agentPromptBuilder.ts` | Removed dead case branch (fall-through already covered by `LEAD CODED`) | Fixed |
+| NIT: `BACKLOG` in `DEFAULT_VALID_COLUMNS` | Kept — legitimate virtual column | No change |
+| NIT: Pre-existing TS errors | Deferred — not caused by this plan | No change |
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/services/planStateUtils.ts` | Removed `'TEAM LEAD CODED'` from `DEFAULT_VALID_COLUMNS` Set |
+| `src/services/agentPromptBuilder.ts` | Removed `case 'TEAM LEAD CODED':` dead branch from `columnToPromptRole()` |
+
+### Verification Results
+
+- **Phase 7.2 grep — `OllamaSetupService|OllamaMode|OllamaInternConfig`**: Zero matches ✓
+- **Phase 7.2 grep — `InteractiveOrchestrator`**: Zero matches ✓
+- **Phase 7.2 grep — `team-lead|teamLead|TeamLead`**: Zero matches ✓
+- **Full-project grep — `TEAM LEAD CODED`**: Zero matches ✓
+- **Full-project grep — `TEAM LEAD`**: Zero matches ✓
+- **PipelineOrchestrator.ts exists**: ✓
+- **pipeline-orchestrator-regression.test.js exists**: ✓
+- **TypeScript compilation**: 4 pre-existing errors only (no new regressions) ✓
+
+### Remaining Risks
+
+1. **Pre-existing TS errors**: 4 errors in `ClickUpSyncService.ts`, `KanbanProvider.ts`, and `TaskViewerProvider.ts` — all pre-existing, not caused by this removal. Should be tracked separately.
+2. **Orphaned state.json entries**: Existing `state.json` files may contain `team-lead`, `ollama`, or `orchestration` settings. These are silently ignored after code changes but could confuse users inspecting state manually. Release notes should mention this.
+3. **Custom agents referencing `team-lead`**: Users with custom agent configs referencing the removed role will need to update their configurations. Release notes should mention this.
 
 ---
 

@@ -8,7 +8,6 @@ Reorganize the kanban control strip to surface the most-used controls (workspace
 
 **Tags:** ui, frontend
 **Complexity:** 4
-**Repo:** switchboard
 
 ## Current State
 

@@ -34,6 +34,14 @@ export class PlanningPanelProvider {
     private _syncCancellationSource: AbortController | undefined;
     private _importInProgress = false;
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
+    private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
+    private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
+    private _lastPanelWriteTimestamp: number = 0;
+    private _isAutoRefreshing: boolean = false;
+    private _activePreviewPath: string | null = null;
+    private _activePreviewSourceId: string | null = null;
+    private _activePreviewDocId: string | null = null;
+    private _watcherGeneration: number = 0;
 
     private _resolvedConfigCache: {
         configPath: string | null;
@@ -296,6 +304,90 @@ export class PlanningPanelProvider {
         this._docsFolderWatcher.onDidChange(refreshImportedDocs);
 
         this._disposables.push(this._docsFolderWatcher);
+    }
+
+    private _setupActiveDocWatcher(filePath: string | null): void {
+        // Dispose existing watcher synchronously
+        if (this._activeDocWatchDebounce) {
+            clearTimeout(this._activeDocWatchDebounce);
+            this._activeDocWatchDebounce = undefined;
+        }
+        if (this._activeDocWatcher) {
+            try {
+                this._activeDocWatcher.dispose();
+            } catch (err) {
+                console.warn('[PlanningPanel] Error disposing active doc watcher:', err);
+            }
+            this._activeDocWatcher = undefined;
+        }
+
+        this._watcherGeneration++;
+        const gen = this._watcherGeneration;
+
+        if (!filePath || !fs.existsSync(filePath)) {
+            return;
+        }
+
+        try {
+            // Watch for changes to the specific file
+            this._activeDocWatcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(path.dirname(filePath), path.basename(filePath)),
+                false, // watch create
+                false, // watch change
+                true   // ignore delete (handled via onDidDelete)
+            );
+
+            this._activeDocWatcher.onDidChange(() => {
+                if (gen !== this._watcherGeneration) { return; } // stale watcher
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
+                if (filePath !== this._activePreviewPath) { return; } // stale path
+
+                if (this._activeDocWatchDebounce) {
+                    clearTimeout(this._activeDocWatchDebounce);
+                }
+
+                this._activeDocWatchDebounce = setTimeout(async () => {
+                    if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
+                    
+                    const allRoots = this._getWorkspaceRoots();
+                    const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+                    if (!workspaceRoot) return;
+
+                    console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
+                    this._isAutoRefreshing = true;
+                    try {
+                        if (this._activePreviewSourceId === 'local-folder') {
+                            // Re-fetch local doc
+                            await this._handleFetchPreview(workspaceRoot, 'local-folder', this._activePreviewDocId!, -1);
+                        } else {
+                            // Re-fetch imported doc via fetchDocsFile
+                            await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
+                        }
+                    } finally {
+                        this._isAutoRefreshing = false;
+                    }
+                }, 300);
+            });
+
+            this._activeDocWatcher.onDidDelete(() => {
+                if (gen !== this._watcherGeneration) { return; }
+                if (this._activeDocWatchDebounce) {
+                    clearTimeout(this._activeDocWatchDebounce);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'previewError',
+                    sourceId: this._activePreviewSourceId || 'local-folder',
+                    requestId: -1,
+                    error: 'File deleted externally'
+                });
+                this._activeDocWatcher?.dispose();
+                this._activeDocWatcher = undefined;
+            });
+
+            this._disposables.push(this._activeDocWatcher);
+        } catch (err) {
+            console.error('[PlanningPanel] Failed to create active doc watcher:', err);
+        }
     }
 
     private _getHtml(webview: vscode.Webview): string {
@@ -1085,7 +1177,21 @@ export class PlanningPanelProvider {
                 const result = await localFolderService.fetchDocContent(docId);
                 console.log('[PlanningPanel] Local doc fetch result:', { success: result.success, error: result.error, hasContent: !!result.content });
                 if (result.success) {
-                    this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content: result.content || '', docName: result.docTitle });
+                    const folderPath = localFolderService.getFolderPath();
+                    const resolvedPath = path.join(folderPath, docId.endsWith('.md') ? docId : docId + '.md');
+                    this._activePreviewPath = resolvedPath;
+                    this._activePreviewSourceId = 'local-folder';
+                    this._activePreviewDocId = docId;
+                    this._setupActiveDocWatcher(resolvedPath);
+
+                    this._panel?.webview.postMessage({ 
+                        type: 'previewReady', 
+                        sourceId, 
+                        requestId, 
+                        content: result.content || '', 
+                        docName: result.docTitle,
+                        isAutoRefreshed: this._isAutoRefreshing
+                    });
                 } else {
                     this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
                 }
@@ -1121,7 +1227,26 @@ export class PlanningPanelProvider {
                     // Strip front-matter for display
                     const content = cachedContent.replace(/^---\n[\s\S]*?\n---\n/, '');
                     const isImported = await this._cacheService.isDocumentImported(sourceId, docId);
-                    this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content, docName, isCached: true, isImported });
+                    
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    const resolvedPath = await this._cacheService.resolveImportedDocPath(docId, workspaceId);
+                    if (resolvedPath) {
+                        this._activePreviewPath = resolvedPath;
+                        this._activePreviewSourceId = sourceId;
+                        this._activePreviewDocId = docId;
+                        this._setupActiveDocWatcher(resolvedPath);
+                    }
+
+                    this._panel?.webview.postMessage({ 
+                        type: 'previewReady', 
+                        sourceId, 
+                        requestId, 
+                        content, 
+                        docName, 
+                        isCached: true, 
+                        isImported,
+                        isAutoRefreshed: this._isAutoRefreshing
+                    });
                     // Refresh cache in background after returning cached content
                     this._refreshCacheInBackground(sourceId, docId, adapter);
                     return;
@@ -1145,7 +1270,8 @@ export class PlanningPanelProvider {
                             docName: docResult.docTitle,
                             content: docResult.content || docResult.firstPageContent || '',
                             pages: docResult.pages,
-                            totalPages: docResult.totalPages
+                            totalPages: docResult.totalPages,
+                            isAutoRefreshed: this._isAutoRefreshing
                         });
                         return;
                     }
@@ -1161,11 +1287,33 @@ export class PlanningPanelProvider {
 
             // Cache the document locally
             if (this._cacheService && content) {
+                this._lastPanelWriteTimestamp = Date.now();
                 await this._cacheService.cacheDocument(sourceId, docId, content, docName || docId);
             }
 
             const isImported = this._cacheService ? await this._cacheService.isDocumentImported(sourceId, docId) : false;
-            this._panel?.webview.postMessage({ type: 'previewReady', sourceId, requestId, content, docName, isCached: true, isImported });
+            
+            if (this._cacheService) {
+                const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                const resolvedPath = await this._cacheService.resolveImportedDocPath(docId, workspaceId);
+                if (resolvedPath) {
+                    this._activePreviewPath = resolvedPath;
+                    this._activePreviewSourceId = sourceId;
+                    this._activePreviewDocId = docId;
+                    this._setupActiveDocWatcher(resolvedPath);
+                }
+            }
+
+            this._panel?.webview.postMessage({ 
+                type: 'previewReady', 
+                sourceId, 
+                requestId, 
+                content, 
+                docName, 
+                isCached: true, 
+                isImported,
+                isAutoRefreshed: this._isAutoRefreshing
+            });
         } catch (err) {
             const currentRequestId = this._latestRequestIds.get(sourceId);
             if (currentRequestId === requestId) {
@@ -1195,6 +1343,7 @@ export class PlanningPanelProvider {
             }
 
             if (this._cacheService && content) {
+                this._lastPanelWriteTimestamp = Date.now();
                 await this._cacheService.cacheDocument(sourceId, docId, content, docName || docId);
             }
         } catch (err) {
@@ -1206,6 +1355,7 @@ export class PlanningPanelProvider {
     private async _handleAppendToPlannerPrompt(workspaceRoot: string, sourceId: string, docId: string, docName: string, content?: string): Promise<void> {
         try {
             let result;
+            this._lastPanelWriteTimestamp = Date.now();
             if (content) {
                 // Use provided content directly (for pages that aren't cached)
                 result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, content, docName, sourceId, { skipDesignDocLink: true });
@@ -1237,8 +1387,18 @@ export class PlanningPanelProvider {
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             const wsId = await db.getWorkspaceId();
             if (wsId) return wsId;
-        } catch {
-            // Fallback: hash of path
+
+            // If we have a DB instance but no workspace ID, something is wrong
+            throw new Error(
+                `[PlanningPanelProvider] No workspace_id configured in database for ${workspaceRoot}. ` +
+                `Please run "Switchboard: Reset Kanban Database" to recreate.`
+            );
+        } catch (err) {
+            // If it's our specific configuration error, rethrow it
+            if (err instanceof Error && err.message.includes('No workspace_id configured')) {
+                throw err;
+            }
+            // Otherwise it's a structural failure (require failed, etc.) - use hash as last resort
         }
         return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
     }
@@ -1324,12 +1484,18 @@ export class PlanningPanelProvider {
             // Strip front-matter for display
             const displayContent = content.replace(/^---\n[\s\S]*?\n---\n/, '');
 
+            this._activePreviewSourceId = 'local-folder';
+            this._activePreviewDocId = slugPrefix;
+            this._activePreviewPath = filePath;
+            this._setupActiveDocWatcher(filePath);
+
             this._panel?.webview.postMessage({
                 type: 'previewReady',
                 sourceId: 'local-folder',
                 requestId,
                 content: displayContent,
-                docName
+                docName,
+                isAutoRefreshed: this._isAutoRefreshing
             });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching docs file:', err);
@@ -1416,6 +1582,7 @@ export class PlanningPanelProvider {
             const result = await adapter.updateContent(importEntry.remoteDocId || importEntry.slugPrefix, localContent);
             if (result.success) {
                 await this._cacheService.updateLastSynced(slugPrefix, localContentHash, workspaceId);
+                this._lastPanelWriteTimestamp = Date.now();
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: true });
             } else {
                 this._panel?.webview.postMessage({ type: 'syncResult', slugPrefix, success: false, error: result.error });
@@ -1472,6 +1639,7 @@ export class PlanningPanelProvider {
                     sourceId,
                     { skipDesignDocLink: true }
                 );
+                this._lastPanelWriteTimestamp = Date.now();
                 if (writeResult.error) {
                     this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
                     return;
@@ -1861,6 +2029,14 @@ export class PlanningPanelProvider {
 
     public dispose(): void {
         this.stopPeriodicSync();
+        if (this._activeDocWatchDebounce) {
+            clearTimeout(this._activeDocWatchDebounce);
+            this._activeDocWatchDebounce = undefined;
+        }
+        if (this._activeDocWatcher) {
+            try { this._activeDocWatcher.dispose(); } catch (e) {}
+            this._activeDocWatcher = undefined;
+        }
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
         if (this._panel) {

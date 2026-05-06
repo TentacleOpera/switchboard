@@ -2777,6 +2777,7 @@
                                         listId: clickUpSelectedListId,
                                         workspaceRoot: currentWorkspaceRoot || undefined
                                     });
+                                    clickUpProjectLoading = false;
                                     loadClickUpProject(false, clickUpSelectedListId);
                                 } else {
                                     // Stale list ID — give up restore
@@ -2819,6 +2820,7 @@
                                 listId: clickUpSelectedListId,
                                 workspaceRoot: currentWorkspaceRoot || undefined
                             });
+                            clickUpProjectLoading = false;
                             loadClickUpProject(false, clickUpSelectedListId);
                         } else {
                             // Stale list ID — give up restore, clear the bad ID
@@ -2874,6 +2876,10 @@
                     break;
                 }
                 case 'clickupError':
+                    // Discard stale error responses from prior list selections
+                    if (message.loadSeq && message.loadSeq !== clickUpLoadSeq) {
+                        break;
+                    }
                     clickUpProjectLoading = false;
                     clickUpProjectLoadedOnce = true;
                     clickUpImportPending = false;
@@ -4080,10 +4086,10 @@
             const subtasksHtml = subtasks.length === 0
                 ? '<p>No subtasks.</p>'
                 : subtasks.map(st => `
-                    <div class="project-detail-item">
+                    <button type="button" class="project-detail-item" data-clickup-subtask-id="${escapeAttr(st.id)}">
                         <span class="project-detail-item-title">${escapeHtml(st.title)}</span>
                         <span class="project-detail-item-status">${escapeHtml(st.status)}</span>
-                    </div>
+                    </button>
                 `).join('');
 
             if (_lastClickUpDetailSubtasksHtml !== subtasksHtml && detailSubtasksList) {
@@ -4127,6 +4133,9 @@
 
         function getFilteredClickUpTasks() {
             let tasks = [...clickUpProjectIssues];
+
+            // Exclude subtasks from the main list; they belong in the detail view
+            tasks = tasks.filter(task => !task.parentId);
 
             if (clickUpProjectSearchValue) {
                 const query = clickUpProjectSearchValue.toLowerCase();
@@ -4351,6 +4360,13 @@
                     return;
                 }
                 loadLinearTaskDetails(button.dataset.linearSubtaskId);
+            });
+            detailSubtasksList?.addEventListener('click', (event) => {
+                const button = event.target.closest('[data-clickup-subtask-id]');
+                if (!button) {
+                    return;
+                }
+                loadClickUpTaskDetails(button.dataset.clickupSubtaskId);
             });
             backButton?.addEventListener('click', () => {
                 if (lastIntegrationProvider === 'clickup') {

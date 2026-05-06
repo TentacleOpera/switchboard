@@ -8,7 +8,6 @@ Remove all automatic MCP server file copying, configuration writing, and server 
 
 **Tags:** bugfix, backend, workflow  
 **Complexity:** 4  
-**Repo:** switchboard
 
 ## User Review Required
 

@@ -8,7 +8,6 @@ Fix the bug where `handleMcpSetup` writes the wrong workspace root to MCP config
 
 **Tags:** bugfix, backend, devops
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 

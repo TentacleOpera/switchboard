@@ -3,17 +3,27 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { PlanningPanelCacheService } from '../PlanningPanelCacheService';
+import { KanbanDatabase } from '../KanbanDatabase';
 
 suite('PlanningPanelCacheService — duplicate detection', () => {
     let tmpDir: string;
+    let kanbanDb: KanbanDatabase;
     let service: PlanningPanelCacheService;
 
     suiteSetup(async () => {
         tmpDir = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'sb-cache-test-'));
-        service = new PlanningPanelCacheService(tmpDir);
+        kanbanDb = KanbanDatabase.forWorkspace(tmpDir);
+        await kanbanDb.createIfMissing();
+        await kanbanDb.ensureReady();
+        await kanbanDb.setWorkspaceId('test-ws');
+        service = new PlanningPanelCacheService(tmpDir, kanbanDb);
     });
 
     suiteTeardown(async () => {
+        if (kanbanDb) {
+            kanbanDb.dispose();
+            await KanbanDatabase.invalidateWorkspace(tmpDir);
+        }
         await fs.promises.rm(tmpDir, { recursive: true, force: true });
     });
 
@@ -24,7 +34,7 @@ suite('PlanningPanelCacheService — duplicate detection', () => {
         docName: string,
         slugPrefix: string
     ): Promise<void> {
-        await service.registerImport(sourceId, docId, docName, slugPrefix);
+        await service.registerImport(sourceId, docId, docName, slugPrefix, {});
     }
 
     // ── checkForDuplicate ──────────────────────────────────────────

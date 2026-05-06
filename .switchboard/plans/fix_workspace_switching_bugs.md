@@ -8,7 +8,6 @@ Fix two related workspace selection bugs in the kanban: (1) agent terminals open
 
 **Tags:** backend, bugfix, UI, workflow
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 

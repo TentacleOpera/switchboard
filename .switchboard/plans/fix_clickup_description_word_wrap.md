@@ -6,7 +6,6 @@ Ensure long ClickUp task descriptions word-wrap correctly in the sidebar detail 
 ## Metadata
 **Tags:** bugfix, ui, frontend
 **Complexity:** 2
-**Repo:** switchboard
 
 ## User Review Required
 No.

@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import type { KanbanProvider } from './KanbanProvider';
+import type { GlobalPlanWatcherService } from './GlobalPlanWatcherService';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 import type { LinearSyncService } from './LinearSyncService';
 import type { KanbanDatabase } from './KanbanDatabase';
@@ -43,6 +44,7 @@ export class ContinuousSyncService implements vscode.Disposable {
 
   constructor(
     private readonly _kanbanProvider: KanbanProvider,
+    private readonly _globalPlanWatcher: GlobalPlanWatcherService,
     private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
     private readonly _getLinearService: (workspaceRoot: string) => LinearSyncService,
     private readonly _getKanbanDb: (workspaceRoot: string) => KanbanDatabase
@@ -70,9 +72,13 @@ export class ContinuousSyncService implements vscode.Disposable {
     this._syncQueue = [];
     this._activeSyncs = 0;
 
-    // Subscribe to file watcher from KanbanProvider (reuse existing watcher)
-    this._fileWatcherSubscription = this._kanbanProvider.onPlanFileChange(
-      (uri) => this._handleFileChange(uri, workspaceRoot)
+    // Subscribe to global plan watcher
+    this._fileWatcherSubscription = this._globalPlanWatcher.onPlanDiscovered(
+      ({ uri, workspaceRoot: discoveredRoot }) => {
+        if (path.resolve(discoveredRoot) === path.resolve(workspaceRoot)) {
+          void this._handleFileChange(uri, workspaceRoot);
+        }
+      }
     );
 
     // Start idle detection timer (checks mtime every 60s)

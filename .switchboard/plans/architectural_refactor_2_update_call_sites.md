@@ -9,7 +9,6 @@ Update all usages of the distributed state (`_activeWorkspaceRoot`, `_resolveWor
 
 **Tags:** backend, infrastructure, reliability, workflow
 **Complexity:** 7
-**Repo:** switchboard
 
 ## Dependencies
 

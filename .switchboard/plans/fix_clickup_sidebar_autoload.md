@@ -6,7 +6,6 @@ Fix the ClickUp sidebar autoload failure and misleading "Not Configured" error m
 ## Metadata
 **Tags:** bugfix, frontend, workflow
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 No immediate user review required for these backend and webview logic changes, unless UI/UX behavior changes unexpectedly during testing.

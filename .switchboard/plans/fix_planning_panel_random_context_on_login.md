@@ -6,7 +6,6 @@ Prevent the planning panel from automatically setting imported documents as the 
 ## Metadata
 **Tags:** frontend, UI, bugfix
 **Complexity:** 3
-**Repo:** switchboard
 
 ## User Review Required
 No

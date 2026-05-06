@@ -10,7 +10,6 @@ Add task creation and modification endpoints to LocalApiServer with strict authe
 ## Metadata
 **Tags:** infrastructure, backend, workflow
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 None - internal tooling

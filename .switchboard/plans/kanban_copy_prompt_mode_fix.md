@@ -8,7 +8,6 @@ Fix the Kanban column "copy prompt" mode so that dragging cards into columns set
 
 **Tags:** bugfix, frontend, backend, UI, workflow
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 

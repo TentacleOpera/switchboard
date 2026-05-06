@@ -9,7 +9,6 @@ Add safety validations to the new setter and conduct comprehensive manual integr
 
 **Tags:** backend, infrastructure, reliability, workflow
 **Complexity:** 4
-**Repo:** switchboard
 
 ## Dependencies
 

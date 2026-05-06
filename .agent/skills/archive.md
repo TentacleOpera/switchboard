@@ -107,6 +107,7 @@ duckdb .switchboard/archive.duckdb "SELECT * FROM plans WHERE topic ILIKE '%auth
 |------------|-------------|
 | `architectural_diagrams` | Generate Mermaid architectural diagrams, render to images, and upload to ClickUp/Linear tickets for team review |
 | `archive` | Query and manage the DuckDB archive of historical plans and conversations |
+| `clickup_mcp` | ClickUp MCP tool patterns, subtask truncation workarounds, and runtime-discovered troubleshooting |
 
 ## Related Files
 - Schema: `src/services/archiveSchema.sql`

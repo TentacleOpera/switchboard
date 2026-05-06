@@ -6,7 +6,6 @@ Move the 'custom agents' setup functionality from the setup menu (setup.html) in
 ## Metadata
 **Tags:** frontend, UI, UX
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None.

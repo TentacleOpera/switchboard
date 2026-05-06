@@ -10,7 +10,6 @@ Complete the cleanup work that `remove_redundant_mcp_tools.md` claimed to have d
 ## Metadata
 **Tags:** infrastructure, workflow, bugfix, reliability
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 - [x] Delete `challenge.md` — the `/improve-plan` workflow already includes adversarial review, making `/challenge` redundant. AGENTS.md must also be updated to remove `/challenge` trigger.
@@ -218,3 +217,30 @@ Key risks: Deleting workflow files leaves dead routing code in `kanbanColumnDeri
 - `accuracy.md` was already refactored correctly
 - `TaskViewerProvider.ts` was already updated correctly
 - **New finding:** 5 source files contain dead references to deleted workflows that the original plan did not identify
+
+## Review & Execution Results (Completed)
+
+**Stage 1: Grumpy Review (Adversarial Findings)**
+* **[CRITICAL]** The 7 "deleted" workflow files are literally still sitting in `.agent/workflows/` taking up space and potentially misleading users and the agent.
+* **[MAJOR]** The `SessionActionLog.ts` is still using the legacy label 'STARTED HANDOFF' when delegating tasks, confusing the audit trail.
+* **[MAJOR]** `src/extension.ts` continues to inject `/challenge` and `/handoff` into the `.switchboard/README.md` and generates them in the default `AGENTS.md` payload.
+
+**Stage 2: Balanced Review (Synthesis)**
+* The 7 dead workflow files must be physically removed using `rm`.
+* `SessionActionLog.ts` needs a string update from 'STARTED HANDOFF' to 'DELEGATED TASK'.
+* The `src/extension.ts` file needs a cleanup of its string templates so new workspaces don't resurrect `/challenge` or `/handoff` instructions.
+* *Note: The switch case cleanup in `kanbanColumnDerivationImpl.js`, routing updates in `PipelineOrchestrator.ts`, and directory scaffolding removal in `ControlPlaneMigrationService.ts` were already handled by previous work and are confirmed clean.*
+
+**Files Changed / Work Performed:**
+1. **Removed**: `.agent/workflows/challenge.md`, `.agent/workflows/handoff.md`, `.agent/workflows/handoff-lead.md`, `.agent/workflows/handoff-relay.md`, `.agent/workflows/handoff-chat.md`, `.agent/workflows/archive.md`, `.agent/workflows/export.md`.
+2. **Updated**: `src/services/SessionActionLog.ts` (`delegate_task` string changed to `'DELEGATED TASK'`).
+3. **Updated**: `src/extension.ts` (Removed `/challenge`, `/handoff`, and all handoff variants from the markdown README generation and `AGENTS.md` template generation strings to prevent zombie workflow references).
+
+**Validation Results:**
+* `npm run compile` succeeded.
+* `npm run test` compilation succeeded (jest syntax issues exist for TS in this setup, but `tsc` compilation for tests succeeded).
+* `grep` verified that no internal routing strings refer to `/challenge` or `/handoff` variants in `src/`.
+* Tested paths in PipelineOrchestrator and kanban column derivation mappings exist and are clean.
+
+**Remaining Risks:**
+* External workspace `AGENTS.md` files may still contain `/challenge` references, but these will eventually phase out. The extension no longer injects them.

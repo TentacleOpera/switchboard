@@ -24,7 +24,7 @@ import {
     reweightSequence
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, BatchPromptPlan, columnToPromptRole, resolveWorkingDir } from './agentPromptBuilder';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBrowseService } from './NotionBrowseService';
 import { ClickUpSyncService, type ClickUpApplyOptions, type ClickUpList, type ClickUpMappingSelection, type ClickUpTask } from './ClickUpSyncService';
@@ -47,6 +47,7 @@ import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { writePlanStateToFile } from './planStateUtils';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import { parsePlanDependencies } from './planDependencyParser';
+import { inferTopicFromPath } from './planMetadataUtils';
 import {
     type ClickUpAutomationRule,
     type LinearAutomationRule
@@ -245,6 +246,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _recentMirrorWrites = new Map<string, NodeJS.Timeout>();  // mirror paths we just wrote
     private _recentBrainWrites = new Map<string, NodeJS.Timeout>();   // brain paths we just wrote
     private _recentSourceWrites = new Map<string, NodeJS.Timeout>();   // managed-import source paths we just wrote
+    private _pendingMirrorToSourceWritebacks = new Map<string, NodeJS.Timeout>(); // mirror paths with active staging-watcher debounce/writeback
     private _brainDebounceTimers = new Map<string, NodeJS.Timeout>();  // debounce brain watcher events
     private _lastAntigravityRescanAt = 0;
     private _configuredPlanSyncTimer?: NodeJS.Timeout;
@@ -257,6 +259,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _planFsDebounceTimers = new Map<string, NodeJS.Timeout>(); // debounce native plan watcher events
     private _clickUpConfigCache: Map<string, any> = new Map();
     private _recentNativePlanCreations = new Map<string, NodeJS.Timeout>(); // 4s TTL dedup: prevents native fs.watch double-fire after VS Code watcher has already handled the creation
+    private _recentlyDeletedPaths = new Map<string, NodeJS.Timeout>(); // 10s TTL: prevents reconciliation from reviving just-deleted plans
     private _postRegistrationCleanupTimer: NodeJS.Timeout | undefined;      // deferred duplicate-row cleanup after watcher-triggered registrations
     private _sessionWatcher?: vscode.FileSystemWatcher;
     private _fsSessionWatcher?: fs.FSWatcher;
@@ -412,8 +415,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             workspaceRoot: workspaceRoot,
             clickupMetadataPath: cacheService['_clickupMetadataPath'],
             linearMetadataPath: cacheService['_linearMetadataPath'],
-            getClickUpService: () => this._clickUpServices.get(workspaceRoot) || null,
-            getLinearService: () => this._linearServices.get(workspaceRoot) || null
+            getClickUpService: () => this._getClickUpService(workspaceRoot),
+            getLinearService: () => this._getLinearService(workspaceRoot),
         });
 
         try {
@@ -1831,7 +1834,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                         topic = plan.topic;
                         dependencies = plan.dependencies;
-                        workingDir = plan.repoScope ? path.join(workspaceRoot, plan.repoScope) : '';
+                        workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
                     }
                 }
                 if (!planFile) {
@@ -2359,7 +2362,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 const coderPrompt = buildKanbanBatchPrompt('coder', validPlans, {
                     pairProgrammingEnabled: true,
                     accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled(),
-                    defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                    defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                    workspaceRoot: resolvedWorkspaceRoot
                 });
                 if (coderUsesIde) {
                     await vscode.env.clipboard.writeText(coderPrompt);
@@ -2401,8 +2405,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return await this._handleRestorePlan(planId);
     }
 
-    public async handleDeletePlanFromReview(sessionId: string, workspaceRoot?: string): Promise<boolean> {
-        return await this._handleDeletePlan(sessionId, workspaceRoot);
+    public async handleDeletePlanFromReview(sessionId: string, workspaceRoot?: string, planFileAbsolute?: string): Promise<boolean> {
+        return await this._handleDeletePlan(sessionId, workspaceRoot, planFileAbsolute);
     }
 
     public async sendReviewTicketToNextAgent(sessionId: string): Promise<{ ok: boolean; message: string }> {
@@ -5379,19 +5383,30 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const accurateCodingEnabled = this._isAccurateCodingEnabled();
         const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
         const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
+        const splitPlan = this._isSplitPlanEnabled();
         const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
-        const designDocLink = this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined;
-        const designDocContent = (this._isDesignDocEnabled() && workspaceRoot) ? (await this._getDesignDocContent(workspaceRoot)) || undefined : undefined;
+        const designDocEnabled = this._isDesignDocEnabled();
+        const designDocLink = designDocEnabled ? this._getDesignDocLink() : undefined;
+        const designDocContent = (designDocEnabled && workspaceRoot) ? (await this._getDesignDocContent(workspaceRoot)) || undefined : undefined;
+
+        const plannerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_planner');
+        const plannerWorkflowPath = plannerConfig?.workflowFilePath || vscode.workspace.getConfiguration('switchboard').get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md');
+
+        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         return buildKanbanBatchPrompt(role, plans, {
             instruction,
             includeInlineChallenge,
             accurateCodingEnabled,
             pairProgrammingEnabled,
             aggressivePairProgramming,
+            splitPlan,
             advancedReviewerEnabled,
+            dependencyCheckEnabled: this._isDependencyCheckEnabled(),
+            plannerWorkflowPath,
             designDocLink,
             designDocContent,
-            defaultPromptOverrides: this._cachedDefaultPromptOverrides
+            defaultPromptOverrides,
+            workspaceRoot
         });
     }
 
@@ -5399,12 +5414,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot?: string
     ): Promise<Partial<Record<string, DefaultPromptOverride>>> {
         const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return {};
-        try {
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
-            return parseDefaultPromptOverrides(state.defaultPromptOverrides);
-        } catch { return {}; }
+        let overrides: Partial<Record<string, DefaultPromptOverride>> = {};
+        if (statePath) {
+            try {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+                overrides = parseDefaultPromptOverrides(state.defaultPromptOverrides);
+            } catch { /* file may not exist or be invalid */ }
+        }
+
+        // Merge with roleConfigs from workspaceState
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        for (const role of roles) {
+            const config: any = this._context.workspaceState.get(`switchboard.prompts.roleConfig_${role}`);
+            if (config && config.prompt) {
+                overrides[role] = {
+                    text: config.prompt,
+                    mode: 'append'
+                };
+            }
+        }
+        return overrides;
     }
 
     public async handleUpdateKanbanStructure(sequence: unknown, workspaceRoot?: string): Promise<void> {
@@ -5726,6 +5756,49 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 state.visibleAgents = {};
             }
             state.visibleAgents[columnId] = visible;
+        });
+        this._kanbanProvider?.sendVisibleAgents();
+        await Promise.all([
+            this._postSidebarConfigurationState(resolvedRoot),
+            this.postSetupPanelState(resolvedRoot)
+        ]);
+    }
+
+    public async handleSaveCustomAgent(agent: CustomAgentConfig, workspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return;
+        }
+        await this.updateState((state: any) => {
+            const existing = parseCustomAgents(state.customAgents);
+            const filtered = existing.filter((a: CustomAgentConfig) => a.id !== agent.id);
+            filtered.push(agent);
+            state.customAgents = filtered;
+        });
+        this._kanbanProvider?.sendVisibleAgents();
+        await Promise.all([
+            this._postSidebarConfigurationState(resolvedRoot),
+            this.postSetupPanelState(resolvedRoot)
+        ]);
+    }
+
+    public async handleDeleteCustomAgent(agentId: string, workspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) {
+            return;
+        }
+        await this.updateState((state: any) => {
+            const existing = parseCustomAgents(state.customAgents);
+            const deletedRole = existing.find((a: CustomAgentConfig) => a.id === agentId)?.role;
+            state.customAgents = existing.filter((a: CustomAgentConfig) => a.id !== agentId);
+            if (deletedRole) {
+                if (state.visibleAgents) {
+                    delete state.visibleAgents[deletedRole];
+                }
+                if (state.startupCommands) {
+                    delete state.startupCommands[deletedRole];
+                }
+            }
         });
         this._kanbanProvider?.sendVisibleAgents();
         await Promise.all([
@@ -6767,7 +6840,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({
                                 type: 'clickupError',
                                 scope: 'project',
-                                error: error instanceof Error ? error.message : 'Failed to load ClickUp project'
+                                error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
+                                loadSeq
                             });
                         }
                         break;
@@ -7954,14 +8028,32 @@ What would you like to find?`;
                 const isBrainMirror = /^brain_[0-9a-f]{64}\.md$/.test(filename);
                 const isIngestedMirror = /^ingested_[0-9a-f]{64}\.md$/.test(filename);
                 if (!isBrainMirror && !isIngestedMirror) return;
+
+                // Track pending mirror→source writebacks so _syncConfiguredPlanFolder can
+                // avoid overwriting fresh mirror edits while the staging watcher debounce
+                // is still ticking or the writeback is in flight.
+                if (isIngestedMirror) {
+                    const pendingMirrorPath = path.join(stagingDir, filename);
+                    const pendingStableMirror = this._getStablePath(pendingMirrorPath);
+                    const existingPending = this._pendingMirrorToSourceWritebacks.get(pendingStableMirror);
+                    if (existingPending) clearTimeout(existingPending);
+                    this._pendingMirrorToSourceWritebacks.set(
+                        pendingStableMirror,
+                        setTimeout(() => this._pendingMirrorToSourceWritebacks.delete(pendingStableMirror), 2000)
+                    );
+                }
+
                 const existing = mirrorDebounceTimers.get(filename);
                 if (existing) clearTimeout(existing);
                 mirrorDebounceTimers.set(filename, setTimeout(async () => {
                     mirrorDebounceTimers.delete(filename);
                     const mirrorPath = path.join(stagingDir, filename);
-                    if (!fs.existsSync(mirrorPath)) return;
 
                     const stableMirrorPath = this._getStablePath(mirrorPath);
+                    this._pendingMirrorToSourceWritebacks.delete(stableMirrorPath);
+
+                    if (!fs.existsSync(mirrorPath)) return;
+
                     // Skip if we wrote this mirror file ourselves (brain/managed-import→mirror direction)
                     if (this._recentMirrorWrites.has(stableMirrorPath)) return;
 
@@ -8012,14 +8104,14 @@ What would you like to find?`;
                         const sourceContent = await fs.promises.readFile(sourcePath, 'utf8');
                         if (mirrorContent === sourceContent) return;
 
+                        await fs.promises.writeFile(sourcePath, mirrorContent);
+
                         const existingTimer = this._recentSourceWrites.get(sourceStable);
                         if (existingTimer) clearTimeout(existingTimer);
                         this._recentSourceWrites.set(
                             sourceStable,
                             setTimeout(() => this._recentSourceWrites.delete(sourceStable), 2000)
                         );
-
-                        await fs.promises.writeFile(sourcePath, mirrorContent);
                         console.log(`[TaskViewerProvider] Synced mirror → managed-import source: ${path.basename(sourcePath)}`);
                     } catch (e: any) {
                         // Read-only or permission failure: leave the mirror authoritative, do not throw.
@@ -8177,11 +8269,52 @@ What would you like to find?`;
                     continue;
                 }
 
+                // Skip if a mirror→source writeback is pending for this mirror.
+                // The staging watcher detected a mirror edit but hasn't completed the
+                // writeback yet (500ms debounce still ticking or write in flight).
+                const stableMirrorPath = this._getStablePath(mirrorPath);
+                if (this._pendingMirrorToSourceWritebacks.has(stableMirrorPath)) {
+                    console.log(`[TaskViewerProvider] Skipping source→mirror sync: mirror→source writeback pending (${path.basename(filePath)})`);
+                    continue;
+                }
+
+                // Skip if source was recently written from mirror (staging watcher echo).
+                // This prevents overwriting fresh mirror edits with stale source content
+                // when the staging watcher's mirror→source writeback is still in flight.
+                const sourceStable = this._getStablePath(filePath);
+                if (this._recentSourceWrites.has(sourceStable)) {
+                    console.log(`[TaskViewerProvider] Skipping source→mirror sync: source recently written from mirror (${path.basename(filePath)})`);
+                    continue;
+                }
+
+                // Skip if the mirror file is newer than the source file.
+                // The user edited the mirror directly and that edit (a) hasn't been
+                // written back yet, or (b) is fresher than any subsequent source edit.
+                // This is a durable, TTL-independent guard against delayed overwrites.
+                let sourceStat: fs.Stats;
+                let mirrorStat: fs.Stats;
+                try {
+                    sourceStat = await fs.promises.stat(filePath);
+                    mirrorStat = await fs.promises.stat(mirrorPath);
+                } catch {
+                    // If we can't stat either file, fall through to the content check.
+                    sourceStat = undefined as any;
+                    mirrorStat = undefined as any;
+                }
+                if (mirrorStat && sourceStat && mirrorStat.mtimeMs > sourceStat.mtimeMs) {
+                    console.log(`[TaskViewerProvider] Skipping source→mirror sync: mirror is newer than source (${path.basename(filePath)})`);
+                    continue;
+                }
+
                 // With bidirectional sync, source and mirror should stay in lockstep.
                 // If they differ, the source was likely edited directly (legitimate update).
             }
 
-            // Mark mirror as recently written so staging watcher doesn't bounce content back
+            await fs.promises.writeFile(mirrorPath, content);
+
+            // Mark mirror as recently written so staging watcher doesn't bounce content back.
+            // TTL is set AFTER writeFile so the 2000ms window starts from when the write
+            // actually completes, preventing the guard from expiring mid-write.
             const stableMirrorPath = this._getStablePath(mirrorPath);
             const existingTimer = this._recentMirrorWrites.get(stableMirrorPath);
             if (existingTimer) clearTimeout(existingTimer);
@@ -8189,8 +8322,6 @@ What would you like to find?`;
                 stableMirrorPath,
                 setTimeout(() => this._recentMirrorWrites.delete(stableMirrorPath), 2000)
             );
-
-            await fs.promises.writeFile(mirrorPath, content);
             const mirrorUri = vscode.Uri.file(mirrorPath);
             if (alreadyExists) {
                 await this._handlePlanTitleSync(mirrorUri, workspaceRoot);
@@ -8284,7 +8415,7 @@ What would you like to find?`;
             console.error('[TaskViewerProvider] Configured plan fs.watch fallback failed (non-fatal):', e);
         }
 
-        await this._syncConfiguredPlanFolder(configuredPlanFolder, resolvedWorkspaceRoot);
+        scheduleSync();
     }
 
     private _getStablePath(p: string): string {
@@ -8756,21 +8887,8 @@ What would you like to find?`;
 
 
 
-    private _inferTopicFromPath(filePath: string | undefined): string {
-        if (!filePath) return '(untitled)';
-        let name = path.basename(filePath, path.extname(filePath));
-        name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
-        // Strip leading hex hash (32+ hex chars)
-        name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
-        if (!name) return '(untitled)';
-        return name
-            .replace(/[_-]+/g, ' ')
-            .replace(/\b\w/g, c => c.toUpperCase())
-            .trim() || '(untitled)';
-    }
-
     private _isGenericTopic(s: string): boolean {
-        return !s || s === '(untitled)' || /^(simple\s+)?implementation\s+plan$/i.test(s.trim());
+        return !s || s === '(untitled)' || s.toLowerCase() === 'untitled plan' || /^(simple\s+)?implementation\s+plan$/i.test(s.trim());
     }
 
     private async _getRecoverablePlans(): Promise<Array<{ planId: string; topic: string; sourceType: string; status: string; brainSourcePath?: string; localPlanPath?: string; updatedAt: string }>> {
@@ -8857,7 +8975,7 @@ What would you like to find?`;
                 }
 
                 if (this._isGenericTopic(topic)) {
-                    topic = this._inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
+                    topic = inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
                 }
 
                 // Get the best available date from DB (fixes migration-corrupted dates)
@@ -8903,7 +9021,7 @@ What would you like to find?`;
                 if (isCompletedInDb) {
                     let topic = entry.topic;
                     if (this._isGenericTopic(topic)) {
-                        topic = this._inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
+                        topic = inferTopicFromPath(entry.brainSourcePath || entry.localPlanPath);
                     }
                     recoverable.push({
                         planId: entry.planId,
@@ -9220,7 +9338,7 @@ What would you like to find?`;
             const mirrorPath = path.join(stagingDir, file);
             const mirrorRelPath = path.join('.switchboard', 'plans', file).replace(/\\/g, '/');
             const runSheet = runSheetMetadata.get(hash);
-            const fallbackTopic = runSheet?.topic || existingRow?.topic || this._inferTopicFromPath(file);
+            const fallbackTopic = runSheet?.topic || existingRow?.topic || inferTopicFromPath(file);
             const topic = await this._readPlanTopicFromFile(mirrorPath, fallbackTopic);
             const now = new Date().toISOString();
 
@@ -9300,7 +9418,7 @@ What would you like to find?`;
 
                 existingEntry.ownerWorkspaceId = wsId;
                 existingEntry.localPlanPath = sheet.planFile;
-                existingEntry.topic = sheet.topic || existingEntry.topic || this._inferTopicFromPath(sheet.planFile);
+                existingEntry.topic = sheet.topic || existingEntry.topic || inferTopicFromPath(sheet.planFile);
                 existingEntry.createdAt = sheet.createdAt || existingEntry.createdAt || new Date().toISOString();
                 existingEntry.updatedAt = sheet.completedAt || sheet.createdAt || new Date().toISOString();
                 changed = true;
@@ -9312,7 +9430,7 @@ What would you like to find?`;
                 ownerWorkspaceId: wsId,
                 sourceType: 'local',
                 localPlanPath: sheet.planFile,
-                topic: sheet.topic || this._inferTopicFromPath(sheet.planFile),
+                topic: sheet.topic || inferTopicFromPath(sheet.planFile),
                 createdAt: sheet.createdAt || new Date().toISOString(),
                 updatedAt: sheet.completedAt || sheet.createdAt || new Date().toISOString(),
                 status: 'active'
@@ -9351,7 +9469,14 @@ What would you like to find?`;
                 // `.switchboard/plans/<repoName>/` layer for local plan files.
                 const relativePlanPath = path.relative(workspaceRoot, filePath).replace(/\\/g, '/');
 
-                // Step 1: attempt revival of soft-deleted rows (existing behaviour)
+                // Step 1.5: guard against recently-deleted paths (prevents zombie resurrection)
+                const stablePath = this._normalizePendingPlanPath(filePath);
+                if (this._recentlyDeletedPaths.has(stablePath)) {
+                    console.log(`[TaskViewerProvider] Skipping recently deleted plan file during reconcile: ${relativePlanPath}`);
+                    continue;
+                }
+
+                // Step 2: attempt revival of soft-deleted rows (existing behaviour)
                 const revivedOrActive = await this._reviveDeletedLocalPlanForPath(
                     workspaceRoot, relativePlanPath, filePath
                 );
@@ -9359,14 +9484,13 @@ What would you like to find?`;
                     continue; // already handled — either revived or was already active
                 }
 
-                // Step 2: guard against concurrent watcher-initiated creation for the same path
-                const stablePath = this._normalizePendingPlanPath(filePath);
+                // Step 3: guard against concurrent watcher-initiated creation for the same path
                 if (this._pendingPlanCreations.has(stablePath) || this._planCreationInFlight.has(stablePath)) {
                     // Watcher has claimed this path — do not race
                     continue;
                 }
 
-                // Step 3: check whether ANY DB row exists (active, deleted, completed) for this file.
+                // Step 4: check whether ANY DB row exists (active, deleted, completed) for this file.
                 // _reviveDeletedLocalPlanForPath already resolved the db/workspaceId — we must re-fetch
                 // here because that method does not expose whether null = "no row" vs "revival failed".
                 const db = await this._getKanbanDb(workspaceRoot);
@@ -9384,7 +9508,7 @@ What would you like to find?`;
                 }
 
                 if (!anyDbRow) {
-                    // Step 4: truly orphaned file — no DB row of any status. Register it.
+                    // Step 5: truly orphaned file — no DB row of any status. Register it.
                     // suppressFollowupSync=true: the single _syncFilesAndRefreshRunSheets at the end
                     // of _collectAndSyncKanbanSnapshot covers the whole batch.
                     console.log(`[TaskViewerProvider] Registering orphaned plan file found during reconcile: ${relativePlanPath}`);
@@ -9470,7 +9594,7 @@ What would you like to find?`;
             return null;
         }
 
-        let topic = deletedEntry.topic || this._inferTopicFromPath(normalizedRelativePath);
+        let topic = deletedEntry.topic || inferTopicFromPath(normalizedRelativePath);
         try {
             const content = await fs.promises.readFile(normalizedAbsolutePath, 'utf8');
             const h1Match = content.match(/^#\s+(.+)$/m);
@@ -10161,7 +10285,7 @@ What would you like to find?`;
 
                 if (db && (!existingRow || existingRow.status !== 'active' || existingRow.workspaceId !== wsId)) {
                     const runSheet = orphanRunSheetMetadata.get(hash);
-                    const fallbackTopic = runSheet?.topic || existingRow?.topic || this._inferTopicFromPath(file);
+                    const fallbackTopic = runSheet?.topic || existingRow?.topic || inferTopicFromPath(file);
                     const topic = await this._readPlanTopicFromFile(restoredMirrorPath, fallbackTopic);
                     const now = new Date().toISOString();
 
@@ -10576,7 +10700,7 @@ What would you like to find?`;
                 topic = h1Match[1].trim();
             }
             if (!topic) {
-                topic = this._inferTopicFromPath(brainFilePath);
+                topic = inferTopicFromPath(brainFilePath);
             }
 
             const sourceKind = this._getAntigravitySourceKind(baseBrainPath);
@@ -10831,7 +10955,7 @@ What would you like to find?`;
                 topic = h1Match ? h1Match[1].trim() : '';
             } catch { topic = ''; }
             if (!topic) {
-                topic = this._inferTopicFromPath(uri.fsPath);
+                topic = inferTopicFromPath(uri.fsPath);
             }
 
             const fileStat = await fs.promises.stat(uri.fsPath);
@@ -11598,7 +11722,7 @@ What would you like to find?`;
                 role = columnToPromptRole(effectiveColumn) || 'coder';
             }
 
-            const workingDir = planRecord?.repoScope ? path.join(resolvedWorkspaceRoot, planRecord.repoScope) : '';
+            const workingDir = resolveWorkingDir(resolvedWorkspaceRoot, planRecord?.repoScope || '');
             const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir };
             const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
@@ -11606,6 +11730,7 @@ What would you like to find?`;
             const accurateCodingEnabled = this._isAccurateCodingEnabled();
             const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
             const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
+            const splitPlan = this._isSplitPlanEnabled();
             const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
 
             // Use standard prompt generation
@@ -11616,9 +11741,11 @@ What would you like to find?`;
                 accurateCodingEnabled: false, // Always false for clipboard prompts
                 pairProgrammingEnabled,
                 aggressivePairProgramming,
+                splitPlan,
                 advancedReviewerEnabled,
                 designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: resolvedWorkspaceRoot
             });
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
             if (customAgent?.promptInstructions) {
@@ -11798,7 +11925,7 @@ What would you like to find?`;
                 }
             }
             if (!topic) {
-                topic = this._inferTopicFromPath(resolvedPath);
+                topic = inferTopicFromPath(resolvedPath);
             }
 
             const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
@@ -11998,14 +12125,14 @@ What would you like to find?`;
         }
     }
 
-    private async _handleDeletePlan(sessionId: string, workspaceRoot?: string): Promise<boolean> {
+    private async _handleDeletePlan(sessionId: string, workspaceRoot?: string, planFileAbsolute?: string): Promise<boolean> {
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : await this._resolveWorkspaceRootForSession(sessionId);
         if (!resolvedWorkspaceRoot) return false;
         await this._activateWorkspaceContext(resolvedWorkspaceRoot);
         const log = this._getSessionLog(resolvedWorkspaceRoot);
-        console.log(`[TaskViewerProvider] _handleDeletePlan: sessionId=${sessionId}`);
+        console.log(`[TaskViewerProvider] _handleDeletePlan start: sessionId=${sessionId}, workspaceRoot=${resolvedWorkspaceRoot}, planFileAbsolute=${planFileAbsolute}`);
         try {
             // Resolve mirror/plan path and brainSourcePath from runsheet
             let mirrorPath: string | undefined;
@@ -12029,6 +12156,23 @@ What would you like to find?`;
                 }
             }
 
+            // Fallback: if mirrorPath unresolved but we have planFileAbsolute from ReviewProvider
+            if (!mirrorPath && planFileAbsolute) {
+                const abs = path.resolve(planFileAbsolute);
+                const absNorm = process.platform === 'win32' ? abs.toLowerCase() : abs;
+                const rootNorm = process.platform === 'win32' ? resolvedWorkspaceRoot.toLowerCase() : resolvedWorkspaceRoot;
+                if (absNorm.startsWith(rootNorm + path.sep) || absNorm.startsWith(rootNorm + '/')) {
+                    mirrorPath = abs;
+                } else {
+                    console.warn(`[TaskViewerProvider] _handleDeletePlan: planFileAbsolute outside workspace, skipping. abs=${abs}`);
+                }
+            }
+            if (!mirrorPath && !brainSourcePath) {
+                console.error('[TaskViewerProvider] _handleDeletePlan: no deletable path resolved for local plan');
+                vscode.window.showErrorMessage('Could not locate the plan file to delete. The plan may have already been removed or the runsheet is corrupted.');
+                return false;
+            }
+
             // AP-2: Windows-safe brain path guard — reject brainSourcePath outside expected dir
             let isManagedImport = false;
             if (brainSourcePath) {
@@ -12039,7 +12183,7 @@ What would you like to find?`;
                     brainSourcePath = undefined;
                 }
             }
-            console.log(`[TaskViewerProvider] _handleDeletePlan: mirrorPath=${mirrorPath}, brainSourcePath=${brainSourcePath}`);
+            console.log(`[TaskViewerProvider] _handleDeletePlan resolved: mirrorPath=${mirrorPath}, brainSourcePath=${brainSourcePath}, isManagedImport=${isManagedImport}`);
 
             // Discover associated review files
             const reviewsDir = path.join(resolvedWorkspaceRoot, '.switchboard', 'reviews');
@@ -12057,6 +12201,23 @@ What would you like to find?`;
                 : baseDialogText;
             const answer = await vscode.window.showWarningMessage(dialogText, { modal: true }, 'Delete');
             if (answer !== 'Delete') return false;
+            console.log(`[TaskViewerProvider] _handleDeletePlan: user confirmed deletion`);
+
+            // Register paths in recently-deleted guard BEFORE attempting deletion
+            if (mirrorPath) {
+                const stablePath = this._normalizePendingPlanPath(mirrorPath);
+                this._recentlyDeletedPaths.set(
+                    stablePath,
+                    setTimeout(() => this._recentlyDeletedPaths.delete(stablePath), 10000)
+                );
+            }
+            if (brainSourcePath) {
+                const stablePath = this._normalizePendingPlanPath(brainSourcePath);
+                this._recentlyDeletedPaths.set(
+                    stablePath,
+                    setTimeout(() => this._recentlyDeletedPaths.delete(stablePath), 10000)
+                );
+            }
 
             // Write tombstone BEFORE deletion to prevent resurrection
             if (brainSourcePath) {
@@ -12074,8 +12235,7 @@ What would you like to find?`;
                 } catch (e: any) {
                     const fileLabel = isManagedImport ? 'source file' : 'brain file';
                     console.error(`[TaskViewerProvider] _handleDeletePlan: failed to delete ${fileLabel}: ${e}`);
-                    vscode.window.showErrorMessage(`Failed to delete ${fileLabel}: ${brainSourcePath} — ${e?.message || e}`);
-                    return false;
+                    throw new Error(`Failed to delete ${fileLabel}: ${brainSourcePath} — ${e?.message || e}`);
                 }
             }
             if (mirrorPath && fs.existsSync(mirrorPath)) {
@@ -12083,8 +12243,7 @@ What would you like to find?`;
                     await fs.promises.unlink(mirrorPath);
                 } catch (e: any) {
                     console.error(`[TaskViewerProvider] _handleDeletePlan: failed to delete mirror file: ${e}`);
-                    vscode.window.showErrorMessage(`Failed to delete mirror file: ${mirrorPath} — ${e?.message || e}`);
-                    return false;
+                    throw new Error(`Failed to delete mirror file: ${mirrorPath} — ${e?.message || e}`);
                 }
             }
             // Delete associated review files
@@ -12095,8 +12254,7 @@ What would you like to find?`;
                     }
                 } catch (e: any) {
                     console.error(`[TaskViewerProvider] _handleDeletePlan: failed to delete review file: ${reviewFile} — ${e}`);
-                    vscode.window.showErrorMessage(`Failed to delete review file: ${path.basename(reviewFile)} — ${e?.message || e}`);
-                    return false;
+                    throw new Error(`Failed to delete review file: ${path.basename(reviewFile)} — ${e?.message || e}`);
                 }
             }
 
@@ -12128,9 +12286,11 @@ What would you like to find?`;
 
             await log.deleteRunSheet(sessionId);
             this._activeDispatchSessions.delete(sessionId);
+            console.log(`[TaskViewerProvider] _handleDeletePlan: runsheet deleted for sessionId=${sessionId}`);
 
             if (db && (!brainSourcePath || isManagedImport)) {
                 await db.deletePlan(sessionId);
+                console.log(`[TaskViewerProvider] _handleDeletePlan: db plan deleted for sessionId=${sessionId}`);
             }
 
             // Update plan registry status to deleted
@@ -12147,11 +12307,20 @@ What would you like to find?`;
                 operation: 'delete_plan',
                 sessionId
             });
-            await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
+            // Only sync if we actually deleted a file; otherwise the orphaned file will be re-discovered
+            if (mirrorPath || brainSourcePath) {
+                await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
+            } else {
+                // File deletion was not possible (no path resolved). Refresh sidebar manually without file scan.
+                await this._refreshRunSheets(resolvedWorkspaceRoot);
+            }
+            console.log(`[TaskViewerProvider] _handleDeletePlan: completed successfully for sessionId=${sessionId}`);
             return true;
         } catch (e) {
-            vscode.window.showErrorMessage(`Failed to delete plan: ${e}`);
-            return false;
+            // Re-throw so callers can distinguish errors from user cancellation (return false).
+            // Callers (ReviewProvider catch block, Kanban webview handler catch block) already
+            // have catch blocks that display the error appropriately.
+            throw e;
         }
     }
 
@@ -12868,20 +13037,36 @@ What would you like to find?`;
     }
 
     private _isAccurateCodingEnabled(): boolean {
+        const coderConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_coder');
+        const leadConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_lead');
+        if (coderConfig?.addons?.accurateCoding !== undefined) return coderConfig.addons.accurateCoding;
+        if (leadConfig?.addons?.accurateCoding !== undefined) return leadConfig.addons.accurateCoding;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', true);
     }
 
     private _isAdvancedReviewerEnabled(): boolean {
+        const reviewerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_reviewer');
+        if (reviewerConfig?.addons?.advancedRegression !== undefined) return reviewerConfig.addons.advancedRegression;
         return vscode.workspace.getConfiguration('switchboard')
             .get<boolean>('reviewer.advancedMode', false);
     }
 
     private _isLeadInlineChallengeEnabled(): boolean {
+        const leadConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_lead');
+        if (leadConfig?.addons?.leadChallenge !== undefined) return leadConfig.addons.leadChallenge;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('leadCoder.inlineChallenge', false);
     }
 
     private _isAggressivePairProgrammingEnabled(): boolean {
+        const plannerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_planner');
+        if (plannerConfig?.addons?.aggressivePairProgramming !== undefined) return plannerConfig.addons.aggressivePairProgramming;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('pairProgramming.aggressive', false);
+    }
+
+    private _isSplitPlanEnabled(): boolean {
+        const plannerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_planner');
+        if (plannerConfig?.addons?.splitPlan !== undefined) return plannerConfig.addons.splitPlan;
+        return false;
     }
 
     private _isJulesAutoSyncEnabled(): boolean {
@@ -12889,7 +13074,15 @@ What would you like to find?`;
     }
 
     private _isDesignDocEnabled(): boolean {
+        const plannerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_planner');
+        if (plannerConfig?.addons?.designDoc !== undefined) return plannerConfig.addons.designDoc;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designDocEnabled', false);
+    }
+
+    private _isDependencyCheckEnabled(): boolean {
+        const plannerConfig: any = this._context.workspaceState.get('switchboard.prompts.roleConfig_planner');
+        if (plannerConfig?.addons?.dependencyCheck !== undefined) return plannerConfig.addons.dependencyCheck;
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.dependencyCheckEnabled', true);
     }
 
     private _getDesignDocLink(): string {
@@ -13068,6 +13261,13 @@ What would you like to find?`;
             action: meta.action
         });
 
+        // Clear terminal before prompt if configured
+        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', false);
+        if (clearBeforePrompt) {
+            terminal.sendText('/clear', true);
+            await new Promise(r => setTimeout(r, 2000));
+        }
+
         // Deliver via robust paced send
         const paced = meta.sender !== meta.recipient;
         await sendRobustText(terminal, payload, paced);
@@ -13178,7 +13378,7 @@ What would you like to find?`;
             if (plan && plan.planFile) {
                 planFileRelative = plan.planFile;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
-                workingDir = plan.repoScope ? path.join(resolvedWorkspaceRoot, plan.repoScope) : '';
+                workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
             }
         }
 
@@ -13280,7 +13480,7 @@ What would you like to find?`;
                     dispatches.push({
                         role: 'lead',
                         agent: leadAgent,
-                        payload: buildKanbanBatchPrompt('lead', [teamPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
+                        payload: buildKanbanBatchPrompt('lead', [teamPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides, workspaceRoot: resolvedWorkspaceRoot }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
                         metadata: { phase_gate: { enforce_persona: 'lead' } }
                     });
                 } else {
@@ -13288,7 +13488,7 @@ What would you like to find?`;
                         dispatches.push({
                             role: 'lead',
                             agent: leadAgent,
-                            payload: buildKanbanBatchPrompt('lead', [teamPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
+                            payload: buildKanbanBatchPrompt('lead', [teamPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides, workspaceRoot: resolvedWorkspaceRoot }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
                             metadata: { phase_gate: { enforce_persona: 'lead' } }
                         });
                     }
@@ -13299,7 +13499,8 @@ What would you like to find?`;
                             agent: coderAgent,
                             payload: buildKanbanBatchPrompt('coder', [teamPlan], {
                                 accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                                workspaceRoot: resolvedWorkspaceRoot
                             }) + `\n\nAdditional Instructions: only do Routine (Band A) work.`,
                             metadata: {}
                         });
@@ -13398,9 +13599,11 @@ What would you like to find?`;
             messagePayload = buildKanbanBatchPrompt('planner', [dispatchPlan], {
                 instruction: plannerInstruction,
                 aggressivePairProgramming: this._isAggressivePairProgrammingEnabled(),
+                splitPlan: this._isSplitPlanEnabled(),
                 designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
                 designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: resolvedWorkspaceRoot
             });
 
             // Append dispatch-specific strict/light mode delivery extensions
@@ -13419,7 +13622,8 @@ What would you like to find?`;
         } else if (role === 'reviewer') {
             messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
                 advancedReviewerEnabled: this._isAdvancedReviewerEnabled(),
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: resolvedWorkspaceRoot
             });
             messageMetadata.phase_gate = {
                 enforce_persona: 'reviewer',
@@ -13452,11 +13656,12 @@ What would you like to find?`;
             messagePayload = buildKanbanBatchPrompt('tester', [dispatchPlan], {
                 designDocLink: this._getDesignDocLink().trim(),
                 designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: resolvedWorkspaceRoot
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
-            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { includeInlineChallenge, defaultPromptOverrides: this._cachedDefaultPromptOverrides });
+            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { includeInlineChallenge, defaultPromptOverrides: this._cachedDefaultPromptOverrides, workspaceRoot: resolvedWorkspaceRoot });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
             if (baseInstruction === 'create-signal-file') {
@@ -13471,7 +13676,8 @@ Create this file exactly as specified, then continue your work.`);
                     instruction: baseInstruction,
                     includeInlineChallenge,
                     accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                    defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                    defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                    workspaceRoot: resolvedWorkspaceRoot
                 });
             }
         } else if (role === 'intern') {
@@ -13479,10 +13685,11 @@ Create this file exactly as specified, then continue your work.`);
                 instruction: baseInstruction,
                 includeInlineChallenge,
                 accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: resolvedWorkspaceRoot
             });
         } else if (customAgent) {
-            messagePayload = buildKanbanBatchPrompt(role, [dispatchPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides });
+            messagePayload = buildKanbanBatchPrompt(role, [dispatchPlan], { defaultPromptOverrides: this._cachedDefaultPromptOverrides, workspaceRoot: resolvedWorkspaceRoot });
             if (customAgent.promptInstructions) {
                 messagePayload += `\n\nAdditional Instructions: ${customAgent.promptInstructions}`;
             }
@@ -13538,6 +13745,30 @@ Create this file exactly as specified, then continue your work.`);
         }
     }
 
+
+    public async handleRebuildDependencyMap(plans: any[]): Promise<boolean> {
+        if (!plans || plans.length === 0) {
+            return false;
+        }
+
+        let prompt = "## Dependency Map Rebuild Request\n\n";
+        prompt += "Rebuild the dependency relationships for the following plans currently in NEW (CREATED) and PLANNED (PLAN REVIEWED) columns:\n\n";
+        prompt += "**Plans to analyze:**\n";
+        
+        plans.forEach((p, i) => {
+            prompt += `${i + 1}. Session: ${p.sessionId} | Topic: "${p.topic}" | Column: ${p.kanbanColumn} | Current deps: ${p.dependencies || 'none'}\n`;
+        });
+
+        prompt += "\n**Instructions:**\n";
+        prompt += "1. Analyze each plan's content and goals\n";
+        prompt += "2. Identify true dependency relationships based on technical prerequisites, logical sequencing, and resource conflicts\n";
+        prompt += "3. Update the dependencies field for each plan as needed (comma-separated session IDs)\n";
+        prompt += "4. Use session IDs for dependency references\n";
+        prompt += "5. Report which plans can proceed (no blocking deps) vs which are blocked\n\n";
+        prompt += "Return a summary of updated dependencies, identified chains, and recommended execution order.";
+
+        return this._handleSendAnalystMessage(prompt, 'analystMap');
+    }
 
     private async _handleSendAnalystMessage(
         instruction: string,

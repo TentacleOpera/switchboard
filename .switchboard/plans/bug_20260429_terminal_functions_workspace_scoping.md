@@ -6,7 +6,6 @@ Update terminal function scripts in `.agent/skills/kanban_operations/` to accept
 ## Metadata
 **Tags:** bugfix, workflow
 **Complexity:** 2
-**Repo:** switchboard
 
 ## User Review Required
 None. This is a backward-compatible bug fix that adds optional parameters to CLI scripts.

@@ -10,7 +10,6 @@ Fix the bug where setting a column's drag-and-drop mode to "Copy Prompt" and dra
 ## Metadata
 **Tags:** bugfix, UX, workflow
 **Complexity:** 3
-**Repo:** switchboard
 
 ## User Review Required
 None — this is a straightforward conditional logic fix with no design decisions.
@@ -180,3 +179,17 @@ When `cliTriggersEnabled` is `false`, `dispatchType` is always `'move'`, even wh
 
 ## Recommendation
 **Send to Coder** — Complexity 3. Two targeted conditional restructuring changes in a single file. No architectural changes, no new patterns, no data consistency risks.
+
+---
+## Review & Verification
+
+### Grumpy Principal Engineer Review
+- **NIT:** No material defects. The logic is fine, though relying on `typeof` or structured objects instead of nested ternaries `(!cliTriggersEnabled ? 'move' : 'cli')` is generally more readable. However, it matches the existing file's style. 
+
+### Balanced Synthesis
+- **Action:** LGTM. No further code fixes required.
+- The conditional restructuring exactly mirrors the plan. Both the regular path and the CODED_AUTO path accurately prioritize `prompt` mode independently of `cliTriggersEnabled`.
+
+### Update
+- **Files Modified:** `src/webview/kanban.html`
+- **Validation:** Code compiled successfully (`npm run compile`). The drag-and-drop conditions are structurally sound. No remaining risks for this UX fix.

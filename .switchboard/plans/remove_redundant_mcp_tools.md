@@ -10,7 +10,6 @@ Remove 12 redundant Switchboard MCP tools and 7 legacy workflows that are supers
 ## Metadata
 **Tags:** infrastructure, workflow, devops
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None - this is internal tooling cleanup

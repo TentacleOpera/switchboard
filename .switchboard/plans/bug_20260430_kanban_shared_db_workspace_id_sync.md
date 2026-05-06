@@ -10,7 +10,6 @@ Fix the bug where plans in a shared kanban database are invisible to child works
 ## Metadata
 **Tags:** bugfix, backend, database, workflow
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 > [!NOTE]

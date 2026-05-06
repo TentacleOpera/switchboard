@@ -6,7 +6,6 @@ Restore red exclamation mark dependency warnings and dependency-based card order
 ## Metadata
 **Tags:** UI, bugfix, workflow
 **Complexity:** 4
-**Repo:** switchboard
 
 ## User Review Required
 No

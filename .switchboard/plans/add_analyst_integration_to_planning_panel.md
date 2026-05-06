@@ -6,7 +6,6 @@ Enable the Planning Panel's "SEND TO ANALYST" button to send research prompts to
 ## Metadata
 **Tags:** backend, UI
 **Complexity:** 4
-**Repo:** switchboard
 
 ---
 

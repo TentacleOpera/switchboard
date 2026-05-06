@@ -8,7 +8,6 @@ Fix the CONTEXT GATHERER kanban column visibility bug by adding `gatherer: false
 
 **Tags:** bugfix, UI, frontend
 **Complexity:** 3
-**Repo:** switchboard
 
 ## User Review Required
 

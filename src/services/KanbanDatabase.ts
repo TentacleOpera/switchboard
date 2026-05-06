@@ -217,6 +217,10 @@ const MIGRATION_V15_SQL = [
     )`
 ];
 
+const MIGRATION_V16_SQL = [
+    `UPDATE plans SET repo_scope = '' WHERE repo_scope = 'switchboard'`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -285,7 +289,11 @@ export class KanbanDatabase {
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
-        const stable = path.resolve(workspaceRoot);
+        const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
+        if (!validation.valid) {
+            throw new Error(`Invalid workspace root: ${validation.error}`);
+        }
+        const stable = validation.resolved!;
         const existing = KanbanDatabase._instances.get(stable);
         if (existing) {
             return existing;
@@ -418,6 +426,38 @@ export class KanbanDatabase {
         }
     }
 
+    /**
+     * Validates a workspace root path. Rejects non-existent paths, non-directories,
+     * and numeric IDs that might be passed incorrectly by integration services.
+     */
+    private static isValidWorkspaceRoot(workspaceRoot: string): { valid: boolean; error?: string; resolved?: string } {
+        if (!workspaceRoot || typeof workspaceRoot !== 'string' || workspaceRoot.trim() === '') {
+            return { valid: false, error: 'Workspace root path cannot be empty.' };
+        }
+        try {
+            const resolved = path.resolve(workspaceRoot);
+            
+            // Reject paths that look like ClickUp or other numeric IDs
+            const basename = path.basename(resolved);
+            if (/^\d{8,}$/.test(basename)) {
+                return { valid: false, error: `Path looks like an ID: ${resolved}`, resolved };
+            }
+
+            if (!fs.existsSync(resolved)) {
+                return { valid: false, error: `Path does not exist: ${resolved}`, resolved };
+            }
+            
+            const stat = fs.statSync(resolved);
+            if (!stat.isDirectory()) {
+                return { valid: false, error: `Path is not a directory: ${resolved}`, resolved };
+            }
+            
+            return { valid: true, resolved };
+        } catch (e: any) {
+            return { valid: false, error: e.message };
+        }
+    }
+
     private static _migrationInProgress = false;
 
     /**
@@ -451,6 +491,11 @@ export class KanbanDatabase {
                 }
             }
 
+            // NOTE: This mkdir is unguarded (no .switchboard boundary check).
+            // migrateIfNeeded() is called from controlled contexts (TaskViewerProvider,
+            // ControlPlaneMigrationService) with validated workspace-root-derived paths.
+            // If called with arbitrary targetPath values, this could create directories
+            // outside the workspace. A future refactor should add boundary validation here.
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.copyFile(sourcePath, targetPath);
             console.log(`[KanbanDatabase] Migrated DB from ${sourcePath} to ${targetPath}`);
@@ -625,8 +670,18 @@ export class KanbanDatabase {
     private static readonly STAT_DEBOUNCE_MS = 500; // Don't re-stat more often than this
     private static _lastLoadedMtimes = new Map<string, number>();
 
+    private get _stateFilePath(): string {
+        return path.join(this._workspaceRoot, '.switchboard', 'kanban-board.md');
+    }
+
     private constructor(private readonly _workspaceRoot: string, resolvedDbPath: string) {
         this._dbPath = resolvedDbPath;
+    }
+
+    public dispose(): void {
+        // No timer to clear — writes are synchronous fire-and-forget
+        // Optional: final flush on deactivation
+        void this.exportStateToFile();
     }
 
     public get lastInitError(): string | null {
@@ -679,8 +734,19 @@ export class KanbanDatabase {
         }
 
         try {
+            // CRITICAL: Validate parent directory before creating
+            const parentDir = path.resolve(path.dirname(this._dbPath));
+            const switchboardDir = path.resolve(path.join(this._workspaceRoot, '.switchboard'));
+            const workspaceRoot = path.resolve(this._workspaceRoot);
+
+            // Only create .switchboard subdirectory or the root itself, not arbitrary paths
+            if (parentDir !== switchboardDir && parentDir !== workspaceRoot && !parentDir.startsWith(switchboardDir + path.sep)) {
+                console.error(`[KanbanDatabase] Refusing to create database outside .switchboard: ${this._dbPath}`);
+                return false;
+            }
+
             // Create parent directory
-            await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
+            await fs.promises.mkdir(parentDir, { recursive: true });
 
             // Initialize SQL.js and create empty database
             const SQL = await KanbanDatabase._loadSqlJs();
@@ -1097,11 +1163,12 @@ export class KanbanDatabase {
             `SELECT * FROM imported_docs WHERE workspace_id = ? ORDER BY imported_at DESC`,
             [workspaceId]
         );
-        const rows: ImportedDocEntry[] = [];
+        
+        const results: ImportedDocEntry[] = [];
         try {
             while (stmt.step()) {
-                const row = stmt.getAsObject();
-                rows.push({
+                const row = stmt.getAsObject() as any;
+                results.push({
                     slugPrefix: String(row.slug_prefix),
                     sourceId: String(row.source_id),
                     remoteDocId: row.remote_doc_id ? String(row.remote_doc_id) : undefined,
@@ -1111,13 +1178,14 @@ export class KanbanDatabase {
                     importedAt: String(row.imported_at),
                     lastSyncedAt: row.last_synced_at ? String(row.last_synced_at) : undefined,
                     contentHash: row.content_hash ? String(row.content_hash) : undefined,
-                    workspaceId: String(row.workspace_id)
+                    workspaceId: String(row.workspace_id),
+                    displayOrder: row.display_order ? Number(row.display_order) : 0
                 });
             }
         } finally {
             stmt.free();
         }
-        return rows;
+        return results;
     }
 
     public async getImportBySlug(slugPrefix: string, workspaceId: string): Promise<ImportedDocEntry | null> {
@@ -1429,6 +1497,26 @@ export class KanbanDatabase {
              WHERE workspace_id = ? AND status = 'active' AND kanban_column = ?
              ORDER BY updated_at DESC`,
             [workspaceId, column]
+        );
+        return this._readRows(stmt);
+    }
+
+    /**
+     * Get plans with dependency info for a specific workspace and set of columns.
+     * Used by the Dependencies tab.
+     */
+    public async getPlansWithDependencies(
+        workspaceId: string,
+        columns: string[] = ['CREATED', 'PLAN REVIEWED']
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const placeholders = columns.map(() => '?').join(',');
+        const stmt = this._db.prepare(
+            `SELECT plan_id, session_id, topic, kanban_column, dependencies 
+             FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND kanban_column IN (${placeholders})
+             ORDER BY kanban_column, updated_at DESC`,
+            [workspaceId, ...columns]
         );
         return this._readRows(stmt);
     }
@@ -2138,8 +2226,16 @@ export class KanbanDatabase {
             const SQL = await KanbanDatabase._loadSqlJs();
 
             if (fs.existsSync(this._dbPath)) {
-                // Only create directory when loading existing file
-                await fs.promises.mkdir(path.dirname(this._dbPath), { recursive: true });
+                // Guard: only create directories within .switchboard or workspace root
+                const parentDir = path.resolve(path.dirname(this._dbPath));
+                const switchboardDir = path.resolve(path.join(this._workspaceRoot, '.switchboard'));
+                const workspaceRoot = path.resolve(this._workspaceRoot);
+                if (parentDir !== switchboardDir && parentDir !== workspaceRoot && !parentDir.startsWith(switchboardDir + path.sep)) {
+                    console.error(`[KanbanDatabase] Refusing to create directory outside .switchboard: ${parentDir}`);
+                    this._lastInitError = `Database parent directory outside .switchboard: ${parentDir}`;
+                    return false;
+                }
+                await fs.promises.mkdir(parentDir, { recursive: true });
                 const stats = await fs.promises.stat(this._dbPath);
                 const fileMtime = stats.mtimeMs;
 
@@ -2428,6 +2524,13 @@ export class KanbanDatabase {
                 console.debug('[KanbanDatabase] V15 migration part skipped:', e);
             }
         }
+
+        // V16: clear incorrect repo_scope values from Bug 2.
+        for (const sql of MIGRATION_V16_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                console.debug('[KanbanDatabase] V16 migration failed:', e);
+            }
+        }
     }
 
     private _planTableHasColumn(columnName: string): boolean {
@@ -2521,6 +2624,53 @@ FROM plans
         }
     }
 
+    private async exportStateToFile(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        try {
+            const workspaceId = await this.getWorkspaceId();
+            if (!workspaceId) return;
+
+            const allPlans = await this.getBoard(workspaceId);
+            const columns = new Map<string, KanbanPlanRecord[]>();
+            for (const col of VALID_KANBAN_COLUMNS) {
+                columns.set(col, []);
+            }
+            for (const plan of allPlans) {
+                const list = columns.get(plan.kanbanColumn);
+                if (list) list.push(plan);
+            }
+
+            let md = `# Kanban Board\n\n`;
+            md += `*Workspace: ${workspaceId}* · *Updated: ${new Date().toISOString()}*\n\n`;
+            for (const [col, plans] of columns) {
+                md += `## ${col}\n\n`;
+                if (plans.length === 0) {
+                    md += `_No plans_\n\n`;
+                } else {
+                    for (const plan of plans) {
+                        const filePath = path.isAbsolute(plan.planFile)
+                            ? plan.planFile
+                            : path.join(this._workspaceRoot, plan.planFile);
+                        md += `- [${plan.sessionId}](${filePath}) — ${plan.topic}\n`;
+                    }
+                    md += `\n`;
+                }
+            }
+
+            // One-time cleanup of old JSON file
+            const oldJsonPath = path.join(this._workspaceRoot, '.switchboard', 'kanban-state.json');
+            if (fs.existsSync(oldJsonPath)) {
+                await fs.promises.unlink(oldJsonPath);
+            }
+
+            const tmpPath = this._stateFilePath + '.tmp';
+            await fs.promises.writeFile(tmpPath, md, 'utf8');
+            await fs.promises.rename(tmpPath, this._stateFilePath);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to export state to file:', error);
+        }
+    }
+
     private async _persist(): Promise<boolean> {
         if (!this._db) return false;
         const data = this._db.export();
@@ -2549,6 +2699,11 @@ FROM plans
         const nextWrite = this._writeTail.then(async () => { result = await writeOperation(); });
         this._writeTail = nextWrite.catch(() => { /* swallow to keep chain alive */ });
         await nextWrite;
+
+        if (result) {
+            void this.exportStateToFile(); // fire-and-forget, no debounce
+        }
+
         return result;
     }
 

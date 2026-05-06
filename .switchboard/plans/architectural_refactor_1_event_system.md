@@ -10,7 +10,6 @@ This first phase focuses on auditing the existing usages and adding the foundati
 
 **Tags:** backend, infrastructure, reliability, workflow
 **Complexity:** 3
-**Repo:** switchboard
 
 ## Dependencies
 

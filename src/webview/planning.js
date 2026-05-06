@@ -18,8 +18,42 @@
         filterRequestIds: {},
         researchMode: persistedState.researchMode || 'web',
         localFolderPath: '',
-        analystAvailable: false
+        analystAvailable: false,
+        docsListCollapsed: persistedState.docsListCollapsed || false
     };
+
+    function toggleSidebarCollapsed() {
+        state.docsListCollapsed = !state.docsListCollapsed;
+        
+        // Persist state
+        const currentPersisted = vscode.getState() || {};
+        vscode.setState({ ...currentPersisted, docsListCollapsed: state.docsListCollapsed });
+        
+        // Apply class to all content rows
+        const contentRows = document.querySelectorAll('.content-row');
+        const toggleBtns = document.querySelectorAll('.sidebar-toggle-btn');
+        
+        contentRows.forEach(row => {
+            row.classList.toggle('collapsed', state.docsListCollapsed);
+        });
+        
+        toggleBtns.forEach(btn => {
+            btn.textContent = state.docsListCollapsed ? '»' : '«';
+        });
+    }
+
+    // Initialize sidebar state
+    if (state.docsListCollapsed) {
+        const contentRows = document.querySelectorAll('.content-row');
+        const toggleBtns = document.querySelectorAll('.sidebar-toggle-btn');
+        contentRows.forEach(row => row.classList.add('collapsed'));
+        toggleBtns.forEach(btn => btn.textContent = '»');
+    }
+
+    // Bind sidebar toggle listeners
+    document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
+        btn.addEventListener('click', toggleSidebarCollapsed);
+    });
 
     // Tab management
     const tabButtons = document.querySelectorAll('.research-tab-btn');
@@ -729,9 +763,23 @@
     }
 
     function handlePreviewReady(msg) {
-        const { sourceId, requestId, content, docName, pages } = msg;
+        const { sourceId, requestId, content, docName, pages, isAutoRefreshed } = msg;
 
-        if (requestId !== undefined && requestId !== state.previewRequestId) return;
+        // Auto-refresh notification
+        if (isAutoRefreshed) {
+            const statusEl = sourceId === 'local-folder' ? document.getElementById('status') : document.getElementById('status-online');
+            if (statusEl) {
+                const originalText = statusEl.textContent;
+                statusEl.textContent = 'Document auto-refreshed';
+                statusEl.style.color = 'var(--accent-teal)';
+                setTimeout(() => {
+                    statusEl.textContent = originalText;
+                    statusEl.style.color = '';
+                }, 2000);
+            }
+        }
+
+        if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
@@ -807,7 +855,12 @@
                 targetBtnAppend.disabled = true;
                 if (btnImportFullDoc) btnImportFullDoc.disabled = true;
             }
-            targetStatus.textContent = '';
+            if (msg.isAutoRefreshed) {
+                targetStatus.textContent = 'Externally updated — refreshed';
+                setTimeout(() => { if (targetStatus.textContent === 'Externally updated — refreshed') targetStatus.textContent = ''; }, 2000);
+            } else {
+                targetStatus.textContent = '';
+            }
             return;
         }
 
@@ -817,7 +870,13 @@
 
         targetBtnAppend.disabled = false;
         if (btnImportFullDoc) btnImportFullDoc.disabled = false;
-        targetStatus.textContent = '';
+        
+        if (msg.isAutoRefreshed) {
+            targetStatus.textContent = 'Externally updated — refreshed';
+            setTimeout(() => { if (targetStatus.textContent === 'Externally updated — refreshed') targetStatus.textContent = ''; }, 2000);
+        } else {
+            targetStatus.textContent = '';
+        }
     }
 
     function handlePreviewError(msg) {

@@ -6,7 +6,6 @@ Fix the plan file watcher in KanbanProvider to watch all workspace folders when 
 ## Metadata
 **Tags:** backend, bugfix
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None. This is a transparent bugfix with no breaking changes or manual steps required.

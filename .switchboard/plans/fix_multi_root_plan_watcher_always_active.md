@@ -10,7 +10,6 @@ Ensure plan file watchers run continuously for ALL configured workspaces in the 
 ## Metadata
 **Tags:** backend, bugfix, reliability, workflow, testing
 **Complexity:** 7
-**Repo:** switchboard
 
 ## User Review Required
 - [ ] Confirm: Kanban shows only current workspace plans, but watchers import plans from ALL workspaces to database
@@ -461,9 +460,11 @@ public refreshIfShowing(workspaceRoot: string): void {
 ## Verification Plan
 
 ### Automated Tests
-- [ ] Unit tests for GlobalPlanWatcherService
-- [ ] Tests for plan metadata extraction
+- [x] Unit tests for GlobalPlanWatcherService (3 tests for `_getAllMappedFolders`)
+- [x] Tests for plan metadata extraction (in `planMetadataUtils.test.ts`)
 - [ ] Tests for database operations
+- [ ] Tests for `_refreshWatchers` diffing behavior
+- [ ] Tests for `triggerScan` recursive scanning
 
 ### Manual Verification
 1. Configure workspace mappings (2+ workspaces → shared DB)
@@ -480,6 +481,52 @@ public refreshIfShowing(workspaceRoot: string): void {
 12. **Verify**: New plan is there (was imported while kanban was on workspace A)
 13. Delete plan in workspace B
 14. **Verify**: Plan removed from kanban
+
+## Reviewer Pass Results
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding |
+|:---|:---|:---|
+| 1 | CRITICAL | `KanbanProvider._getWatchFolders()` uses phantom property `mapping.parentWorkspaceFolder` instead of `mapping.parentFolder` (the actual type-defined property). This means `_getWatchFolders()` never resolves parent folders from mappings. |
+| 2 | MAJOR | `triggerScan` only reads top-level files via `readdir`; doesn't recurse into subdirectories. Watcher glob `**/*.md` catches nested plans, but scan misses them on startup. |
+| 3 | MAJOR | Non-null assertion `this._globalPlanWatcher!` on optional constructor parameter in KanbanProvider. If constructed without watcher, ContinuousSyncService crashes. |
+| 4 | MAJOR | `void globalPlanWatcher.initialize()` in extension.ts — fire-and-forget swallows initialization errors; service starts with zero watchers silently. |
+| 5 | NIT | Dead code: `_planContentWatchers` and `_nativeFsWatchers` in KanbanProvider are declared/cleaned but never populated. |
+| 6 | NIT | `package.json` schema missing `parentFolder` property in mapping items. |
+| 7 | NIT | Test coverage minimal — only `_getAllMappedFolders` tested; no tests for `_handlePlanFile`, `_refreshWatchers`, `triggerScan`, or debounce. |
+
+### Stage 2: Fixes Applied
+
+| # | Fix | File(s) Changed |
+|:---|:---|:---|
+| 1 | Changed `mapping.parentWorkspaceFolder` → `mapping.parentFolder` in `_getWatchFolders()` | `src/services/KanbanProvider.ts` (line 664-665) |
+| 2 | Rewrote `triggerScan` to use recursive `scanDir` helper that descends into subdirectories | `src/services/GlobalPlanWatcherService.ts` (lines 354-384) |
+| 3 | Made `_continuousSync` optional (`?`); wrapped construction in `if (this._globalPlanWatcher)` guard; added null checks at all usage sites (`applyLiveSyncConfig`, `pauseLiveSync`, `resumeLiveSync`) | `src/services/KanbanProvider.ts` (lines 123, 191-192, 252-261, 4385, 4390) |
+| 4 | Changed `void globalPlanWatcher.initialize()` → `await globalPlanWatcher.initialize()` | `src/extension.ts` (line 1117) |
+
+### Validation Results
+
+- **TypeScript compilation (`tsc --noEmit`)**: No new errors. Pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (import extension issues) unchanged.
+- **Webpack build**: Compiled successfully in production mode.
+- **Unit tests**: Existing `GlobalPlanWatcherService.test.ts` and `planMetadataUtils.test.ts` not affected by changes (no test runner available in current environment; tests target pure helpers that were not modified).
+
+### Remaining Risks
+
+1. **Delete-then-recreate race**: If a plan file is deleted and immediately recreated (atomic save), both `_debounceHandleDelete` and `_debounceHandleFile` fire independently. The delete may remove the DB record just before the create re-inserts it. Low probability, acknowledged in plan's edge-case audit.
+2. **Native watcher path upgrade**: If `.switchboard/plans/` doesn't exist at activation time, the native watcher falls back to watching `.switchboard/` or the root. When `plans/` is later created, the watcher doesn't upgrade to watch the more specific path. The VS Code watcher (for workspace folders) handles this correctly via `RelativePattern`.
+3. **`package.json` schema gap**: `parentFolder` is not in the JSON schema, so VS Code won't validate or autocomplete it. Pre-existing issue, not introduced by this plan.
+4. **Dead code**: `_planContentWatchers` and `_nativeFsWatchers` in KanbanProvider are vestigial. Should be cleaned up in a follow-up.
+
+### Final Verdict: **Ready**
+
+All CRITICAL and MAJOR findings have been fixed. The implementation correctly:
+- Creates an activation-time `GlobalPlanWatcherService` that watches ALL mapped workspace folders
+- Uses per-file debouncing (300ms) to coalesce VS Code and native watcher events
+- Properly disposes watchers, native watchers, debounce timers, and config listener
+- Emits `onPlanDiscovered` events that KanbanProvider uses for targeted UI refresh
+- Falls back to VS Code workspace folders when no mappings are configured
+- Integrates with ClickUp real-time sync via the factory pattern
 
 ## Recommendation
 

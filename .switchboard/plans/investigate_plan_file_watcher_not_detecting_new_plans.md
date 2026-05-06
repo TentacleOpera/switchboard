@@ -6,7 +6,6 @@ Investigate and fix the plan file watcher in KanbanProvider that is not detectin
 ## Metadata
 **Tags:** bugfix, workflow
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 None. Investigation will determine if fix requires user action (e.g., reloading VS Code window).

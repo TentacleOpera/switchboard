@@ -6,7 +6,6 @@ Fix the Planning Panel's imported docs lookup to search across all workspace fol
 ## Metadata
 **Tags:** bugfix, workflow
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None. This is a transparent bugfix with no breaking changes or manual steps required.

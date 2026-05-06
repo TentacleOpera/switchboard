@@ -56,8 +56,14 @@ export class PlanningPanelCacheService {
         if (this._kanbanDb) {
             const wsId = await this._kanbanDb.getWorkspaceId();
             if (wsId) return wsId;
+            
+            // If we have a DB but no workspace ID, it's a configuration issue
+            throw new Error(
+                `[PlanningPanelCacheService] No workspace_id configured in database. ` +
+                `Please run "Switchboard: Reset Kanban Database" to recreate.`
+            );
         }
-        return crypto.createHash('sha256').update(this._workspaceRoot).digest('hex').slice(0, 16);
+        throw new Error('[PlanningPanelCacheService] KanbanDatabase not available');
     }
 
     /**
@@ -349,26 +355,73 @@ cachedAt: ${new Date().toISOString()}
         options: { remoteContentHash?: string; workspaceId?: string }
     ): Promise<void> {
         if (!this._kanbanDb) {
-            console.warn('[PlanningPanelCacheService] KanbanDatabase not available, skipping import registration');
+            const msg = 'Database not available. Please ensure Switchboard setup is complete.';
+            console.error(`[PlanningPanelCacheService] ${msg}`);
+            
+            try {
+                const vscode = require('vscode');
+                vscode.window.showErrorMessage(
+                    `${msg} Run "Switchboard: Reset Kanban Database" to recreate.`,
+                    'Reset Database'
+                ).then((selection: string) => {
+                    if (selection === 'Reset Database') {
+                        vscode.commands.executeCommand('switchboard.resetKanbanDb');
+                    }
+                });
+            } catch { /* outside extension host */ }
             return;
         }
         
-        const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
-        const filePath = path.join(docsDir, `${slugPrefix}.md`);
-        const workspaceId = await this._getEffectiveWorkspaceId(options.workspaceId);
+        // Ensure DB is ready, or warn user
+        const ready = await this._kanbanDb.ensureReady();
+        if (!ready) {
+            const msg = 'Database failed to initialize. Registry will not persist.';
+            console.error(`[PlanningPanelCacheService] ${msg}`);
+            try {
+                const vscode = require('vscode');
+                vscode.window.showErrorMessage(
+                    `${msg} Run "Switchboard: Reset Kanban Database" to recreate.`,
+                    'Reset Database'
+                ).then((selection: string) => {
+                    if (selection === 'Reset Database') {
+                        vscode.commands.executeCommand('switchboard.resetKanbanDb');
+                    }
+                });
+            } catch { /* outside extension host */ }
+            return;
+        }
         
-        await this._kanbanDb.registerImport({
-            slugPrefix,
-            sourceId,
-            remoteDocId: docId,
-            docName,
-            parentDocName: docName,
-            filePath,
-            importedAt: new Date().toISOString(),
-            lastSyncedAt: new Date().toISOString(),
-            contentHash: options.remoteContentHash,
-            workspaceId
-        });
+        try {
+            const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
+            const filePath = path.join(docsDir, `${slugPrefix}.md`);
+            const workspaceId = await this._getEffectiveWorkspaceId(options.workspaceId);
+            
+            await this._kanbanDb.registerImport({
+                slugPrefix,
+                sourceId,
+                remoteDocId: docId,
+                docName,
+                parentDocName: docName,
+                filePath,
+                importedAt: new Date().toISOString(),
+                lastSyncedAt: new Date().toISOString(),
+                contentHash: options.remoteContentHash,
+                workspaceId
+            });
+        } catch (err: any) {
+            console.error(`[PlanningPanelCacheService] Import registration failed: ${err.message}`);
+            try {
+                const vscode = require('vscode');
+                vscode.window.showErrorMessage(
+                    `Import failed: ${err.message} Run "Switchboard: Reset Kanban Database" to recreate.`,
+                    'Reset Database'
+                ).then((selection: string) => {
+                    if (selection === 'Reset Database') {
+                        vscode.commands.executeCommand('switchboard.resetKanbanDb');
+                    }
+                });
+            } catch { /* outside extension host */ }
+        }
     }
 
     public async getImportedDocs(workspaceId?: string): Promise<ImportedDocEntry[]> {
@@ -408,8 +461,8 @@ cachedAt: ${new Date().toISOString()}
     public async checkForDuplicate(
         docName: string,
         sourceId: string,
-        workspaceId?: string,
-        docId?: string
+        docId?: string,
+        workspaceId?: string
     ): Promise<DuplicateCheckResult> {
         if (!this._kanbanDb) return { isDuplicate: false };
         const effectiveWsId = await this._getEffectiveWorkspaceId(workspaceId);

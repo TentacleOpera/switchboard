@@ -8,7 +8,6 @@ Migrate the Planning Panel's ad-hoc JSON-based import registry (`imported-docs.j
 
 **Tags:** backend, database, reliability, workflow
 **Complexity:** 8
-**Repo:** switchboard
 
 ## User Review Required
 

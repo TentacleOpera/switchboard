@@ -6,7 +6,6 @@ Migrate the kanban structure configuration (column management) from the setup me
 ## Metadata
 **Tags:** UI, UX, frontend
 **Complexity:** 4
-**Repo:** switchboard
 **Status:** ✅ COMPLETED
 
 ## User Review Required

@@ -9,7 +9,6 @@ With all call sites updated, safely remove the unused fields and methods that re
 
 **Tags:** backend, infrastructure, reliability, workflow
 **Complexity:** 2
-**Repo:** switchboard
 
 ## Dependencies
 

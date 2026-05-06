@@ -156,6 +156,90 @@ function testPlannerRepoMetadataLine() {
     console.log('  PASS: Planner prompt includes repo metadata instructions');
 }
 
+function testCustomWorkflowPathGeneratesMinimalPrompt() {
+    console.log('Testing custom workflow path generates minimal prompt...');
+    const customWorkflowPath = '.claude/get-shit-done/agents/gsd-planner.md';
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: customWorkflowPath
+    });
+    assert.ok(prompt.includes(`Read ${customWorkflowPath} and follow it step-by-step`), 'Custom workflow should generate minimal "Read and follow" prompt');
+    assert.ok(!prompt.includes('Please improve the following'), 'Custom workflow should NOT include full Switchboard prompt');
+    assert.ok(!prompt.includes('## Complexity Audit'), 'Custom workflow should NOT include Switchboard-specific sections');
+    console.log('  PASS: Custom workflow path generates minimal prompt');
+}
+
+function testDefaultWorkflowPathGeneratesFullPrompt() {
+    console.log('Testing default workflow path generates full Switchboard prompt...');
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md'
+    });
+    assert.ok(prompt.includes('Please improve the following'), 'Default workflow should include full Switchboard prompt');
+    assert.ok(prompt.includes('## Complexity Audit'), 'Default workflow should include Switchboard-specific sections');
+    console.log('  PASS: Default workflow path generates full Switchboard prompt');
+}
+
+function testCustomWorkflowWithAddons() {
+    console.log('Testing custom workflow with add-ons...');
+    const customWorkflowPath = '.claude/superpowers/skills/writing-plans.md';
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: customWorkflowPath,
+        aggressivePairProgramming: true,
+        dependencyCheckEnabled: true
+    });
+    assert.ok(prompt.includes(`Read ${customWorkflowPath} and follow it step-by-step`), 'Custom workflow should generate minimal "Read and follow" prompt');
+    assert.ok(prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Custom workflow should append aggressive pair programming add-on');
+    assert.ok(prompt.includes('[DEPENDENCY CHECK ENABLED]'), 'Custom workflow should append dependency check add-on');
+    console.log('  PASS: Custom workflow with add-ons appends add-on instructions');
+}
+
+function testSplitPlanDefaultDisabled() {
+    console.log('Testing split plan default disabled...');
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md'
+    });
+    assert.ok(!prompt.includes('SPLIT PLAN'), 'Default planner prompt should NOT include "SPLIT PLAN"');
+    assert.ok(!prompt.includes('_routine.md'), 'Default planner prompt should NOT include "_routine.md"');
+    console.log('  PASS: Default planner prompt excludes split-plan directives');
+}
+
+function testSplitPlanEnabledDefaultWorkflow() {
+    console.log('Testing split plan enabled with default workflow...');
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        splitPlan: true
+    });
+    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Split-plan enabled prompt should include "SPLIT PLAN MODE"');
+    assert.ok(prompt.includes('_routine.md'), 'Split-plan enabled prompt should include "_routine.md"');
+    assert.ok(prompt.includes('Apply this two-file output to EVERY plan'), 'Split-plan enabled prompt should include batch directive');
+    console.log('  PASS: Split-plan enabled with default workflow includes full split directives');
+}
+
+function testSplitPlanEnabledCustomWorkflow() {
+    console.log('Testing split plan enabled with custom workflow...');
+    const customWorkflowPath = '.claude/superpowers/skills/writing-plans.md';
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: customWorkflowPath,
+        splitPlan: true
+    });
+    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Split-plan enabled with custom workflow should include "SPLIT PLAN MODE"');
+    assert.ok(prompt.includes('_routine.md'), 'Split-plan enabled with custom workflow should include "_routine.md"');
+    assert.ok(prompt.includes(`Read ${customWorkflowPath} and follow it step-by-step`), 'Custom workflow should still generate minimal "Read and follow" prompt');
+    console.log('  PASS: Split-plan enabled with custom workflow includes concise split directive');
+}
+
+function testSplitPlanWithAggressivePairProgramming() {
+    console.log('Testing split plan with aggressive pair programming...');
+    const prompt = buildKanbanBatchPrompt('planner', plans1, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        splitPlan: true,
+        aggressivePairProgramming: true
+    });
+    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Prompt with both options should include "SPLIT PLAN MODE"');
+    assert.ok(prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Prompt with both options should include "PAIR PROGRAMMING OPTIMISATION"');
+    assert.ok(prompt.includes('_routine.md'), 'Prompt with both options should include "_routine.md"');
+    console.log('  PASS: Split-plan and aggressive pair programming can coexist without contradiction');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
@@ -168,6 +252,13 @@ try {
     testPartiallyScopedWorkingDirectoryContext();
     testReplaceOverrideKeepsRepoContext();
     testPlannerRepoMetadataLine();
+    testCustomWorkflowPathGeneratesMinimalPrompt();
+    testDefaultWorkflowPathGeneratesFullPrompt();
+    testCustomWorkflowWithAddons();
+    testSplitPlanDefaultDisabled();
+    testSplitPlanEnabledDefaultWorkflow();
+    testSplitPlanEnabledCustomWorkflow();
+    testSplitPlanWithAggressivePairProgramming();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {
     console.error('\nTest FAILED:', err.message);

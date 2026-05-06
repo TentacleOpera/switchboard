@@ -29,8 +29,18 @@ export class PlannerPromptWriter {
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             const wsId = await db.getWorkspaceId();
             if (wsId) return wsId;
-        } catch {
-            // Fallback: use normalized path
+
+            // If we have a DB instance but no workspace ID, something is wrong
+            throw new Error(
+                `[PlannerPromptWriter] No workspace_id configured in database for ${workspaceRoot}. ` +
+                `Please run "Switchboard: Reset Kanban Database" to recreate.`
+            );
+        } catch (err) {
+            // If it's our specific configuration error, rethrow it
+            if (err instanceof Error && err.message.includes('No workspace_id configured')) {
+                throw err;
+            }
+            // Otherwise it's a structural failure (require failed, etc.) - use hash as last resort
         }
         return crypto.createHash('sha256').update(workspaceRoot).digest('hex').slice(0, 16);
     }

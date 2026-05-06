@@ -335,8 +335,20 @@ function run() {
     );
     expectRegex(
         kanbanSource,
+        /data-tab="dependencies"/,
+        'Expected dependencies tab to still exist'
+    );
+    expectRegex(
+        kanbanSource,
         /data-tab="setup"/,
         'Expected setup tab to still exist'
+    );
+
+    // Verify position of DEPENDENCIES tab
+    expectRegex(
+        kanbanSource,
+        /data-tab="automation"[\s\S]*?data-tab="dependencies"[\s\S]*?data-tab="setup"/,
+        'Expected DEPENDENCIES tab to be positioned between AUTOMATION and SETUP'
     );
 
     console.log('✓ Test 6 passed\n');

@@ -689,6 +689,32 @@
           color: var(--accent-red);
         }
 
+        .hidden { display: none !important; }
+
+        /* Inline Custom Agent Form */
+        .agents-tab-inline-form {
+          border: 1px solid var(--border-bright);
+          border-radius: 4px;
+          padding: 12px;
+          margin-bottom: 8px;
+          background: var(--panel-bg2);
+        }
+        .agents-tab-inline-form-title {
+          font-size: 12px;
+          font-weight: 600;
+          color: var(--text-primary);
+          margin-bottom: 10px;
+          padding-bottom: 6px;
+          border-bottom: 1px solid var(--border-color);
+        }
+        .agents-tab-inline-form .modal-input,
+        .agents-tab-inline-form .modal-textarea {
+          margin-bottom: 8px;
+        }
+        .agents-tab-inline-form .modal-label {
+          margin-bottom: 3px;
+        }
+
         /* Kanban Tab Navigation Styles */
         .kanban-tab-bar {
             display: flex;
@@ -1445,6 +1471,332 @@
             letter-spacing: 0.5px;
         }
 
+
+        /* Dependency Tree Styles */
+        #dependencies-tab-content {
+            flex: 1;
+            flex-direction: column;
+            overflow: hidden;
+            padding: 20px;
+        }
+
+        .dep-tree-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 10px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .dep-tree-title {
+            font-family: var(--font-mono);
+            font-size: 14px;
+            color: var(--accent-teal);
+            text-shadow: var(--glow-teal);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+
+        .dep-tree-actions {
+            display: flex;
+            gap: 10px;
+        }
+
+        .dep-tree-container {
+            flex: 1;
+            overflow: auto;
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 20px;
+            position: relative;
+        }
+
+        .dep-tree {
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+
+        .plan-node {
+            display: flex;
+            flex-direction: column;
+            padding: 10px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            background: var(--panel-bg2);
+            min-width: 200px;
+            max-width: 400px;
+            cursor: pointer;
+            transition: transform 0.2s, border-color 0.2s;
+        }
+
+        .plan-node:hover {
+            border-color: var(--accent-teal);
+            transform: translateY(-2px);
+        }
+
+        .plan-node.created {
+            border-left: 4px solid var(--accent-orange);
+        }
+
+        .plan-node.planned {
+            border-left: 4px solid #2ea043; /* Green */
+        }
+
+        .plan-node.blocking {
+            border: 1px solid var(--accent-red);
+            box-shadow: 0 0 5px rgba(218, 54, 51, 0.3);
+        }
+
+        .plan-id {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            margin-bottom: 4px;
+        }
+
+        .plan-title {
+            font-size: 13px;
+            font-weight: 500;
+            margin-bottom: 6px;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+
+        .plan-status-tag {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 2px 6px;
+            border-radius: 10px;
+            background: rgba(255, 255, 255, 0.1);
+            width: fit-content;
+        }
+
+        .dep-connector {
+            margin-left: 30px;
+            padding-left: 20px;
+            border-left: 1px solid var(--border-bright);
+            position: relative;
+            margin-bottom: 10px;
+        }
+
+        .dep-connector::before {
+            content: '└─';
+            position: absolute;
+            left: 0;
+            top: 0;
+            color: var(--border-bright);
+            font-size: 10px;
+            font-family: var(--font-mono);
+        }
+
+        .dep-legend {
+            display: flex;
+            gap: 15px;
+            margin-top: 20px;
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .legend-item {
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+
+        .legend-box {
+            width: 12px;
+            height: 12px;
+            border-radius: 2px;
+        }
+
+        .legend-box.created { background: var(--accent-orange); }
+        .legend-box.planned { background: #2ea043; }
+        .legend-box.blocking { border: 1px solid var(--accent-red); background: rgba(218, 54, 51, 0.2); }
+
+        .empty-state {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--text-secondary);
+            font-style: italic;
+        }
+
+        /* Role-based Prompts Tab UI */
+        .prompts-tab {
+            padding: 20px;
+            max-width: 800px;
+            overflow-y: auto;
+            height: 100%;
+        }
+
+        .prompts-tab h2 {
+            margin-top: 0;
+            margin-bottom: 20px;
+            font-size: 18px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .role-selector-section {
+            margin-bottom: 24px;
+            padding: 12px;
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-radius: 8px;
+            border: 1px solid var(--accent-teal-dim);
+        }
+
+        .role-selector-section label {
+            font-weight: 600;
+            font-size: 13px;
+            margin-right: 8px;
+            color: var(--text-primary);
+        }
+
+        .role-selector-section select {
+            padding: 6px 12px;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 4px;
+            font-size: 13px;
+            min-width: 200px;
+            background: #0a0a0a;
+            color: var(--text-primary);
+        }
+
+        .role-config {
+            margin-bottom: 24px;
+        }
+
+        .config-section {
+            margin-bottom: 16px;
+            padding: 16px;
+            background: #0a0a0a;
+            border-radius: 8px;
+            border: 1px solid var(--border-color);
+        }
+
+        .config-section h3 {
+            margin-top: 0;
+            margin-bottom: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .section-desc {
+            margin: 0 0 12px 0;
+            font-size: 12px;
+            color: var(--text-secondary);
+            line-height: 1.4;
+        }
+
+        .input-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+        }
+
+        .input-group label {
+            font-weight: 600;
+            font-size: 12px;
+            align-self: center;
+            white-space: nowrap;
+            color: var(--text-primary);
+        }
+
+        .input-group input[type="text"] {
+            flex: 1;
+            padding: 6px 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-size: 13px;
+            background: #111;
+            color: var(--text-primary);
+        }
+
+        .example-paths {
+            font-size: 11px;
+            color: var(--text-secondary);
+        }
+
+        .example-paths strong {
+            display: block;
+            margin-bottom: 4px;
+        }
+
+        .example-paths code {
+            display: block;
+            background: #1a1a1a;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-family: var(--font-mono);
+            margin-top: 4px;
+            color: var(--accent-teal);
+        }
+
+        #rolePromptTextarea {
+            width: 100%;
+            min-height: 150px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 13px;
+            resize: vertical;
+            background: #111;
+            color: var(--text-primary);
+        }
+
+        .checkbox-group {
+            display: grid;
+            grid-template-columns: 1fr;
+            gap: 8px;
+        }
+
+        .checkbox-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 13px;
+            cursor: pointer;
+            padding: 8px;
+            background: #0d0d0d;
+            border-radius: 4px;
+            border: 1px solid var(--border-color);
+        }
+
+        .checkbox-item:hover {
+            background: #1a1a1a;
+        }
+
+        .checkbox-item input[type="checkbox"] {
+            margin: 0;
+        }
+
+        .tooltip {
+            font-size: 11px;
+            color: var(--text-secondary);
+            margin-left: auto;
+        }
+
+        #promptPreview {
+            width: 100%;
+            min-height: 200px;
+            padding: 8px;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: var(--font-mono);
+            font-size: 12px;
+            background: #0d0d0d;
+            color: var(--text-secondary);
+            resize: vertical;
+        }
     </style>
 </head>
 
@@ -1454,6 +1806,7 @@
         <button class="kanban-tab-btn" data-tab="agents">AGENTS</button>
         <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
+        <button class="kanban-tab-btn" data-tab="dependencies">DEPENDENCIES</button>
         <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -1494,6 +1847,35 @@
         <div id="automation-panel-root" class="automation-panel"></div>
     </div>
 
+    <!-- Dependencies Tab Content -->
+    <div id="dependencies-tab-content" class="kanban-tab-content">
+        <div class="dep-tree-header">
+            <div class="dep-tree-title">Plan Dependencies</div>
+            <div class="dep-tree-actions">
+                <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">COPY PROMPT</button>
+                <button class="strip-btn" id="btn-rebuild-deps" data-tooltip="Send to analyst terminal">SEND TO ANALYST</button>
+                <button class="strip-btn" id="btn-refresh-deps" data-tooltip="Reload dependency map from database">REFRESH</button>
+            </div>
+        </div>
+        <div class="dep-tree-container" id="dep-tree-container">
+            <div class="empty-state">No plans in CREATED or PLAN REVIEWED columns. Create a plan to see dependencies here.</div>
+        </div>
+        <div class="dep-legend">
+            <div class="legend-item">
+                <div class="legend-box created"></div>
+                <span>CREATED</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box planned"></div>
+                <span>PLAN REVIEWED</span>
+            </div>
+            <div class="legend-item">
+                <div class="legend-box blocking"></div>
+                <span>⚠️ BLOCKED</span>
+            </div>
+        </div>
+    </div>
+
     <!-- Setup Tab Content -->
     <div id="setup-tab-content" class="kanban-tab-content">
         <div class="setup-section">
@@ -1517,6 +1899,21 @@
                 </label>
                 <div class="hint-text">
                     Include plans with unknown complexity in batch moves
+                </div>
+            </div>
+        </div>
+        <div class="setup-section">
+            <div class="setup-section-title">Terminal Context</div>
+            <div class="setup-field">
+                <label class="cli-toggle-inline" id="clear-terminal-before-prompt-label" data-tooltip="Send /clear to CLI agents before dispatching prompts (adds 2s delay)">
+                    <label class="toggle-switch">
+                        <input type="checkbox" id="clear-terminal-before-prompt-toggle">
+                        <span class="toggle-slider"></span>
+                    </label>
+                    <span class="toggle-label">Clear before prompt</span>
+                </label>
+                <div class="hint-text">
+                    Clears terminal context before each prompt dispatch (2s delay)
                 </div>
             </div>
         </div>
@@ -1561,6 +1958,29 @@
         <div class="db-subsection">
           <div class="subsection-header"><span>Custom Agents</span></div>
           <div id="agents-tab-custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="agents-tab-custom-agent-form" class="agents-tab-inline-form hidden">
+            <div class="agents-tab-inline-form-title" id="agents-tab-inline-form-title">New Custom Agent</div>
+            <label class="modal-label" for="agents-tab-custom-agent-name">Agent name</label>
+            <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+            <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
+            <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
+            <label class="modal-label" for="agents-tab-custom-agent-prompt">Prompt instructions</label>
+            <textarea id="agents-tab-custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
+            <label class="modal-label" for="agents-tab-custom-agent-dragdrop">Drag &amp; Drop Mode</label>
+            <select id="agents-tab-custom-agent-dragdrop" class="modal-input">
+              <option value="cli">CLI Agent (trigger terminal action)</option>
+              <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
+            </select>
+            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+              <input id="agents-tab-custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
+              <span>Show as Kanban column</span>
+            </label>
+            <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+            <div class="flex gap-2" style="margin-top: 10px;">
+              <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
+              <button id="agents-tab-btn-cancel-custom-agent" class="modal-btn-secondary">CANCEL</button>
+            </div>
+          </div>
           <button id="agents-tab-btn-add-custom-agent" class="strip-btn" style="width:100%; margin-top:8px;">ADD CUSTOM AGENT</button>
         </div>
 
@@ -1569,87 +1989,110 @@
 
     <!-- Prompts Tab Content -->
     <div id="prompts-tab-content" class="kanban-tab-content">
-      <div style="padding:12px; overflow-y:auto; height:100%;">
-        <div style="font-size:11px; color:var(--accent-teal); margin-bottom:10px; font-family:var(--font-mono); letter-spacing:1px; font-weight:600;">PROMPT CONFIGURATION</div>
-
-        <!-- Prompt Controls -->
-        <div class="db-subsection">
-          <div class="subsection-header"><span>Prompt Controls</span></div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:6px;"><input id="prompts-tab-design-doc-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Append Design Doc to planner prompts</span></label>
-          <div style="margin-left:20px;margin-top:4px;">
-            <input id="prompts-tab-design-doc-input" type="text" placeholder="https://notion.so/... or /path/to/design.md" style="width:100%;background:#0a0a0a;color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:4px;font-size:10px;font-family:var(--font-mono);">
-            <div id="prompts-tab-design-doc-status" style="font-size:9px;color:var(--text-secondary);margin-top:2px;font-family:var(--font-mono);">Not configured</div>
-          </div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;"><input id="prompts-tab-dependency-check-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Dependency check for improve-plan workflow</span></label>
-          <div style="font-size:9px;color:var(--text-secondary);margin-left:20px;margin-top:2px;line-height:1.3;">
-            Queries active Kanban plans for conflicts when running /improve-plan. May slow down planning on large workspaces.
-          </div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;"><input id="prompts-tab-accurate-coding-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Accurate coding mode for Coder prompts</span></label>
-          <div style="font-size:9px;color:var(--text-secondary);margin-left:20px;margin-top:2px;line-height:1.3;">
-            Reduces creative freedom and demands exhaustive test coverage and architectural justification for every change.
-          </div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;"><input id="prompts-tab-lead-challenge-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Inline challenge step for Lead Coder prompts</span></label>
-          <div style="font-size:9px;color:var(--text-secondary);margin-left:20px;margin-top:2px;line-height:1.3;">
-            Inserts an internal review stage in the lead-coder flow to sanity-check plans before code generation.
-          </div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;"><input id="prompts-tab-advanced-reviewer-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Advanced reviewer mode (deep regression analysis)</span></label>
-          <div style="font-size:9px;color:var(--text-secondary);margin-left:20px;margin-top:2px;line-height:1.3;">
-            Enables deeper static analysis and cross-file impact checks during the review phase.
-          </div>
-          <label class="startup-row" style="display:flex;align-items:flex-start;gap:8px;margin-top:10px;"><input id="prompts-tab-aggressive-pair-toggle" type="checkbox" style="width:auto;margin:0;margin-top:2px;"><span>Aggressive pair programming (shift more tasks to Coder)</span></label>
-          <div style="font-size:9px;color:var(--text-secondary);margin-left:20px;margin-top:2px;line-height:1.3;">
-            Assigns more granular tasks to the Coder agent instead of the Lead Coder for parallel execution.
-          </div>
-        </div>
-
-        <!-- Default Prompt Overrides -->
-        <div class="db-subsection">
-          <div class="subsection-header"><span>Default Prompt Overrides</span></div>
-          <div id="prompts-tab-prompt-role-tabs" style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px;"></div>
-          <div style="margin-bottom:10px;">
-            <div style="font-size:10px;font-family:var(--font-mono);letter-spacing:1px;color:var(--text-secondary);margin-bottom:6px;">DEFAULT PROMPT PREVIEW (read only)</div>
-            <textarea id="prompts-tab-prompt-preview-text" rows="12" readonly style="width:100%;font-family:var(--font-mono);font-size:10px;opacity:0.7;cursor:default;resize:vertical;max-height:300px;overflow-y:auto;background:#0a0a0a;color:var(--text-secondary);border:1px solid var(--border-color);border-radius:3px;padding:6px;" placeholder="Loading preview..."></textarea>
-          </div>
-          <label style="display:block;font-size:10px;font-family:var(--font-mono);color:var(--text-secondary);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;">Mode</label>
-          <select id="prompts-tab-prompt-mode" style="width:100%;background:#0a0a0a;color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:4px;font-size:11px;margin-bottom:8px;">
-            <option value="append">Append — add after generated prompt</option>
-            <option value="prepend">Prepend — insert before generated prompt</option>
-            <option value="replace">Replace — replace prompt body</option>
+      <div class="prompts-tab">
+        <h2>Prompt Configuration</h2>
+        
+        <!-- Role Selector -->
+        <div class="role-selector-section">
+          <label for="roleSelect">Role:</label>
+          <select id="roleSelect">
+            <option value="planner" selected>Planner</option>
+            <option value="lead">Lead Coder</option>
+            <option value="coder">Coder</option>
+            <option value="reviewer">Reviewer</option>
+            <option value="tester">Acceptance Tester</option>
+            <option value="intern">Intern</option>
+            <option value="analyst">Analyst</option>
+            <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
-          <label style="display:block;font-size:10px;font-family:var(--font-mono);color:var(--text-secondary);margin-bottom:4px;text-transform:uppercase;letter-spacing:1px;">Replace default prompt</label>
-          <textarea id="prompts-tab-prompt-text" rows="6" placeholder="Enter custom instructions for this role..." style="width:100%;background:#0a0a0a;color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:6px;font-size:11px;resize:vertical;margin-bottom:8px;"></textarea>
-          <div style="display:flex;gap:6px;align-items:center;margin-bottom:8px;">
-            <button id="prompts-tab-btn-clear-override" style="font-family:var(--font-mono);font-size:10px;padding:3px 8px;background:transparent;border:1px solid var(--border-color);color:var(--text-secondary);cursor:pointer;border-radius:2px;">CLEAR OVERRIDE</button>
-          </div>
-          <div id="prompts-tab-prompt-override-summary" style="font-size:10px;color:var(--text-secondary);font-family:var(--font-mono);min-height:14px;margin-bottom:6px;"></div>
-          <button id="prompts-tab-btn-save-overrides" style="width:100%;font-family:var(--font-mono);font-size:10px;letter-spacing:1px;padding:6px;background:color-mix(in srgb,var(--accent-teal) 10%,transparent);border:1px solid var(--accent-teal-dim);color:var(--accent-teal);cursor:pointer;border-radius:2px;">SAVE ALL OVERRIDES</button>
         </div>
-      </div>
-    </div>
+        
+        <!-- Planner-specific configuration -->
+        <div id="plannerConfig" class="role-config">
+          <div class="config-section workflow-section">
+            <h3>Workflow File</h3>
+            <p class="section-desc">The workflow file defines the planning methodology.</p>
+            
+            <div class="input-group">
+              <label for="workflowFilePath">Workflow File Path:</label>
+              <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
+              <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
+            </div>
+            <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
+            
+            <div class="example-paths">
+              <strong>Example paths:</strong>
+              <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
+              <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
+              <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+            </div>
+          </div>
+          
+          <div class="config-section addons-section">
+            <h3>Add-ons</h3>
+            <p class="section-desc">Planner-specific orchestration features.</p>
+            
+            <div class="checkbox-group">
+              <label class="checkbox-item" title="Query Kanban for dependencies between active plans">
+                <input type="checkbox" id="plannerAddonDependencyCheck" checked>
+                <span>Dependency Check</span>
+                <span class="tooltip">Query Kanban for cross-plan dependencies</span>
+              </label>
+              
+              <label class="checkbox-item" title="Append design doc/PRD as context for planning">
+                <input type="checkbox" id="plannerAddonDesignDoc">
+                <span>Design Doc Reference</span>
+                <span class="tooltip">Include design doc as planning context</span>
+              </label>
+              
+              <label class="checkbox-item" title="Aggressive pair programming mode">
+                <input type="checkbox" id="plannerAddonAggressivePairProgramming">
+                <span>Aggressive Pair Programming</span>
+                <span class="tooltip">Assume Coder can handle more independently</span>
+              </label>
 
-    <!-- Custom Agent Modal -->
-    <div id="agents-tab-custom-agent-modal" class="modal-overlay hidden">
-      <div class="modal-card" style="max-width: 520px;">
-        <div class="modal-title">Custom Agent</div>
-        <label class="modal-label" for="agents-tab-custom-agent-name">Agent name</label>
-        <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
-        <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
-        <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
-        <label class="modal-label" for="agents-tab-custom-agent-prompt">Prompt instructions</label>
-        <textarea id="agents-tab-custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
-        <label class="modal-label" for="agents-tab-custom-agent-dragdrop">Drag &amp; Drop Mode</label>
-        <select id="agents-tab-custom-agent-dragdrop" class="modal-input">
-          <option value="cli">CLI Agent (trigger terminal action)</option>
-          <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
-        </select>
-        <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-          <input id="agents-tab-custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
-          <span>Show as Kanban column</span>
-        </label>
-        <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
-        <div class="flex gap-2" style="margin-top: 10px;">
-          <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
-          <button id="agents-tab-btn-cancel-custom-agent" class="modal-btn-secondary">CANCEL</button>
+              <label class="checkbox-item" title="Prohibit git commands in the prompt">
+                <input type="checkbox" id="plannerAddonGitProhibition" checked>
+                <span>Git Prohibition</span>
+                <span class="tooltip">Include git prohibition directive (recommended)</span>
+              </label>
+
+              <label class="checkbox-item" title="Produce separate Routine and Complex plan files">
+                <input type="checkbox" id="plannerAddonSplitPlan">
+                <span>Split Plan</span>
+                <span class="tooltip">Produce separate Routine and Complex plan files</span>
+              </label>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Non-planner roles: Prompt customization -->
+        <div id="promptCustomization" class="role-config" style="display: none;">
+          <div class="config-section prompt-section">
+            <h3>Prompt Customization</h3>
+            <p class="section-desc">Customize the system prompt for this role.</p>
+            
+            <textarea id="rolePromptTextarea" placeholder="Enter custom prompt for this role..."></textarea>
+          </div>
+          
+          <div class="config-section addons-section">
+            <h3>Add-ons</h3>
+            <p class="section-desc" id="roleAddonsDesc">Role-specific orchestration features.</p>
+            
+            <div id="roleAddonsGroup" class="checkbox-group">
+              <!-- Role-specific add-ons injected here via JavaScript -->
+            </div>
+          </div>
+        </div>
+        
+        <!-- Preview section (shown for all roles) -->
+        <div class="config-section preview-section">
+          <h3>Preview</h3>
+          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+            <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent:</span>
+            <button id="refreshPreview" class="secondary-btn">Refresh Preview</button>
+          </div>
+          <textarea id="promptPreview" readonly></textarea>
         </div>
       </div>
     </div>
@@ -1773,63 +2216,184 @@
         const kanbanBoard = document.getElementById('kanban-board');
 
         // ── PROMPTS TAB ─────────────────────────────────────────────────────────
-        const PROMPTS_TAB_ROLES = [
-          { key:'planner', label:'Planner' }, { key:'lead', label:'Lead Coder' },
-          { key:'coder', label:'Coder' }, { key:'reviewer', label:'Reviewer' },
-          { key:'tester', label:'Acceptance Tester' }, { key:'intern', label:'Intern' },
-          { key:'analyst', label:'Analyst' },
-        ];
-        let promptsTabOverrides = {};
-        let promptsTabPreviews = {};
-        let promptsTabEditingRole = 'planner';
+        const ROLE_ADDONS = {
+            planner: [
+                { id: 'dependencyCheck', label: 'Dependency Check', tooltip: 'Query Kanban for cross-plan dependencies', default: true },
+                { id: 'designDoc', label: 'Design Doc Reference', tooltip: 'Include design doc as planning context', default: false },
+                { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive (recommended)', default: true },
+                { id: 'splitPlan', label: 'Split Plan', tooltip: 'Produce separate Routine and Complex plan files', default: false }
+            ],
+            lead: [
+                { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Coder handles Routine tasks concurrently', default: false },
+                { id: 'leadChallenge', label: 'Inline Challenge Step', tooltip: 'Internal review before code generation', default: false },
+                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false }
+            ],
+            coder: [
+                { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
+                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false }
+            ],
+            reviewer: [
+                { id: 'advancedRegression', label: 'Advanced Regression Analysis', tooltip: 'Trace all callers of modified functions', default: false }
+            ],
+            tester: [],
+            intern: [],
+            analyst: []
+        };
 
-        function promptsTabSaveDraft() {
-          const mode = document.getElementById('prompts-tab-prompt-mode')?.value || 'append';
-          const text = (document.getElementById('prompts-tab-prompt-text')?.value || '').trim();
-          if (text) { promptsTabOverrides[promptsTabEditingRole] = { mode, text }; }
-          else { delete promptsTabOverrides[promptsTabEditingRole]; }
-        }
-        function promptsTabLoadForm() {
-          const o = promptsTabOverrides[promptsTabEditingRole];
-          const modeEl = document.getElementById('prompts-tab-prompt-mode');
-          const textEl = document.getElementById('prompts-tab-prompt-text');
-          if (modeEl) modeEl.value = o?.mode || 'append';
-          if (textEl) textEl.value = o?.text || '';
-        }
-        function promptsTabUpdateSummary() {
-          const count = Object.values(promptsTabOverrides).filter(o => o?.text).length;
-          const el = document.getElementById('prompts-tab-prompt-override-summary');
-          if (el) el.textContent = count ? `${count} role(s) customized` : 'No overrides configured';
-        }
-        function promptsTabLoadPreview() {
-          const el = document.getElementById('prompts-tab-prompt-preview-text');
-          if (el) el.value = promptsTabPreviews[promptsTabEditingRole] || 'Loading preview...';
-        }
-        function promptsTabRenderTabs() {
-          const container = document.getElementById('prompts-tab-prompt-role-tabs');
-          if (!container) return;
-          container.innerHTML = '';
-          PROMPTS_TAB_ROLES.forEach(({ key, label }) => {
-            const btn = document.createElement('button');
-            btn.className = 'prompts-role-tab' +
-              (key === promptsTabEditingRole ? ' active' : '') +
-              (promptsTabOverrides[key]?.text ? ' has-override' : '');
-            btn.textContent = label;
-            btn.addEventListener('click', () => {
-              promptsTabSaveDraft();
-              promptsTabEditingRole = key;
-              promptsTabLoadForm();
-              promptsTabLoadPreview();
-              promptsTabRenderTabs();
+        const DEFAULT_CONFIG = {
+            planner: {
+                workflowFilePath: '.agent/workflows/improve-plan.md',
+                addons: { dependencyCheck: true, designDoc: false, aggressivePairProgramming: false, gitProhibition: true, splitPlan: false }
+            },
+            lead: { prompt: '', addons: { pairProgramming: false, leadChallenge: false, accurateCoding: false } },
+            coder: { prompt: '', addons: { pairProgramming: false, accurateCoding: false } },
+            reviewer: { prompt: '', addons: { advancedRegression: false } },
+            tester: { prompt: '', addons: {} },
+            intern: { prompt: '', addons: {} },
+            analyst: { prompt: '', addons: {} }
+        };
+
+        let currentRole = 'planner';
+        let roleConfigs = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
+
+        function loadRoleConfigs() {
+            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+            roles.forEach(role => {
+                postKanbanMessage({ type: 'getSetting', key: `roleConfig_${role}` });
             });
-            container.appendChild(btn);
-          });
+            postKanbanMessage({ type: 'getSetting', key: 'selectedRole' });
+        }
+
+        function updateCustomAgentsDropdown() {
+            const group = document.getElementById('customAgentsGroup');
+            if (!group) return;
+            group.innerHTML = '';
+            lastCustomAgents.forEach(agent => {
+                const opt = document.createElement('option');
+                opt.value = agent.id;
+                opt.textContent = agent.name;
+                group.appendChild(opt);
+            });
+        }
+
+        async function handleRoleChange() {
+            const plannerConfig = document.getElementById('plannerConfig');
+            const promptCustomization = document.getElementById('promptCustomization');
+            if (!plannerConfig || !promptCustomization) return;
+
+            plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
+            promptCustomization.style.display = currentRole === 'planner' ? 'none' : 'block';
+
+            if (currentRole === 'planner') {
+                const config = roleConfigs.planner;
+                document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agent/workflows/improve-plan.md';
+                document.getElementById('plannerAddonDependencyCheck').checked = !!config.addons?.dependencyCheck;
+                document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
+                document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
+                document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
+                document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
+            } else {
+                const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
+                document.getElementById('rolePromptTextarea').value = config.prompt || '';
+                renderRoleAddons(currentRole);
+            }
+
+            refreshPreview();
+        }
+
+        function renderRoleAddons(role) {
+            const group = document.getElementById('roleAddonsGroup');
+            const desc = document.getElementById('roleAddonsDesc');
+            if (!group || !desc) return;
+            group.innerHTML = '';
+
+            const addons = ROLE_ADDONS[role] || [];
+            if (addons.length === 0) {
+                desc.textContent = 'No add-ons available for this role.';
+                return;
+            }
+
+            desc.textContent = `${role.charAt(0).toUpperCase() + role.slice(1)}-specific orchestration features:`;
+
+            addons.forEach(addon => {
+                const isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
+                const label = document.createElement('label');
+                label.className = 'checkbox-item';
+                label.title = addon.tooltip;
+                label.innerHTML = `
+                    <input type="checkbox" id="addon_${addon.id}" ${isChecked ? 'checked' : ''}>
+                    <span>${addon.label}</span>
+                    <span class="tooltip">${addon.tooltip}</span>
+                `;
+                label.querySelector('input').addEventListener('change', (e) => {
+                    if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                    if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                    roleConfigs[role].addons[addon.id] = e.target.checked;
+                    saveRoleConfig(role);
+                    refreshPreview();
+                });
+                group.appendChild(label);
+            });
+        }
+
+        function saveRoleConfig(role) {
+            postKanbanMessage({
+                type: 'saveSetting',
+                key: `roleConfig_${role}`,
+                value: roleConfigs[role]
+            });
+        }
+
+        async function refreshPreview() {
+            const preview = document.getElementById('promptPreview');
+            if (!preview) return;
+
+            let prompt = '';
+            if (currentRole === 'planner') {
+                const workflowPath = document.getElementById('workflowFilePath').value;
+                const depCheck = document.getElementById('plannerAddonDependencyCheck').checked;
+                const aggPair = document.getElementById('plannerAddonAggressivePairProgramming').checked;
+                const gitProhib = document.getElementById('plannerAddonGitProhibition').checked;
+                const desDoc = document.getElementById('plannerAddonDesignDoc').checked;
+                const splitPlan = document.getElementById('plannerAddonSplitPlan').checked;
+
+                prompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+                if (depCheck) {
+                    prompt += `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n\n`;
+                }
+                if (aggPair) {
+                    prompt += `PAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n\n`;
+                }
+                if (gitProhib) {
+                    prompt += `GIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.\n\n`;
+                }
+                if (desDoc) {
+                    // Note: designDocLink would ideally be fetched here or passed in.
+                    // For now, we'll indicate it will be appended.
+                    prompt += `DESIGN DOC REFERENCE: Enabled. (Link will be injected at runtime from planner settings)\n\n`;
+                }
+                if (splitPlan) {
+                    prompt += `SPLIT PLAN MODE: Enabled. Planner will produce TWO separate files per plan (Original for Complex/Risky only, companion _routine.md for Routine only). Both files will include full shared context.\n\n`;
+                }
+            } else {
+                const config = roleConfigs[currentRole];
+                prompt = config?.prompt || '';
+                const addons = ROLE_ADDONS[currentRole] || [];
+                addons.forEach(addon => {
+                    const cb = document.getElementById(`addon_${addon.id}`);
+                    if (cb && cb.checked) {
+                        prompt += `\n\n[${addon.label}]\n${addon.tooltip}`;
+                    }
+                });
+            }
+            preview.value = prompt.trim() || '(No prompt content)';
         }
 
         // ── AGENTS TAB ────────────────────────────────────────────────────────────
 
         let agentsTabCustomAgents = [];
-        let agentsTabEditingCustomAgentId = null;
+        let agentsTabEditingAgentId = null;
 
         function agentsTabSanitizeCustomAgentId(value) {
           const normalized = String(value || '')
@@ -1844,21 +2408,22 @@
           return `custom_agent_${agentsTabSanitizeCustomAgentId(id)}`;
         }
 
-        function agentsTabOpenCustomAgentModal(agent) {
-          agentsTabEditingCustomAgentId = agent ? agent.id : null;
+        function agentsTabShowInlineForm(agent) {
+          agentsTabEditingAgentId = agent ? agent.id : null;
+          document.getElementById('agents-tab-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
           document.getElementById('agents-tab-custom-agent-prompt').value = agent?.promptInstructions || '';
           document.getElementById('agents-tab-custom-agent-dragdrop').value = agent?.dragDropMode || 'cli';
           document.getElementById('agents-tab-custom-agent-kanban').checked = agent?.includeInKanban === true;
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
-          document.getElementById('agents-tab-custom-agent-modal').classList.remove('hidden');
+          document.getElementById('agents-tab-custom-agent-form').classList.remove('hidden');
           setTimeout(() => document.getElementById('agents-tab-custom-agent-name').focus(), 0);
         }
 
-        function agentsTabCloseCustomAgentModal() {
-          agentsTabEditingCustomAgentId = null;
-          document.getElementById('agents-tab-custom-agent-modal').classList.add('hidden');
+        function agentsTabHideInlineForm() {
+          agentsTabEditingAgentId = null;
+          document.getElementById('agents-tab-custom-agent-form').classList.add('hidden');
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
         }
 
@@ -1870,7 +2435,7 @@
             return;
           }
 
-          const existingId = agentsTabEditingCustomAgentId || agentsTabSanitizeCustomAgentId(name);
+          const existingId = agentsTabEditingAgentId || agentsTabSanitizeCustomAgentId(name);
           const role = agentsTabToCustomAgentRole(existingId);
           const nextAgent = {
             id: existingId,
@@ -1902,7 +2467,7 @@
           agentsTabCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
 
           agentsTabRenderCustomAgentList();
-          agentsTabCloseCustomAgentModal();
+          agentsTabHideInlineForm();
           vscode.postMessage({ type: 'saveCustomAgent', agent: nextAgent });
         }
 
@@ -1924,11 +2489,14 @@
             `;
 
             item.querySelector('.edit').addEventListener('click', () => {
-              agentsTabOpenCustomAgentModal(agent);
+              agentsTabShowInlineForm(agent);
             });
 
             item.querySelector('.delete').addEventListener('click', () => {
               if (confirm(`Delete custom agent "${agent.name}"?`)) {
+                if (agentsTabEditingAgentId === agent.id) {
+                  agentsTabHideInlineForm();
+                }
                 agentsTabCustomAgents = agentsTabCustomAgents.filter(a => a.id !== agent.id);
                 agentsTabRenderCustomAgentList();
                 vscode.postMessage({ type: 'deleteCustomAgent', agentId: agent.id });
@@ -1941,18 +2509,12 @@
 
         // Custom Agents event listeners
         document.getElementById('agents-tab-btn-add-custom-agent')?.addEventListener('click', () => {
-          agentsTabOpenCustomAgentModal(null);
+          agentsTabShowInlineForm(null);
         });
 
         document.getElementById('agents-tab-btn-save-custom-agent')?.addEventListener('click', agentsTabSaveCustomAgent);
 
-        document.getElementById('agents-tab-btn-cancel-custom-agent')?.addEventListener('click', agentsTabCloseCustomAgentModal);
-
-        document.getElementById('agents-tab-custom-agent-modal')?.addEventListener('click', (e) => {
-          if (e.target.id === 'agents-tab-custom-agent-modal') {
-            agentsTabCloseCustomAgentModal();
-          }
-        });
+        document.getElementById('agents-tab-btn-cancel-custom-agent')?.addEventListener('click', agentsTabHideInlineForm);
 
         function agentsTabCollectConfig() {
           const commands = {}, visibleAgents = {};
@@ -2104,6 +2666,7 @@
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = false;
+        let clearTerminalBeforePrompt = false;
         let collapseCodersEnabled = true;
         // Restore collapse toggle from webview state if available
         try {
@@ -2190,16 +2753,16 @@
                   vscode.postMessage({ type: 'getCustomAgents' });
                 }
 
+                // Hydrate DEPENDENCIES tab when activated
+                if (tabName === 'dependencies') {
+                  vscode.postMessage({ type: 'getDependencyMapData' });
+                }
+
                 // Hydrate PROMPTS tab when activated
                 if (tabName === 'prompts') {
-                  // Initialize editing role and render UI immediately
-                  if (!promptsTabEditingRole) promptsTabEditingRole = PROMPTS_TAB_ROLES[0].key;
-                  promptsTabRenderTabs();
-                  promptsTabLoadForm();
-                  promptsTabLoadPreview();
-                  vscode.postMessage({ type: 'getPromptsConfig' });
-                  vscode.postMessage({ type: 'getDefaultPromptOverrides' });
-                  vscode.postMessage({ type: 'getDefaultPromptPreviews' });
+                  vscode.postMessage({ type: 'getCustomAgents' });
+                  loadRoleConfigs();
+                  refreshPreview();
                 }
             });
         });
@@ -2214,6 +2777,69 @@
                 workspaceRoot: message.workspaceRoot || getActiveWorkspaceRoot()
             });
         }
+
+        // ── PROMPTS TAB EVENT LISTENERS ──────────────────────────────────────────
+        function initPromptsTabListeners() {
+            const roleSelect = document.getElementById('roleSelect');
+            if (roleSelect) {
+                roleSelect.addEventListener('change', (e) => {
+                    currentRole = e.target.value;
+                    handleRoleChange();
+                    postKanbanMessage({ type: 'saveSetting', key: 'selectedRole', value: currentRole });
+                });
+            }
+
+            const workflowFilePath = document.getElementById('workflowFilePath');
+            if (workflowFilePath) {
+                workflowFilePath.addEventListener('change', (e) => {
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    roleConfigs.planner.workflowFilePath = e.target.value;
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            }
+
+            const validateWorkflowPath = document.getElementById('validateWorkflowPath');
+            if (validateWorkflowPath) {
+                validateWorkflowPath.addEventListener('click', () => {
+                    const pathEl = document.getElementById('workflowFilePath');
+                    if (pathEl) {
+                        postKanbanMessage({ type: 'fileExists', path: pathEl.value });
+                    }
+                });
+            }
+
+            const rolePromptTextarea = document.getElementById('rolePromptTextarea');
+            if (rolePromptTextarea) {
+                rolePromptTextarea.addEventListener('change', (e) => {
+                    if (!roleConfigs[currentRole]) roleConfigs[currentRole] = { prompt: '', addons: {} };
+                    roleConfigs[currentRole].prompt = e.target.value;
+                    saveRoleConfig(currentRole);
+                });
+            }
+
+            const refreshPreviewBtn = document.getElementById('refreshPreview');
+            if (refreshPreviewBtn) {
+                refreshPreviewBtn.addEventListener('click', () => refreshPreview());
+            }
+
+            // Planner specific add-on listeners
+            ['plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan'].forEach(id => {
+                const el = document.getElementById(id);
+                if (el) {
+                    el.addEventListener('change', (e) => {
+                        const addonId = id.replace('plannerAddon', '');
+                        const finalAddonId = addonId.charAt(0).toLowerCase() + addonId.slice(1);
+                        if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                        if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                        roleConfigs.planner.addons[finalAddonId] = e.target.checked;
+                        saveRoleConfig('planner');
+                        refreshPreview();
+                    });
+                }
+            });
+        }
+        initPromptsTabListeners();
 
         function getWorkspaceItemRepoScope(item) {
             const raw = String(item && item.workspaceRoot || '');
@@ -2315,6 +2941,17 @@
             }
             if (toggleLabel) {
                 toggleLabel.classList.toggle('is-off', !allowUnknownComplexityAutoMove);
+            }
+        }
+
+        function updateClearTerminalBeforePromptUi() {
+            const toggle = document.getElementById('clear-terminal-before-prompt-toggle');
+            const toggleLabel = document.getElementById('clear-terminal-before-prompt-label');
+            if (toggle) {
+                toggle.checked = !!clearTerminalBeforePrompt;
+            }
+            if (toggleLabel) {
+                toggleLabel.classList.toggle('is-off', !clearTerminalBeforePrompt);
             }
         }
 
@@ -2884,6 +3521,8 @@
             displayCards.forEach(card => {
                 const effectiveCol = card._effectiveColumn || card.column;
                 const col = columns.includes(effectiveCol) ? effectiveCol : 'CREATED';
+                const t = new Date(card.lastActivity).getTime();
+                card._ts = isNaN(t) ? 0 : t;
                 buckets[col].push(card);
             });
 
@@ -2895,7 +3534,9 @@
                 CODED_COLUMN_IDS.forEach(colId => {
                     coderItems.push(...(buckets[colId] || []));
                 });
-                const sortedCoderItems = sortColumnByDependencies(coderItems);
+                // Sort combined coder items by timestamp (newest first)
+                coderItems.sort((a, b) => b._ts - a._ts);
+                const sortedCoderItems = coderItems;
                 const autoContainer = document.getElementById('col-CODED_AUTO');
                 const autoCountEl = document.getElementById('count-CODED_AUTO');
                 if (autoContainer && autoCountEl) {
@@ -2913,7 +3554,12 @@
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
-                const sortedItems = sortColumnByDependencies(items);
+                // Only apply dependency sorting to planning columns
+                const PLANNING_COLUMNS = ['CREATED', 'PLAN REVIEWED'];
+                const isPlanningColumn = PLANNING_COLUMNS.includes(col);
+                const sortedItems = isPlanningColumn
+                    ? sortColumnByDependencies(items)
+                    : [...items].sort((a, b) => b._ts - a._ts);
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -3680,6 +4326,30 @@
                         currentCards = nextCards;
                     }
                     break;
+                case 'settingResult': {
+                    const { key, value } = msg;
+                    if (key === 'selectedRole' && value) {
+                        currentRole = value;
+                        const roleSelect = document.getElementById('roleSelect');
+                        if (roleSelect) roleSelect.value = value;
+                        handleRoleChange();
+                    } else if (key.startsWith('roleConfig_')) {
+                        const role = key.replace('roleConfig_', '');
+                        roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role]));
+                        if (role === currentRole) {
+                            handleRoleChange();
+                        }
+                    }
+                    break;
+                }
+                case 'fileExistsResult': {
+                    const statusEl = document.getElementById('prompts-tab-workflow-path-status');
+                    if (statusEl) {
+                        statusEl.textContent = msg.exists ? '✓ File exists' : '✗ File not found';
+                        statusEl.style.color = msg.exists ? 'var(--accent-teal)' : 'var(--accent-red)';
+                    }
+                    break;
+                }
                 case 'backlogViewState':
                     showingBacklog = event.data.showing;
                     renderColumns();
@@ -3697,6 +4367,36 @@
                         updateAutobanIndicators();
                     }
                     break;
+                case 'dependencyMapData':
+                    renderDependencyTree(msg.plans);
+                    if (msg.prompt) {
+                        const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
+                        if (btnCopyDepsPrompt) {
+                            navigator.clipboard.writeText(msg.prompt).then(() => {
+                                btnCopyDepsPrompt.textContent = 'COPIED!';
+                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'COPY PROMPT'; }, 2000);
+                            }).catch(err => {
+                                console.error('[kanban webview] failed to copy prompt:', err);
+                                btnCopyDepsPrompt.textContent = 'COPY FAILED';
+                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'COPY PROMPT'; }, 2000);
+                            });
+                            btnCopyDepsPrompt.disabled = false;
+                        }
+                    }
+                    break;
+                case 'actionTriggered':
+                    if (msg.role === 'analystMap') {
+                        const btnRebuild = document.getElementById('btn-rebuild-deps');
+                        if (btnRebuild) {
+                            btnRebuild.disabled = false;
+                            btnRebuild.textContent = 'REBUILD MAP';
+                            if (msg.success === false) {
+                                btnRebuild.textContent = 'REBUILD FAILED';
+                                setTimeout(() => { btnRebuild.textContent = 'REBUILD MAP'; }, 3000);
+                            }
+                        }
+                    }
+                    break;
                 case 'updateAgentNames':
                     lastAgentNames = msg.agentNames || {};
                     updateAllColumnAgents();
@@ -3712,6 +4412,10 @@
                 case 'allowUnknownComplexityAutoMoveState':
                     allowUnknownComplexityAutoMove = msg.enabled !== false;
                     updateUnknownComplexityToggleUi();
+                    break;
+                case 'clearTerminalBeforePromptState':
+                    clearTerminalBeforePrompt = msg.enabled !== false;
+                    updateClearTerminalBeforePromptUi();
                     break;
                 case 'liveSyncUpdate': {
                     window.liveSyncStates = window.liveSyncStates || {};
@@ -3887,57 +4591,16 @@
                   document.getElementById('agents-tab-jules-auto-sync').checked = !!msg.julesAutoSyncEnabled;
                   break;
                 }
-                case 'promptsConfig': {
-                  document.getElementById('prompts-tab-accurate-coding-toggle').checked = !!msg.accurateCodingEnabled;
-                  document.getElementById('prompts-tab-advanced-reviewer-toggle').checked = !!msg.advancedReviewerEnabled;
-                  document.getElementById('prompts-tab-dependency-check-toggle').checked = !!msg.dependencyCheckEnabled;
-                  document.getElementById('prompts-tab-lead-challenge-toggle').checked = !!msg.leadChallengeEnabled;
-                  document.getElementById('prompts-tab-aggressive-pair-toggle').checked = !!msg.aggressivePairProgramming;
-                  document.getElementById('prompts-tab-design-doc-toggle').checked = !!msg.designDocEnabled;
-                  const designDocInput = document.getElementById('prompts-tab-design-doc-input');
-                  if (designDocInput && msg.designDocLink) designDocInput.value = msg.designDocLink;
-                  const designDocStatus = document.getElementById('prompts-tab-design-doc-status');
-                  if (designDocStatus) {
-                    const link = msg.designDocLink || '';
-                    designDocStatus.textContent = link
-                      ? `Source: ${link.length > 60 ? link.slice(0, 57) + '...' : link}`
-                      : 'Not configured';
-                  }
+                case 'customAgents': {
+                  agentsTabCustomAgents = msg.customAgents || [];
+                  lastCustomAgents = agentsTabCustomAgents;
+                  agentsTabRenderCustomAgentList();
+                  updateCustomAgentsDropdown();
                   break;
                 }
                 case 'julesAutoSyncSetting': {
                   const el = document.getElementById('agents-tab-jules-auto-sync');
                   if (el) el.checked = msg.enabled === true;
-                  break;
-                }
-                case 'designDocConfig': {
-                  const el = document.getElementById('prompts-tab-design-doc-status');
-                  if (el) el.textContent = msg.url
-                    ? `Source: ${msg.url.length > 60 ? msg.url.slice(0,57)+'...' : msg.url}`
-                    : 'Not configured — configure in Planning tab';
-                  break;
-                }
-                case 'defaultPromptOverrides': {
-                  promptsTabOverrides = msg.overrides || {};
-                  if (!promptsTabEditingRole) promptsTabEditingRole = PROMPTS_TAB_ROLES[0].key;
-                  promptsTabLoadForm();
-                  promptsTabRenderTabs();
-                  promptsTabLoadPreview();
-                  promptsTabUpdateSummary();
-                  break;
-                }
-                case 'defaultPromptPreviews': {
-                  promptsTabPreviews = msg.previews || {};
-                  promptsTabLoadPreview();
-                  break;
-                }
-                case 'saveDefaultPromptOverridesResult': {
-                  if (msg.success) promptsTabUpdateSummary();
-                  break;
-                }
-                case 'customAgents': {
-                  agentsTabCustomAgents = msg.customAgents || [];
-                  agentsTabRenderCustomAgentList();
                   break;
                 }
                 case 'saveCustomAgentResult': {
@@ -4057,6 +4720,12 @@
             allowUnknownComplexityAutoMove = checked;
             updateUnknownComplexityToggleUi();
             postKanbanMessage({ type: 'toggleAllowUnknownComplexityAutoMove', enabled: checked });
+        });
+        document.getElementById('clear-terminal-before-prompt-toggle')?.addEventListener('change', (event) => {
+            const checked = !!event.target?.checked;
+            clearTerminalBeforePrompt = checked;
+            updateClearTerminalBeforePromptUi();
+            postKanbanMessage({ type: 'toggleClearTerminalBeforePrompt', enabled: checked });
         });
         document.getElementById('pairProgrammingModeSelect')?.addEventListener('change', (e) => {
             const select = e.target;
@@ -4738,6 +5407,7 @@
                 renderAutobanPanel();
             } else if (msg.type === 'customAgents') {
                 lastCustomAgents = Array.isArray(msg.customAgents) ? msg.customAgents : [];
+                updateCustomAgentsDropdown();
                 renderAutobanPanel();
             }
         });
@@ -4993,6 +5663,161 @@
 
         // Signal to extension that webview is ready to receive data
         postKanbanMessage({ type: 'ready' });
+        // ─── Dependency Tree Visualization ──────────────────────────────────────────
+
+        function renderDependencyTree(plans) {
+            const container = document.getElementById('dep-tree-container');
+            if (!container) return;
+
+            if (!plans || plans.length === 0) {
+                container.innerHTML = '<div class="empty-state">No plans in New or Planned columns. Create a plan to see dependencies here.</div>';
+                return;
+            }
+
+            const DEP_NODE_LIMIT = 50;
+            const html = [];
+            const planMap = new Map();
+            plans.forEach(p => planMap.set(p.sessionId, p));
+
+            // Detect cycles to highlight them
+            const cycles = detectCyclesForDeps(plans);
+
+            const renderPlan = (plan) => {
+                const isCreated = plan.kanbanColumn === 'CREATED';
+                const statusClass = isCreated ? 'created' : 'planned';
+                
+                const deps = (plan.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
+                const blockingDeps = deps.filter(d => planMap.has(d));
+                const isBlocking = blockingDeps.length > 0;
+                const isCycling = cycles.has(plan.sessionId);
+                const blockingClass = (isBlocking || isCycling) ? 'blocking' : '';
+
+                const safeSessionId = escapeAttr(plan.sessionId);
+                const safeTopic = escapeHtml(plan.topic);
+                const safeTopicAttr = escapeAttr(plan.topic);
+                const safeColumn = escapeHtml(plan.kanbanColumn);
+
+                let planHtml = `
+                    <div class="plan-node ${statusClass} ${blockingClass}" data-session-id="${safeSessionId}" onclick="postKanbanMessage({ type: 'selectPlan', sessionId: '${safeSessionId}' })">
+                        <div class="plan-id">${escapeHtml(plan.sessionId.substring(0, 8))}...</div>
+                        <div class="plan-title" title="${safeTopicAttr}">${safeTopic}</div>
+                        <div class="plan-status-tag">${safeColumn}${isBlocking ? ' ⚠️ BLOCKED' : ''}${isCycling ? ' 🔄 CYCLE' : ''}</div>
+                    </div>
+                `;
+
+                if (deps.length > 0) {
+                    deps.forEach(depId => {
+                        const depPlan = planMap.get(depId);
+                        const depTitle = depPlan ? escapeHtml(depPlan.topic) : escapeHtml(depId.substring(0, 8)) + '...';
+                        planHtml += `
+                            <div class="dep-connector">
+                                <span style="font-size: 10px; color: var(--text-secondary);">Depends on: ${depTitle}</span>
+                            </div>
+                        `;
+                    });
+                }
+                return planHtml;
+            };
+
+            const displayPlans = plans.length > DEP_NODE_LIMIT ? plans.slice(0, DEP_NODE_LIMIT) : plans;
+
+            html.push('<div class="dep-tree">');
+            displayPlans.forEach(plan => {
+                html.push(renderPlan(plan));
+            });
+            if (plans.length > DEP_NODE_LIMIT) {
+                html.push(`<div class="empty-state" style="text-align:center; padding:10px;">Showing ${DEP_NODE_LIMIT} of ${plans.length} plans. <button class="strip-btn" onclick="_depShowAll()" style="font-size:10px; padding:2px 8px;">Show All</button></div>`);
+            }
+            html.push('</div>');
+
+            container.innerHTML = html.join('');
+
+            // Expose full list for "Show All" button
+            window._depAllPlans = plans;
+            window._depShowAll = () => {
+                const c = document.getElementById('dep-tree-container');
+                if (!c) return;
+                const allHtml = ['<div class="dep-tree">'];
+                plans.forEach(plan => { allHtml.push(renderPlan(plan)); });
+                allHtml.push('</div>');
+                c.innerHTML = allHtml.join('');
+            };
+        }
+
+        function detectCyclesForDeps(plans) {
+            const adj = new Map();
+            plans.forEach(p => {
+                const deps = (p.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
+                // Only include edges to plans that exist in the current set
+                adj.set(p.sessionId, deps.filter(id => plans.some(q => q.sessionId === id)));
+            });
+
+            const visited = new Set();
+            const recStack = new Set();
+            const cycleNodes = new Set();
+
+            function dfs(u) {
+                visited.add(u);
+                recStack.add(u);
+
+                const deps = adj.get(u) || [];
+                for (const v of deps) {
+                    if (!visited.has(v)) {
+                        dfs(v);
+                    } else if (recStack.has(v)) {
+                        cycleNodes.add(u);
+                        cycleNodes.add(v);
+                    }
+                }
+
+                recStack.delete(u);
+            }
+
+            for (const planId of adj.keys()) {
+                if (!visited.has(planId)) {
+                    dfs(planId);
+                }
+            }
+            return cycleNodes;
+        }
+
+        // Add listeners for the dependencies tab buttons
+        window.addEventListener('DOMContentLoaded', () => {
+            const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
+            const btnRebuildDeps = document.getElementById('btn-rebuild-deps');
+            const btnRefreshDeps = document.getElementById('btn-refresh-deps');
+
+            if (btnCopyDepsPrompt) {
+                btnCopyDepsPrompt.addEventListener('click', () => {
+                    btnCopyDepsPrompt.disabled = true;
+                    const originalText = btnCopyDepsPrompt.textContent;
+                    btnCopyDepsPrompt.textContent = 'LOADING...';
+                    postKanbanMessage({ type: 'getDependencyMapData', copyPrompt: true });
+                });
+            }
+
+            if (btnRebuildDeps) {
+                btnRebuildDeps.addEventListener('click', () => {
+                    btnRebuildDeps.disabled = true;
+                    const originalText = btnRebuildDeps.textContent;
+                    btnRebuildDeps.textContent = 'SENDING...';
+                    postKanbanMessage({ type: 'rebuildDependencyMap' });
+                    
+                    // Reset button after 30s timeout or we can wait for a message back
+                    setTimeout(() => {
+                        btnRebuildDeps.disabled = false;
+                        btnRebuildDeps.textContent = originalText;
+                    }, 30000);
+                });
+            }
+
+            if (btnRefreshDeps) {
+                btnRefreshDeps.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'getDependencyMapData' });
+                });
+            }
+        });
+
     </script>
 </body>
 

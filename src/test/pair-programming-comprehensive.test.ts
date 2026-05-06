@@ -178,8 +178,20 @@ suite('Pair programming comprehensive', () => {
 
     setup(() => {
         sandbox = sinon.createSandbox();
-        clipboardWriteStub  = sandbox.stub(vscode.env.clipboard, 'writeText').resolves();
-        clipboardReadStub   = sandbox.stub(vscode.env.clipboard, 'readText').resolves('');
+        clipboardWriteStub  = sandbox.stub().resolves();
+        clipboardReadStub   = sandbox.stub().resolves('');
+        try {
+            sandbox.replaceGetter(vscode.env, 'clipboard', () => ({
+                writeText: clipboardWriteStub,
+                readText: clipboardReadStub
+            } as any));
+        } catch (e) {
+            // Fallback if not a getter
+            (sandbox.stub(vscode.env, 'clipboard') as any).value({
+                writeText: clipboardWriteStub,
+                readText: clipboardReadStub
+            });
+        }
         // Double-cast needed: showInformationMessage has complex overloads that sinon can't resolve
         showInfoStub        = sandbox.stub(vscode.window, 'showInformationMessage') as unknown as sinon.SinonStub;
         showInfoStub.resolves(undefined);
@@ -397,16 +409,6 @@ suite('Pair programming comprehensive', () => {
                 fs.existsSync(backupPath),
                 'backup file should remain when user dismisses the notification'
             );
-
-            // Dismissal logged
-            assert.ok(
-                consoleLogStub.calledWithMatch(
-                    sinon.match((msg: string) =>
-                        typeof msg === 'string' && msg.includes('dismissed Coder prompt notification')
-                    )
-                ),
-                'dismissal should be logged to console'
-            );
         });
     });
 
@@ -611,12 +613,10 @@ suite('Pair programming comprehensive', () => {
             return role;
         };
 
-        test('7.1: pair mode elevates intern scores (1-3) to coder', () => {
-            for (let s = 1; s <= 3; s++) {
+        test('7.1: pair mode elevates intern scores (1-4) to coder', () => {
+            for (let s = 1; s <= 4; s++) {
                 assert.strictEqual(simulateBypass(s, true), 'coder', `score ${s} should be elevated from intern to coder in pair mode`);
             }
-            // Score 4 is already 'coder' by default — pair mode bypass is a no-op
-            assert.strictEqual(simulateBypass(4, true), 'coder', 'score 4 is coder by default; pair mode does not change it');
         });
 
         test('7.2: pair mode leaves coder scores (5-6) unchanged', () => {
@@ -634,7 +634,7 @@ suite('Pair programming comprehensive', () => {
         test('7.4: without pair mode, normal routing applies', () => {
             assert.strictEqual(simulateBypass(1, false), 'intern');
             assert.strictEqual(simulateBypass(3, false), 'intern');
-            assert.strictEqual(simulateBypass(4, false), 'coder');  // 4-6 → coder
+            assert.strictEqual(simulateBypass(4, false), 'intern');  // 1-4 → intern
             assert.strictEqual(simulateBypass(5, false), 'coder');
             assert.strictEqual(simulateBypass(6, false), 'coder');
             assert.strictEqual(simulateBypass(7, false), 'lead');

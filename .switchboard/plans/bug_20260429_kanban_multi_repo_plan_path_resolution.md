@@ -6,7 +6,6 @@ Fix the bug where accessing a plan file from the kanban in a multi-repo workspac
 ## Metadata
 **Tags:** bugfix, workflow, multi-repo
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None. This is a backward-compatible bug fix for multi-repo workspace path resolution.

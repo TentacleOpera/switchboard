@@ -10,7 +10,6 @@ Add read-only proxy endpoints for ClickUp/Linear APIs and name resolution to Loc
 ## Metadata
 **Tags:** infrastructure, backend, authentication, workflow
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 None - internal tooling

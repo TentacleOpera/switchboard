@@ -6,7 +6,6 @@ Persist the user's selected kanban workspace across VS Code sessions by storing 
 ## Metadata
 **Tags:** backend, bugfix
 **Complexity:** 3
-**Repo:** switchboard
 
 ## User Review Required
 - [x] Review edge-case handling for deleted/moved workspace paths - IMPLEMENTED: Falls back through index→name→roots[0]

@@ -5,6 +5,8 @@
  * prompt text is identical for the same role regardless of UI entry point.
  */
 
+import * as fs from 'fs';
+import * as path from 'path';
 import { DefaultPromptOverride } from './agentConfig';
 
 export interface BatchPromptPlan {
@@ -13,6 +15,46 @@ export interface BatchPromptPlan {
     complexity?: string;
     dependencies?: string;
     workingDir?: string;
+}
+
+/**
+ * Resolve a safe working directory from a repoScope value.
+ * Validates that the resolved path exists on disk; falls back to
+ * workspaceRoot if it does not. Logs a warning on fallback.
+ */
+export function resolveWorkingDir(workspaceRoot: string, repoScope: string): string {
+    if (!repoScope || !repoScope.trim()) return '';
+    const candidate = path.join(workspaceRoot, repoScope.trim());
+    if (fs.existsSync(candidate) && fs.statSync(candidate).isDirectory()) {
+        return candidate;
+    }
+    console.warn(
+        `[resolveWorkingDir] repoScope "${repoScope}" resolved to non-existent directory: ${candidate}. ` +
+        `Falling back to workspace root.`
+    );
+    return workspaceRoot;
+}
+
+/**
+ * Detect if a workspace is single-repo or multi-repo based on the presence
+ * of project markers in subdirectories.
+ */
+export function detectWorkspaceType(workspaceRoot: string): { isMultiRepo: boolean; subRepoNames: string[] } {
+    const PROJECT_MARKERS = ['package.json', 'tsconfig.json', 'Cargo.toml', 'go.mod', 'pyproject.toml'];
+    try {
+        const entries = fs.readdirSync(workspaceRoot, { withFileTypes: true });
+        const subRepoNames: string[] = [];
+        for (const entry of entries) {
+            if (!entry.isDirectory() || entry.name.startsWith('.') || entry.name === 'node_modules') continue;
+            const subDir = path.join(workspaceRoot, entry.name);
+            if (PROJECT_MARKERS.some(marker => fs.existsSync(path.join(subDir, marker)))) {
+                subRepoNames.push(entry.name);
+            }
+        }
+        return { isMultiRepo: subRepoNames.length > 1, subRepoNames };
+    } catch {
+        return { isMultiRepo: false, subRepoNames: [] };
+    }
 }
 
 interface PromptDispatchContext {
@@ -35,12 +77,20 @@ export interface PromptBuilderOptions {
     advancedReviewerEnabled?: boolean;
     /** Whether dependency check instructions are injected (planner role). */
     dependencyCheckEnabled?: boolean;
+    /** Path to the workflow file for the planner role. Defaults to .agent/workflows/improve-plan.md */
+    plannerWorkflowPath?: string;
     /** When present, appends a Design Doc / PRD link to planner prompts. */
     designDocLink?: string;
     /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
     designDocContent?: string;
+    /** When true, planner produces separate Routine and Complex plan files. */
+    splitPlan?: boolean;
     /** Per-role prompt customisations loaded from state.json. */
     defaultPromptOverrides?: Partial<Record<string, DefaultPromptOverride>>;
+    /** The absolute path to the workspace root. Used for workspace type detection and working directory resolution. */
+    workspaceRoot?: string;
+    /** When true, git prohibition directive is included in planner prompts (default: true). */
+    gitProhibitionEnabled?: boolean;
 }
 
 function applyPromptOverride(
@@ -127,6 +177,7 @@ ${perPlanDirectories}`
 }
 
 const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+const DEFAULT_PLANNER_WORKFLOW = '.agent/workflows/improve-plan.md';
 
 /**
  * Canonical prompt builder.  Every UI surface that produces a prompt for an
@@ -145,6 +196,7 @@ export function buildKanbanBatchPrompt(
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
     const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? true;
+    const splitPlan = options?.splitPlan ?? false;
     const promptOverride = options?.defaultPromptOverrides?.[role] as DefaultPromptOverride | undefined;
 
     const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
@@ -177,55 +229,63 @@ export function buildKanbanBatchPrompt(
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
 
     if (role === 'planner') {
-        const plannerVerb = baseInstruction === 'enhance' ? 'enhance' : 'improve';
+        const workflowPath = options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW;
+        const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
+
+        let workspaceTypeBlock = '';
+        if (options?.workspaceRoot) {
+            const { isMultiRepo, subRepoNames } = detectWorkspaceType(options.workspaceRoot);
+            if (isMultiRepo) {
+                workspaceTypeBlock = `\nWORKSPACE TYPE: This workspace is multi-repo. Valid sub-repo folder names are: ${subRepoNames.join(', ')}. Set **Repo:** to the appropriate sub-repo folder name.`;
+            } else {
+                workspaceTypeBlock = `\nWORKSPACE TYPE: This workspace is single-repo. Do NOT include a **Repo:** line in the plan metadata.`;
+            }
+        }
+
+        // Minimal base prompt (framework-agnostic)
+        let plannerPrompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+
+        // Include batch execution rules for multi-plan dispatches
+        if (plans.length > 1) {
+            plannerPrompt += `${batchExecutionRules}\n\n`;
+        }
+
+        // Append add-on instructions if enabled
         const aggressiveDirective = aggressivePairProgramming
             ? `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`
             : '';
+
         const dependencyCheckInstruction = dependencyCheckEnabled
             ? `\n\n[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n`
             : '';
-        const ALLOWED_TAGS = "frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics";
+
         const designDocLink = options?.designDocLink?.trim();
-        let plannerPrompt = `Please ${plannerVerb} the following ${plans.length} plans. Break each down into distinct steps grouped by high complexity and low complexity. Add extra detail.${aggressiveDirective}${dependencyCheckInstruction}
-MANDATORY: You MUST read and strictly adhere to \`.agent/workflows/improve-plan.md\` to format your output and ensure sufficient technical detail. Do not make assumptions about which files need to be changed; provide exact file paths and explicit implementation steps as required by the workflow.
-Do not add net-new product requirements or scope.
-You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
+        if (designDocLink) {
+            plannerPrompt += `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
+        }
 
-${batchExecutionRules}
+        plannerPrompt += aggressiveDirective + dependencyCheckInstruction;
+        if (splitPlan) {
+            plannerPrompt += `\n\nSPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent."`;
+        }
+        if (workspaceTypeBlock) {
+            plannerPrompt += workspaceTypeBlock + '\n';
+        }
 
-For each plan:
-1. Read the plan file before editing.
-2. Fill out 'TODO' sections or underspecified parts. Scan the Kanban board/plans folder for potential cross-plan conflicts and document them.
-3. Ensure the plan has a "## Complexity Audit" section with "### Routine" and "### Complex / Risky" subsections. If missing, create it. If present, update it. If Complex / Risky is empty, write "- None" explicitly.
-4. Ensure the plan has a "## Metadata" section immediately after the "## Goal" section. You MUST explicitly assign metadata using EXACTLY this format:
-## Metadata
-**Tags:** [comma-separated list chosen ONLY from: ${ALLOWED_TAGS}]
-**Complexity:** [integer 1-10]
-**Repo:** [bare sub-repo folder name, e.g. 'be'. Omit if not a multi-repo setup or if this plan spans multiple repos.]
+        // Add dispatch context and plan list (reuse outer variables from buildPromptDispatchContext)
+        plannerPrompt += `${dispatchContextPrefix}${focusDirective}`;
 
-Scoring guide:
-1-2: Very Low — trivial config/copy changes
-3-4: Low — routine single-file changes
-5-6: Medium — multi-file changes, moderate logic
-7-8: High — new patterns, complex state, security-sensitive
-9-10: Very High — architectural changes, new framework integrations
+        // Append git prohibition if enabled (add-on, default true)
+        if (gitProhibitionEnabled) {
+            plannerPrompt += GIT_PROHIBITION_DIRECTIVE;
+        }
 
-Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** none
-5. Perform adversarial review: post a Grumpy critique (dramatic "Grumpy Principal Engineer" voice: incisive, specific, theatrical) then a Balanced synthesis.
-6. ${chatCritiqueDirective}
-7. Update the original plan with the enhancement findings. Do NOT truncate, summarize, or delete existing implementation steps, code blocks, or goal statements.
-8. Recommend agent: if complexity ≤ 6, say "Send to Coder". If complexity ≥ 7, say "Send to Lead Coder".
+        plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
 
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
-
-PLANS TO PROCESS:
-${planList}`;
-
+        // Append design doc content (pre-fetched Notion)
         const designDocContent = options?.designDocContent?.trim();
         if (designDocContent) {
             plannerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
-        } else if (designDocLink) {
-            plannerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}`;
         }
 
         return applyPromptOverride(plannerPrompt, dispatchContextBlock, planList, promptOverride);
@@ -369,7 +429,6 @@ export function columnToPromptRole(column: string): string | null {
     switch (normalized) {
         case 'CREATED': return 'planner';
         case 'PLAN REVIEWED': return 'lead';
-        case 'TEAM LEAD CODED':
         case 'LEAD CODED':
         case 'CODER CODED':
         case 'INTERN CODED':

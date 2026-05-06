@@ -6,7 +6,6 @@ Fix three UX bugs in the Research tab: (1) missing AGENTS.md documentation for w
 ## Metadata
 **Tags:** frontend, UI, bugfix, documentation
 **Complexity:** 3
-**Repo:** switchboard
 
 ---
 

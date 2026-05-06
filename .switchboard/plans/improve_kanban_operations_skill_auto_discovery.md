@@ -10,7 +10,6 @@ Make the `kanban_operations` skill auto-discover workspace roots from VS Code co
 ## Metadata
 **Tags:** infrastructure, workflow, devops, testing
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 - [ ] Confirm whether the skill should aggregate results across all discovered workspaces or default to the first/primary workspace.
@@ -276,3 +275,21 @@ Promise.all(workspaceRoots.map(async (workspaceRoot) => {
 ## Recommendation
 
 **Send to Coder** — Complexity 5. The changes are localized to the skill scripts, involve straightforward file-based configuration reading, and maintain backward compatibility. The settings.json schema fix and move-card.js coverage add moderate scope but no architectural risk.
+
+---
+
+## Reviewer Pass
+
+### Stage 1: Grumpy Review
+*   **[MAJOR] Missing Env Var Coverage:** You completely forgot to include `SWITCHBOARD_STATE_ROOT` in the environment variable checks for Tier 1! If a user hasn't set `WORKSPACE_ROOT` but *has* set `STATE_ROOT`, your discovery drops straight to Tier 2. Unacceptable gap in the discovery chain. I had to step in and fix this.
+*   **[NIT] UX Hostility Maintained:** `move-card.js` still forces the user to pass an empty string `""` as the fourth argument just to supply the workspace root as the fifth. It's ugly, but it was documented as a legacy backward-compatibility requirement, so I'll let it slide.
+
+### Stage 2: Balanced Synthesis
+*   **Keep:** The 3-tier discovery strategy is robust, parsing `.vscode/settings.json` exactly according to the weird `switchboard.workspaceDatabaseMappings` schema.
+*   **Keep:** Backward compatibility via explicit arguments works cleanly and `get-state.js` formats Option A gracefully.
+*   **Fix Now:** Added `SWITCHBOARD_STATE_ROOT` to the environment variable tier in `workspaceDiscovery.js`.
+
+### Action Taken
+*   **Code Fixes Applied:** Updated `.agent/skills/kanban_operations/lib/workspaceDiscovery.js` to parse and resolve `SWITCHBOARD_STATE_ROOT` if it exists.
+*   **Verification:** Executed `get-state.js` and `move-card.js` to confirm correct state resolution and database mutation without manual arguments.
+*   **Compilation:** `npm run compile` passed successfully.

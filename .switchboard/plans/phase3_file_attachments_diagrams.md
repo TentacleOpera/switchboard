@@ -10,7 +10,6 @@ Add file attachment, doc page creation, and diagram generation endpoints to Loca
 ## Metadata
 **Tags:** infrastructure, backend, workflow
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 None - internal tooling; mermaid-cli installation optional

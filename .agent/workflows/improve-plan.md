@@ -17,7 +17,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    - Read the target plan file and treat it as the single source of truth.
    - Read the actual code for any services, utilities, or modules referenced by the plan.
    - [OPTIONAL] If dependency check is enabled via Prompt Controls checkbox:
-     - Query active Kanban plans for dependencies using `kanban_operations` skill: run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit.
+     - Query active Kanban plans for dependencies: read `<workspace_root>/.switchboard/kanban-board.md` (fallback to `node .agent/skills/kanban_operations/get-state.js <workspace_id>` if file missing). Inspect CREATED and BACKLOG columns for conflicts; exclude COMPLETED, LEAD CODED, CODER CODED, and CODE REVIEWED columns. If query fails, note uncertainty in Edge-Case & Dependency Audit.
      - Emit dependencies in plan's `## Dependencies` section as `sess_XXXXXXXXXXXXX — <topic>` lines, or `None` if none.
 
 2. **Improve the plan**
@@ -28,12 +28,13 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    1. **## Goal** - 1-2 sentences summarizing the objective
    2. **## Metadata**
       - **Tags:** [frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics]
+      - Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** none
       - **Complexity:** 1-10
       - **Repo:** Bare sub-repo folder name if applicable
    3. **## User Review Required**
    4. **## Complexity Audit**
       - ### Routine
-      - ### Complex / Risky
+      - ### Complex / Risky (if empty, write "- None" explicitly)
    5. **## Edge-Case & Dependency Audit**
       - **Race Conditions**, **Security**, **Side Effects**, **Dependencies & Conflicts**
    6. **## Dependencies**
@@ -51,11 +52,19 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    - **Complex/Risky (7-10):** Multi-file coordination. New architectural patterns. Data consistency risks. Breaking changes.
    - **Mixed (5-6):** Majority routine but with one or two moderate, well-scoped risks extending existing patterns.
    - Do not add net-new product scope unless strictly implied by the existing plan.
+   - You may add clarifying implementation detail only if strictly implied by existing requirements; label it as "Clarification", not a new requirement.
+
+   **Scoring Guide:**
+   - 1-2: Very Low — trivial config/copy changes
+   - 3-4: Low — routine single-file changes
+   - 5-6: Medium — multi-file changes, moderate logic
+   - 7-8: High — new patterns, complex state, security-sensitive
+   - 9-10: Very High — architectural changes, new framework integrations
 
 3. **Run the internal adversarial review**
    - First, produce a sharp Grumpy-style critique focused on assumptions, risks, race conditions, missing error handling, and validation gaps.
    - Immediately follow with a balanced synthesis that keeps valid concerns, rejects weak ones, and converges on the strongest execution strategy.
-   - **Output:** Write the full Grumpy and Balanced critiques to the chat response for user review. In the plan file's `## Adversarial Synthesis` section, include only a 2-3 sentence Risk Summary (e.g., "Key risks: X, Y, Z. Mitigations: A, B.").
+   - **Output:** Write the full Grumpy and Balanced critiques to the chat response as formatted markdown — do not only write them to the plan file. The user must be able to read the critique directly in chat without opening the plan. In the plan file's `## Adversarial Synthesis` section, include only a 2-3 sentence Risk Summary (e.g., "Key risks: X, Y, Z. Mitigations: A, B.").
 
 4. **Update the original plan file**
    - Write the improvement findings back into the same feature plan file.

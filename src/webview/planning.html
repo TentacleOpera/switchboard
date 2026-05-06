@@ -163,6 +163,72 @@
             grid-template-columns: 280px 1fr;
             flex: 1;
             overflow: hidden;
+            transition: grid-template-columns 0.2s ease;
+        }
+
+        .content-row.collapsed {
+            grid-template-columns: 40px 1fr;
+        }
+
+        .content-row.collapsed #tree-pane,
+        .content-row.collapsed #tree-pane-online {
+            padding: 4px;
+            overflow: hidden;
+        }
+
+        .content-row.collapsed .file-name,
+        .content-row.collapsed .label,
+        .content-row.collapsed .folder-subheader,
+        .content-row.collapsed .source-header,
+        .content-row.collapsed .folder-config,
+        .content-row.collapsed .source-header-row,
+        .content-row.collapsed .imported-docs-header,
+        .content-row.collapsed .imported-docs-doc-subheader,
+        .content-row.collapsed .doc-delete-btn,
+        .content-row.collapsed .last-synced,
+        .content-row.collapsed .sync-btn,
+        .content-row.collapsed .source-badge {
+            display: none !important;
+        }
+
+        .content-row.collapsed .tree-node {
+            justify-content: center;
+            padding: 8px 0;
+            margin-left: 0 !important;
+        }
+
+        .content-row.collapsed .tree-node .icon {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .sidebar-toggle-row {
+            display: flex;
+            justify-content: flex-end;
+            margin-bottom: 8px;
+            flex-shrink: 0;
+        }
+
+        .sidebar-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.15s;
+        }
+
+        .sidebar-toggle-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .content-row.collapsed .sidebar-toggle-row {
+            justify-content: center;
         }
 
         /* Active Design Doc Header */
@@ -1126,6 +1192,9 @@
             </div>
             <div class="content-row">
                 <div id="tree-pane">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
                     <div class="empty-state">Loading local docs...</div>
                 </div>
                 <div id="preview-pane">
@@ -1160,6 +1229,9 @@
             </div>
             <div class="content-row">
                 <div id="tree-pane-online">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
                     <div class="empty-state">Loading online docs...</div>
                 </div>
                 <div id="preview-pane-online">

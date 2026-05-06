@@ -502,9 +502,23 @@ export class ClickUpSyncService {
     if (!normalized) {
       throw new Error('ClickUp config normalization failed');
     }
-    await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
-    await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
-    this._config = normalized;
+    const dir = path.dirname(this._configPath);
+    await fs.promises.mkdir(dir, { recursive: true });
+    
+    const tmpPath = path.join(dir, `.clickup-config-${Date.now()}.tmp`);
+    try {
+      await fs.promises.writeFile(tmpPath, JSON.stringify(normalized, null, 2));
+      await fs.promises.rename(tmpPath, this._configPath);
+      this._config = normalized;
+    } catch (error) {
+      // Cleanup temp file if it exists
+      try {
+        await fs.promises.unlink(tmpPath);
+      } catch {
+        // Ignore cleanup errors
+      }
+      throw error;
+    }
   }
 
   async listFolderLists(folderId?: string): Promise<ClickUpListSummary[]> {

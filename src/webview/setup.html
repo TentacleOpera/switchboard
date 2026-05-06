@@ -43,6 +43,30 @@
             display: none !important;
         }
 
+        /* Inline Custom Agent Form */
+        .setup-inline-form {
+            border: 1px solid var(--border-bright);
+            border-radius: 4px;
+            padding: 12px;
+            margin-bottom: 8px;
+            background: var(--panel-bg2);
+        }
+        .setup-inline-form-title {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-bottom: 10px;
+            padding-bottom: 6px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .setup-inline-form .modal-input,
+        .setup-inline-form .modal-textarea {
+            margin-bottom: 8px;
+        }
+        .setup-inline-form .modal-label {
+            margin-bottom: 3px;
+        }
+
         .flex {
             display: flex;
         }
@@ -540,9 +564,31 @@
 
         <div class="tab-content" id="custom-agents-fields" data-tab-content="custom-agents">
                 <div id="custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+                <div id="custom-agent-form" class="setup-inline-form hidden">
+                    <div class="setup-inline-form-title" id="custom-agent-inline-form-title">New Custom Agent</div>
+                    <label class="modal-label" for="custom-agent-name">Agent name</label>
+                    <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
+                    <label class="modal-label" for="custom-agent-command">Startup command</label>
+                    <input id="custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
+                    <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
+                    <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
+                    <label class="modal-label" for="custom-agent-dragdrop">Drag &amp; Drop Mode</label>
+                    <select id="custom-agent-dragdrop" class="modal-input">
+                        <option value="cli">CLI Agent (trigger terminal action)</option>
+                        <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
+                    </select>
+                    <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
+                        <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
+                        <span>Show as Kanban column</span>
+                    </label>
+                    <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+                    <div class="flex gap-2" style="margin-top: 10px;">
+                        <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
+                        <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
+                    </div>
+                </div>
                 <button id="btn-add-custom-agent" class="secondary-btn w-full">ADD CUSTOM AGENT</button>
             </div>
-        </div>
 
 
         <div class="tab-content" id="kanban-structure-fields" data-tab-content="kanban">
@@ -555,7 +601,6 @@
                     Drag active middle columns to change board order. New and Completed stay fixed.
                 </div>
             </div>
-        </div>
 
 
         <div class="tab-content" id="db-sync-fields" data-tab-content="database">
@@ -617,7 +662,6 @@
                     </button>
                 </div>
             </div>
-        </div>
 
         <div class="tab-content" id="workspace-mapping-fields" data-tab-content="workspace">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -637,7 +681,6 @@
                 </div>
                 <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
             </div>
-        </div>
 
         <div class="tab-content" id="project-mgmt-fields" data-tab-content="integration">
 
@@ -897,7 +940,6 @@
                     <div id="notion-setup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
                 </div>
             </div>
-        </div>
 
         <div class="tab-content" id="planning-sources-fields" data-tab-content="sources">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -929,7 +971,6 @@
                     <div id="planning-sources-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
                 </div>
             </div>
-        </div>
 
         <div class="tab-content" id="control-plane-fields" data-tab-content="control">
                 <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
@@ -1038,7 +1079,6 @@
                     </div>
                 </div>
             </div>
-        </div>
 
         <div class="tab-content" id="planning-panel-fields" data-tab-content="sync">
                 <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
@@ -1087,33 +1127,6 @@
                     Status: <span id="planning-sync-status-text">Not configured</span>
                 </div>
             </div>
-        </div>
-    </div>
-
-    <div id="custom-agent-modal" class="modal-overlay hidden">
-        <div class="modal-card" style="max-width: 520px;">
-            <div class="modal-title">Custom Agent</div>
-            <label class="modal-label" for="custom-agent-name">Agent name</label>
-            <input id="custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
-            <label class="modal-label" for="custom-agent-command">Startup command</label>
-            <input id="custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
-            <label class="modal-label" for="custom-agent-prompt">Prompt instructions</label>
-            <textarea id="custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
-            <label class="modal-label" for="custom-agent-dragdrop">Drag &amp; Drop Mode</label>
-            <select id="custom-agent-dragdrop" class="modal-input">
-                <option value="cli">CLI Agent (trigger terminal action)</option>
-                <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
-            </select>
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-                <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
-                <span>Show as Kanban column</span>
-            </label>
-            <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
-            <div class="flex gap-2" style="margin-top: 10px;">
-                <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
-                <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
-            </div>
-        </div>
     </div>
 
     <div id="kanban-column-modal" class="modal-overlay hidden">
@@ -1177,7 +1190,6 @@
         const vscode = acquireVsCodeApi();
 
         const customAgentList = document.getElementById('custom-agent-list');
-        const customAgentModal = document.getElementById('custom-agent-modal');
         const customAgentNameInput = document.getElementById('custom-agent-name');
         const customAgentCommandInput = document.getElementById('custom-agent-command');
         const customAgentPromptInput = document.getElementById('custom-agent-prompt');
@@ -1765,7 +1777,7 @@
 
         function openControlPlaneSetup(mode) {
             setControlPlaneSetupMode(mode);
-            openAccordion('control-plane-fields', 'control-plane-chevron');
+            activateTab('control');
             requestControlPlaneStatus();
         }
 
@@ -1845,21 +1857,22 @@
                 .sort((left, right) => (left.order - right.order) || left.label.localeCompare(right.label));
         }
 
-        function openCustomAgentModal(agent) {
+        function showInlineCustomAgentForm(agent) {
             editingCustomAgentId = agent ? agent.id : null;
+            document.getElementById('custom-agent-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
             customAgentNameInput.value = agent?.name || '';
             customAgentCommandInput.value = agent?.startupCommand || '';
             customAgentPromptInput.value = agent?.promptInstructions || '';
             customAgentDragDropModeInput.value = agent?.dragDropMode || 'cli';
             customAgentKanbanInput.checked = agent?.includeInKanban === true;
             customAgentError.textContent = '';
-            customAgentModal.classList.remove('hidden');
+            document.getElementById('custom-agent-form').classList.remove('hidden');
             setTimeout(() => customAgentNameInput.focus(), 0);
         }
 
-        function closeCustomAgentModal() {
+        function hideInlineCustomAgentForm() {
             editingCustomAgentId = null;
-            customAgentModal.classList.add('hidden');
+            document.getElementById('custom-agent-form').classList.add('hidden');
             customAgentError.textContent = '';
         }
 
@@ -1982,7 +1995,7 @@
             syncLocalKanbanStructureWithCustomAgents();
             renderCustomAgentConfigList();
             renderKanbanStructureList();
-            closeCustomAgentModal();
+            hideInlineCustomAgentForm();
             queueSetupAutosave(`custom-agent-save:${nextAgent.role}`, true);
         }
 
@@ -2299,13 +2312,16 @@
                 editBtn.className = 'secondary-btn';
                 editBtn.style.cssText = 'width:auto; min-width:64px;';
                 editBtn.textContent = 'EDIT';
-                editBtn.onclick = () => openCustomAgentModal(agent);
+                editBtn.onclick = () => showInlineCustomAgentForm(agent);
 
                 const deleteBtn = document.createElement('button');
                 deleteBtn.className = 'secondary-btn';
                 deleteBtn.style.cssText = 'width:auto; min-width:64px;';
                 deleteBtn.textContent = 'DELETE';
                 deleteBtn.onclick = () => {
+                    if (editingCustomAgentId === agent.id) {
+                        hideInlineCustomAgentForm();
+                    }
                     lastCustomAgents = lastCustomAgents.filter(item => item.id !== agent.id);
                     delete lastVisibleAgents[agent.role];
                     delete lastStartupCommands[agent.role];
@@ -3349,9 +3365,9 @@
                 pat: multiRepoPatInput?.value || ''
             });
         });
-        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => openCustomAgentModal());
+        document.getElementById('btn-add-custom-agent')?.addEventListener('click', () => showInlineCustomAgentForm(null));
         document.getElementById('btn-save-custom-agent')?.addEventListener('click', saveCustomAgentDraft);
-        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', closeCustomAgentModal);
+        document.getElementById('btn-cancel-custom-agent')?.addEventListener('click', hideInlineCustomAgentForm);
         document.getElementById('btn-add-kanban-column')?.addEventListener('click', () => openKanbanColumnModal());
         document.getElementById('btn-save-kanban-column')?.addEventListener('click', saveKanbanColumnDraft);
         document.getElementById('btn-cancel-kanban-column')?.addEventListener('click', closeKanbanColumnModal);
@@ -3386,7 +3402,6 @@
         ];
         const textAutosaveSelectors = [
             '#git-ignore-rules',
-        ];
             '#plan-ingestion-folder-input'
         ];
         instantAutosaveSelectors.forEach(selector => {
@@ -3522,9 +3537,6 @@
             });
         });
 
-        customAgentModal.addEventListener('click', (event) => {
-            if (event.target === customAgentModal) closeCustomAgentModal();
-        });
         kanbanColumnModal.addEventListener('click', (event) => {
             if (event.target === kanbanColumnModal) closeKanbanColumnModal();
         });
@@ -3533,7 +3545,7 @@
         });
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') {
-                closeCustomAgentModal();
+                hideInlineCustomAgentForm();
                 closeKanbanColumnModal();
                 closeCustomPromptsModal();
             }
@@ -4111,7 +4123,8 @@
                     break;
                 case 'openSetupSection':
                     if (message.section === 'project-mgmt') {
-                        openAccordion('project-mgmt-fields', 'project-mgmt-chevron', requestIntegrationSetupStates);
+                        activateTab('integration');
+                        requestIntegrationSetupStates();
                     }
                     if (message.section === 'control-plane' || message.section === 'control-plane:migrate-existing') {
                         openControlPlaneSetup('migrate-existing');

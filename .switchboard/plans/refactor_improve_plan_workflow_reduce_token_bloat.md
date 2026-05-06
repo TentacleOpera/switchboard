@@ -6,7 +6,6 @@ Remove token bloat from the improve-plan.md workflow file by condensing verbose 
 ## Metadata
 **Tags:** workflow, documentation, reliability
 **Complexity:** 3
-**Repo:** switchboard
 
 ## User Review Required
 None - this is a documentation-only change with no code execution impact

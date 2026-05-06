@@ -1631,8 +1631,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(restorePlanFromKanbanDisposable);
 
-    const deletePlanFromReviewDisposable = vscode.commands.registerCommand('switchboard.deletePlanFromReview', async (sessionId: string, workspaceRoot?: string) => {
-        return taskViewerProvider.handleDeletePlanFromReview(sessionId, workspaceRoot);
+    const deletePlanFromReviewDisposable = vscode.commands.registerCommand('switchboard.deletePlanFromReview', async (sessionId: string, workspaceRoot?: string, planFileAbsolute?: string) => {
+        return taskViewerProvider.handleDeletePlanFromReview(sessionId, workspaceRoot, planFileAbsolute);
     });
     context.subscriptions.push(deletePlanFromReviewDisposable);
 

@@ -6,7 +6,6 @@ Fix the copy link button in the Kanban board to generate the correct plan file p
 ## Metadata
 **Tags:** bugfix, workflow
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 After database investigation, may need to manually verify existing plan files are in correct locations before migration.

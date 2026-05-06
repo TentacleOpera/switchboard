@@ -6,7 +6,6 @@ Convert the setup panel (`src/webview/setup.html`) from an accordion-based layou
 ## Metadata
 **Tags:** frontend, UI, UX
 **Complexity:** 6
-**Repo:** switchboard
 
 ## User Review Required
 UI pattern change will affect muscle memory for existing users. Previously open sections may reset to first tab on initial load until state persistence is implemented.

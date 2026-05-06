@@ -6,7 +6,6 @@ Remove blocking PID resolution waits from the `createAgentGrid` function and rel
 ## Metadata
 **Tags:** performance, infrastructure, bugfix
 **Complexity:** 5
-**Repo:** switchboard
 
 ## User Review Required
 - [ ] Confirm that the MCP heartbeat interval (Site 4) should be removed entirely in this plan, or deferred to a separate MCP-removal plan.
@@ -236,3 +235,23 @@ Key risks: Removing PID from `clearGridBlockers` loses stale-terminal detection 
 ## Recommendation
 
 **Send to Coder** — Complexity 5. The changes are well-scoped to the agent grid creation path with clear file/line references. The heartbeat removal is the only moderately complex change, and its impact is limited since MCP removal is planned. Deferred items are clearly marked with TODO comments.
+
+---
+
+## Reviewer Pass
+
+### Stage 1: Grumpy Review
+*   **[NIT] Narrow Race Condition:** Relying purely on `exitStatus === undefined` leaves a tiny window where the OS has killed the process but VS Code hasn't fired the event yet. The plan admits this, but it's still a smell. At least it's better than blocking for 5 seconds.
+*   **[NIT] Loose Types:** Setting `pid: null` in `batchRegistrations` forces downstream types to loosen up. It works because JavaScript doesn't care, but it's sloppy.
+*   **[NIT] TODOs as Tech Debt:** You left `// TODO` comments for the MCP server removal instead of tracking them properly. Let's hope someone actually reads them.
+
+### Stage 2: Balanced Synthesis
+*   **Keep:** The removal of `waitWithTimeout` in `clearGridBlockers` and the main loop. The logic accurately targets `exitStatus` and dramatically speeds up the grid creation.
+*   **Keep:** The removal of the 1-second startup delay. `terminal.sendText()` buffers correctly.
+*   **Keep:** The removal of the heartbeat interval.
+*   **Defer:** The remaining PID resolution code paths correctly belong to the MCP removal plan.
+
+### Action Taken
+*   **Verification:** Verified via manual inspection that the grid creation path is free of arbitrary delays and `waitWithTimeout` calls.
+*   **Compilation:** `npm run compile` passed successfully without type errors.
+*   **Code Fixes Applied:** None. The coder followed the plan flawlessly.

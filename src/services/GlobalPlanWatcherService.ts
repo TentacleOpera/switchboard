@@ -1,0 +1,407 @@
+
+import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
+import * as os from 'os';
+import { v4 as uuidv4 } from 'uuid';
+import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
+import { parsePlanMetadata } from './planMetadataUtils';
+import type { ClickUpSyncService } from './ClickUpSyncService';
+
+export class GlobalPlanWatcherService implements vscode.Disposable {
+    private _watchers = new Map<string, vscode.FileSystemWatcher>();
+    private _nativeWatchers = new Map<string, fs.FSWatcher>();
+    private _outputChannel?: vscode.OutputChannel;
+    private _disposables: vscode.Disposable[] = [];
+    
+    private _onPlanDiscovered = new vscode.EventEmitter<{
+        uri: vscode.Uri;
+        workspaceRoot: string;
+    }>();
+    public readonly onPlanDiscovered = this._onPlanDiscovered.event;
+
+    // Per-file debounce timers to coalesce VS Code and native watcher events
+    private _debounceTimers = new Map<string, NodeJS.Timeout>();
+
+    constructor(
+        private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
+        outputChannel?: vscode.OutputChannel
+    ) {
+        this._outputChannel = outputChannel;
+    }
+
+    public async initialize(): Promise<void> {
+        this._outputChannel?.appendLine('[GlobalPlanWatcher] Initializing...');
+        await this._refreshWatchers();
+        
+        // Watch for configuration changes
+        const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
+            if (e.affectsConfiguration('switchboard.workspaceDatabaseMappings')) {
+                this._outputChannel?.appendLine('[GlobalPlanWatcher] Config changed, refreshing watchers...');
+                await this._refreshWatchers();
+            }
+        });
+        this._disposables.push(configListener);
+    }
+
+    private async _refreshWatchers(): Promise<void> {
+        // Get all folders that should be watched
+        const foldersToWatch = await this._getAllMappedFolders();
+        
+        // Dispose watchers for folders no longer in config
+        for (const [folder, watcher] of this._watchers) {
+            if (!foldersToWatch.includes(folder)) {
+                watcher.dispose();
+                this._watchers.delete(folder);
+                
+                const native = this._nativeWatchers.get(folder);
+                if (native) {
+                    try { native.close(); } catch {}
+                    this._nativeWatchers.delete(folder);
+                }
+                
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Stopped watching: ${folder}`);
+            }
+        }
+
+        // Create watchers for new folders
+        for (const folder of foldersToWatch) {
+            if (!this._watchers.has(folder)) {
+                this._setupWatcherForFolder(folder);
+            }
+        }
+    }
+
+    private async _getAllMappedFolders(): Promise<string[]> {
+        const folders: string[] = [];
+        
+        try {
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                .get('workspaceDatabaseMappings') as
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const mapping of cfg.mappings) {
+                    // Collect both parentFolder (if exists) and all workspaceFolders
+                    if (mapping.parentFolder) {
+                        const resolved = path.resolve(this._expandHome(mapping.parentFolder));
+                        if (fs.existsSync(resolved) && !folders.includes(resolved)) {
+                            folders.push(resolved);
+                        }
+                    }
+                    if (Array.isArray(mapping.workspaceFolders)) {
+                        for (const wf of mapping.workspaceFolders) {
+                            const resolved = path.resolve(this._expandHome(wf));
+                            if (fs.existsSync(resolved) && !folders.includes(resolved)) {
+                                folders.push(resolved);
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Fallback: If no mappings or mappings empty, include current workspace folders
+            if (folders.length === 0) {
+                const workspaceFolders = vscode.workspace.workspaceFolders || [];
+                for (const wf of workspaceFolders) {
+                    const resolved = path.resolve(wf.uri.fsPath);
+                    if (!folders.includes(resolved)) {
+                        folders.push(resolved);
+                    }
+                }
+            }
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error reading config: ${err}`);
+        }
+
+        return folders;
+    }
+
+    private _expandHome(p: string): string {
+        const trimmed = p.trim();
+        return trimmed.startsWith('~')
+            ? path.join(os.homedir(), trimmed.slice(1))
+            : trimmed;
+    }
+
+    private _setupWatcherForFolder(folder: string): void {
+        const plansDir = path.join(folder, '.switchboard', 'plans');
+        
+        // We don't skip if plansDir is missing, because it might be created later.
+        // But for fs.watch we need it to exist.
+
+        // VS Code watcher - works even if dir doesn't exist yet (if it's in a workspace folder)
+        const workspaceFolderPaths = new Set(
+            (vscode.workspace.workspaceFolders || []).map(f => path.resolve(f.uri.fsPath))
+        );
+
+        if (workspaceFolderPaths.has(folder)) {
+            const pattern = new vscode.RelativePattern(folder, '.switchboard/plans/**/*.md');
+            const watcher = vscode.workspace.createFileSystemWatcher(pattern, false, false, false);
+
+            watcher.onDidCreate((uri) => {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Created: ${uri.fsPath}`);
+                this._debounceHandleFile(uri, folder);
+            });
+
+            watcher.onDidChange((uri) => {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Changed: ${uri.fsPath}`);
+                this._debounceHandleFile(uri, folder);
+            });
+
+            watcher.onDidDelete((uri) => {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code Deleted: ${uri.fsPath}`);
+                this._debounceHandleDelete(uri, folder);
+            });
+
+            this._watchers.set(folder, watcher);
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] VS Code watcher active for: ${folder}`);
+        } else {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Folder ${folder} is not a VS Code workspace folder, relying on native fs.watch`);
+        }
+
+        // Native fs.watch fallback (handles non-workspace folders and .gitignore issues)
+        this._setupNativeWatcher(folder);
+    }
+
+    private _setupNativeWatcher(folder: string): void {
+        const plansDir = path.join(folder, '.switchboard', 'plans');
+        if (!fs.existsSync(plansDir)) {
+            // Try to watch the .switchboard dir if it exists, or the root
+            const switchboardDir = path.join(folder, '.switchboard');
+            if (fs.existsSync(switchboardDir)) {
+                this._setupNativeFsWatch(switchboardDir, folder);
+            } else {
+                this._setupNativeFsWatch(folder, folder);
+            }
+            return;
+        }
+        this._setupNativeFsWatch(plansDir, folder);
+    }
+
+    private _setupNativeFsWatch(watchPath: string, workspaceRoot: string): void {
+        try {
+            const nativeWatcher = fs.watch(watchPath, { recursive: true }, (eventType, filename) => {
+                if (!filename || !filename.endsWith('.md')) return;
+                
+                // Ensure it's in .switchboard/plans
+                const fullPath = path.resolve(path.join(watchPath, filename));
+                const plansDir = path.resolve(path.join(workspaceRoot, '.switchboard', 'plans'));
+                if (!fullPath.startsWith(plansDir)) return;
+
+                const uri = vscode.Uri.file(fullPath);
+                
+                if (eventType === 'rename' || !fs.existsSync(fullPath)) {
+                    if (!fs.existsSync(fullPath)) {
+                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native Delete: ${fullPath}`);
+                        this._debounceHandleDelete(uri, workspaceRoot);
+                        return;
+                    }
+                }
+
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native Change: ${fullPath}`);
+                this._debounceHandleFile(uri, workspaceRoot);
+            });
+
+            this._nativeWatchers.set(workspaceRoot, nativeWatcher);
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch active for: ${watchPath}`);
+        } catch (e) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Native watch failed for ${watchPath}: ${e}`);
+        }
+    }
+
+    private _debounceHandleFile(uri: vscode.Uri, workspaceRoot: string): void {
+        const key = uri.fsPath;
+        const existing = this._debounceTimers.get(key);
+        if (existing) clearTimeout(existing);
+
+        const timer = setTimeout(() => {
+            this._debounceTimers.delete(key);
+            void this._handlePlanFile(uri, workspaceRoot);
+        }, 300);
+        this._debounceTimers.set(key, timer);
+    }
+
+    private _debounceHandleDelete(uri: vscode.Uri, workspaceRoot: string): void {
+        const key = `delete:${uri.fsPath}`;
+        const existing = this._debounceTimers.get(key);
+        if (existing) clearTimeout(existing);
+
+        const timer = setTimeout(() => {
+            this._debounceTimers.delete(key);
+            void this._handlePlanDelete(uri, workspaceRoot);
+        }, 300);
+        this._debounceTimers.set(key, timer);
+    }
+
+    private async _handlePlanFile(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            
+            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            
+            if (!workspaceId) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] No workspaceId for ${workspaceRoot}, skipping import`);
+                return;
+            }
+
+            let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+            const content = await fs.promises.readFile(uri.fsPath, 'utf8');
+            const metadata = await parsePlanMetadata(content, relativePath);
+            
+            const now = new Date().toISOString();
+
+            if (!plan) {
+                // New plan - parse and insert
+                const newRecord: KanbanPlanRecord = {
+                    planId: uuidv4(),
+                    sessionId: metadata.sessionId,
+                    topic: metadata.topic,
+                    planFile: relativePath,
+                    kanbanColumn: metadata.kanbanColumn || 'CREATED',
+                    status: 'active',
+                    complexity: metadata.complexity,
+                    tags: metadata.tags,
+                    dependencies: metadata.dependencies,
+                    repoScope: '',
+                    workspaceId: workspaceId,
+                    createdAt: now,
+                    updatedAt: now,
+                    lastAction: '',
+                    sourceType: 'local',
+                    brainSourcePath: '',
+                    mirrorPath: '',
+                    routedTo: '',
+                    dispatchedAgent: '',
+                    dispatchedIde: '',
+                    clickupTaskId: '',
+                    linearIssueId: ''
+                };
+                await db.upsertPlans([newRecord]);
+                plan = newRecord;
+
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${metadata.sessionId} in ${workspaceId}`);
+            } else {
+                // Existing plan - update metadata
+                const updatedRecord: KanbanPlanRecord = {
+                    ...plan,
+                    topic: metadata.topic,
+                    complexity: metadata.complexity,
+                    tags: metadata.tags,
+                    dependencies: metadata.dependencies,
+                    updatedAt: now
+                };
+                await db.upsertPlans([updatedRecord]);
+                plan = updatedRecord;
+                
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Updated plan: ${plan.sessionId} in ${workspaceId}`);
+            }
+
+            // ClickUp real-time sync
+            if (plan) {
+                try {
+                    const clickUp = this._getClickUpService(workspaceRoot);
+                    const clickUpConfig = await clickUp.loadConfig();
+                    if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
+                        clickUp.debouncedSync(plan.sessionId, {
+                            planId: plan.planId,
+                            sessionId: plan.sessionId,
+                            topic: plan.topic,
+                            planFile: plan.planFile,
+                            kanbanColumn: plan.kanbanColumn,
+                            status: plan.status,
+                            complexity: plan.complexity,
+                            tags: plan.tags,
+                            dependencies: plan.dependencies,
+                            createdAt: plan.createdAt,
+                            updatedAt: plan.updatedAt,
+                            lastAction: plan.lastAction
+                        });
+                    }
+                } catch { /* skip sync errors */ }
+            }
+
+            // Emit event for UI refresh
+            this._onPlanDiscovered.fire({ uri, workspaceRoot });
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error handling plan: ${err}`);
+        }
+    }
+
+    private async _handlePlanDelete(uri: vscode.Uri, workspaceRoot: string): Promise<void> {
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            
+            const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            
+            if (workspaceId) {
+                const plan = await db.getPlanByPlanFile(relativePath, workspaceId);
+                if (plan) {
+                    await db.deletePlan(plan.sessionId);
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.sessionId}`);
+                    this._onPlanDiscovered.fire({ uri, workspaceRoot });
+                }
+            }
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error deleting plan: ${err}`);
+        }
+    }
+
+    public async triggerScan(workspaceRoot: string): Promise<void> {
+        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Manual scan triggered for ${workspaceRoot}`);
+        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+
+        if (!fs.existsSync(plansDir)) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Plans directory not found: ${plansDir}`);
+            return;
+        }
+
+        try {
+            let processed = 0;
+            const scanDir = async (dir: string): Promise<void> => {
+                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const entryPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        await scanDir(entryPath);
+                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                        const uri = vscode.Uri.file(entryPath);
+                        await this._handlePlanFile(uri, workspaceRoot);
+                        processed++;
+                    }
+                }
+            };
+            await scanDir(plansDir);
+
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scanned ${processed} files in ${workspaceRoot}`);
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Scan error in ${workspaceRoot}: ${err}`);
+        }
+    }
+
+    public dispose(): void {
+        for (const watcher of this._watchers.values()) {
+            watcher.dispose();
+        }
+        this._watchers.clear();
+
+        for (const watcher of this._nativeWatchers.values()) {
+            try { watcher.close(); } catch {}
+        }
+        this._nativeWatchers.clear();
+
+        for (const timer of this._debounceTimers.values()) {
+            clearTimeout(timer);
+        }
+        this._debounceTimers.clear();
+
+        for (const d of this._disposables) {
+            d.dispose();
+        }
+        this._disposables = [];
+    }
+}
