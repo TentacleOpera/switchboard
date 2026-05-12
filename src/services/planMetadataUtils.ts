@@ -48,8 +48,11 @@ export function inferTopicFromPath(filePath: string | undefined): string {
 }
 
 export async function parsePlanMetadata(content: string, planFile: string): Promise<PlanMetadata> {
-    // Extract sessionId
-    const sessionIdMatch = content.match(/sessionId:\s*([a-z0-9_]+)/i) || 
+    // Extract sessionId from YAML frontmatter first
+    const yamlSessionIdMatch = content.match(/^---[\s\S]*?sessionId:\s*([a-z0-9_]+)/im);
+    // Fallback to legacy patterns
+    const sessionIdMatch = yamlSessionIdMatch ||
+                           content.match(/sessionId:\s*([a-z0-9_]+)/i) || 
                            content.match(/## Metadata[\s\S]*?session[_\s]?id[:\s]+([a-z0-9_]+)/i);
     const sessionId = sessionIdMatch?.[1] || 
                      path.basename(planFile, '.md').replace(/^(feature_plan_\d+_|brain_|ingested_)/, '');
@@ -64,7 +67,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
 
     // Extract complexity
     let complexity: string = 'Unknown';
-    const overrideMatch = content.match(/\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/i);
+    const overrideMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/im);
     if (overrideMatch) {
         const val = overrideMatch[1];
         if (val.toLowerCase() !== 'unknown') {
@@ -77,7 +80,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         }
     }
     if (complexity === 'Unknown') {
-        const metadataMatch = content.match(/\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/i);
+        const metadataMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/im);
         if (metadataMatch) {
             const val = metadataMatch[1];
             const num = parseInt(val, 10);
@@ -91,7 +94,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
 
     // Extract tags
     let tags: string = '';
-    const tagsMatch = content.match(/\*\*Tags:\*\*\s*(.+)/i);
+    const tagsMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Tags:\*\*\s*(.+)/im);
     if (tagsMatch) {
         tags = sanitizeTags(tagsMatch[1]);
     }

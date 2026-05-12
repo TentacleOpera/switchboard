@@ -1056,6 +1056,20 @@
             letter-spacing: 1px;
         }
 
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            margin-bottom: 4px;
+        }
+        .checkbox-label:hover {
+            color: var(--text-primary);
+        }
+
         .modal-input,
         .modal-textarea {
             width: 100%;
@@ -1472,12 +1486,55 @@
         }
 
 
-        /* Dependency Tree Styles */
-        #dependencies-tab-content {
-            flex: 1;
-            flex-direction: column;
-            overflow: hidden;
+        /* Dependency Tree and UAT Styles */
+        #dependencies-tab-content, #uat-tab-content {
             padding: 20px;
+        }
+
+        .uat-plan-section {
+            margin-bottom: 16px;
+        }
+
+        .uat-plan-title {
+            font-family: var(--font-mono);
+            font-size: 11px;
+            color: var(--accent-teal);
+            letter-spacing: 0.8px;
+            text-transform: uppercase;
+            margin-bottom: 8px;
+            padding-bottom: 4px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .uat-step {
+            display: flex;
+            align-items: flex-start;
+            gap: 8px;
+            padding: 4px 0;
+            font-size: 12px;
+        }
+
+        .uat-step input[type="checkbox"] {
+            accent-color: var(--accent-teal);
+            margin-top: 2px;
+            cursor: pointer;
+        }
+
+        .uat-step.checked .uat-step-text {
+            text-decoration: line-through;
+            color: var(--text-secondary);
+        }
+
+        .uat-step-text {
+            color: var(--text-primary);
+        }
+
+        .uat-no-steps {
+            font-family: var(--font-mono);
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 0;
         }
 
         .dep-tree-header {
@@ -1592,6 +1649,18 @@
             color: var(--border-bright);
             font-size: 10px;
             font-family: var(--font-mono);
+        }
+
+        .dep-link {
+            cursor: pointer;
+            text-decoration: underline;
+            text-decoration-style: dotted;
+            transition: color 0.15s, text-decoration-style 0.15s;
+        }
+
+        .dep-link:hover {
+            text-decoration-style: solid;
+            color: var(--text-primary) !important;
         }
 
         .dep-legend {
@@ -1807,6 +1876,7 @@
         <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="kanban-tab-btn" data-tab="dependencies">DEPENDENCIES</button>
+        <button class="kanban-tab-btn" data-tab="uat">UAT</button>
         <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -1873,6 +1943,19 @@
                 <div class="legend-box blocking"></div>
                 <span>⚠️ BLOCKED</span>
             </div>
+        </div>
+    </div>
+
+    <!-- UAT Tab Content -->
+    <div id="uat-tab-content" class="kanban-tab-content">
+        <div class="dep-tree-header">
+            <div class="dep-tree-title">User Acceptance Testing</div>
+            <div class="dep-tree-actions">
+                <button class="strip-btn" id="btn-refresh-uat" data-tooltip="Reload UAT checklist from database">REFRESH</button>
+            </div>
+        </div>
+        <div class="dep-tree-container" id="uat-checklist-container">
+            <div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>
         </div>
     </div>
 
@@ -1947,6 +2030,10 @@
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. gemini" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="gatherer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Context Gatherer</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Clipboard context gathering only</span></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
@@ -1958,6 +2045,7 @@
         <div class="db-subsection">
           <div class="subsection-header"><span>Custom Agents</span></div>
           <div id="agents-tab-custom-agent-list" style="display:flex; flex-direction:column; gap:6px;"></div>
+          <div id="agents-tab-custom-agent-delete-error" style="min-height:0px; color: var(--accent-red); font-size: 11px; margin-top: 4px;"></div>
           <div id="agents-tab-custom-agent-form" class="agents-tab-inline-form hidden">
             <div class="agents-tab-inline-form-title" id="agents-tab-inline-form-title">New Custom Agent</div>
             <label class="modal-label" for="agents-tab-custom-agent-name">Agent name</label>
@@ -1975,6 +2063,45 @@
               <input id="agents-tab-custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
               <span>Show as Kanban column</span>
             </label>
+
+            <details id="agents-tab-custom-agent-addons" style="margin-top:10px;">
+              <summary class="modal-label" style="cursor:pointer; user-select:none;">Prompt Add-ons</summary>
+              <div style="padding:8px 0; display:flex; flex-direction:column; gap:4px;">
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-switchboard-safeguards" style="width:auto;margin:0;"> Switchboard Safeguards</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-git-prohibition" style="width:auto;margin:0;"> Git Prohibition</label>                <label class="checkbox-label"><input type="checkbox" id="ca-addon-workspace-detection" style="width:auto;margin:0;"> Workspace Type Detection</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-inline-challenge" style="width:auto;margin:0;"> Inline Adversarial Challenge</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-accuracy" style="width:auto;margin:0;"> Accuracy Mode</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-pair-programming" style="width:auto;margin:0;"> Pair Programming (Complex only)</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-aggressive-pair" style="width:auto;margin:0;"> Aggressive Pair Programming</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-advanced-reviewer" style="width:auto;margin:0;"> Advanced Regression Analysis</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-dependency-check" style="width:auto;margin:0;"> Dependency Check</label>
+                <label class="checkbox-label"><input type="checkbox" id="ca-addon-split-plan" style="width:auto;margin:0;"> Split Plan (Routine/Complex files)</label>
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="ca-addon-complexity-scoring" style="width:auto;margin:0;">
+                  <span>Apply Complexity Scoring (if plan lacks Complexity Audit)</span>
+                </label>
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="ca-addon-ticket-update" style="width:auto;margin:0;">
+                  <span>Enable Ticket Update (add AI Analysis comment to ticket)</span>
+                </label>
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="ca-addon-research" style="width:auto;margin:0;">
+                  <span>Enable Deep Research (50-100 sources, codebase + web)</span>
+                </label>
+                <p style="font-size:11px;color:var(--text-secondary);margin:2px 0 0 0;padding-left:22px;">
+                  Triggers deep_planning skill protocol. Skips planning proposal phase.
+                </p>
+
+                <div style="margin-top:8px;">                  <label class="modal-label" style="margin-bottom:4px;">Design Doc Link</label>
+                  <input id="ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
+                </div>
+                
+                <div>
+                  <label class="modal-label" style="margin-bottom:4px;">Custom Workflow Path</label>
+                  <input id="ca-addon-workflow-path" class="modal-input" type="text" placeholder=".agent/workflows/custom.md" style="margin-bottom:8px;">
+                </div>
+              </div>
+            </details>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
               <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
@@ -2003,6 +2130,9 @@
             <option value="tester">Acceptance Tester</option>
             <option value="intern">Intern</option>
             <option value="analyst">Analyst</option>
+            <option value="ticket_updater">Ticket Updater</option>
+            <option value="researcher">Researcher</option>
+            <option value="splitter">Splitter Agent</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
         </div>
@@ -2033,8 +2163,14 @@
             <p class="section-desc">Planner-specific orchestration features.</p>
             
             <div class="checkbox-group">
+              <label class="checkbox-item" title="Include batch execution rules and focus directive">
+                <input type="checkbox" id="plannerAddonSwitchboardSafeguards">
+                <span>Switchboard Safeguards</span>
+                <span class="tooltip">Include batch execution rules and focus directive</span>
+              </label>
+              
               <label class="checkbox-item" title="Query Kanban for dependencies between active plans">
-                <input type="checkbox" id="plannerAddonDependencyCheck" checked>
+                <input type="checkbox" id="plannerAddonDependencyCheck">
                 <span>Dependency Check</span>
                 <span class="tooltip">Query Kanban for cross-plan dependencies</span>
               </label>
@@ -2052,9 +2188,9 @@
               </label>
 
               <label class="checkbox-item" title="Prohibit git commands in the prompt">
-                <input type="checkbox" id="plannerAddonGitProhibition" checked>
+                <input type="checkbox" id="plannerAddonGitProhibition">
                 <span>Git Prohibition</span>
-                <span class="tooltip">Include git prohibition directive (recommended)</span>
+                <span class="tooltip">Include git prohibition directive</span>
               </label>
 
               <label class="checkbox-item" title="Produce separate Routine and Complex plan files">
@@ -2218,47 +2354,81 @@
         // ── PROMPTS TAB ─────────────────────────────────────────────────────────
         const ROLE_ADDONS = {
             planner: [
-                { id: 'dependencyCheck', label: 'Dependency Check', tooltip: 'Query Kanban for cross-plan dependencies', default: true },
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'dependencyCheck', label: 'Dependency Check', tooltip: 'Query Kanban for cross-plan dependencies', default: false },
                 { id: 'designDoc', label: 'Design Doc Reference', tooltip: 'Include design doc as planning context', default: false },
                 { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive (recommended)', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: false },
                 { id: 'splitPlan', label: 'Split Plan', tooltip: 'Produce separate Routine and Complex plan files', default: false }
             ],
             lead: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
                 { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Coder handles Routine tasks concurrently', default: false },
                 { id: 'leadChallenge', label: 'Inline Challenge Step', tooltip: 'Internal review before code generation', default: false },
-                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false }
+                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
             ],
             coder: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
                 { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
-                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false }
+                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
             ],
             reviewer: [
-                { id: 'advancedRegression', label: 'Advanced Regression Analysis', tooltip: 'Trace all callers of modified functions', default: false }
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'advancedRegression', label: 'Advanced Regression Analysis', tooltip: 'Trace all callers of modified functions', default: false },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
             ],
-            tester: [],
-            intern: [],
-            analyst: []
+            tester: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
+            ],
+            intern: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
+            ],
+            analyst: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
+            ],
+            ticket_updater: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
+                { id: 'ticketUpdateEnabled', label: 'Ticket Update', tooltip: 'Update associated ticket with AI analysis', default: true }
+            ],
+            researcher: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
+                { id: 'researchEnabled', label: 'Deep Research', tooltip: 'Enable deep research mode', default: true }
+            ],
+            splitter: [
+                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
+                { id: 'complexityScoringSkill', label: 'Complexity Scoring', tooltip: 'Invoke complexity scoring before split', default: false }
+            ]
         };
 
         const DEFAULT_CONFIG = {
             planner: {
                 workflowFilePath: '.agent/workflows/improve-plan.md',
-                addons: { dependencyCheck: true, designDoc: false, aggressivePairProgramming: false, gitProhibition: true, splitPlan: false }
+                addons: { switchboardSafeguards: true, dependencyCheck: false, designDoc: false, aggressivePairProgramming: false, gitProhibition: false, splitPlan: false }
             },
-            lead: { prompt: '', addons: { pairProgramming: false, leadChallenge: false, accurateCoding: false } },
-            coder: { prompt: '', addons: { pairProgramming: false, accurateCoding: false } },
-            reviewer: { prompt: '', addons: { advancedRegression: false } },
-            tester: { prompt: '', addons: {} },
-            intern: { prompt: '', addons: {} },
-            analyst: { prompt: '', addons: {} }
+            lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true } },
+            coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true } },
+            reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, gitProhibition: true } },
+            tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
+            intern: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
+            analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
+            ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: true } },
+            researcher: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, researchEnabled: true } },
+            splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false } }
         };
 
         let currentRole = 'planner';
         let roleConfigs = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
         function loadRoleConfigs() {
-            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
             roles.forEach(role => {
                 postKanbanMessage({ type: 'getSetting', key: `roleConfig_${role}` });
             });
@@ -2288,6 +2458,7 @@
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
                 document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agent/workflows/improve-plan.md';
+                document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
                 document.getElementById('plannerAddonDependencyCheck').checked = !!config.addons?.dependencyCheck;
                 document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
@@ -2352,6 +2523,7 @@
             let prompt = '';
             if (currentRole === 'planner') {
                 const workflowPath = document.getElementById('workflowFilePath').value;
+                const safeguards = document.getElementById('plannerAddonSwitchboardSafeguards').checked;
                 const depCheck = document.getElementById('plannerAddonDependencyCheck').checked;
                 const aggPair = document.getElementById('plannerAddonAggressivePairProgramming').checked;
                 const gitProhib = document.getElementById('plannerAddonGitProhibition').checked;
@@ -2359,6 +2531,9 @@
                 const splitPlan = document.getElementById('plannerAddonSplitPlan').checked;
 
                 prompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+                if (safeguards) {
+                    prompt += `CRITICAL INSTRUCTIONS:\n1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.\n2. Execute each plan fully before moving to the next (if sequential).\n3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n[FOCUS DIRECTIVE ENABLED]\nTreat the absolute path as the single source of truth.\n\n`;
+                }
                 if (depCheck) {
                     prompt += `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n\n`;
                 }
@@ -2378,7 +2553,18 @@
                 }
             } else {
                 const config = roleConfigs[currentRole];
-                prompt = config?.prompt || '';
+
+                // If custom override exists, use it
+                if (config?.prompt) {
+                    prompt = config.prompt;
+                } else {
+                    // Request default persona from backend
+                    postKanbanMessage({ type: 'getPersonaForRole', role: currentRole });
+                    preview.value = 'Loading default persona...';
+                    return; // Will be updated when personaContent message arrives
+                }
+
+                // Add addons
                 const addons = ROLE_ADDONS[currentRole] || [];
                 addons.forEach(addon => {
                     const cb = document.getElementById(`addon_${addon.id}`);
@@ -2416,6 +2602,27 @@
           document.getElementById('agents-tab-custom-agent-prompt').value = agent?.promptInstructions || '';
           document.getElementById('agents-tab-custom-agent-dragdrop').value = agent?.dragDropMode || 'cli';
           document.getElementById('agents-tab-custom-agent-kanban').checked = agent?.includeInKanban === true;
+
+          // Load addons
+          const addons = agent?.addons || {};
+          document.getElementById('ca-addon-switchboard-safeguards').checked = addons.switchboardSafeguards === true;
+          document.getElementById('ca-addon-git-prohibition').checked = addons.gitProhibitionEnabled === true;          document.getElementById('ca-addon-workspace-detection').checked = addons.workspaceTypeDetection === true;
+          document.getElementById('ca-addon-inline-challenge').checked = addons.includeInlineChallenge === true;
+          document.getElementById('ca-addon-accuracy').checked = addons.accurateCodingEnabled === true;
+          document.getElementById('ca-addon-pair-programming').checked = addons.pairProgrammingEnabled === true;
+          document.getElementById('ca-addon-aggressive-pair').checked = addons.aggressivePairProgramming === true;
+          document.getElementById('ca-addon-advanced-reviewer').checked = addons.advancedReviewerEnabled === true;
+          document.getElementById('ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
+          document.getElementById('ca-addon-split-plan').checked = addons.splitPlan === true;
+          document.getElementById('ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
+          document.getElementById('ca-addon-ticket-update').checked = addons.ticketUpdateEnabled === true;
+          document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
+          document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
+          document.getElementById('ca-addon-workflow-path').value = addons.customWorkflowPath || '';
+
+          // Close details by default when opening form
+          document.getElementById('agents-tab-custom-agent-addons').removeAttribute('open');
+
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
           document.getElementById('agents-tab-custom-agent-form').classList.remove('hidden');
           setTimeout(() => document.getElementById('agents-tab-custom-agent-name').focus(), 0);
@@ -2435,46 +2642,73 @@
             return;
           }
 
-          const existingId = agentsTabEditingAgentId || agentsTabSanitizeCustomAgentId(name);
-          const role = agentsTabToCustomAgentRole(existingId);
+          const newId = agentsTabSanitizeCustomAgentId(name);
+          const role = agentsTabToCustomAgentRole(newId);
           const nextAgent = {
-            id: existingId,
+            id: newId,
             role,
             name,
             startupCommand,
             promptInstructions: document.getElementById('agents-tab-custom-agent-prompt').value.trim(),
             includeInKanban: !!document.getElementById('agents-tab-custom-agent-kanban').checked,
             kanbanOrder: 0,
-            dragDropMode: document.getElementById('agents-tab-custom-agent-dragdrop').value
+            dragDropMode: document.getElementById('agents-tab-custom-agent-dragdrop').value,
+            addons: {
+                switchboardSafeguards: document.getElementById('ca-addon-switchboard-safeguards').checked,
+                gitProhibitionEnabled: document.getElementById('ca-addon-git-prohibition').checked,
+                workspaceTypeDetection: document.getElementById('ca-addon-workspace-detection').checked,
+                includeInlineChallenge: document.getElementById('ca-addon-inline-challenge').checked,
+                accurateCodingEnabled: document.getElementById('ca-addon-accuracy').checked,
+                pairProgrammingEnabled: document.getElementById('ca-addon-pair-programming').checked,
+                aggressivePairProgramming: document.getElementById('ca-addon-aggressive-pair').checked,
+                advancedReviewerEnabled: document.getElementById('ca-addon-advanced-reviewer').checked,
+                dependencyCheckEnabled: document.getElementById('ca-addon-dependency-check').checked,
+                splitPlan: document.getElementById('ca-addon-split-plan').checked,
+                complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
+                ticketUpdateEnabled: document.getElementById('ca-addon-ticket-update').checked,
+                researchEnabled: document.getElementById('ca-addon-research').checked,
+                designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
+                customWorkflowPath: document.getElementById('ca-addon-workflow-path').value.trim() || undefined,
+            }
           };
 
           const duplicate = agentsTabCustomAgents.find(agent =>
-            agent.id !== nextAgent.id &&
-            agent.name.toLowerCase() === nextAgent.name.toLowerCase()
+            (agentsTabEditingAgentId ? agent.id !== agentsTabEditingAgentId : true) &&
+            (agent.name.toLowerCase() === nextAgent.name.toLowerCase() || agent.id === nextAgent.id)
           );
           if (duplicate) {
             document.getElementById('agents-tab-custom-agent-error').textContent = 'Agent names must be unique.';
             return;
           }
 
-          const previousAgent = agentsTabCustomAgents.find(agent => agent.id === nextAgent.id);
+          const previousAgent = agentsTabCustomAgents.find(agent => agent.id === (agentsTabEditingAgentId || nextAgent.id));
           if (previousAgent?.includeInKanban) {
             nextAgent.kanbanOrder = previousAgent.kanbanOrder;
           }
 
-          agentsTabCustomAgents = agentsTabCustomAgents.filter(agent => agent.id !== nextAgent.id);
+          const workspaceRoot = getActiveWorkspaceRoot();
+
+          if (agentsTabEditingAgentId && agentsTabEditingAgentId !== nextAgent.id) {
+            // Identity changed -> delete old one to clean up state keys
+            vscode.postMessage({ type: 'deleteCustomAgent', agentId: agentsTabEditingAgentId, workspaceRoot });
+            agentsTabCustomAgents = agentsTabCustomAgents.filter(agent => agent.id !== agentsTabEditingAgentId);
+          } else {
+            agentsTabCustomAgents = agentsTabCustomAgents.filter(agent => agent.id !== nextAgent.id);
+          }
+
           agentsTabCustomAgents.push(nextAgent);
           agentsTabCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
 
           agentsTabRenderCustomAgentList();
           agentsTabHideInlineForm();
-          vscode.postMessage({ type: 'saveCustomAgent', agent: nextAgent });
+          vscode.postMessage({ type: 'saveCustomAgent', agent: nextAgent, workspaceRoot });
         }
 
         function agentsTabRenderCustomAgentList() {
           const container = document.getElementById('agents-tab-custom-agent-list');
           if (!container) return;
           container.innerHTML = '';
+          document.getElementById('agents-tab-custom-agent-delete-error').textContent = '';
 
           agentsTabCustomAgents.forEach(agent => {
             const item = document.createElement('div');
@@ -2493,14 +2727,13 @@
             });
 
             item.querySelector('.delete').addEventListener('click', () => {
-              if (confirm(`Delete custom agent "${agent.name}"?`)) {
+                document.getElementById('agents-tab-custom-agent-delete-error').textContent = '';
                 if (agentsTabEditingAgentId === agent.id) {
                   agentsTabHideInlineForm();
                 }
                 agentsTabCustomAgents = agentsTabCustomAgents.filter(a => a.id !== agent.id);
                 agentsTabRenderCustomAgentList();
-                vscode.postMessage({ type: 'deleteCustomAgent', agentId: agent.id });
-              }
+                vscode.postMessage({ type: 'deleteCustomAgent', agentId: agent.id, workspaceRoot: getActiveWorkspaceRoot() });
             });
 
             container.appendChild(item);
@@ -2657,7 +2890,7 @@
             { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
-        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: false };
+        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: true };
         let columns = columnDefinitions
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
@@ -2680,6 +2913,10 @@
         let autobanColumns = columnDefinitions.filter(col => col.autobanEnabled).map(col => col.id);
         let lastBoardSignature = '';
         let currentWorkspaceRoot = '';
+        try {
+            const attr = document.body?.dataset?.initialWorkspaceRoot;
+            if (attr) currentWorkspaceRoot = decodeURIComponent(attr);
+        } catch (_) {}
         let activeWorkspaceFilter = null;
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
@@ -2749,20 +2986,24 @@
 
                 // Hydrate AGENTS tab when activated
                 if (tabName === 'agents') {
-                  vscode.postMessage({ type: 'getStartupCommands' });
-                  vscode.postMessage({ type: 'getCustomAgents' });
+                  postKanbanMessage({ type: 'getStartupCommands' });
+                  postKanbanMessage({ type: 'getCustomAgents' });
                 }
 
                 // Hydrate DEPENDENCIES tab when activated
                 if (tabName === 'dependencies') {
-                  vscode.postMessage({ type: 'getDependencyMapData' });
+                  postKanbanMessage({ type: 'getDependencyMapData' });
+                }
+
+                // Hydrate UAT tab when activated
+                if (tabName === 'uat') {
+                    postKanbanMessage({ type: 'getUATData' });
                 }
 
                 // Hydrate PROMPTS tab when activated
                 if (tabName === 'prompts') {
-                  vscode.postMessage({ type: 'getCustomAgents' });
+                  postKanbanMessage({ type: 'getCustomAgents' });
                   loadRoleConfigs();
-                  refreshPreview();
                 }
             });
         });
@@ -2824,7 +3065,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -3000,7 +3241,12 @@
         }
 
         function escapeAttr(value) {
-            return String(value || '').replace(/"/g, '&quot;');
+            return String(value || '')
+                .replace(/&/g, '&amp;')
+                .replace(/"/g, '&quot;')
+                .replace(/'/g, '&#39;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
         }
 
         function updateIntegrationIntervalState() {
@@ -4328,10 +4574,12 @@
                     break;
                 case 'settingResult': {
                     const { key, value } = msg;
-                    if (key === 'selectedRole' && value) {
-                        currentRole = value;
-                        const roleSelect = document.getElementById('roleSelect');
-                        if (roleSelect) roleSelect.value = value;
+                    if (key === 'selectedRole') {
+                        if (value) {
+                            currentRole = value;
+                            const roleSelect = document.getElementById('roleSelect');
+                            if (roleSelect) roleSelect.value = value;
+                        }
                         handleRoleChange();
                     } else if (key.startsWith('roleConfig_')) {
                         const role = key.replace('roleConfig_', '');
@@ -4339,6 +4587,27 @@
                         if (role === currentRole) {
                             handleRoleChange();
                         }
+                    }
+                    break;
+                }
+                case 'personaContent': {
+                    const { role, content, error } = msg;
+                    const preview = document.getElementById('promptPreview');
+                    if (role !== currentRole || !preview) break;
+
+                    if (error || content === null) {
+                        preview.value = '(No default persona found)';
+                    } else {
+                        // Append addons to persona content
+                        let prompt = content;
+                        const addons = ROLE_ADDONS[currentRole] || [];
+                        addons.forEach(addon => {
+                            const cb = document.getElementById(`addon_${addon.id}`);
+                            if (cb && cb.checked) {
+                                prompt += `\n\n[${addon.label}]\n${addon.tooltip}`;
+                            }
+                        });
+                        preview.value = prompt.trim() || '(No prompt content)';
                     }
                     break;
                 }
@@ -4383,6 +4652,9 @@
                             btnCopyDepsPrompt.disabled = false;
                         }
                     }
+                    break;
+                case 'uatData':
+                    renderUATChecklist(msg.plans);
                     break;
                 case 'actionTriggered':
                     if (msg.role === 'analystMap') {
@@ -4594,6 +4866,9 @@
                 case 'customAgents': {
                   agentsTabCustomAgents = msg.customAgents || [];
                   lastCustomAgents = agentsTabCustomAgents;
+                  if (msg.workspaceRoot) {
+                    currentWorkspaceRoot = msg.workspaceRoot;
+                  }
                   agentsTabRenderCustomAgentList();
                   updateCustomAgentsDropdown();
                   break;
@@ -4605,7 +4880,7 @@
                 }
                 case 'saveCustomAgentResult': {
                   if (msg.success) {
-                    vscode.postMessage({ type: 'getCustomAgents' });
+                    postKanbanMessage({ type: 'getCustomAgents' });
                   } else {
                     document.getElementById('agents-tab-custom-agent-error').textContent = msg.error || 'Failed to save custom agent';
                   }
@@ -4613,7 +4888,10 @@
                 }
                 case 'deleteCustomAgentResult': {
                   if (msg.success) {
-                    vscode.postMessage({ type: 'getCustomAgents' });
+                    document.getElementById('agents-tab-custom-agent-delete-error').textContent = '';
+                    postKanbanMessage({ type: 'getCustomAgents' });
+                  } else {
+                    document.getElementById('agents-tab-custom-agent-delete-error').textContent = msg.error || 'Failed to delete custom agent';
                   }
                   break;
                 }
@@ -5592,7 +5870,7 @@
 
         function reorderVisibleKanbanStructure(draggedId, targetId) {
             const renderable = getRenderableKanbanStructure();
-            const middleIds = renderable.filter(item => !item.fixed).map(item => item.id);
+            const middleIds = renderable.filter(item => !item.fixed && item.visible !== false).map(item => item.id);
             const fromIndex = middleIds.indexOf(draggedId);
             const toIndex = middleIds.indexOf(targetId);
             if (fromIndex < 0 || toIndex < 0 || fromIndex === toIndex) return;
@@ -5602,8 +5880,6 @@
             nextSequence.splice(toIndex, 0, movedId);
 
             postKanbanMessage({ type: 'updateKanbanStructure', sequence: nextSequence });
-            // Reload from extension to get updated order
-            postKanbanMessage({ type: 'getKanbanStructure' });
         }
 
         function saveKanbanColumnDraft() {
@@ -5665,6 +5941,21 @@
         postKanbanMessage({ type: 'ready' });
         // ─── Dependency Tree Visualization ──────────────────────────────────────────
 
+        function extractReadableTitle(depId) {
+            if (depId.includes('/') || depId.endsWith('.md')) {
+                const filename = depId.split('/').pop();
+                const nameWithoutExt = filename.replace(/\.md$/, '');
+                return nameWithoutExt
+                    .replace(/[_-]/g, ' ')
+                    .replace(/([a-z])([A-Z])/g, '$1 $2')
+                    .replace(/\b\w/g, l => l.toUpperCase());
+            }
+            if (/^sess_\d+$/.test(depId)) {
+                return `Plan (${depId.slice(0, 12)}…)`;
+            }
+            return depId;
+        }
+
         function renderDependencyTree(plans) {
             const container = document.getElementById('dep-tree-container');
             if (!container) return;
@@ -5677,7 +5968,13 @@
             const DEP_NODE_LIMIT = 50;
             const html = [];
             const planMap = new Map();
-            plans.forEach(p => planMap.set(p.sessionId, p));
+            const planFileMap = new Map();
+            plans.forEach(p => {
+                planMap.set(p.sessionId, p);
+                if (p.planFile) {
+                    planFileMap.set(p.planFile, p);
+                }
+            });
 
             // Detect cycles to highlight them
             const cycles = detectCyclesForDeps(plans);
@@ -5687,7 +5984,7 @@
                 const statusClass = isCreated ? 'created' : 'planned';
                 
                 const deps = (plan.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
-                const blockingDeps = deps.filter(d => planMap.has(d));
+                const blockingDeps = deps.filter(d => planMap.has(d) || planFileMap.has(d));
                 const isBlocking = blockingDeps.length > 0;
                 const isCycling = cycles.has(plan.sessionId);
                 const blockingClass = (isBlocking || isCycling) ? 'blocking' : '';
@@ -5699,7 +5996,6 @@
 
                 let planHtml = `
                     <div class="plan-node ${statusClass} ${blockingClass}" data-session-id="${safeSessionId}" onclick="postKanbanMessage({ type: 'selectPlan', sessionId: '${safeSessionId}' })">
-                        <div class="plan-id">${escapeHtml(plan.sessionId.substring(0, 8))}...</div>
                         <div class="plan-title" title="${safeTopicAttr}">${safeTopic}</div>
                         <div class="plan-status-tag">${safeColumn}${isBlocking ? ' ⚠️ BLOCKED' : ''}${isCycling ? ' 🔄 CYCLE' : ''}</div>
                     </div>
@@ -5707,11 +6003,27 @@
 
                 if (deps.length > 0) {
                     deps.forEach(depId => {
-                        const depPlan = planMap.get(depId);
-                        const depTitle = depPlan ? escapeHtml(depPlan.topic) : escapeHtml(depId.substring(0, 8)) + '...';
+                        const depPlan = planMap.get(depId) || planFileMap.get(depId);
+                        let depTitle;
+                        let clickAttr;
+                        
+                        if (depPlan) {
+                            depTitle = escapeHtml(depPlan.topic);
+                            clickAttr = `data-dep-session="${escapeAttr(depPlan.sessionId)}"`;
+                        } else {
+                            depTitle = extractReadableTitle(depId);
+                            // Only make path-like deps clickable
+                            if (depId.includes('/') || depId.endsWith('.md')) {
+                                clickAttr = `data-dep-path="${escapeAttr(depId)}"`;
+                            } else {
+                                clickAttr = '';
+                            }
+                        }
+                        
+                        const clickClass = clickAttr ? 'dep-link' : '';
                         planHtml += `
                             <div class="dep-connector">
-                                <span style="font-size: 10px; color: var(--text-secondary);">Depends on: ${depTitle}</span>
+                                <span class="${clickClass}" style="font-size: 10px; color: var(--text-secondary);" ${clickAttr}>Depends on: ${escapeHtml(depTitle)}</span>
                             </div>
                         `;
                     });
@@ -5731,6 +6043,16 @@
             html.push('</div>');
 
             container.innerHTML = html.join('');
+
+            container.onclick = function(e) {
+                const target = e.target.closest('[data-dep-session], [data-dep-path]');
+                if (!target) return;
+                if (target.dataset.depSession) {
+                    postKanbanMessage({ type: 'selectPlan', sessionId: target.dataset.depSession });
+                } else if (target.dataset.depPath) {
+                    postKanbanMessage({ type: 'openPlanByPath', planPath: target.dataset.depPath });
+                }
+            };
 
             // Expose full list for "Show All" button
             window._depAllPlans = plans;
@@ -5781,6 +6103,57 @@
             return cycleNodes;
         }
 
+        function renderUATChecklist(plans) {
+            const container = document.getElementById('uat-checklist-container');
+            if (!container) return;
+
+            if (!plans || plans.length === 0) {
+                container.innerHTML = '<div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>';
+                return;
+            }
+            let html = '';
+            for (const plan of plans) {
+                html += `<div class="uat-plan-section" data-session-id="${escapeAttr(plan.sessionId)}">`;
+                html += `<div class="uat-plan-title">${escapeHtml(plan.topic)} <span style="color:var(--text-secondary); font-size:9px;">(${escapeHtml(plan.kanbanColumn)})</span></div>`;
+                if (plan.steps && plan.steps.length > 0) {
+                    for (let i = 0; i < plan.steps.length; i++) {
+                        const step = plan.steps[i];
+                        const checked = step.checked ? 'checked' : '';
+                        const checkedClass = step.checked ? ' checked' : '';
+                        html += `<div class="uat-step${checkedClass}">
+                            <input type="checkbox" data-session-id="${escapeAttr(plan.sessionId)}" data-step-index="${i}" ${checked} />
+                            <span class="uat-step-text">${escapeHtml(step.text)}</span>
+                        </div>`;
+                    }
+                } else {
+                    html += '<div class="uat-no-steps">No manual verification steps defined</div>';
+                }
+                html += '</div>';
+            }
+            container.innerHTML = html;
+
+            // Attach checkbox listeners
+            container.querySelectorAll('input[type="checkbox"]').forEach(cb => {
+                cb.addEventListener('change', (e) => {
+                    const sessionId = e.target.dataset.sessionId;
+                    const stepIndex = parseInt(e.target.dataset.stepIndex, 10);
+                    const checked = e.target.checked;
+                    // Update visual state
+                    const stepDiv = e.target.closest('.uat-step');
+                    if (stepDiv) {
+                        stepDiv.classList.toggle('checked', checked);
+                    }
+                    // Persist to extension host
+                    postKanbanMessage({
+                        type: 'setUATCheckState',
+                        sessionId,
+                        stepIndex,
+                        checked
+                    });
+                });
+            });
+        }
+
         // Add listeners for the dependencies tab buttons
         window.addEventListener('DOMContentLoaded', () => {
             const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
@@ -5814,6 +6187,13 @@
             if (btnRefreshDeps) {
                 btnRefreshDeps.addEventListener('click', () => {
                     postKanbanMessage({ type: 'getDependencyMapData' });
+                });
+            }
+
+            const btnRefreshUAT = document.getElementById('btn-refresh-uat');
+            if (btnRefreshUAT) {
+                btnRefreshUAT.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'getUATData' });
                 });
             }
         });

@@ -1249,23 +1249,6 @@
                 <div class="planning-card-header">CLIPBOARD IMPORT</div>
                 <div class="planning-card-description">Copy AI-generated plans from NotebookLM, Claude, or Gemini, then click Import Plans below. If multiple plans are detected with separator markers, they will be automatically split into separate plan files.</div>
 
-                <div class="planning-card-section">
-                    <div class="planning-card-section-title">SEPARATOR PATTERN</div>
-                    <div class="planning-controls">
-                        <select id="airlock-separator-preset" class="planning-select">
-                            <option value="claude" data-pattern="### PLAN [N] START">Claude</option>
-                            <option value="gemini" data-pattern="## Plan [N]">Gemini</option>
-                            <option value="custom">Custom</option>
-                        </select>
-                    </div>
-                    <div id="airlock-separator-custom-row" class="planning-custom-row" style="display: none;">
-                        <input type="text" id="airlock-separator-input" class="planning-input" placeholder="Enter custom separator pattern, use [N] for plan number">
-                    </div>
-                    <div class="planning-hint">Select the AI platform you use to generate plans. The separator pattern helps split multiple plans into separate files.</div>
-                    <div id="airlock-separator-preview" class="planning-preview"></div>
-                    <div id="airlock-separator-error" class="planning-error"></div>
-                </div>
-
                 <div class="planning-controls">
                     <button id="btn-copy-agent-prompt" class="planning-button secondary">COPY AGENT PROMPT</button>
                     <button id="btn-import-plans" class="planning-button">IMPORT PLANS</button>

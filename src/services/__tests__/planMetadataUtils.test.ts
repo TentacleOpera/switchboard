@@ -66,6 +66,27 @@ describe('planMetadataUtils', () => {
             const metadata = await parsePlanMetadata('', 'fix_kanban_column_sorting.md');
             assert.strictEqual(metadata.topic, 'Fix Kanban Column Sorting');
         });
+
+        describe('list-marker tolerance', () => {
+            const listMarkerCases = [
+                { label: 'dash list marker', content: '## Metadata\n- **Complexity:** 5', expected: '5' },
+                { label: 'asterisk list marker', content: '## Metadata\n* **Complexity:** 5', expected: '5' },
+                { label: 'indented', content: '## Metadata\n  **Complexity:** 5', expected: '5' },
+                { label: 'dash list marker (override)', content: '- **Manual Complexity Override:** 8\n**Complexity:** 5', expected: '8' },
+                { label: 'dash list marker (tags)', content: '## Metadata\n- **Tags:** frontend, backend', expectedTags: ',frontend,backend,' },
+                { label: 'blockquote marker', content: '## Metadata\n> **Complexity:** 5', expected: '5' },
+                { label: 'numbered list marker', content: '## Metadata\n1. **Complexity:** 5', expected: '5' },
+                { label: 'numbered list marker (tags)', content: '1. **Tags:** UI, UX', expectedTags: ',ui,ux,' }
+            ];
+
+            listMarkerCases.forEach(({ label, content, expected, expectedTags }) => {
+                it(`handles ${label}`, async () => {
+                    const metadata = await parsePlanMetadata(content, 'test.md');
+                    if (expected) assert.strictEqual(metadata.complexity, expected);
+                    if (expectedTags) assert.strictEqual(metadata.tags, expectedTags);
+                });
+            });
+        });
     });
 
     describe('inferTopicFromPath', () => {

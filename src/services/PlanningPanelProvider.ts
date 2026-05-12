@@ -683,21 +683,6 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
-            case 'getClipboardSeparatorPattern': {
-                const pattern = await this._getClipboardSeparatorPattern(workspaceRoot);
-                this._panel?.webview.postMessage({ type: 'clipboardSeparatorPattern', ...pattern });
-                break;
-            }
-            case 'setClipboardSeparatorPreset': {
-                const result = await this._setClipboardSeparatorPreset(workspaceRoot, msg.preset);
-                this._panel?.webview.postMessage({ type: 'clipboardSeparatorPatternUpdated', ...result });
-                break;
-            }
-            case 'setClipboardSeparatorPattern': {
-                const result = await this._setClipboardSeparatorPattern(workspaceRoot, msg.pattern);
-                this._panel?.webview.postMessage({ type: 'clipboardSeparatorPatternUpdated', ...result });
-                break;
-            }
             case 'importPlansFromClipboard': {
                 await this._handleImportPlansFromClipboard(workspaceRoot);
                 break;
@@ -1835,23 +1820,6 @@ export class PlanningPanelProvider {
         } catch (err) {
             this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: String(err) });
         }
-    }
-
-    private async _getClipboardSeparatorPattern(workspaceRoot: string): Promise<{ preset: string; pattern: string }> {
-        const preset = this._context.workspaceState.get<string>('switchboard.clipboardImport.separatorPreset') || 'claude';
-        const pattern = this._context.workspaceState.get<string>('switchboard.clipboardImport.separatorPattern') || '### PLAN [N] START';
-        return { preset, pattern };
-    }
-
-    private async _setClipboardSeparatorPreset(workspaceRoot: string, preset: string): Promise<{ preset: string; pattern: string }> {
-        await this._context.workspaceState.update('switchboard.clipboardImport.separatorPreset', preset);
-        const pattern = await this._getClipboardSeparatorPattern(workspaceRoot);
-        return pattern;
-    }
-
-    private async _setClipboardSeparatorPattern(workspaceRoot: string, pattern: string): Promise<{ pattern: string }> {
-        await this._context.workspaceState.update('switchboard.clipboardImport.separatorPattern', pattern);
-        return { pattern };
     }
 
     private async _handleImportPlansFromClipboard(workspaceRoot: string): Promise<void> {

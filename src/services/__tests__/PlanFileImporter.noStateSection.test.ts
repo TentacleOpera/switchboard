@@ -60,7 +60,7 @@ suite('PlanFileImporter - plan without ## Switchboard State', () => {
         assert.strictEqual(result.columns[sessionId], 'CREATED');
     });
 
-    test('imports plan with valid Switchboard State section to specified column', async () => {
+    test('imports plan with Switchboard State section defaults to CREATED', async () => {
         const planContent = [
             '# My Test Plan With State',
             '',
@@ -82,9 +82,9 @@ suite('PlanFileImporter - plan without ## Switchboard State', () => {
 
         assert.strictEqual(result.count, 1);
 
-        // The column entry should be PLAN REVIEWED
+        // File-based state is DISABLED — importer defaults to CREATED/active
         const sessionId = result.sessionIds[0];
-        assert.strictEqual(result.columns[sessionId], 'PLAN REVIEWED');
+        assert.strictEqual(result.columns[sessionId], 'CREATED');
     });
 
     test('handles empty plans directory gracefully', async () => {

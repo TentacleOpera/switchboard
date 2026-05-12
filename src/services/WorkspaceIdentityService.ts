@@ -132,7 +132,7 @@ async function tryWriteCommittedWorkspaceIdIfDifferent(
         // Check if file already has the correct value
         let currentValue = '';
         try {
-            currentValue = (await fs.promises.readFile(committedPath, 'utf8')).trim();
+            currentValue = (await fs.promises.readFile(committedPath, 'utf8')).split('\n')[0]?.trim() ?? '';
         } catch {
             // File doesn't exist or can't be read - will create it
         }
@@ -140,7 +140,8 @@ async function tryWriteCommittedWorkspaceIdIfDifferent(
         // Only write if different (prevents unnecessary writes and fs churn)
         if (currentValue !== workspaceId) {
             await fs.promises.mkdir(path.dirname(committedPath), { recursive: true });
-            await fs.promises.writeFile(committedPath, `${workspaceId}\n`);
+            const dbPath = KanbanDatabase.forWorkspace(path.resolve(workspaceRoot)).dbPath;
+            await fs.promises.writeFile(committedPath, `${workspaceId}\n${dbPath}\n`);
         }
     } catch (error: any) {
         if (error?.code !== 'EEXIST') {
@@ -176,7 +177,8 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
     // PRIORITY 2: Check local workspace-id file (backward compatibility, first-time setup)
     try {
         const fileContent = await fs.promises.readFile(committedPath, 'utf8');
-        const trimmed = fileContent.trim();
+        const lines = fileContent.split('\n');
+        const trimmed = (lines[0] ?? '').trim();
         if (isValidWorkspaceId(trimmed)) {
             if (dbReady) {
                 await db.setWorkspaceId(trimmed);

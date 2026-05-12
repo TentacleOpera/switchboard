@@ -1401,7 +1401,7 @@ async function enforceWorkflowForAction(action, state, sender, recipient, payloa
 // --- Persona Injection System ---
 
 const ROLE_TO_PERSONA_FILE = {
-    'lead': 'lead.md',
+    'lead': 'lead_coder.md',
     'coder': 'coder.md',
     'coder 1': 'coder.md', // Backwards compatibility
     'coder 2': 'coder.md', // Backwards compatibility
@@ -1409,6 +1409,7 @@ const ROLE_TO_PERSONA_FILE = {
     'planner': 'planner.md',
     'tester': 'tester.md',
     'researcher': 'researcher.md',
+    'intern': 'intern.md',
     'task runner': 'task_runner.md',
     'execution': 'task_runner.md' // Backwards compatibility
 };
@@ -1501,7 +1502,7 @@ function resolvePersonaByRoleKey(roleKey) {
     if (!personaFile) return null;
 
     const workspaceRoot = process.env.SWITCHBOARD_WORKSPACE_ROOT || process.cwd();
-    const personaPath = path.join(workspaceRoot, '.agent', 'personas', 'roles', personaFile);
+    const personaPath = path.join(workspaceRoot, '.agent', 'personas', personaFile);
 
     try {
         if (!fs.existsSync(personaPath)) return null;

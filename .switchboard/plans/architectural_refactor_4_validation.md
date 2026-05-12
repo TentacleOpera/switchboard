@@ -12,7 +12,7 @@ Add safety validations to the new setter and conduct comprehensive manual integr
 
 ## Dependencies
 
-- .switchboard/plans/architectural_refactor_3_remove_state.md
+- sess_1777759332501 — Architectural Refactor 3/4: Remove Distributed State
 
 ## Proposed Changes
 

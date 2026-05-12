@@ -249,11 +249,6 @@ async function testMixedProviderMetadataImportsAsLocalWithoutDedupeIds() {
             '## Goal',
             '',
             'Exercise invalid mixed provider metadata handling.',
-            '',
-            '## Switchboard State',
-            '',
-            '**Kanban Column:** CREATED',
-            '**Status:** active',
             ''
         ].join('\n'), 'utf8');
 
@@ -526,8 +521,12 @@ async function run() {
             const planContent = readText(createdPlan.planFile);
             assert.ok(planContent.includes('**Linear Issue ID:** issue-bug'));
             assert.ok(planContent.includes('**Automation Rule:** Bug Summary'));
-            assert.ok(planContent.includes('## Linear Issue Notes'));
-            assert.ok(planContent.includes('**Kanban Column:** CREATED'));
+            assert.ok(!planContent.includes('## Goal'));
+            assert.ok(!planContent.includes('## Proposed Changes'));
+            assert.ok(!planContent.includes('## Linear Issue Notes'));
+            assert.ok(!planContent.includes('## Switchboard State'));
+            assert.ok(!planContent.includes('## Metadata'));
+            assert.ok(planContent.includes('The app crashes on launch.'));
 
             await db.updateColumn(createdPlan.sessionId, 'COMPLETED');
             const refreshedContext = createContext(workspaceRoot, {

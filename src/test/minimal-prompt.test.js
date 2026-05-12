@@ -13,15 +13,28 @@ function testDefaultPromptIsMinimal() {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
         aggressivePairProgramming: false,
         dependencyCheckEnabled: false,
-        gitProhibitionEnabled: true
+        gitProhibitionEnabled: false
     });
 
     assert.ok(prompt.includes('Read .agent/workflows/improve-plan.md and follow it step-by-step'), 'Prompt should start with minimal instruction');
     assert.ok(!prompt.includes('Complexity Audit'), 'Prompt should not include hardcoded Complexity Audit instruction');
     assert.ok(!prompt.includes('Metadata section'), 'Prompt should not include hardcoded Metadata section instruction');
     assert.ok(!prompt.includes('Scoring guide'), 'Prompt should not include hardcoded Scoring guide');
-    assert.ok(prompt.includes('GIT POLICY'), 'Prompt should include git prohibition when enabled');
+    assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not include git prohibition when disabled');
+    assert.ok(!prompt.includes('DEPENDENCY CHECK'), 'Prompt should not include dependency check when disabled');
     console.log('  PASS: Default prompt is minimal');
+}
+
+function testNoAddOnsByDefault() {
+    console.log('Testing no add-ons are included when no options are passed...');
+    const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md'
+    });
+
+    assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not include git prohibition by default');
+    assert.ok(!prompt.includes('DEPENDENCY CHECK'), 'Prompt should not include dependency check by default');
+    assert.ok(!prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Prompt should not include aggressive pair programming by default');
+    console.log('  PASS: No add-ons are included by default');
 }
 
 function testAddOnsAreAppendedWhenEnabled() {
@@ -38,13 +51,14 @@ function testAddOnsAreAppendedWhenEnabled() {
 }
 
 function testGitProhibitionIncludedWhenEnabled() {
-    console.log('Testing git prohibition is included when enabled (default)...');
+    console.log('Testing git prohibition is included when explicitly enabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
-        plannerWorkflowPath: '.agent/workflows/improve-plan.md'
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        gitProhibitionEnabled: true
     });
 
-    assert.ok(prompt.includes('GIT POLICY'), 'Prompt should include git prohibition by default');
-    console.log('  PASS: Git prohibition is included when enabled (default)');
+    assert.ok(prompt.includes('GIT POLICY'), 'Prompt should include git prohibition when enabled');
+    console.log('  PASS: Git prohibition is included when enabled');
 }
 
 function testGitProhibitionExcludedWhenDisabled() {
@@ -119,6 +133,7 @@ function testBatchExecutionRulesExcludedForSinglePlan() {
 
 try {
     testDefaultPromptIsMinimal();
+    testNoAddOnsByDefault();
     testAddOnsAreAppendedWhenEnabled();
     testGitProhibitionIncludedWhenEnabled();
     testGitProhibitionExcludedWhenDisabled();

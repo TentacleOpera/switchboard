@@ -221,6 +221,49 @@ const MIGRATION_V16_SQL = [
     `UPDATE plans SET repo_scope = '' WHERE repo_scope = 'switchboard'`,
 ];
 
+const MIGRATION_V17_SQL = [
+    // Sentinel column: mark records whose plan_file needs absolute-path resolution.
+    // The actual fix is applied in _fixRelativePaths() during initialization.
+    `ALTER TABLE plans ADD COLUMN needs_path_fix INTEGER DEFAULT 0`,
+    // Pre-populate: mark any record whose plan_file does not begin with '/'
+    // (covers macOS/Linux; Windows paths not applicable to this workspace).
+    `UPDATE plans SET needs_path_fix = 1 WHERE plan_file NOT LIKE '/%' AND plan_file != ''`,
+];
+
+const MIGRATION_V18_SQL = [
+    // Sentinel column: mark records whose plan_file needs relative-path conversion.
+    // The actual fix is applied in _convertAbsoluteToRelativePaths() during initialization.
+    // After this migration, _fixRelativePaths() (V17) becomes a permanent no-op for these records:
+    // V17 only fires when needs_path_fix=1 (relative→absolute), which V18 then reverses (absolute→relative).
+    // Invariant post-V18: all plan_file values in DB are relative; absolute only in memory after _readRows().
+    `ALTER TABLE plans ADD COLUMN needs_relative_conversion INTEGER DEFAULT 0`,
+    // Pre-populate: mark any record whose plan_file begins with '/' (absolute path)
+    `UPDATE plans SET needs_relative_conversion = 1 WHERE plan_file LIKE '/%' AND plan_file != ''`,
+];
+
+const MIGRATION_V19_SQL = [
+    // Step 1: Deduplicate by session_id — prefer non-CREATED column, then latest updated_at.
+    // Logs each deleted row for auditability.
+    `DELETE FROM plans
+     WHERE rowid NOT IN (
+         SELECT rowid FROM plans AS p1
+         WHERE p1.rowid = (
+             SELECT p2.rowid FROM plans AS p2
+             WHERE p2.session_id = p1.session_id
+             ORDER BY
+                 CASE p2.kanban_column WHEN 'CREATED' THEN 1 ELSE 0 END ASC,
+                 p2.updated_at DESC
+             LIMIT 1
+         )
+     )
+     AND session_id != ''`,
+    // Step 2: Enforce session_id uniqueness at the index level.
+    // Defensive: the schema already has session_id TEXT UNIQUE NOT NULL (line 87),
+    // but this index ensures uniqueness even for DBs created before that constraint
+    // was added or that skipped the V11 table recreation.
+    `CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_session_id_unique ON plans(session_id)`
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -234,7 +277,7 @@ INSERT INTO plans (
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
     clickup_task_id, linear_issue_id
  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-ON CONFLICT(plan_id) DO UPDATE SET
+ON CONFLICT(session_id) DO UPDATE SET
     session_id = excluded.session_id,
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -394,6 +437,15 @@ export class KanbanDatabase {
             KanbanDatabase._instancesByDbPath.delete(existing.dbPath);
             KanbanDatabase._instances.delete(stable);
             console.log(`[KanbanDatabase] Invalidated cached instance for ${stable}`);
+            
+            // Re-sync workspace identity to capture any database path changes
+            try {
+                // Must require dynamically to avoid circular dependencies
+                const { ensureWorkspaceIdentity } = require('./WorkspaceIdentityService');
+                await ensureWorkspaceIdentity(stable);
+            } catch (e) {
+                console.error(`[KanbanDatabase] Failed to sync workspace identity after invalidation:`, e);
+            }
         }
     }
 
@@ -624,6 +676,10 @@ export class KanbanDatabase {
                     chkStmt.free();
                     if (skip) continue;
 
+                    // NOTE: plan_file values from source DB are not normalized here.
+                    // If source is pre-V18 (absolute paths), the V18 startup sweep will repair
+                    // them on next initialization. See _convertAbsoluteToRelativePaths().
+
                     // Build ordered values array from the intersection columns
                     const values = columns.map(c => srcRow[c] ?? null);
                     const placeholders = columns.map(() => '?').join(', ');
@@ -754,7 +810,7 @@ export class KanbanDatabase {
 
             // Execute schema and migrations
             this._db.exec(SCHEMA_SQL);
-            this._runMigrations();
+            await this._runMigrations();
 
             // Persist to disk
             await this._persist();
@@ -808,7 +864,7 @@ export class KanbanDatabase {
                     record.planId,        // 1
                     record.sessionId,     // 2
                     record.topic,         // 3
-                    this._normalizePath(record.planFile), // 4
+                    this._ensureRelativePlanFile(record.planFile), // 4
                     record.kanbanColumn,  // 5
                     record.status,        // 6
                     record.complexity,    // 7
@@ -820,8 +876,8 @@ export class KanbanDatabase {
                     record.updatedAt,     // 13
                     record.lastAction,    // 14
                     record.sourceType,    // 15
-                    this._normalizePath(record.brainSourcePath), // 16
-                    this._normalizePath(record.mirrorPath), // 17
+                    this._ensureRelativePlanFile(record.brainSourcePath), // 16
+                    this._ensureRelativePlanFile(record.mirrorPath), // 17
                     record.routedTo || '',       // 18
                     record.dispatchedAgent || '', // 19
                     record.dispatchedIde || '',   // 20
@@ -836,6 +892,14 @@ export class KanbanDatabase {
             return false;
         }
         return this._persist();
+    }
+
+    /**
+     * Upsert a single plan record. Convenience wrapper around upsertPlans().
+     * Used by NotionBackupService restore flow.
+     */
+    public async upsertPlan(record: KanbanPlanRecord): Promise<boolean> {
+        return this.upsertPlans([record]);
     }
 
     public async hasActivePlans(workspaceId: string): Promise<boolean> {
@@ -887,6 +951,32 @@ export class KanbanDatabase {
             }
         }
         return result;
+    }
+
+    /**
+     * Atomic update of plan column and optional plan file path.
+     */
+    public async movePlan(sessionId: string, newColumn: string, planFile?: string): Promise<boolean> {
+        if (!VALID_KANBAN_COLUMNS.has(newColumn) && !SAFE_COLUMN_NAME_RE.test(newColumn)) {
+            console.error(`[KanbanDatabase] Rejected invalid column name: ${newColumn}`);
+            return false;
+        }
+
+        console.log(`[KanbanDatabase] movePlan: sessionId=${sessionId}, newColumn=${newColumn}, planFile=${planFile}`);
+        
+        const now = new Date().toISOString();
+        let sql: string;
+        let params: unknown[];
+
+        if (planFile) {
+            sql = 'UPDATE plans SET kanban_column = ?, plan_file = ?, updated_at = ? WHERE session_id = ?';
+            params = [newColumn, this._ensureRelativePlanFile(planFile), now, sessionId];
+        } else {
+            sql = 'UPDATE plans SET kanban_column = ?, updated_at = ? WHERE session_id = ?';
+            params = [newColumn, now, sessionId];
+        }
+
+        return this._persistedUpdate(sql, params);
     }
 
     /**
@@ -1048,7 +1138,7 @@ export class KanbanDatabase {
         console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}`);
         const result = this._persistedUpdate(
             'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
-            [this._normalizePath(planFile), new Date().toISOString(), sessionId]
+            [this._ensureRelativePlanFile(planFile), new Date().toISOString(), sessionId]
         );
         // Verify the update took effect
         if (this._db) {
@@ -1622,7 +1712,7 @@ export class KanbanDatabase {
 
     public async getPlanByPlanFile(planFile: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
-        const normalized = this._normalizePath(planFile);
+        const normalized = this._ensureRelativePlanFile(planFile);
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
              WHERE plan_file = ? AND workspace_id = ?
@@ -1694,7 +1784,7 @@ export class KanbanDatabase {
         try {
             for (const u of updates) {
                 const setClauses = ['topic = ?', 'plan_file = ?'];
-                const params: unknown[] = [u.topic, this._normalizePath(u.planFile)];
+                const params: unknown[] = [u.topic, this._ensureRelativePlanFile(u.planFile)];
 
                 if (!options?.preserveTimestamps) {
                     const now = new Date().toISOString();
@@ -2144,7 +2234,7 @@ export class KanbanDatabase {
     public async updateBrainPaths(sessionId: string, brainSourcePath: string, mirrorPath: string): Promise<boolean> {
         return this._persistedUpdate(
             'UPDATE plans SET brain_source_path = ?, mirror_path = ?, updated_at = ? WHERE session_id = ?',
-            [this._normalizePath(brainSourcePath), this._normalizePath(mirrorPath), new Date().toISOString(), sessionId]
+            [this._ensureRelativePlanFile(brainSourcePath), this._ensureRelativePlanFile(mirrorPath), new Date().toISOString(), sessionId]
         );
     }
 
@@ -2211,7 +2301,7 @@ export class KanbanDatabase {
 
             // Re-apply schema and migrations (idempotent — safe to re-run)
             this._db.exec(SCHEMA_SQL);
-            this._runMigrations();
+            await this._runMigrations();
 
             this._loadedMtime = currentMtime;
             KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);
@@ -2273,10 +2363,17 @@ export class KanbanDatabase {
             this._db.exec(SCHEMA_SQL);
 
             // Run migrations for existing databases
-            this._runMigrations();
+            await this._runMigrations();
 
             // Persist migration changes (new tables/columns) to disk
             await this._persist();
+
+            // After running migrations, repair any relative plan_file paths
+            await this._fixRelativePaths();
+
+            // After V17 path fix, convert all absolute paths to relative for portability (V18).
+            // Invariant: after this call, all plan_file values in DB are workspace-relative.
+            await this._convertAbsoluteToRelativePaths();
 
             // Warn about conflict copies
             this._warnConflictCopies();
@@ -2353,7 +2450,144 @@ export class KanbanDatabase {
         }
     }
 
-    private _runMigrations(): void {
+    /**
+     * Fix any plan_file values stored as relative paths by resolving them to
+     * absolute paths using this._workspaceRoot.
+     *
+     * Called once per initialization, after _runMigrations().
+     * Wraps all writes in a single transaction for atomicity.
+     * Safe to call on a fully-fixed database (reads 0 rows → exits early).
+     */
+    private async _fixRelativePaths(): Promise<void> {
+        if (!this._db) return;
+
+        // Guard: only run if V17 migration has been applied (column exists)
+        if (!this._planTableHasColumn('needs_path_fix')) {
+            console.log('[KanbanDatabase] _fixRelativePaths: needs_path_fix column missing, skipping sweep');
+            return;
+        }
+
+        const workspaceId = await this.getWorkspaceId();
+
+        // Read all records flagged for path repair
+        const stmt = this._db.prepare(
+            `SELECT session_id, plan_file FROM plans
+             WHERE needs_path_fix = 1
+               AND (workspace_id = ? OR workspace_id IS NULL)`,
+            [workspaceId]
+        );
+
+        const toFix: Array<{ sessionId: string; planFile: string }> = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                toFix.push({
+                    sessionId: String(row.session_id),
+                    planFile: String(row.plan_file || '')
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+
+        if (toFix.length === 0) {
+            console.log('[KanbanDatabase] _fixRelativePaths: no records need fixing');
+            return;
+        }
+
+        this._db.run('BEGIN');
+        try {
+            for (const { sessionId, planFile } of toFix) {
+                const absolutePath = this._resolveAbsolutePlanFile(planFile);
+                this._db.run(
+                    'UPDATE plans SET plan_file = ?, needs_path_fix = 0, updated_at = ? WHERE session_id = ?',
+                    [absolutePath, new Date().toISOString(), sessionId]
+                );
+                console.log(`[KanbanDatabase] Fixed relative path for ${sessionId}: ${planFile} → ${absolutePath}`);
+            }
+            this._db.run('COMMIT');
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* best effort */ }
+            console.error('[KanbanDatabase] _fixRelativePaths: transaction rolled back', err);
+            return;
+        }
+
+        await this._persist();
+        console.log(`[KanbanDatabase] _fixRelativePaths: fixed ${toFix.length} record(s)`);
+    }
+
+    /**
+     * Convert absolute plan_file paths to relative paths by stripping workspace root.
+     *
+     * Called once per initialization, after _fixRelativePaths() (V17).
+     * Wraps all writes in a single transaction for atomicity.
+     * Safe to call on a fully-converted database (reads 0 rows → exits early).
+     *
+     * Note on V17/V18 interaction: _fixRelativePaths() (V17) converts relative→absolute.
+     * This method (V18) converts absolute→relative. V17 only fires on records with
+     * needs_path_fix=1. Once those records are converted to absolute by V17, V18 picks
+     * them up via needs_relative_conversion=1. After V18 processes a record, both
+     * sentinel columns are 0, so neither sweep touches it again. Safe steady state.
+     */
+    private async _convertAbsoluteToRelativePaths(): Promise<void> {
+        if (!this._db) return;
+
+        // Guard: only run if V18 migration has been applied (column exists)
+        if (!this._planTableHasColumn('needs_relative_conversion')) {
+            console.log('[KanbanDatabase] _convertAbsoluteToRelativePaths: needs_relative_conversion column missing, skipping sweep');
+            return;
+        }
+
+        const workspaceId = await this.getWorkspaceId();
+
+        // Read all records flagged for conversion (scoped to this workspace)
+        const stmt = this._db.prepare(
+            `SELECT session_id, plan_file FROM plans
+         WHERE needs_relative_conversion = 1
+           AND (workspace_id = ? OR workspace_id IS NULL)`,
+            [workspaceId]
+        );
+
+        const toConvert: Array<{ sessionId: string; planFile: string }> = [];
+        try {
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                toConvert.push({
+                    sessionId: String(row.session_id),
+                    planFile: String(row.plan_file || '')
+                });
+            }
+        } finally {
+            stmt.free();
+        }
+
+        if (toConvert.length === 0) {
+            console.log('[KanbanDatabase] _convertAbsoluteToRelativePaths: no records need conversion');
+            return;
+        }
+
+        this._db.run('BEGIN');
+        try {
+            for (const { sessionId, planFile } of toConvert) {
+                const relativePath = this._ensureRelativePlanFile(planFile);
+                this._db.run(
+                    'UPDATE plans SET plan_file = ?, needs_relative_conversion = 0, updated_at = ? WHERE session_id = ?',
+                    [relativePath, new Date().toISOString(), sessionId]
+                );
+                console.log(`[KanbanDatabase] Converted absolute to relative for ${sessionId}: ${planFile} → ${relativePath}`);
+            }
+            this._db.run('COMMIT');
+        } catch (err) {
+            try { this._db.run('ROLLBACK'); } catch { /* best effort */ }
+            console.error('[KanbanDatabase] _convertAbsoluteToRelativePaths: transaction rolled back', err);
+            return;
+        }
+
+        await this._persist();
+        console.log(`[KanbanDatabase] _convertAbsoluteToRelativePaths: converted ${toConvert.length} record(s)`);
+    }
+
+    private async _runMigrations(): Promise<void> {
         if (!this._db) return;
 
         // V2: add brain_source_path, mirror_path columns + config table + status index
@@ -2530,6 +2764,37 @@ export class KanbanDatabase {
             try { this._db.exec(sql); } catch (e) {
                 console.debug('[KanbanDatabase] V16 migration failed:', e);
             }
+        }
+
+        // V17: add needs_path_fix sentinel and mark relative-path records for runtime repair.
+        for (const sql of MIGRATION_V17_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                // 'needs_path_fix' column may already exist if migration was previously applied.
+                console.debug('[KanbanDatabase] V17 migration step skipped (already applied):', e);
+            }
+        }
+
+        // V18: add needs_relative_conversion sentinel and mark absolute-path records for runtime conversion.
+        // After V18, the invariant is: DB stores relative paths only; _readRows() expands to absolute.
+        for (const sql of MIGRATION_V18_SQL) {
+            try { this._db.exec(sql); } catch (e) {
+                // 'needs_relative_conversion' column may already exist if migration was previously applied.
+                console.debug('[KanbanDatabase] V18 migration step skipped (already applied):', e);
+            }
+        }
+
+        // V19: deduplicate plans by session_id and enforce unique index.
+        // Version-gated because the DELETE is destructive and non-idempotent.
+        // (Deviation from try/catch pattern used by V2–V18: those migrations are
+        // idempotent or add-only, so re-execution is safe. V19's DELETE is not.)
+        const v19 = await this.getMigrationVersion();
+        if (v19 < 19) {
+            for (const sql of MIGRATION_V19_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V19 migration step skipped or failed:', e);
+                }
+            }
+            await this.setMigrationVersion(19);
         }
     }
 
@@ -2929,6 +3194,76 @@ FROM plans
         return filePath.replace(/\\/g, '/');
     }
 
+    /**
+     * Resolve plan_file to an absolute path and normalise to forward slashes.
+     * If planFile is already absolute, only forward-slash normalisation is applied.
+     * If planFile is relative, it is resolved relative to this._workspaceRoot.
+     * Returns '' if planFile is empty.
+     *
+     * USAGE: This method is ONLY for:
+     *   1. The READ boundary (_readRows()) — expanding stored relative paths to absolute for in-memory use.
+     * For DB writes and lookup key normalisation (e.g. getPlanByPlanFile), use _ensureRelativePlanFile() instead.
+     *
+     * Security: if the resolved path escapes workspaceRoot, the original value is
+     * returned unchanged and a warning is logged (prevents path-traversal via
+     * crafted relative paths in the database).
+     */
+    private _resolveAbsolutePlanFile(planFile: string): string {
+        if (!planFile) return '';
+        const normalized = planFile.replace(/\\/g, '/');
+        if (path.isAbsolute(normalized)) return normalized;
+
+        // Resolve relative path against workspace root
+        const absolute = path.resolve(this._workspaceRoot, normalized).replace(/\\/g, '/');
+
+        // Boundary check — must remain within the workspace
+        const workspaceNormalized = this._workspaceRoot.replace(/\\/g, '/');
+        if (!absolute.startsWith(workspaceNormalized)) {
+            console.warn(
+                `[KanbanDatabase] _resolveAbsolutePlanFile: resolved path escapes workspace, ` +
+                `leaving unchanged. planFile=${planFile}`
+            );
+            return normalized; // return at least the forward-slash normalized form
+        }
+        return absolute;
+    }
+
+    /**
+     * Convert plan_file to a relative path (workspace-relative) for DB storage.
+     * If planFile is absolute and starts with workspaceRoot, strip the prefix.
+     * If planFile is already relative, return it unchanged.
+     * Returns '' if planFile is empty.
+     *
+     * USAGE: This is the authoritative normalizer for ALL DB write boundaries.
+     * For reading from DB back into memory, use _resolveAbsolutePlanFile() instead.
+     *
+     * Security: if _workspaceRoot is unset, logs warning and returns path unchanged.
+     * If path is absolute but outside workspace, logs warning and returns path as-is.
+     */
+    private _ensureRelativePlanFile(planFile: string): string {
+        if (!planFile) return '';
+        if (!this._workspaceRoot) {
+            console.warn('[KanbanDatabase] _ensureRelativePlanFile: _workspaceRoot not set, returning path unchanged');
+            return planFile;
+        }
+        const normalized = planFile.replace(/\\/g, '/');
+        if (!path.isAbsolute(normalized)) return normalized;
+
+        const workspaceNormalized = this._workspaceRoot.replace(/\\/g, '/');
+        if (normalized.startsWith(workspaceNormalized)) {
+            const relative = normalized.slice(workspaceNormalized.length);
+            // Remove leading slash if present
+            return relative.startsWith('/') ? relative.slice(1) : relative;
+        }
+
+        // Path is absolute but outside workspace — log warning and return as-is
+        console.warn(
+            `[KanbanDatabase] _ensureRelativePlanFile: absolute path outside workspace, ` +
+            `storing as-is. planFile=${planFile}, workspaceRoot=${this._workspaceRoot}`
+        );
+        return normalized;
+    }
+
     private _readRows(stmt: ReturnType<SqlJsDatabase['prepare']>): KanbanPlanRecord[] {
         const rows: KanbanPlanRecord[] = [];
         try {
@@ -2938,7 +3273,7 @@ FROM plans
                     planId: String(row.plan_id || ""),
                     sessionId: String(row.session_id || ""),
                     topic: String(row.topic || ""),
-                    planFile: this._normalizePath(String(row.plan_file || "")),
+                    planFile: this._resolveAbsolutePlanFile(String(row.plan_file || "")),
                     kanbanColumn: String(row.kanban_column || "CREATED"),
                     status: String(row.status || "active") as KanbanPlanStatus,
                     complexity: String(row.complexity || "Unknown"),
@@ -2955,8 +3290,8 @@ FROM plans
                             ? st
                             : 'local';
                     })(),
-                    brainSourcePath: this._normalizePath(String(row.brain_source_path || "")),
-                    mirrorPath: this._normalizePath(String(row.mirror_path || "")),
+                    brainSourcePath: this._resolveAbsolutePlanFile(String(row.brain_source_path || "")),
+                    mirrorPath: this._resolveAbsolutePlanFile(String(row.mirror_path || "")),
                     routedTo: String(row.routed_to || ""),
                     dispatchedAgent: String(row.dispatched_agent || ""),
                     dispatchedIde: String(row.dispatched_ide || ""),

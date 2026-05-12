@@ -111,53 +111,23 @@
     }
 
     // Clipboard Import logic
-    const separatorPreset = document.getElementById('airlock-separator-preset');
-    const separatorCustomRow = document.getElementById('airlock-separator-custom-row');
-    const separatorInput = document.getElementById('airlock-separator-input');
-    const separatorPreview = document.getElementById('airlock-separator-preview');
-    const separatorError = document.getElementById('airlock-separator-error');
     const copyAgentPromptBtn = document.getElementById('btn-copy-agent-prompt');
     const importPlansBtn = document.getElementById('btn-import-plans');
 
-    function updateSeparatorPreview(pattern) {
-        if (!pattern) {
-            if (separatorPreview) separatorPreview.textContent = '';
-            return;
-        }
-        const ex1 = pattern.replace(/\[N\]/g, '1');
-        const ex2 = pattern.replace(/\[N\]/g, '2');
-        const ex3 = pattern.replace(/\[N\]/g, '3');
-        separatorPreview.textContent = `Example format:\n${ex1}\n[Plan 1 content]\n\n${ex2}\n[Plan 2 content]\n\n${ex3}\n[Plan 3 content]`;
-    }
-
-    if (separatorPreset) {
-        separatorPreset.addEventListener('change', () => {
-            const key = separatorPreset.value;
-            if (separatorCustomRow) separatorCustomRow.style.display = key === 'custom' ? 'block' : 'none';
-            if (separatorError) separatorError.textContent = '';
-            vscode.postMessage({ type: 'setClipboardSeparatorPreset', preset: key });
-            const opt = separatorPreset.options[separatorPreset.selectedIndex];
-            if (key !== 'custom' && opt.dataset.pattern) {
-                updateSeparatorPreview(opt.dataset.pattern);
-            }
-        });
-    }
-
-    if (separatorInput) {
-        separatorInput.addEventListener('change', () => {
-            if (separatorError) separatorError.textContent = '';
-            vscode.postMessage({ type: 'setClipboardSeparatorPattern', pattern: separatorInput.value });
-        });
-    }
-
     if (copyAgentPromptBtn) {
         copyAgentPromptBtn.addEventListener('click', () => {
-            const currentPattern = separatorPreset?.value === 'custom'
-                ? separatorInput?.value || '### PLAN [N] START'
-                : (separatorPreset?.options[separatorPreset.selectedIndex]?.dataset?.pattern || '### PLAN [N] START');
-            const ex1 = currentPattern.replace(/\[N\]/g, '1');
-            const ex2 = currentPattern.replace(/\[N\]/g, '2');
-            const prompt = `Please output all features/plans as a single markdown block with each plan separated by this exact format:\n\n${ex1}\n[plan 1 content here]\n\n${ex2}\n[plan 2 content here]\n\n[etc...]\n\nEach plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
+            const prompt = `Please output all features/plans as a single markdown block with each plan separated by this exact format:
+
+--- PLAN ---
+[plan 1 content here]
+
+--- PLAN ---
+[plan 2 content here]
+
+--- PLAN ---
+[plan 3 content here]
+
+Each plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
             navigator.clipboard.writeText(prompt).then(() => {
                 copyAgentPromptBtn.innerText = 'COPIED';
                 setTimeout(() => { copyAgentPromptBtn.innerText = 'COPY AGENT PROMPT'; }, 2000);
@@ -247,21 +217,24 @@
 
     if (copySprintPromptBtn) {
         copySprintPromptBtn.addEventListener('click', () => {
-            const currentPattern = separatorPreset?.value === 'custom'
-                ? separatorInput?.value || '### PLAN [N] START'
-                : (separatorPreset?.options[separatorPreset.selectedIndex]?.dataset?.pattern || '### PLAN [N] START');
-            const ex1 = currentPattern.replace(/\[N\]/g, '1');
-            const ex2 = currentPattern.replace(/\[N\]/g, '2');
-            const prompt = `Please analyze the uploaded codebase and generate sprint plans. Output each plan separated by this exact format:\n\n${ex1}\n[plan 1 content here]\n\n${ex2}\n[plan 2 content here]\n\n[etc...]\n\nEach plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
+            const prompt = `Please analyze the uploaded codebase and generate sprint plans. Output each plan separated by this exact format:
+
+--- PLAN ---
+[plan 1 content here]
+
+--- PLAN ---
+[plan 2 content here]
+
+--- PLAN ---
+[plan 3 content here]
+
+Each plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
             navigator.clipboard.writeText(prompt).then(() => {
                 copySprintPromptBtn.innerText = 'COPIED';
                 setTimeout(() => { copySprintPromptBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);
             });
         });
     }
-
-    // Request initial separator state
-    vscode.postMessage({ type: 'getClipboardSeparatorPattern' });
 
     const SOURCE_DISPLAY_NAMES = {
         'clickup': 'ClickUp',
@@ -540,6 +513,17 @@
         // Clear only local pane
         treePane.innerHTML = '';
         
+        // Re-add sidebar toggle
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePane.appendChild(toggleRow);
+        
         if (sourceId === 'local-folder') {
             const configRow = document.createElement('div');
             configRow.className = 'folder-config';
@@ -660,8 +644,22 @@
         // Clear only online pane
         treePaneOnline.innerHTML = '';
 
+        // Re-add sidebar toggle
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePaneOnline.appendChild(toggleRow);
+
         if (!roots || roots.length === 0) {
-            treePaneOnline.innerHTML = '<div class="empty-state">No online sources available</div>';
+            const empty = document.createElement('div');
+            empty.className = 'empty-state';
+            empty.textContent = 'No online sources available';
+            treePaneOnline.appendChild(empty);
             return;
         }
 
@@ -1172,25 +1170,6 @@
         targetPreview.insertBefore(toc, targetPreview.firstChild);
     }
 
-    function handleClipboardSeparatorPattern(msg) {
-        const { preset, pattern } = msg;
-        if (preset) {
-            separatorPreset.value = preset;
-            separatorCustomRow.style.display = preset === 'custom' ? 'block' : 'none';
-        }
-        if (pattern && preset !== 'custom') {
-            separatorInput.value = pattern;
-            updateSeparatorPreview(pattern);
-        }
-    }
-
-    function handleClipboardSeparatorPatternUpdated(msg) {
-        const { pattern } = msg;
-        if (pattern) {
-            updateSeparatorPreview(pattern);
-        }
-    }
-
     function handleAirlockExportComplete(msg) {
         const webaiStatus = document.getElementById('webai-status');
         const bundleBtn = document.getElementById('btn-bundle-code');
@@ -1485,12 +1464,6 @@
                 break;
             case 'localFolderPathUpdated':
                 handleLocalFolderPathUpdated(msg);
-                break;
-            case 'clipboardSeparatorPattern':
-                handleClipboardSeparatorPattern(msg);
-                break;
-            case 'clipboardSeparatorPatternUpdated':
-                handleClipboardSeparatorPatternUpdated(msg);
                 break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);

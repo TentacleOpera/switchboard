@@ -431,7 +431,7 @@ Key inbound messages from the Kanban webview:
 
 ### MCP integration
 
-`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the VS Code UI dispatch pipeline (formerly triggered by the `move_kanban_card` MCP tool, now removed). It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity. Agents should use the `kanban_operations` skill script instead.
+`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the VS Code UI dispatch pipeline (formerly triggered by the `move_kanban_card` MCP tool, now removed). It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity. Agents should use the `query_switchboard_kanban` skill instead.
 
 ## 15) Complexity classification and auto-routing
 
@@ -564,20 +564,17 @@ The Review panel supports inline editing of plan metadata:
 - **Topic**: plan title
 - **Plan text**: full markdown editing with optimistic concurrency via `expectedMtimeMs`
 
-## 18) Kanban skill scripts (replaces former MCP tools)
+## 18) Kanban skills (replaces former MCP tools)
 
-The MCP tools `get_kanban_state`, `move_kanban_card`, `query_plan_archive`, and `search_archive` have been removed. Agents now use direct database access via skill scripts.
+The MCP tools `get_kanban_state`, `move_kanban_card`, `query_plan_archive`, and `search_archive` have been removed. Agents now use direct database access via skills.
 
-### `kanban_operations` skill
+### `query_switchboard_kanban` skill
 
-Located at `.agent/skills/kanban_operations/`. Provides direct DB access for card movement and state queries.
+Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries and card movements.
 
-- **Move a card**: `node .agent/skills/kanban_operations/move-card.js <session_id> <target_column>`
-  - Validates column against `VALID_KANBAN_COLUMNS` export from `KanbanDatabase.ts`
-  - Calls `KanbanDatabase.updateColumn()` directly (no IPC)
-- **Get kanban state**: `node .agent/skills/kanban_operations/get-state.js <workspace_id>`
-  - Queries `KanbanDatabase.getPlansByColumn()` for each column
-  - Outputs JSON with columns as keys and plan arrays as values
+- Agents read the database path from `.switchboard/workspace-id` (line 2).
+- Example read: `sqlite3 <db_path> "SELECT session_id, topic, kanban_column FROM plans WHERE kanban_column = 'CREATED';"`
+- Example update: `sqlite3 <db_path> "UPDATE plans SET kanban_column = 'CODED' WHERE session_id = '<session_id>';"`
 
 ### `query_archive` skill
 
@@ -682,6 +679,6 @@ Typical maintainer checks:
    - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
 7. Kanban DB vs file-derived state:
    - The SQLite DB is authoritative for column positions when available, but the file-derived fallback uses `deriveKanbanColumn()` which may disagree after manual DB column moves.
-   - The `get_kanban_state` MCP tool (now removed) had its own DB read path separate from `KanbanProvider._refreshBoard()`. The `kanban_operations` skill script now provides direct DB access for agents.
+   - The `get_kanban_state` MCP tool (now removed) had its own DB read path separate from `KanbanProvider._refreshBoard()`. The `query_switchboard_kanban` skill now provides direct DB access for agents.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.

@@ -492,3 +492,27 @@ Add to skills table (alphabetical order):
 
 **Agent Recommendation:** Send to Coder (Complexity 5)
 
+## 🛡️ Verification Phase
+
+### Grumpy Review (Adversarial Findings)
+1. **[CRITICAL] Memory Leak via Unbounded Body Parsing**: The `_parseJsonBody` function in `LocalApiServer.ts` buffers incoming `data` chunks into a string without a size limit. An attacker or malfunctioning skill could send a massive payload and OOM the VS Code extension host. The coder added `_MAX_FILE_SIZE_BYTES` logic in the attachment endpoint but completely forgot generic request payload limits.
+2. **[MAJOR] Broken "Phase 1" Backward Compatibility**: The plan explicitly stated: "CLARIFICATION: Phase 1 - auth not strictly enforced yet. Phase 2 will add: if (!await this._checkAuth(req)) { ... }". The coder jumped the gun and passed `true` to `_checkAuth(req, true)` in the new proxy endpoints (`_handleClickUpApiProxy` and `_handleLinearApiProxy`), meaning requests without tokens will be rejected with 401 Unauthorized. This completely breaks the seamless rollout intended for Phase 1.
+3. **[NIT] O(N) Cache Pruning on Every Request**: `_pruneCache` is called on *every single* name resolution request. It iterates over the entire Map. If a script resolves a batch of names, it triggers O(N²) behavior. Not a memory leak, but it is a CPU leak.
+
+### Balanced Review (Synthesis & Action Items)
+- **Fix Now (CRITICAL)**: Implemented a 10MB (`this._MAX_FILE_SIZE_BYTES`) limit in `_parseJsonBody` to reject oversized payloads safely and prevent extension host crashes.
+- **Fix Now (MAJOR)**: Adjusted the authentication check in `_handleClickUpApiProxy` and `_handleLinearApiProxy` to pass `false` for `requireAuth`, honoring the Phase 1 backward compatibility mandate. Strict enforcement will be left for Phase 2 as planned.
+- **Fix Now (NIT)**: Added a simple size threshold (`if (this._nameResolutionCache.size < 100) return;`) to `_pruneCache` to prevent excessive Map iteration on every request while still preventing long-term memory leaks.
+
+### Code Fixes Applied
+- **`src/services/LocalApiServer.ts`**:
+  - Rewrote `_parseJsonBody` to track `bodySize` and reject payloads larger than `_MAX_FILE_SIZE_BYTES` (10MB).
+  - Modified `_handleClickUpApiProxy` and `_handleLinearApiProxy` to use `_checkAuth(req, false)`.
+  - Added a short-circuit threshold to `_pruneCache()`.
+
+### Validation Results
+- **Typecheck/Compile**: `npm run compile` completed successfully with Exit code 0, confirming the modifications introduced no syntax or type errors.
+- **Files Modified**: 
+  - `src/services/LocalApiServer.ts`
+
+**ACCURACY VERIFICATION COMPLETE**

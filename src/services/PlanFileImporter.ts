@@ -1,9 +1,7 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
-import { buildKanbanColumns, parseCustomAgents, parseCustomKanbanColumns } from './agentConfig';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
-import { inspectKanbanState } from './planStateUtils';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 
 type ImportablePlanFile = {
@@ -23,8 +21,8 @@ export interface ImportPlanFilesResult {
  * `.switchboard/plans/<repoName>/*.md` layer and upserts records into the
  * kanban DB.
  * Used by the "Reset Database" command to repopulate from plan files.
- * When a plan file contains a `## Switchboard State` section, the embedded
- * kanban column and status are used instead of defaulting to CREATED/active.
+ * All imported plans default to CREATED/active. The KanbanDatabase is the
+ * sole source of truth for plan state.
  */
 export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?: string): Promise<ImportPlanFilesResult> {
     // Resolve effective root for shared database support
@@ -47,10 +45,6 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     if (!ready) {
         return { count: 0, sessionIds: [], columns: {} };
     }
-
-    const validKanbanColumns = await readImportableKanbanColumns(
-        resolveImportableStateRoot(workspaceRoot, effectiveStateRoot)
-    );
 
     const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
 
@@ -108,22 +102,9 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             );
         }
 
-        // Use embedded kanban state if present; fall back to defaults for
-        // legacy files that pre-date the ## Switchboard State section.
-        const embeddedStateInspection = inspectKanbanState(content, { validColumns: validKanbanColumns });
-        const embeddedState = embeddedStateInspection.state;
-        if (embeddedStateInspection.topLevelSectionCount > 1) {
-            console.warn(
-                `[PlanFileImporter] Detected ${embeddedStateInspection.topLevelSectionCount} top-level Switchboard State sections in ${planFileNormalized}; using the last valid section.`
-            );
-        } else if (!embeddedState && embeddedStateInspection.topLevelSectionCount > 0) {
-            console.warn(
-                `[PlanFileImporter] Found top-level Switchboard State section(s) in ${planFileNormalized} but '${embeddedStateInspection.lastSeenColumn || 'unknown'}' is not importable in this workspace; defaulting to CREATED/active.`
-            );
-        }
-
-        const kanbanColumn = embeddedState?.kanbanColumn ?? 'CREATED';
-        const status: KanbanPlanStatus = embeddedState?.status === 'completed' ? 'completed' : 'active';
+        // Always default to CREATED/active - KanbanDatabase is the sole source of truth
+        const kanbanColumn = 'CREATED';
+        const status: KanbanPlanStatus = 'active';
 
         records.push({
             planId,
@@ -214,22 +195,6 @@ async function listImportablePlanFiles(plansDir: string): Promise<ImportablePlan
     return files.sort((left, right) => left.filePath.localeCompare(right.filePath));
 }
 
-function resolveImportableStateRoot(workspaceRoot: string, effectiveStateRoot?: string): string {
-    const providedStateRoot = String(effectiveStateRoot || '').trim();
-    if (providedStateRoot) {
-        return path.resolve(providedStateRoot);
-    }
-    const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-    const directParentRoot = path.dirname(resolvedWorkspaceRoot);
-    if (directParentRoot !== resolvedWorkspaceRoot) {
-        const parentKanbanDb = path.join(directParentRoot, '.switchboard', 'kanban.db');
-        if (fs.existsSync(parentKanbanDb)) {
-            return directParentRoot;
-        }
-    }
-    return resolvedWorkspaceRoot;
-}
-
 function extractTopic(content: string, filename: string): string {
     const h1Match = content.match(/^#\s+(.+)$/m);
     if (h1Match) {
@@ -312,30 +277,3 @@ async function detectControlPlaneWorkspace(workspaceRoot: string): Promise<boole
     return false;
 }
 
-async function readImportableKanbanColumns(workspaceRoot: string): Promise<Set<string>> {
-    const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-    let customAgents: unknown[] = [];
-    let customKanbanColumns: unknown[] = [];
-
-    try {
-        if (fs.existsSync(statePath)) {
-            const state = JSON.parse(await fs.promises.readFile(statePath, 'utf8'));
-            customAgents = Array.isArray(state.customAgents) ? state.customAgents : [];
-            customKanbanColumns = Array.isArray(state.customKanbanColumns) ? state.customKanbanColumns : [];
-        }
-    } catch (error) {
-        console.warn('[PlanFileImporter] Failed to read custom kanban column config from state.json:', error);
-    }
-
-    const validColumns = new Set(
-        buildKanbanColumns(
-            parseCustomAgents(customAgents),
-            parseCustomKanbanColumns(customKanbanColumns)
-        ).map((column) => column.id)
-    );
-
-    validColumns.add('BACKLOG');
-    validColumns.add('CODED');
-
-    return validColumns;
-}

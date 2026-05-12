@@ -2,7 +2,7 @@
 
 ## Goal
 
-Filter subtasks out of the main ClickUp task list and render them as interactive, clickable items within the task detail view, matching the existing Linear tab pattern.
+Filter subtasks out of the main ClickUp/Linear task list and render them as interactive, clickable items within the task detail view. Subtasks should be displayed with the format "Parent title: title" to provide context about which parent task they belong to.
 
 ## Metadata
 
@@ -21,19 +21,22 @@ In the ClickUp tab of `implementation.html`, subtasks are currently displayed as
 The desired behavior is:
 1. **Main list**: Show only parent tasks. Hide subtasks entirely.
 2. **Detail view**: Show subtasks under the "Subtasks" heading as clickable links that load the subtask detail when clicked.
+3. **Display format**: Subtasks should be displayed as "Parent title: title" to provide context about the parent task.
 
 ## Root Cause
 
-1. `getFilteredClickUpTasks()` returns every task in `clickUpProjectIssues` without filtering out items that have a `parentId`.
-2. `renderSidebarClickUpTaskDetail()` renders subtasks as plain `<div class="project-detail-item">` with no interactivity.
-3. There is no click handler for subtask items in the ClickUp detail view (unlike the Linear detail view, which uses `<button data-linear-subtask-id="...">` and delegates clicks to `loadLinearTaskDetails()`).
+1. **CRITICAL BUG**: `_normalizeClickUpTask()` in `ClickUpSyncService.ts` was reading `parentId` from `raw?.parent` as a string, but the ClickUp API returns the parent as an object with an `id` field (e.g., `{ id: "12345" }`). This caused `parentId` to be set to the string "[object Object]" or empty, making the filter `!task.parentId` ineffective.
+2. `getFilteredClickUpTasks()` returns every task in `clickUpProjectIssues` without filtering out items that have a `parentId`.
+3. `renderSidebarClickUpTaskDetail()` renders subtasks as clickable `<button>` elements but without the "Parent title: title" format.
+4. There is a click handler for ClickUp subtask items, but the display format needs updating.
 
 ## Complexity Audit
 
 ### Routine
-- Step 1: Filter subtasks out of the main task list (`implementation.html` lines 4128–4144)
-- Step 2: Render subtasks as clickable `<button>` elements in the detail view (`implementation.html` lines 4080–4091)
-- Step 3: Add delegated click listener for ClickUp subtask buttons (`implementation.html` lines 4348–4354)
+- Step 1: Fix `parentId` population in `_normalizeClickUpTask()` to handle object structure (`ClickUpSyncService.ts` lines 712–722)
+- Step 2: Filter subtasks out of the main task list (`implementation.html` lines 4084–4104)
+- Step 3: Render subtasks as clickable `<button>` elements with "Parent title: title" format in the detail view (`implementation.html` lines 4036–4048)
+- Step 4: Apply same format to Linear tab for consistency
 
 ### Complex / Risky
 - None
@@ -49,43 +52,54 @@ The desired behavior is:
 
 None
 
+## Implementation Status
+
+- **Step 1 (CRITICAL BUG FIX)**: ⏳ PENDING - Fix `parentId` population in `_normalizeClickUpTask()` to handle both string and object structures from ClickUp API
+- **Step 2**: ✅ ALREADY IMPLEMENTED - Filter exists at line 4088
+- **Step 3**: ⏳ PENDING - Need to update ClickUp subtask display format to "Parent title: title"
+- **Step 4**: ⏳ PENDING - Need to update Linear subtask display format to "Parent title: title"
+
 ## Adversarial Synthesis
 
 Key risks: (1) `parentId` may not be populated by `_normalizeClickUpTask` if the backend shape changes, causing the filter to silently fail, (2) ClickUp task IDs in HTML attributes are typically numeric strings but custom IDs could contain characters needing escaping. Mitigations: verify `parentId` field exists in the mapped task object before coding; `escapeAttr` handles standard attribute escaping.
 
 ## Proposed Changes
 
+### `src/services/ClickUpSyncService.ts`
+
+**Context 1:** `_normalizeClickUpTask()` (lines 712–722) was reading `parentId` from `raw?.parent` as a string, but the ClickUp API returns the parent as an object with an `id` field. This caused the filter to fail.
+
+**Logic:** Update `parentId` extraction to handle both string and object structures.
+
+**Implementation (lines 712–722):**
+```typescript
+parentId: (() => {
+  // ClickUp API returns parent as either a string ID or an object with id field
+  const parent = raw?.parent;
+  if (typeof parent === 'string' && parent.trim()) {
+    return parent.trim();
+  }
+  if (parent?.id) {
+    return String(parent.id).trim();
+  }
+  return null;
+})(),
+```
+
+**Status:** ⏳ PENDING
+
 ### `src/webview/implementation.html`
 
-**Context 1:** `getFilteredClickUpTasks()` (lines 4128–4144) returns every task in `clickUpProjectIssues` without filtering out items that have a `parentId`. This causes subtasks to appear in the main task list.
+**Context 2:** `getFilteredClickUpTasks()` (lines 4084–4104) already has the filter to exclude subtasks from the main task list. This now works correctly with the fixed `parentId` population.
 
-**Logic:** Add a filter to exclude tasks that have a `parentId`.
+**Status:** ⏳ PENDING (requires Step 1 fix to function correctly)
 
-**Implementation (line 4129, after `let tasks = [...clickUpProjectIssues];`):**
-```js
-// Exclude subtasks from the main list; they belong in the detail view
-tasks = tasks.filter(task => !task.parentId);
-```
+**Context 2:** `renderSidebarClickUpTaskDetail()` (lines 4036–4048) renders subtasks as clickable `<button>` elements. The current display shows only the subtask title. The user wants the format "Parent title: title" to provide context.
 
-**Edge Cases:** If `parentId` is `undefined` (not present), it is falsy and the task passes the filter — correct behavior. If `parentId` is an empty string, it is also falsy — correct behavior.
+**Logic:** Update the subtask title display to include the parent task title prefix.
 
-**Context 2:** `renderSidebarClickUpTaskDetail()` (lines 4046–4126) renders subtasks as plain `<div class="project-detail-item">` with no interactivity. The Linear tab already uses `<button data-linear-subtask-id="...">` with a delegated click handler.
-
-**Logic:** Replace the non-interactive `<div>` markup for subtasks with `<button>` elements carrying a `data-clickup-subtask-id` attribute.
-
-**Implementation (lines 4080–4087):**
+**Implementation (lines 4038–4042):**
 Change:
-```js
-const subtasksHtml = subtasks.length === 0
-    ? '<p>No subtasks.</p>'
-    : subtasks.map(st => `
-        <div class="project-detail-item">
-            <span class="project-detail-item-title">${escapeHtml(st.title)}</span>
-            <span class="project-detail-item-status">${escapeHtml(st.status)}</span>
-        </div>
-    `).join('');
-```
-to:
 ```js
 const subtasksHtml = subtasks.length === 0
     ? '<p>No subtasks.</p>'
@@ -96,8 +110,23 @@ const subtasksHtml = subtasks.length === 0
         </button>
     `).join('');
 ```
+to:
+```js
+const subtasksHtml = subtasks.length === 0
+    ? '<p>No subtasks.</p>'
+    : subtasks.map(st => `
+        <button type="button" class="project-detail-item" data-clickup-subtask-id="${escapeAttr(st.id)}">
+            <span class="project-detail-item-title">${escapeHtml(task.title)}: ${escapeHtml(st.title)}</span>
+            <span class="project-detail-item-status">${escapeHtml(st.status)}</span>
+        </button>
+    `).join('');
+```
 
-**Edge Cases:** `st.id` is the ClickUp task ID (numeric string). `escapeAttr` handles attribute escaping. The `_lastClickUpDetailSubtasksHtml` cache comparison at line 4089 still works because it compares the full HTML string.
+**Context 3:** Apply the same "Parent title: title" format to the Linear tab for consistency. Find the Linear subtask rendering function and update it similarly.
+
+**Implementation:** Search for Linear subtask rendering (likely in `renderSidebarLinearTaskDetail()` or similar) and update the subtask title display to include the parent issue title prefix.
+
+**Status:** ⏳ PENDING
 
 **Context 3:** There is no click handler for ClickUp subtask items in the detail view. The Linear detail view uses a delegated listener on `detailSubtasksList` that calls `loadLinearTaskDetails()` when a `[data-linear-subtask-id]` button is clicked.
 
@@ -122,44 +151,51 @@ detailSubtasksList?.addEventListener('click', (event) => {
 
 ### Automated Tests
 
-No existing automated tests cover ClickUp subtask rendering. Add manual verification:
+No existing automated tests cover ClickUp/Linear subtask rendering. Add manual verification:
 
 1. Open the ClickUp tab in the Switchboard sidebar.
 2. Select a Space → Folder → List that contains tasks with subtasks.
 3. Confirm the main card list shows **only parent tasks** (no subtask rows).
 4. Click a parent task to open its detail view.
 5. Confirm the **Subtasks** section lists each subtask as a clickable row.
-6. Click a subtask row — the detail view should reload to show that subtask's details.
-7. Use the **BACK TO LIST** button to return to the parent task list.
+6. Confirm the subtask display format is "Parent title: subtask title".
+7. Click a subtask row — the detail view should reload to show that subtask's details.
+8. Use the **BACK TO LIST** button to return to the parent task list.
+9. Repeat steps 1-8 for the Linear tab to ensure consistency.
 
 ### Regression Tests
 
 - Confirm the Linear tab subtask display and click behavior remain unaffected.
 - Confirm status filter and search still work correctly on the parent task list.
 - Confirm ClickUp task detail view renders correctly for tasks with no subtasks.
+- Confirm the "Parent title: title" format displays correctly for both ClickUp and Linear tabs.
 
 ## Risks & Notes
 
-- **No backend changes required.** The `parentId` field is already populated by `_normalizeClickUpTask()` in `ClickUpSyncService.ts`.
-- **API parameter `subtasks=true`** in `getListTasks()` could optionally be removed to reduce payload size, but that is out of scope for this UI-only fix. Leaving it as-is is safe because the frontend now filters subtasks out.
+- **CRITICAL BUG IDENTIFIED:** The `parentId` field is not being populated correctly in `_normalizeClickUpTask()` because ClickUp API returns the parent as an object with an `id` field (e.g., `{ id: "12345" }`), but the code treats it as a string. This causes the filter `!task.parentId` to fail, which is why subtasks still appear in the main list despite the filter being in place.
+- The filter `tasks.filter(task => !task.parentId)` at line 4088 exists but is ineffective until the `parentId` population bug is fixed.
+- **API parameter `subtasks=true`** in `getListTasks()` could optionally be removed to reduce payload size, but that is out of scope for this UI-only fix. Leaving it as-is is safe because the frontend filters subtasks out once the bug is fixed.
 - The Linear tab already uses this exact pattern (`data-linear-subtask-id` + delegated click handler), so the ClickUp tab should follow it for consistency.
+- **Parent title availability:** The parent task title is available in the `task` variable within `renderSidebarClickUpTaskDetail()`, so no additional API calls are needed to construct the "Parent title: title" format.
 
-**Recommendation:** Send to Coder
+**Recommendation:** Execute Step 1 first (fix `parentId` population) to make the filter functional, then proceed with display format updates
 
 ---
 
 ## Review & Validation (Grumpy/Balanced)
 
 ### Stage 1: Grumpy Review (Adversarial)
-* "Well, well, well. For once, a frontend change that actually does exactly what it says on the tin and nothing more. You successfully used `!task.parentId` to hide the subtasks, and you managed to not screw up the delegated event listener by using `[data-clickup-subtask-id]`. My only lingering concern—because I *must* find something—is whether the backend `parentId` is strictly populated as a string or `null`. Since JS's falsy checks are a blunt instrument, it works out here. It's almost... competent." [NIT]
+* "Oh, look at you, adding a 'Parent title: title' format requirement after the fact. The original plan was fine—filter subtasks, make them clickable. Now you want to prefix the parent title too? Sure, the `task` variable is right there in scope, so it's trivial. But did you consider that the parent title might be very long, making the subtask list unreadable? Did you consider that the user might already know which parent they clicked into? No, you just want more context everywhere. Fine, it's harmless, but let's not pretend this is some groundbreaking UX insight.
+
+BUT WAIT—you actually found the real bug. The `parentId` wasn't being populated because ClickUp returns an object, not a string. That's actually a legitimate bug to fix first, otherwise the filter is useless. Good catch. Now execute the plan in order." [NIT]
 
 ### Stage 2: Balanced Synthesis
-* **What's good:** The implementation perfectly matches the plan. Subtasks are excluded from the main list using `!task.parentId`, rendered as interactive `<button>` elements with the correct attributes, and the event listener correctly calls `loadClickUpTaskDetails` via event delegation.
-* **What needs fixing:** No material code fixes are required.
-* **Risks:** The status dropdown will still show subtask statuses, but the plan acknowledges this as a harmless/useful side effect.
+* **What's good:** Identified the critical bug in `_normalizeClickUpTask()` where `parentId` isn't being populated correctly due to ClickUp API's object structure. The plan now prioritizes fixing this bug first (Step 1) before the display format changes. The filter at line 4088 exists but is ineffective until Step 1 is completed.
+* **What needs fixing:** Execute Step 1 (fix `parentId` population) to make the filter functional, then implement the "Parent title: title" format for ClickUp subtask display (lines 4038–4042) and locate/update Linear subtask rendering for consistency.
+* **Risks:** Long parent titles could make the subtask list harder to read. Consider truncating or styling the parent title differently if this becomes an issue.
 
 ### Validation Results
-* **Files Changed:** `src/webview/implementation.html`
-* **Status:** The Javascript changes are syntactically sound and correctly use the existing escaping functions (`escapeHtml`, `escapeAttr`).
-* **Code Fixes Applied:** None required. The implementation is solid.
-* **Remaining Risks:** None within the scope of this UI change.
+* **Files Changed:** None yet (plan only)
+* **Status:** Plan updated to document the critical bug and prioritize the fix. No code changes applied.
+* **Code Fixes Applied:** None (plan only)
+* **Remaining Risks:** Need to execute Step 1 first to make the filter functional, then proceed with display format updates.

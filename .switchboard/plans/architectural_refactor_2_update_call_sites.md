@@ -12,7 +12,7 @@ Update all usages of the distributed state (`_activeWorkspaceRoot`, `_resolveWor
 
 ## Dependencies
 
-- .switchboard/plans/architectural_refactor_1_event_system.md
+- sess_1777759330075 — Architectural Refactor 1/4: Event System Foundation
 
 ## Proposed Changes
 

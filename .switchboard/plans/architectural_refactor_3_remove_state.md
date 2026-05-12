@@ -12,7 +12,7 @@ With all call sites updated, safely remove the unused fields and methods that re
 
 ## Dependencies
 
-- .switchboard/plans/architectural_refactor_2_update_call_sites.md
+- sess_1777759329250 — Architectural Refactor 2/4: Update All Call Sites
 
 ## Proposed Changes
 

@@ -7,8 +7,7 @@ const path = require('path');
 
 const {
     inspectKanbanState,
-    extractKanbanState,
-    applyKanbanStateToPlanContent
+    extractKanbanState
 } = require(path.join(process.cwd(), 'out', 'services', 'planStateUtils.js'));
 const { importPlanFiles } = require(path.join(process.cwd(), 'out', 'services', 'PlanFileImporter.js'));
 const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
@@ -127,57 +126,6 @@ async function run() {
         null,
         'Expected inspectKanbanState to return null state for preserved-draft content (file-based state disabled).'
     );
-    const rewrittenPreservedDraft = applyKanbanStateToPlanContent(preservedDraftContent, {
-        kanbanColumn: 'PLAN REVIEWED',
-        status: 'active',
-        lastUpdated: '2026-01-01T00:00:00.000Z',
-        formatVersion: 1
-    });
-    assert.ok(
-        rewrittenPreservedDraft.includes('```markdown\n## Switchboard State\n\n**Kanban Column:** BACKLOG\n**Status:** active\n```'),
-        'Expected preserved original draft state examples inside fenced code to remain intact after rewriting the live footer.'
-    );
-    assert.ok(
-        rewrittenPreservedDraft.trimEnd().endsWith([
-            '## Switchboard State',
-            '**Kanban Column:** PLAN REVIEWED',
-            '**Status:** active',
-            '**Last Updated:** 2026-01-01T00:00:00.000Z',
-            '**Format Version:** 1'
-        ].join('\n')),
-        'Expected rewritten content to end with exactly one authoritative live Switchboard State footer.'
-    );
-
-    const rewrittenDuplicateWithTail = applyKanbanStateToPlanContent(duplicateWithTrailingContent, {
-        kanbanColumn: 'COMPLETED',
-        status: 'completed',
-        lastUpdated: '2026-01-02T00:00:00.000Z',
-        formatVersion: 1
-    });
-    assert.strictEqual(
-        (rewrittenDuplicateWithTail.match(/^## Switchboard State$/gm) || []).length,
-        1,
-        'Expected save-side normalization to remove every prior live Switchboard State section before appending the new footer.'
-    );
-    assert.ok(
-        rewrittenDuplicateWithTail.includes('## Tail\nThis content must stay above the rewritten footer.'),
-        'Expected non-state content after duplicate live sections to survive normalization.'
-    );
-    assert.doesNotMatch(
-        rewrittenDuplicateWithTail,
-        /\*\*Kanban Column:\*\*\s+BACKLOG/,
-        'Expected stale earlier live state sections to be removed during normalization.'
-    );
-    assert.ok(
-        rewrittenDuplicateWithTail.trimEnd().endsWith([
-            '## Switchboard State',
-            '**Kanban Column:** COMPLETED',
-            '**Status:** completed',
-            '**Last Updated:** 2026-01-02T00:00:00.000Z',
-            '**Format Version:** 1'
-        ].join('\n')),
-        'Expected normalized content with trailing non-state headings to still end with exactly one authoritative footer.'
-    );
 
     const workspaceRoot = await fs.promises.mkdtemp(path.join(os.tmpdir(), 'switchboard-duplicate-state-'));
     try {
@@ -189,10 +137,12 @@ async function run() {
             'utf8'
         );
 
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        await db.createIfMissing();
+
         const imported = await importPlanFiles(workspaceRoot);
         assert.strictEqual(imported.count, 1, 'Expected importPlanFiles to ingest the duplicate-state fixture.');
 
-        const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const ready = await db.ensureReady();
         assert.strictEqual(ready, true, 'Expected KanbanDatabase to initialize for duplicate-state regression test.');
 
@@ -213,16 +163,6 @@ async function run() {
         await KanbanDatabase.invalidateWorkspace(workspaceRoot);
         await fs.promises.rm(workspaceRoot, { recursive: true, force: true });
     }
-
-    const stateUtilsSource = fs.readFileSync(
-        path.join(process.cwd(), 'src', 'services', 'planStateUtils.ts'),
-        'utf8'
-    );
-    assert.doesNotMatch(
-        stateUtilsSource,
-        /content\.replace\(\/\\n\?## Switchboard State\[\\s\\S\]\*\$\/, ''\)/,
-        'Expected applyKanbanStateToPlanContent() to stop stripping from the first Switchboard State match to EOF.'
-    );
 
     console.log('duplicate switchboard state regression test passed');
 }

@@ -200,7 +200,12 @@ async function run() {
             const planContent = readText(createdPlan.planFile);
             assert.ok(planContent.includes('**ClickUp Task ID:** task-bug'));
             assert.ok(planContent.includes('**Automation Rule:** Bug Summary'));
-            assert.ok(planContent.includes('**Kanban Column:** CREATED'));
+            assert.ok(!planContent.includes('## Goal'));
+            assert.ok(!planContent.includes('## Proposed Changes'));
+            assert.ok(!planContent.includes('## ClickUp Task Notes'));
+            assert.ok(!planContent.includes('## Switchboard State'));
+            assert.ok(!planContent.includes('## Metadata'));
+            assert.ok(planContent.includes('The app crashes on launch.'));
             assert.ok(!planContent.includes('**Internal Plan:** true'));
             assert.ok(!planContent.includes('**Pipeline ID:**'));
 

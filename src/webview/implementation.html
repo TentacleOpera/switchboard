@@ -1576,7 +1576,7 @@
 
         .hierarchy-label {
             font-size: 11px;
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-weight: 500;
         }
 
@@ -1608,7 +1608,7 @@
         }
 
         .hierarchy-separator {
-            color: var(--text-muted);
+            color: var(--text-secondary);
             font-size: 12px;
             margin: 0 2px;
         }
@@ -2950,6 +2950,9 @@
                 }
                 case 'customAgents':
                     if (Array.isArray(message.customAgents)) {
+                        if (message.workspaceRoot) {
+                            currentWorkspaceRoot = message.workspaceRoot;
+                        }
                         lastCustomAgents = message.customAgents;
                         renderAgentList();
                     }
@@ -3103,56 +3106,6 @@
                     const notionPanel = document.querySelector('[data-panel="notion"]');
                     if (notionPanel && notionPanel._handleNotionFetchState) {
                         notionPanel._handleNotionFetchState(message);
-                    }
-                    break;
-                }
-                case 'clipboardSeparatorPattern': {
-                    const dd = document.getElementById('airlock-separator-preset');
-                    const ci = document.getElementById('airlock-separator-input');
-                    const cr = document.getElementById('airlock-separator-custom-row');
-                    const ce = document.getElementById('airlock-separator-error');
-                    if (dd && message.presets) {
-                        dd.innerHTML = '';
-                        message.presets.forEach(p => {
-                            const opt = document.createElement('option');
-                            opt.value = p.key;
-                            opt.textContent = p.label;
-                            opt.dataset.pattern = p.literalPattern;
-                            dd.appendChild(opt);
-                        });
-                        // Add Custom option
-                        const customOpt = document.createElement('option');
-                        customOpt.value = 'custom';
-                        customOpt.textContent = 'Custom...';
-                        dd.appendChild(customOpt);
-                        // Add Legacy option if applicable
-                        if (message.isLegacy) {
-                            const legacyOpt = document.createElement('option');
-                            legacyOpt.value = 'legacy';
-                            legacyOpt.textContent = 'Legacy regex: ' + message.pattern;
-                            legacyOpt.dataset.pattern = '';
-                            dd.appendChild(legacyOpt);
-                        }
-                        dd.value = message.isLegacy ? 'legacy' : (message.preset || 'classic');
-                    }
-                    if (ci) ci.value = (message.preset === 'custom' ? message.pattern : '') || '';
-                    if (cr) cr.style.display = (message.preset === 'custom' || message.isLegacy) ? 'block' : 'none';
-                    // Update preview
-                    const preview = document.getElementById('airlock-separator-preview');
-                    if (preview && message.pattern) {
-                        const p = message.pattern;
-                        const ex1 = p.replace(/\[N\]/g, '1');
-                        const ex2 = p.replace(/\[N\]/g, '2');
-                        preview.textContent = 'Preview matches:\n' + ex1 + '\n' + ex2;
-                    }
-                    break;
-                }
-                case 'clipboardSeparatorPatternResult': {
-                    const ci = document.getElementById('airlock-separator-input');
-                    const ce = document.getElementById('airlock-separator-error');
-                    if (ci) ci.value = message.pattern || '';
-                    if (ce) {
-                        ce.textContent = message.success ? '' : (message.error || 'Invalid pattern');
                     }
                     break;
                 }
@@ -4867,143 +4820,6 @@
             switchAgentTab(currentAgentTab);
         }
 
-        function createClipboardImportPanel() {
-            const container = document.createElement('div');
-            container.className = 'agent-row';
-
-            // Header
-            const header = document.createElement('div');
-            header.className = 'row-header';
-            const identity = document.createElement('div');
-            identity.className = 'agent-identity';
-            const name = document.createElement('div');
-            name.className = 'agent-name';
-            name.style.cssText = 'color:var(--text-secondary);';
-            name.innerText = 'CLIPBOARD PLAN IMPORT';
-            identity.appendChild(name);
-            header.appendChild(identity);
-            container.appendChild(header);
-
-            // Description
-            const clipDesc = document.createElement('div');
-            clipDesc.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            clipDesc.innerText = 'Copy AI-generated plans from NotebookLM, Claude, or Gemini, then click Import Plans below (or use the Import button in the Kanban NEW column). If multiple plans are detected with separator markers, they will be automatically split into separate plan files.';
-            container.appendChild(clipDesc);
-
-            // Preset dropdown
-            const clipDropdownRow = document.createElement('div');
-            clipDropdownRow.style.cssText = 'display:flex; gap:4px; align-items:center; padding:0 8px 4px;';
-
-            const clipDropdownLabel = document.createElement('span');
-            clipDropdownLabel.style.cssText = 'font-size:10px; color:var(--text-secondary); white-space:nowrap;';
-            clipDropdownLabel.innerText = 'Separator:';
-            clipDropdownRow.appendChild(clipDropdownLabel);
-
-            const clipDropdown = document.createElement('select');
-            clipDropdown.id = 'airlock-separator-preset';
-            clipDropdown.style.cssText = 'flex:1; font-family:var(--font-mono); font-size:10px; background:var(--bg-dim); color:var(--text-primary); border:1px solid var(--border-dim); border-radius:3px; padding:3px 4px;';
-            clipDropdownRow.appendChild(clipDropdown);
-            container.appendChild(clipDropdownRow);
-
-            // Custom pattern input (hidden by default)
-            const clipCustomRow = document.createElement('div');
-            clipCustomRow.id = 'airlock-separator-custom-row';
-            clipCustomRow.style.cssText = 'display:none; padding:0 8px 4px;';
-
-            const clipCustomInput = document.createElement('input');
-            clipCustomInput.id = 'airlock-separator-input';
-            clipCustomInput.type = 'text';
-            clipCustomInput.placeholder = '### PLAN [N] START';
-            clipCustomInput.style.cssText = 'width:100%; font-family:var(--font-mono); font-size:10px; box-sizing:border-box; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); padding:3px 4px; border-radius:3px;';
-            clipCustomRow.appendChild(clipCustomInput);
-            container.appendChild(clipCustomRow);
-
-            // N placeholder hint
-            const clipHint = document.createElement('div');
-            clipHint.style.cssText = 'padding:0 8px 4px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono);';
-            clipHint.innerText = '[N] = auto-numbered placeholder (1, 2, 3...)';
-            container.appendChild(clipHint);
-
-            // Live preview
-            const clipPreview = document.createElement('div');
-            clipPreview.id = 'airlock-separator-preview';
-            clipPreview.style.cssText = 'margin:0 8px 8px; font-size:10px; color:var(--text-secondary); padding:6px 8px; background:var(--bg-dim); border:1px solid var(--border-dim); border-radius:4px; font-family:var(--font-mono); white-space:pre-line; line-height:1.4;';
-            container.appendChild(clipPreview);
-
-            // Error display
-            const clipError = document.createElement('div');
-            clipError.id = 'airlock-separator-error';
-            clipError.style.cssText = 'min-height:0; padding:0 8px; color:var(--accent-red); font-size:10px; font-family:var(--font-mono);';
-            container.appendChild(clipError);
-
-            // --- Helper: update preview from pattern ---
-            function updateSeparatorPreview(pattern) {
-                if (!pattern) { clipPreview.textContent = ''; return; }
-                const ex1 = pattern.replace(/\[N\]/g, '1');
-                const ex2 = pattern.replace(/\[N\]/g, '2');
-                clipPreview.textContent = 'Preview matches:\n' + ex1 + '\n' + ex2;
-            }
-
-            // --- Event: dropdown change ---
-            clipDropdown.addEventListener('change', () => {
-                const key = clipDropdown.value;
-                clipCustomRow.style.display = key === 'custom' ? 'block' : 'none';
-                clipError.textContent = '';
-                vscode.postMessage({ type: 'setClipboardSeparatorPreset', preset: key });
-                const opt = clipDropdown.options[clipDropdown.selectedIndex];
-                if (key !== 'custom' && opt.dataset.pattern) {
-                    updateSeparatorPreview(opt.dataset.pattern);
-                }
-            });
-
-            // --- Event: custom input change ---
-            clipCustomInput.addEventListener('change', () => {
-                clipError.textContent = '';
-                vscode.postMessage({ type: 'setClipboardSeparatorPattern', pattern: clipCustomInput.value });
-                updateSeparatorPreview(clipCustomInput.value);
-            });
-
-            // --- Helper text above Copy Agent Prompt button ---
-            const copyPromptHint = document.createElement('div');
-            copyPromptHint.style.cssText = 'padding:0 8px 4px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            copyPromptHint.innerText = 'Click below to copy a prompt you can paste to any AI. This tells the AI to format multiple plans with the correct separators for automatic import.';
-            container.appendChild(copyPromptHint);
-
-            // --- Copy Agent Prompt button ---
-            const copyPromptBtn = document.createElement('button');
-            copyPromptBtn.className = 'secondary-btn';
-            copyPromptBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 4px;';
-            copyPromptBtn.innerText = 'COPY AGENT PROMPT';
-            copyPromptBtn.onclick = () => {
-                const currentPattern = clipDropdown.value === 'custom'
-                    ? clipCustomInput.value || '### PLAN [N] START'
-                    : (clipDropdown.options[clipDropdown.selectedIndex]?.dataset?.pattern || '### PLAN [N] START');
-                const ex1 = currentPattern.replace(/\[N\]/g, '1');
-                const ex2 = currentPattern.replace(/\[N\]/g, '2');
-                const prompt = `Please output all features/plans as a single markdown block with each plan separated by this exact format:\n\n${ex1}\n[plan 1 content here]\n\n${ex2}\n[plan 2 content here]\n\n[etc...]\n\nEach plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
-                navigator.clipboard.writeText(prompt).then(() => {
-                    copyPromptBtn.innerText = 'COPIED';
-                    setTimeout(() => { copyPromptBtn.innerText = 'COPY AGENT PROMPT'; }, 2000);
-                });
-            };
-            container.appendChild(copyPromptBtn);
-
-            // --- Import Plans button ---
-            const importPlansBtn = document.createElement('button');
-            importPlansBtn.className = 'secondary-btn is-teal';
-            importPlansBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
-            importPlansBtn.innerText = 'IMPORT PLANS';
-            importPlansBtn.onclick = () => {
-                vscode.postMessage({ type: 'importPlansFromClipboard' });
-            };
-            container.appendChild(importPlansBtn);
-
-            // --- Request initial separator state ---
-            vscode.postMessage({ type: 'getClipboardSeparatorPattern' });
-
-            return container;
-        }
-
         function createNotionPanel() {
             const container = document.createElement('div');
             container.className = 'agent-row';
@@ -5233,9 +5049,6 @@
             container.appendChild(s2BtnRow);
 
             // Step 3: Copy Sprint Planning Prompt
-            // NOTE: This button reads 'airlock-separator-preset' and 'airlock-separator-input'
-            // via getElementById — those elements live in createClipboardImportPanel().
-            // This cross-panel dependency works because both panels share the same webview DOM.
             const s3Header = document.createElement('div');
             s3Header.style.cssText = 'padding:8px 8px 2px; font-size:9px; color:var(--text-secondary); font-family:var(--font-mono); letter-spacing:1px;';
             s3Header.innerText = '3. COPY SPRINT PLANNING PROMPT';
@@ -5251,20 +5064,34 @@
             copySprintBtn.style.cssText = 'width:calc(100% - 16px); margin:0 8px 8px;';
             copySprintBtn.innerText = 'COPY SPRINT PROMPT';
             copySprintBtn.onclick = () => {
-                const dd = document.getElementById('airlock-separator-preset');
-                const ci = document.getElementById('airlock-separator-input');
-                let sepPattern = '### PLAN [N] START';
-                if (dd) {
-                    if (dd.value === 'custom' && ci) {
-                        sepPattern = ci.value || sepPattern;
-                    } else {
-                        const opt = dd.options[dd.selectedIndex];
-                        if (opt && opt.dataset.pattern) sepPattern = opt.dataset.pattern;
-                    }
-                }
-                const ex1 = sepPattern.replace(/\[N\]/g, '1');
-                const ex2 = sepPattern.replace(/\[N\]/g, '2');
-                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:\n\n1. Read the "how_to_plan.md" guide to understand the planning framework\n2. Generate a highly detailed implementation plan following the guide's structure\n3. Include:\n   - Specific file paths and line numbers\n   - Step-by-step implementation instructions\n   - Dependencies and potential conflicts\n   - Complexity audit (Routine / Complex classification)\n   - Verification steps\n\n**IMPORTANT - Multi-Plan Format:**\nWhen generating multiple plans in a single response, you MUST use plan markers to delimit each plan. This enables automatic import into Switchboard:\n\n- Before each plan, add a marker line: ${ex1} (where N is the plan number)\n- The plan's H1 title should immediately follow the marker\n- Example:\n  ${ex1}\n  \n  # First Plan Title\n  [plan content...]\n  \n  ${ex2}\n  \n  # Second Plan Title\n  [plan content...]\n\nWork through all plans in the list, using the marker format above.`;
+                const prompt = `Review the "new_column_plans.md" file in the uploaded sources. For each plan listed:
+
+1. Read the "how_to_plan.md" guide to understand the planning framework
+2. Generate a highly detailed implementation plan following the guide's structure
+3. Include:
+   - Specific file paths and line numbers
+   - Step-by-step implementation instructions
+   - Dependencies and potential conflicts
+   - Complexity audit (Routine / Complex classification)
+   - Verification steps
+
+**IMPORTANT - Multi-Plan Format:**
+When generating multiple plans in a single response, you MUST use plan markers to delimit each plan. This enables automatic import into Switchboard:
+
+- Before each plan, add a marker line: --- PLAN ---
+- The plan's H1 title should immediately follow the marker
+- Example:
+  --- PLAN ---
+  
+  # First Plan Title
+  [plan content...]
+  
+  --- PLAN ---
+  
+  # Second Plan Title
+  [plan content...]
+
+Work through all plans in the list, using the marker format above.`;
                 navigator.clipboard.writeText(prompt).then(() => {
                     copySprintBtn.innerText = '\u2713 COPIED';
                     setTimeout(() => { copySprintBtn.innerText = 'COPY SPRINT PROMPT'; }, 2000);

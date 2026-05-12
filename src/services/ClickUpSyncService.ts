@@ -29,6 +29,9 @@ export interface ClickUpConfig {
   selectedListName: string;
   selectedSpaceId: string;
   selectedFolderId: string;
+  deleteSyncEnabled?: boolean;   // default: false — delete ClickUp task when plan is deleted
+  completeSyncEnabled?: boolean; // default: false — sync completed status to ClickUp
+  excludeBacklog?: boolean;      // default: false — exclude tasks with 'backlog' status from sync
 }
 
 export interface KanbanPlanRecord {
@@ -247,7 +250,10 @@ export class ClickUpSyncService {
       selectedListId: '',
       selectedListName: '',
       selectedSpaceId: '',
-      selectedFolderId: ''
+      selectedFolderId: '',
+      deleteSyncEnabled: false,
+      completeSyncEnabled: false,
+      excludeBacklog: false,
     };
   }
 
@@ -282,7 +288,16 @@ export class ClickUpSyncService {
       selectedListId: raw.selectedListId || '',
       selectedListName: raw.selectedListName || '',
       selectedSpaceId: raw.selectedSpaceId || '',
-      selectedFolderId: raw.selectedFolderId || ''
+      selectedFolderId: raw.selectedFolderId || '',
+      deleteSyncEnabled: raw.deleteSyncEnabled === undefined
+        ? false   // Default false — require explicit opt-in
+        : raw.deleteSyncEnabled === true,
+      completeSyncEnabled: raw.completeSyncEnabled === undefined
+        ? false   // Default false — require explicit opt-in
+        : raw.completeSyncEnabled === true,
+      excludeBacklog: raw.excludeBacklog === undefined
+        ? false   // Default false — include all tasks by default
+        : raw.excludeBacklog === true,
     };
   }
 
@@ -1233,20 +1248,22 @@ export class ClickUpSyncService {
     };
   }
 
-  public async createTask(
-    listId: string,
-    name: string,
-    options?: {
-      description?: string;
-      status?: string;
-      parentId?: string;
-      priority?: number;
-    }
-  ): Promise<ClickUpTask | null> {
+  public async createTask(params: {
+    name: string;
+    listId: string;
+    description?: string;
+    assignees?: number[];
+    dueDate?: string;
+    parent?: string;
+    status?: string;
+    priority?: number;
+  }): Promise<ClickUpTask | null> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
       throw new Error('ClickUp not configured');
     }
+
+    const { name, listId, description, assignees, dueDate, parent, status, priority } = params;
 
     const normalizedListId = String(listId || '').trim();
     if (!normalizedListId) {
@@ -1259,20 +1276,18 @@ export class ClickUpSyncService {
     }
 
     const body: Record<string, unknown> = { name: normalizedName };
-    const description = String(options?.description || '').trim();
-    const status = String(options?.status || '').trim();
-    const parentId = String(options?.parentId || '').trim();
-    if (description) {
-      body.description = description;
-    }
-    if (status) {
-      body.status = status;
-    }
-    if (parentId) {
-      body.parent = parentId;
-    }
-    if (typeof options?.priority === 'number' && Number.isFinite(options.priority)) {
-      body.priority = options.priority;
+    if (description) body.description = description;
+    if (status) body.status = status;
+    if (parent) body.parent = parent;
+    if (assignees && Array.isArray(assignees)) body.assignees = assignees;
+    if (priority) body.priority = priority;
+    
+    // ClickUp API expects dueDate in epoch milliseconds
+    if (dueDate) {
+      const date = new Date(dueDate);
+      if (!isNaN(date.getTime())) {
+        body.due_date = date.getTime();
+      }
     }
 
     const createResult = await this.retry(() =>
@@ -1305,11 +1320,12 @@ export class ClickUpSyncService {
     } catch (error) {
       console.warn(`[ClickUpSync] Created task ${taskId}, but follow-up read failed; returning POST payload.`, error);
     }
+    
     return this._normalizeClickUpTask({
       id: taskId,
       name: normalizedName,
       description,
-      parent: parentId,
+      parent: parent || null,
       list: { id: normalizedListId, name: '' },
       ...createResult.data
     });
@@ -1317,12 +1333,16 @@ export class ClickUpSyncService {
 
   public async updateTask(
     taskId: string,
-    options: {
+    updates: {
       name?: string;
       description?: string;
       status?: string;
+      assignees?: number[];
+      due_date?: number;
+      priority?: number;
+      tags?: string[];
     }
-  ): Promise<void> {
+  ): Promise<ClickUpTask | null> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
       throw new Error('ClickUp not configured');
@@ -1333,28 +1353,15 @@ export class ClickUpSyncService {
       throw new Error('ClickUp task updates require a task ID.');
     }
 
-    const body: Record<string, unknown> = {};
-    const name = String(options?.name || '').trim();
-    const description = String(options?.description || '').trim();
-    const status = String(options?.status || '').trim();
-    if (name) {
-      body.name = name;
-    }
-    if (description) {
-      body.description = description;
-    }
-    if (status) {
-      body.status = status;
-    }
-    if (Object.keys(body).length === 0) {
+    if (Object.keys(updates).length === 0) {
       throw new Error('ClickUp task updates require at least one changed field.');
     }
 
     const updateResult = await this.retry(() =>
-      this.httpRequest('PUT', `/task/${normalizedTaskId}`, body)
+      this.httpRequest('PUT', `/task/${normalizedTaskId}`, updates)
     );
     if (updateResult.status !== 200) {
-      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}.`);
+      throw new Error(`Failed to update ClickUp task ${normalizedTaskId}. Status: ${updateResult.status}`);
     }
 
     // Invalidate cache for the list containing this task
@@ -1367,6 +1374,8 @@ export class ClickUpSyncService {
         this._cacheService.invalidateTaskCache('clickup');
       }
     }
+
+    return this._normalizeClickUpTask(updateResult.data);
   }
 
   public async addTaskComment(taskId: string, comment: string): Promise<void> {
@@ -1393,6 +1402,38 @@ export class ClickUpSyncService {
     );
     if (commentResult.status !== 200) {
       throw new Error(`Failed to comment on ClickUp task ${normalizedTaskId}.`);
+    }
+  }
+
+  /**
+   * Delete a ClickUp task via the native DELETE endpoint.
+   * Used when a Switchboard plan is deleted and deleteSyncEnabled is true.
+   * ClickUp DELETE /api/v2/task/{task_id} returns HTTP 204 on success.
+   * A 404 means the task is already gone — treated as success-with-warning.
+   */
+  public async archiveTask(taskId: string): Promise<{ success: boolean; error?: string }> {
+    const normalizedTaskId = String(taskId || '').trim();
+    if (!normalizedTaskId) {
+      return { success: false, error: 'Task ID is required' };
+    }
+
+    try {
+      const result = await this.httpRequest('DELETE', `/task/${normalizedTaskId}`);
+      if (result.status === 204) {
+        console.log(`[ClickUpSync] Deleted ClickUp task ${normalizedTaskId}`);
+        return { success: true };
+      } else if (result.status === 404) {
+        // Task already deleted — treat as success
+        console.warn(`[ClickUpSync] ClickUp task ${normalizedTaskId} not found (already deleted?). Continuing.`);
+        return { success: true };
+      } else {
+        return { success: false, error: `Failed to delete task: HTTP ${result.status}` };
+      }
+    } catch (error) {
+      return {
+        success: false,
+        error: error instanceof Error ? error.message : String(error)
+      };
     }
   }
 
@@ -1490,6 +1531,98 @@ export class ClickUpSyncService {
     }
   }
 
+  public async attachFile(taskId: string, fileName: string, buffer: Buffer, comment?: string): Promise<{ url: string; fileName: string }> {
+    const token = await this.getApiToken();
+    if (!token) { throw new Error('ClickUp API token not configured'); }
+
+    const boundary = '----WebKitFormBoundary' + Math.random().toString(36).substring(2);
+    
+    return new Promise((resolve, reject) => {
+      const header = Buffer.from(
+        `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="attachment"; filename="${fileName}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`
+      );
+      const footer = Buffer.from(`\r\n--${boundary}--\r\n`);
+      
+      const req = https.request({
+        hostname: 'api.clickup.com',
+        path: `/api/v2/task/${taskId}/attachment`,
+        method: 'POST',
+        headers: {
+          'Authorization': token,
+          'Content-Type': `multipart/form-data; boundary=${boundary}`,
+          'Content-Length': header.length + buffer.length + footer.length
+        }
+      }, (res) => {
+        let raw = '';
+        res.on('data', (chunk) => { raw += chunk.toString(); });
+        res.on('end', async () => {
+          if (res.statusCode !== 200 && res.statusCode !== 201) {
+            reject(new Error(`ClickUp attachment failed with status ${res.statusCode}: ${raw}`));
+            return;
+          }
+          try {
+            const data = JSON.parse(raw);
+            const result = {
+              url: String(data?.url || '').trim(),
+              fileName: String(data?.filename || fileName).trim()
+            };
+            
+            // Post comment if provided
+            if (comment) {
+              await this.addTaskComment(taskId, comment).catch(err => {
+                console.warn('[ClickUpSync] Failed to post comment after attachment:', err);
+              });
+            }
+            
+            resolve(result);
+          } catch (err) {
+            reject(new Error('Failed to parse ClickUp attachment response'));
+          }
+        });
+      });
+      
+      req.on('error', reject);
+      req.write(header);
+      req.write(buffer);
+      req.write(footer);
+      req.end();
+    });
+  }
+
+  public async createDocPage(params: {
+    workspaceId?: string;
+    docId: string;
+    pageName: string;
+    content: string;
+    parentPageId?: string;
+  }): Promise<{ id: string; url: string }> {
+    let { workspaceId, docId, pageName, content, parentPageId } = params;
+    
+    if (!workspaceId) {
+      workspaceId = await this.loadWorkspaceIdIfNeeded();
+    }
+    
+    const body: any = {
+      name: pageName,
+      content: content
+    };
+    if (parentPageId) {
+      body.parent = parentPageId;
+    }
+    
+    const result = await this.httpRequestV3('POST', `/workspace/${workspaceId}/doc/${docId}/page`, body);
+    if (result.status !== 200 && result.status !== 201) {
+      throw new Error(`ClickUp doc page creation failed with status ${result.status}: ${JSON.stringify(result.data)}`);
+    }
+    
+    return {
+      id: String(result.data?.id || '').trim(),
+      url: String(result.data?.url || '').trim()
+    };
+  }
+
   // ── Token Management ────────────────────────────────────────
 
   /**
@@ -1521,6 +1654,54 @@ export class ClickUpSyncService {
   }
 
   // ── HTTP Client ─────────────────────────────────────────────
+
+  /**
+   * Generic API request wrapper for LocalApiServer proxy.
+   */
+  async makeApiRequest(method: string, endpoint: string, query?: any, body?: any): Promise<any> {
+    const apiPath = endpoint + (query ? '?' + new URLSearchParams(query).toString() : '');
+    const result = await this.httpRequest(method as any, apiPath, body);
+    return result.data;
+  }
+
+  /**
+   * Resolve a task or list name to its ID.
+   */
+  async resolveNameToId(name: string): Promise<string | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('ClickUp not configured');
+    }
+
+    const normalizedName = name.trim().toLowerCase();
+    
+    // 1. Check mapped columns first
+    for (const [column, listId] of Object.entries(config.columnMappings)) {
+      if (column.toLowerCase() === normalizedName && listId) {
+        return listId;
+      }
+    }
+
+    // 2. Search for lists by name
+    const lists = await this.findList(name);
+    if (lists.length > 0) {
+      // Return the first exact match, or the first partial match
+      const exactMatch = lists.find(l => l.name.toLowerCase() === normalizedName);
+      return exactMatch ? exactMatch.id : lists[0].id;
+    }
+
+    // 3. Search for tasks by name across all mapped lists
+    for (const listId of Object.values(config.columnMappings)) {
+      if (!listId) continue;
+      const tasks = await this.findTask(listId, name);
+      if (tasks.length > 0) {
+        const exactMatch = tasks.find(t => t.name.toLowerCase() === normalizedName);
+        return exactMatch ? exactMatch.id : tasks[0].id;
+      }
+    }
+
+    return null;
+  }
 
   /**
    * Authenticated HTTPS request to ClickUp REST API.
@@ -2199,13 +2380,16 @@ export class ClickUpSyncService {
         );
         if (handledByAutomation) { skipped++; continue; }
 
-        const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
-
-        // Skip if already imported
-        try { await fs.promises.access(planFile); skipped++; continue; } catch { /* file doesn't exist, proceed */ }
-
         // Determine initial kanban column: backlog status → BACKLOG, everything else → CREATED
-        const statusName = (task.status?.status || '').toLowerCase();
+        const statusName = (task.status?.status || '').toLowerCase().trim();
+
+        // Optional backlog filter: skip tasks named "backlog" if excludeBacklog is enabled.
+        if (config.excludeBacklog === true && statusName === 'backlog') {
+          skipped++;
+          continue;
+        }
+
+        const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
         const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
 
         // Core fields

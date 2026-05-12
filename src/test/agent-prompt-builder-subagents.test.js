@@ -72,27 +72,36 @@ function testExecutionDirective() {
 
 function testGitProhibitionDirective() {
     console.log('Testing git prohibition directive presence...');
-    const allRoles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'unknown_role'];
-    for (const role of allRoles) {
+    const alwaysRoles = ['reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'];
+    for (const role of alwaysRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes('GIT POLICY'), `Role ${role} SHOULD include git prohibition directive`);
     }
-    console.log('  PASS: Git prohibition directive present for all roles');
+    // Planner: git prohibition is conditional (add-on), NOT included by default
+    const plannerPromptDefault = buildKanbanBatchPrompt('planner', plans1);
+    assert.ok(!plannerPromptDefault.includes('GIT POLICY'), 'Planner should NOT include git prohibition by default (it is an add-on)');
+    const plannerPromptWithAddon = buildKanbanBatchPrompt('planner', plans1, { gitProhibitionEnabled: true });
+    assert.ok(plannerPromptWithAddon.includes('GIT POLICY'), 'Planner SHOULD include git prohibition when add-on is enabled');
+    console.log('  PASS: Git prohibition directive correct for all roles');
 }
 
 function testChatCritiqueDirective() {
     console.log('Testing chat critique directive presence...');
-    const promptRoles = ['planner', 'reviewer'];
+    // Reviewer includes chat critique directive in the prompt
+    const promptRoles = ['reviewer'];
     for (const role of promptRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(prompt.includes(chatCritiqueText), `Role ${role} SHOULD include chat critique directive`);
     }
+    // Planner does NOT include chat critique in the prompt — it's in the workflow file
+    const plannerPrompt = buildKanbanBatchPrompt('planner', plans1);
+    assert.ok(!plannerPrompt.includes(chatCritiqueText), 'Planner should NOT include chat critique in prompt (it is in the workflow file)');
     const nonCritiqueRoles = ['tester', 'lead', 'coder'];
     for (const role of nonCritiqueRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(chatCritiqueText), `Role ${role} should NOT include chat critique directive`);
     }
-    console.log('  PASS: Chat critique directive correctly limited to planner and reviewer');
+    console.log('  PASS: Chat critique directive correctly limited to reviewer');
 }
 
 function testNoRepoContextForUnscopedPlans() {
@@ -105,7 +114,7 @@ function testNoRepoContextForUnscopedPlans() {
 
 function testSingleWorkingDirectoryContext() {
     console.log('Testing shared working directory directive...');
-    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'unknown_role'];
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst'];
     for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, sameDirPlans);
         assert.ok(prompt.includes('WORKING DIRECTORY: /workspace/be'), `Role ${role} should include the shared working directory`);
@@ -151,9 +160,14 @@ function testReplaceOverrideKeepsRepoContext() {
 
 function testPlannerRepoMetadataLine() {
     console.log('Testing planner repo metadata guidance...');
-    const prompt = buildKanbanBatchPrompt('planner', plans1);
-    assert.ok(prompt.includes(repoMetadataText), 'Planner prompts should require repo metadata guidance');
-    console.log('  PASS: Planner prompt includes repo metadata instructions');
+    // Without workspaceRoot, it should NOT include the block
+    const prompt1 = buildKanbanBatchPrompt('planner', plans1);
+    assert.ok(!prompt1.includes('WORKSPACE TYPE:'), 'Planner prompts should NOT include workspace type without workspaceRoot');
+    
+    // With workspaceRoot, it SHOULD include it
+    const prompt2 = buildKanbanBatchPrompt('planner', plans1, { workspaceRoot: __dirname });
+    assert.ok(prompt2.includes('WORKSPACE TYPE:'), 'Planner prompts SHOULD include workspace type with workspaceRoot');
+    console.log('  PASS: Planner prompt includes workspace type guidance');
 }
 
 function testCustomWorkflowPathGeneratesMinimalPrompt() {
@@ -168,14 +182,15 @@ function testCustomWorkflowPathGeneratesMinimalPrompt() {
     console.log('  PASS: Custom workflow path generates minimal prompt');
 }
 
-function testDefaultWorkflowPathGeneratesFullPrompt() {
-    console.log('Testing default workflow path generates full Switchboard prompt...');
+function testDefaultWorkflowPathGeneratesMinimalPrompt() {
+    console.log('Testing default workflow path generates minimal prompt...');
     const prompt = buildKanbanBatchPrompt('planner', plans1, {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md'
     });
-    assert.ok(prompt.includes('Please improve the following'), 'Default workflow should include full Switchboard prompt');
-    assert.ok(prompt.includes('## Complexity Audit'), 'Default workflow should include Switchboard-specific sections');
-    console.log('  PASS: Default workflow path generates full Switchboard prompt');
+    assert.ok(prompt.includes('Read .agent/workflows/improve-plan.md and follow it step-by-step'), 'Default workflow should generate minimal "Read and follow" prompt');
+    assert.ok(!prompt.includes('Please improve the following'), 'Default workflow should NOT include old full Switchboard prompt text');
+    assert.ok(!prompt.includes('## Complexity Audit'), 'Default workflow should NOT include hardcoded Switchboard-specific sections');
+    console.log('  PASS: Default workflow path generates minimal prompt');
 }
 
 function testCustomWorkflowWithAddons() {
@@ -210,7 +225,6 @@ function testSplitPlanEnabledDefaultWorkflow() {
     });
     assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Split-plan enabled prompt should include "SPLIT PLAN MODE"');
     assert.ok(prompt.includes('_routine.md'), 'Split-plan enabled prompt should include "_routine.md"');
-    assert.ok(prompt.includes('Apply this two-file output to EVERY plan'), 'Split-plan enabled prompt should include batch directive');
     console.log('  PASS: Split-plan enabled with default workflow includes full split directives');
 }
 
@@ -240,6 +254,28 @@ function testSplitPlanWithAggressivePairProgramming() {
     console.log('  PASS: Split-plan and aggressive pair programming can coexist without contradiction');
 }
 
+function testInternAnalystPrompts() {
+    console.log('Testing intern and analyst prompt templates...');
+    const internPrompt = buildKanbanBatchPrompt('intern', plans1);
+    const analystPrompt = buildKanbanBatchPrompt('analyst', plans1);
+    
+    assert.ok(internPrompt.includes('Please process the following 1 plans.'), 'Intern prompt should start with processing plans');
+    assert.ok(analystPrompt.includes('Please process the following 1 plans.'), 'Analyst prompt should start with processing plans');
+    assert.strictEqual(internPrompt, analystPrompt, 'Intern and analyst prompts should be identical in initial state');
+    
+    assert.ok(internPrompt.includes('GIT POLICY'), 'Intern prompt should include GIT POLICY');
+    assert.ok(analystPrompt.includes('GIT POLICY'), 'Analyst prompt should include GIT POLICY');
+    console.log('  PASS: Intern and analyst prompt templates correctly implemented');
+}
+
+function testUnknownRoleThrows() {
+    console.log('Testing unknown role throws error...');
+    assert.throws(() => {
+        buildKanbanBatchPrompt('unknown_role', plans1);
+    }, /Unknown role 'unknown_role' in buildKanbanBatchPrompt/, 'Should throw error for unknown roles');
+    console.log('  PASS: Unknown role correctly throws error');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
@@ -253,12 +289,14 @@ try {
     testReplaceOverrideKeepsRepoContext();
     testPlannerRepoMetadataLine();
     testCustomWorkflowPathGeneratesMinimalPrompt();
-    testDefaultWorkflowPathGeneratesFullPrompt();
+    testDefaultWorkflowPathGeneratesMinimalPrompt();
     testCustomWorkflowWithAddons();
     testSplitPlanDefaultDisabled();
     testSplitPlanEnabledDefaultWorkflow();
     testSplitPlanEnabledCustomWorkflow();
     testSplitPlanWithAggressivePairProgramming();
+    testInternAnalystPrompts();
+    testUnknownRoleThrows();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {
     console.error('\nTest FAILED:', err.message);

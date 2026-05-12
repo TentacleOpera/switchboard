@@ -16,9 +16,6 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
 1. **Load the plan**
    - Read the target plan file and treat it as the single source of truth.
    - Read the actual code for any services, utilities, or modules referenced by the plan.
-   - [OPTIONAL] If dependency check is enabled via Prompt Controls checkbox:
-     - Query active Kanban plans for dependencies: read `<workspace_root>/.switchboard/kanban-board.md` (fallback to `node .agent/skills/kanban_operations/get-state.js <workspace_id>` if file missing). Inspect CREATED and BACKLOG columns for conflicts; exclude COMPLETED, LEAD CODED, CODER CODED, and CODE REVIEWED columns. If query fails, note uncertainty in Edge-Case & Dependency Audit.
-     - Emit dependencies in plan's `## Dependencies` section as `sess_XXXXXXXXXXXXX — <topic>` lines, or `None` if none.
 
 2. **Improve the plan**
    - Fill in underspecified sections and break work into clear execution steps with file paths and line numbers.

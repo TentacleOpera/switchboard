@@ -1,4 +1,33 @@
-export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst';
+export type BuiltInAgentRole = 'lead' | 'coder' | 'intern' | 'reviewer' | 'tester' | 'planner' | 'analyst' | 'ticket_updater' | 'researcher' | 'splitter' | 'gatherer';
+
+export interface CustomAgentAddons {
+    // Core
+    gitProhibitionEnabled?: boolean;
+    workspaceTypeDetection?: boolean;
+    switchboardSafeguards?: boolean;
+
+    // Role-style add-ons
+    includeInlineChallenge?: boolean;
+    accurateCodingEnabled?: boolean;
+    pairProgrammingEnabled?: boolean;
+    aggressivePairProgramming?: boolean;
+    advancedReviewerEnabled?: boolean;
+    dependencyCheckEnabled?: boolean;
+    splitPlan?: boolean;
+    researchEnabled?: boolean; // NEW: enable deep research mode
+    complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
+    ticketUpdateEnabled?: boolean;    // from ticket_updater_role.md
+
+    // Design doc
+    designDocLink?: string;
+    designDocContent?: string;
+
+    // Workflow
+    customWorkflowPath?: string;
+
+    // Prompt override (applied LAST, after all directives)
+    defaultPromptOverride?: DefaultPromptOverride;
+}
 
 export interface CustomAgentConfig {
     id: string;
@@ -9,6 +38,7 @@ export interface CustomAgentConfig {
     includeInKanban: boolean;
     kanbanOrder: number;
     dragDropMode: 'cli' | 'prompt' | 'disabled';
+    addons?: CustomAgentAddons;
 }
 
 export interface CustomKanbanColumnConfig {
@@ -44,18 +74,25 @@ export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
     reviewer: 'Reviewer',
     tester: 'Acceptance Tester',
     planner: 'Planner',
-    'analyst': 'Analyst'
-    };
+    'analyst': 'Analyst',
+    'ticket_updater': 'Ticket Updater',
+    'researcher': 'Researcher',
+    'splitter': 'Splitter Agent',
+    'gatherer': 'Context Gatherer'
+};
 
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'CREATED', label: 'New', order: 0, kind: 'created', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
+    { id: 'SPLITTER', label: 'Splitter', role: 'splitter', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 150, kind: 'gather', source: 'built-in', autobanEnabled: false, dragDropMode: 'disabled', hideWhenNoAgent: true },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'CODE REVIEWED', label: 'Reviewed', role: 'reviewer', order: 300, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
     { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', order: 350, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli', hideWhenNoAgent: true },
+    { id: 'TICKET UPDATER', label: 'Ticket Updater', role: 'ticket_updater', order: 9000, kind: 'reviewed', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'COMPLETED', label: 'Completed', order: 9999, kind: 'completed', source: 'built-in', autobanEnabled: false, dragDropMode: 'cli' },
 ];
 
@@ -102,6 +139,40 @@ export function isCustomAgentRole(role: string | undefined | null): boolean {
     return typeof role === 'string' && role.startsWith('custom_agent_');
 }
 
+export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefined {
+    if (!raw || typeof raw !== 'object' || Array.isArray(raw)) { return undefined; }
+    const s = raw as Record<string, unknown>;
+    const a: CustomAgentAddons = {};
+    if (s.gitProhibitionEnabled === true) a.gitProhibitionEnabled = true;
+    if (s.workspaceTypeDetection === true) a.workspaceTypeDetection = true;
+    if (s.switchboardSafeguards === true) a.switchboardSafeguards = true;
+    if (s.includeInlineChallenge === true) a.includeInlineChallenge = true;
+    if (s.accurateCodingEnabled === true) a.accurateCodingEnabled = true;
+    if (s.pairProgrammingEnabled === true) a.pairProgrammingEnabled = true;
+    if (s.aggressivePairProgramming === true) a.aggressivePairProgramming = true;
+    if (s.advancedReviewerEnabled === true) a.advancedReviewerEnabled = true;
+    if (s.dependencyCheckEnabled === true) a.dependencyCheckEnabled = true;
+    if (s.splitPlan === true) a.splitPlan = true;
+    if (s.researchEnabled === true) a.researchEnabled = true;
+    if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
+    if (s.ticketUpdateEnabled === true) a.ticketUpdateEnabled = true;
+    if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
+    if (s.designDocContent) {
+        const content = String(s.designDocContent).trim();
+        a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
+    }
+    if (s.customWorkflowPath) a.customWorkflowPath = String(s.customWorkflowPath).trim();
+    if (s.defaultPromptOverride && typeof s.defaultPromptOverride === 'object') {
+        const o = s.defaultPromptOverride as Record<string, unknown>;
+        const mode = String(o.mode || '');
+        const text = String(o.text || '').trim();
+        if (text && ['append', 'prepend', 'replace'].includes(mode)) {
+            a.defaultPromptOverride = { mode: mode as PromptOverrideMode, text };
+        }
+    }
+    return Object.keys(a).length > 0 ? a : undefined;
+}
+
 export function parseCustomAgents(raw: unknown): CustomAgentConfig[] {
     if (!Array.isArray(raw)) {
         return [];
@@ -139,6 +210,7 @@ export function parseCustomAgents(raw: unknown): CustomAgentConfig[] {
             includeInKanban: source.includeInKanban === true,
             kanbanOrder,
             dragDropMode: (source.dragDropMode === 'prompt' ? 'prompt' : 'cli') as 'cli' | 'prompt',
+            addons: parseCustomAgentAddons(source.addons)
         });
         seenRoles.add(role);
     }
@@ -282,7 +354,7 @@ export function parseDefaultPromptOverrides(
 ): Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> {
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {};
     const result: Partial<Record<BuiltInAgentRole, DefaultPromptOverride>> = {};
-    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+    const VALID_ROLES: BuiltInAgentRole[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'];
     const VALID_MODES: PromptOverrideMode[] = ['append', 'prepend', 'replace'];
     for (const role of VALID_ROLES) {
         const entry = (raw as Record<string, unknown>)[role];

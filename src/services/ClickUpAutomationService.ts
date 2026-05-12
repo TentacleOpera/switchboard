@@ -104,14 +104,6 @@ export class ClickUpAutomationService {
         return String(value || '').replace(/\s+/g, ' ').trim();
     }
 
-    private _truncate(value: string, maxLength: number): string {
-        const normalized = this._normalizeWhitespace(value);
-        if (normalized.length <= maxLength) {
-            return normalized;
-        }
-        return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-    }
-
     private _buildStableAutomationId(clickupTaskId: string): string {
         const taskSlug = this._slugify(clickupTaskId, 'task');
         const stableHash = crypto.createHash('sha256')
@@ -149,50 +141,15 @@ export class ClickUpAutomationService {
         return fs.promises.readFile(resolvedPlanFile, 'utf8');
     }
 
-    private _buildGoal(task: ClickUpAutomationTaskSummary): string {
-        return task.description
-            ? task.description
-            : `Complete the work requested in ClickUp task ${task.id}.`;
-    }
-
-    private _buildProposedChanges(task: ClickUpAutomationTaskSummary): string {
-        const summary = task.description
-            ? this._truncate(task.description, 180)
-            : `Complete the work requested in ClickUp task ${task.id}.`;
-        return [
-            '- Review the ClickUp task context and confirm the requested outcome.',
-            `- Implement the requested work: ${summary}`,
-            '- Capture the resulting changes in this plan so the final result can be written back to ClickUp.'
-        ].join('\n');
-    }
-
     private _buildPlanContent(
         task: ClickUpAutomationTaskSummary,
-        rule: ClickUpAutomationRule,
-        planId: string,
-        sessionId: string
+        rule: ClickUpAutomationRule
     ): string {
         const metadataLines = [
             `> Imported from ClickUp task \`${task.id}\``,
             `> **ClickUp Task ID:** ${task.id}`,
-            `> **Plan ID:** ${planId}`,
-            `> **Session ID:** ${sessionId}`,
             `> **Automation Rule:** ${rule.name}`,
-            task.url ? `> **URL:** ${task.url}` : '',
-            task.listName ? `> **List:** ${task.listName}` : '',
-            task.status ? `> **ClickUp Status:** ${task.status}` : '',
-            task.tags.length > 0 ? `> **Tags:** ${task.tags.join(', ')}` : ''
-        ].filter(Boolean);
-
-        const notesLines = [
-            '## ClickUp Task Notes',
-            '',
-            `**Start Column:** ${rule.targetColumn}`,
-            `**Final Column:** ${rule.finalColumn}`,
-            `**Write Back on Complete:** ${rule.writeBackOnComplete ? 'yes' : 'no'}`,
-            task.url ? `**Task URL:** ${task.url}` : '',
-            task.status ? `**Current ClickUp Status:** ${task.status}` : '',
-            task.tags.length > 0 ? `**Tags:** ${task.tags.join(', ')}` : ''
+            task.url ? `> **URL:** ${task.url}` : ''
         ].filter(Boolean);
 
         return [
@@ -200,25 +157,7 @@ export class ClickUpAutomationService {
             '',
             ...metadataLines,
             '',
-            '## Metadata',
-            '',
-            `**Tags:** ${task.tags.join(', ') || 'clickup'}`,
-            '**Complexity:** Unknown',
-            '',
-            '## Goal',
-            '',
-            this._buildGoal(task),
-            '',
-            '## Proposed Changes',
-            '',
-            this._buildProposedChanges(task),
-            '',
-            ...notesLines,
-            '',
-            '## Switchboard State',
-            '',
-            `**Kanban Column:** ${rule.targetColumn}`,
-            '**Status:** active'
+            task.description || ''
         ].join('\n');
     }
 
@@ -346,7 +285,7 @@ export class ClickUpAutomationService {
                 try {
                     await fs.promises.writeFile(
                         planFile,
-                        this._buildPlanContent(taskSummary, matchedRule, stableAutomationId, stableAutomationId),
+                        this._buildPlanContent(taskSummary, matchedRule),
                         { encoding: 'utf8', flag: 'wx' }
                     );
                     result.created++;

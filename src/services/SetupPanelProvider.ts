@@ -115,6 +115,15 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'integrationSetupStates', ...states });
                     break;
                 }
+                case 'setGlobalSettingsEnabled': {
+                    await this._taskViewerProvider.setGlobalSettingsEnabled(message.enabled);
+                    break;
+                }
+                case 'getGlobalSettingsEnabled': {
+                    const enabled = this._taskViewerProvider.getGlobalSettingsEnabled();
+                    this._panel.webview.postMessage({ type: 'globalSettingsEnabled', enabled });
+                    break;
+                }
                 case 'getControlPlaneStatus': {
                     const status = await this._getControlPlaneStatus(typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined);
                     this._panel.webview.postMessage({ type: 'controlPlaneStatusResult', ...status });
@@ -377,6 +386,35 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
+                case 'configureNotionBackup': {
+                    const result = await this._taskViewerProvider.handleConfigureNotionBackup(
+                        typeof message.databaseUrl === 'string' ? message.databaseUrl : '',
+                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
+                    );
+                    this._panel?.webview.postMessage({ type: 'notionBackupConfigResult', ...result });
+                    break;
+                }
+                case 'backupToNotion': {
+                    const result = await this._taskViewerProvider.handleBackupToNotion(
+                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
+                    );
+                    this._panel?.webview.postMessage({ type: 'notionBackupResult', ...result });
+                    break;
+                }
+                case 'restoreFromNotion': {
+                    const result = await this._taskViewerProvider.handleRestoreFromNotion(
+                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
+                    );
+                    this._panel?.webview.postMessage({ type: 'notionRestoreResult', ...result });
+                    break;
+                }
+                case 'autoCreateNotionDatabase': {
+                    const result = await this._taskViewerProvider.handleAutoCreateNotionDatabase(
+                        typeof message.workspaceRoot === 'string' ? message.workspaceRoot : undefined
+                    );
+                    this._panel?.webview.postMessage({ type: 'notionAutoCreateResult', ...result });
+                    break;
+                }
                 case 'runSetup':
                     await vscode.commands.executeCommand('switchboard.setup');
                     break;
@@ -404,8 +442,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getCustomAgents': {
-                    const customAgents = await this._taskViewerProvider.getCustomAgents();
-                    this._panel.webview.postMessage({ type: 'customAgents', customAgents });
+                    const workspaceRoot = (this._taskViewerProvider as any)._resolveWorkspaceRoot?.();
+                    const customAgents = await this._taskViewerProvider.getCustomAgents(workspaceRoot);
+                    this._panel.webview.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
                     break;
                 }
                 case 'getKanbanStructure': {
@@ -436,6 +475,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                         type: 'aggressivePairSetting',
                         enabled: this._taskViewerProvider.handleGetAggressivePairSetting()
                     });
+                    break;
+                case 'getPreventAgentFileOpeningSetting':
+                    this._panel.webview.postMessage({
+                        type: 'preventAgentFileOpeningSetting',
+                        enabled: this._taskViewerProvider.handleGetPreventAgentFileOpeningSetting()
+                    });
+                    break;
+                case 'setPreventAgentFileOpeningSetting':
+                    await this._taskViewerProvider.handleSetPreventAgentFileOpeningSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getDesignDocSetting': {
                     const designDocSetting = this._taskViewerProvider.handleGetDesignDocSetting();

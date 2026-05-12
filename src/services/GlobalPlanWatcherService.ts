@@ -23,6 +23,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     // Per-file debounce timers to coalesce VS Code and native watcher events
     private _debounceTimers = new Map<string, NodeJS.Timeout>();
 
+    private _scanInterval?: NodeJS.Timeout;
+    private _scanIntervalMs = 10000; // 10 seconds default
+    private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
+    private _scanInProgress = false; // Guard against overlapping scans
+
     constructor(
         private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
         outputChannel?: vscode.OutputChannel
@@ -33,6 +38,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     public async initialize(): Promise<void> {
         this._outputChannel?.appendLine('[GlobalPlanWatcher] Initializing...');
         await this._refreshWatchers();
+        this._startPeriodicScan();
         
         // Watch for configuration changes
         const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
@@ -40,8 +46,110 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 this._outputChannel?.appendLine('[GlobalPlanWatcher] Config changed, refreshing watchers...');
                 await this._refreshWatchers();
             }
+            if (e.affectsConfiguration('switchboard.planWatcher.periodicScanEnabled') || 
+                e.affectsConfiguration('switchboard.planWatcher.scanIntervalMs')) {
+                this._outputChannel?.appendLine('[GlobalPlanWatcher] Plan watcher config changed, restarting periodic scan...');
+                this._startPeriodicScan();
+            }
         });
         this._disposables.push(configListener);
+
+        // Watch for workspace folder additions/removals
+        const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
+            this._outputChannel?.appendLine('[GlobalPlanWatcher] Workspace folders changed, refreshing watchers...');
+            await this._refreshWatchers();
+        });
+        this._disposables.push(folderListener);
+    }
+
+    private _startPeriodicScan(): void {
+        if (this._scanInterval) {
+            clearInterval(this._scanInterval);
+            this._scanInterval = undefined;
+        }
+
+        const config = vscode.workspace.getConfiguration('switchboard.planWatcher');
+        const enabled = config.get<boolean>('periodicScanEnabled', true);
+        this._scanIntervalMs = config.get<number>('scanIntervalMs', 10000);
+
+        if (!enabled) {
+            this._outputChannel?.appendLine('[GlobalPlanWatcher] Periodic scan disabled');
+            return;
+        }
+
+        this._scanInterval = setInterval(async () => {
+            if (this._scanInProgress) { return; } // Skip if previous scan still running
+            this._scanInProgress = true;
+            try {
+                const folders = await this._getAllMappedFolders();
+                for (const folder of folders) {
+                    await this._scanForNewFiles(folder);
+                }
+            } finally {
+                this._scanInProgress = false;
+            }
+        }, this._scanIntervalMs);
+        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan started (${this._scanIntervalMs}ms)`);
+    }
+
+    private async _scanForNewFiles(workspaceRoot: string): Promise<void> {
+        const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
+        if (!fs.existsSync(plansDir)) { return; }
+
+        try {
+            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+            await db.ensureReady();
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId();
+            if (!workspaceId) { return; }
+
+            const existingPlans = await db.getAllPlans(workspaceId);
+            const existingPaths = new Set(
+                existingPlans.map(p => {
+                    const rel = path.isAbsolute(p.planFile) ? path.relative(workspaceRoot, p.planFile) : p.planFile;
+                    return rel.replace(/\\/g, '/');
+                })
+            );
+            // Also add absolute paths to catch legacy DB entries stored with absolute paths
+            const existingAbsolutePaths = new Set(
+                existingPlans.map(p => p.planFile.replace(/\\/g, '/'))
+                    .filter(p => path.isAbsolute(p))
+            );
+            const now = Date.now();
+            const lastScan = this._lastScanTime.get(workspaceRoot) || 0;
+            
+            // Set lastScanTime BEFORE scanning so mid-scan errors don't cause re-processing
+            // on the next cycle.
+            this._lastScanTime.set(workspaceRoot, now);
+
+            const scanDir = async (dir: string): Promise<void> => {
+                const entries = await fs.promises.readdir(dir, { withFileTypes: true });
+                for (const entry of entries) {
+                    const entryPath = path.join(dir, entry.name);
+                    if (entry.isDirectory()) {
+                        await scanDir(entryPath);
+                    } else if (entry.isFile() && entry.name.endsWith('.md')) {
+                        const relativePath = path.relative(workspaceRoot, entryPath).replace(/\\/g, '/');
+                        const absolutePath = entryPath.replace(/\\/g, '/');
+                        if (existingPaths.has(relativePath) || existingAbsolutePaths.has(absolutePath)) { continue; }
+
+                        const stats = await fs.promises.stat(entryPath);
+                        // Skip files older than the last scan to avoid re-importing
+                        if (stats.mtimeMs < lastScan) { continue; }
+                        // Skip very recently created files to avoid reading partial writes
+                        if (now - stats.mtimeMs < 500) { continue; }
+
+                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan found new file: ${relativePath}`);
+                        const uri = vscode.Uri.file(entryPath);
+                        // Route through debounce to avoid races with fs.watch events
+                        this._debounceHandleFile(uri, workspaceRoot);
+                    }
+                }
+            };
+
+            await scanDir(plansDir);
+        } catch (err) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Periodic scan error in ${workspaceRoot}: ${err}`);
+        }
     }
 
     private async _refreshWatchers(): Promise<void> {
@@ -80,6 +188,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 .get('workspaceDatabaseMappings') as
                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
+            this._outputChannel?.appendLine(
+                `[GlobalPlanWatcher] Config: enabled=${cfg?.enabled}, mappings=${cfg?.mappings?.length ?? 0}`
+            );
+
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const mapping of cfg.mappings) {
                     // Collect both parentFolder (if exists) and all workspaceFolders
@@ -111,9 +223,12 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 }
             }
         } catch (err) {
-            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error reading config: ${err}`);
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] Error resolving mapped folders: ${err}`);
         }
 
+        this._outputChannel?.appendLine(
+            `[GlobalPlanWatcher] Mapped folders: [${folders.map(f => path.basename(f)).join(', ')}] (total: ${folders.length})`
+        );
         return folders;
     }
 
@@ -250,8 +365,40 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
             const content = await fs.promises.readFile(uri.fsPath, 'utf8');
             const metadata = await parsePlanMetadata(content, relativePath);
+            if (!plan) {
+                // Fallback 1: plan may exist under a different path or workspace_id
+                plan = await db.getPlanBySessionId(metadata.sessionId);
+                if (plan) {
+                    // Only update plan_file for local plans — never overwrite brain/mirror paths
+                    if (plan.sourceType === 'local') {
+                        await db.updatePlanFile(plan.sessionId, relativePath);
+                    }
+                }
+            }
+            if (!plan) {
+                // Fallback 2: try absolute path lookup for legacy DB entries
+                const absolutePath = uri.fsPath.replace(/\\/g, '/');
+                plan = await db.getPlanByPlanFile(absolutePath, workspaceId);
+                if (plan) {
+                    // Update to relative path for consistency
+                    if (plan.sourceType === 'local') {
+                        await db.updatePlanFile(plan.sessionId, relativePath);
+                    }
+                }
+            }
             
-            const now = new Date().toISOString();
+            let fileMtime = new Date().toISOString();
+            let fileBirthtime = fileMtime;
+            try {
+                const stats = await fs.promises.stat(uri.fsPath);
+                fileMtime = stats.mtime.toISOString();
+                fileBirthtime = stats.birthtime && stats.birthtime.getTime() > 0
+                    ? stats.birthtime.toISOString()
+                    : fileMtime;
+            } catch (statErr) {
+                // Fallback to current time if stat fails (e.g., file deleted mid-process)
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] stat() failed for ${uri.fsPath}: ${statErr}`);
+            }
 
             if (!plan) {
                 // New plan - parse and insert
@@ -267,8 +414,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     dependencies: metadata.dependencies,
                     repoScope: '',
                     workspaceId: workspaceId,
-                    createdAt: now,
-                    updatedAt: now,
+                    createdAt: fileBirthtime,
+                    updatedAt: fileMtime,
                     lastAction: '',
                     sourceType: 'local',
                     brainSourcePath: '',
@@ -291,7 +438,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     complexity: metadata.complexity,
                     tags: metadata.tags,
                     dependencies: metadata.dependencies,
-                    updatedAt: now
+                    updatedAt: fileMtime
                 };
                 await db.upsertPlans([updatedRecord]);
                 plan = updatedRecord;
@@ -384,6 +531,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     public dispose(): void {
+        if (this._scanInterval) {
+            clearInterval(this._scanInterval);
+            this._scanInterval = undefined;
+        }
+
         for (const watcher of this._watchers.values()) {
             watcher.dispose();
         }

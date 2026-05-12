@@ -10,6 +10,32 @@ function withClipboardLock<T>(fn: () => Promise<T>): Promise<T> {
     return next;
 }
 
+// Named timing constants for clipboard paste operations
+const PRE_PASTE_SETTLE_MS = 200;
+const POST_PASTE_SETTLE_MS = 800;
+
+/**
+ * Paste text to terminal via clipboard to bypass PTY line-buffer limits.
+ * Saves existing clipboard content, writes new text, pastes, then restores.
+ */
+export async function pasteTextViaClipboard(
+    terminal: vscode.Terminal,
+    text: string
+): Promise<void> {
+    await withClipboardLock(async () => {
+        let previousClipboard = '';
+        try { previousClipboard = await vscode.env.clipboard.readText(); } catch { /* ignore */ }
+
+        await vscode.env.clipboard.writeText(text);
+        terminal.show(false);
+        await new Promise(r => setTimeout(r, PRE_PASTE_SETTLE_MS));
+        await vscode.commands.executeCommand('workbench.action.terminal.paste');
+
+        await new Promise(r => setTimeout(r, POST_PASTE_SETTLE_MS));
+        try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
+    });
+}
+
 /**
  * Normalize a filesystem path for consistent cross-platform hashing.
  * On Windows, lowercases the path for case-insensitive comparison.
@@ -55,21 +81,9 @@ export async function sendRobustText(
     if (text.length > CLIPBOARD_PASTE_THRESHOLD) {
         _log(`Large payload (${text.length} chars) for '${terminal.name}', using clipboard paste delivery.`);
         try {
-            await withClipboardLock(async () => {
-                let previousClipboard = '';
-                try { previousClipboard = await vscode.env.clipboard.readText(); } catch { /* ignore */ }
+            await pasteTextViaClipboard(terminal, text);
 
-                await vscode.env.clipboard.writeText(text);
-                terminal.show(false);
-                await new Promise(r => setTimeout(r, 200));
-                await vscode.commands.executeCommand('workbench.action.terminal.paste');
-
-                // Wait for paste to settle, then restore clipboard
-                await new Promise(r => setTimeout(r, 800));
-                try { await vscode.env.clipboard.writeText(previousClipboard); } catch { /* ignore */ }
-            });
-
-            // Submit the pasted content (clipboard paste doesn't need CLI confirmation Enter)
+            // Submit the pasted content
             await new Promise(r => setTimeout(r, NEWLINE_DELAY));
             terminal.sendText('', true);
             _log(`Clipboard paste complete for '${terminal.name}', Enter sent.`);

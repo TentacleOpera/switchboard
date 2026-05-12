@@ -427,6 +427,20 @@
             letter-spacing: 1px;
         }
 
+        .checkbox-label {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            cursor: pointer;
+            user-select: none;
+            margin-bottom: 4px;
+        }
+        .checkbox-label:hover {
+            color: var(--text-primary);
+        }
+
         .modal-input,
         .modal-textarea {
             width: 100%;
@@ -559,6 +573,16 @@
                 <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);">
                     IDLE
                 </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    WORKFLOW SETTINGS
+                </div>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="prevent-agent-file-opening-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Agent File Opening Prevention</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Auto-close any file that gets opened in the editor. Use "Override Open" right-click to bypass.</span>
+                    </div>
+                </label>
                 <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
             </div>
 
@@ -581,7 +605,44 @@
                         <input id="custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
                         <span>Show as Kanban column</span>
                     </label>
-                    <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
+
+                    <details id="setup-custom-agent-addons" style="margin-top:10px;">
+                       <summary class="modal-label" style="cursor:pointer; user-select:none;">Prompt Add-ons</summary>
+                       <div style="padding:8px 0; display:flex; flex-direction:column; gap:4px;">
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-switchboard-safeguards" style="width:auto;margin:0;"> Switchboard Safeguards</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-git-prohibition" style="width:auto;margin:0;"> Git Prohibition</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-workspace-detection" style="width:auto;margin:0;"> Workspace Type Detection</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-inline-challenge" style="width:auto;margin:0;"> Inline Adversarial Challenge</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-accuracy" style="width:auto;margin:0;"> Accuracy Mode</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-pair-programming" style="width:auto;margin:0;"> Pair Programming (Complex only)</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-aggressive-pair" style="width:auto;margin:0;"> Aggressive Pair Programming</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-advanced-reviewer" style="width:auto;margin:0;"> Advanced Regression Analysis</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-dependency-check" style="width:auto;margin:0;"> Dependency Check</label>
+                         <label class="checkbox-label"><input type="checkbox" id="setup-ca-addon-split-plan" style="width:auto;margin:0;"> Split Plan (Routine/Complex files)</label>
+                         <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                           <input type="checkbox" id="setup-ca-addon-complexity-scoring" style="width:auto;margin:0;">
+                           <span>Apply Complexity Scoring (if plan lacks Complexity Audit)</span>
+                         </label>
+                         <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                           <input type="checkbox" id="setup-ca-addon-ticket-update" style="width:auto;margin:0;">
+                           <span>Enable Ticket Update (add AI Analysis comment to ticket)</span>
+                         </label>
+                         <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                           <input type="checkbox" id="setup-ca-addon-research" style="width:auto;margin:0;">
+                           <span>Enable Deep Research (50-100 sources, codebase + web)</span>
+                         </label>
+
+                         <div style="margin-top:8px;">
+                           <label class="modal-label" style="margin-bottom:4px;">Design Doc Link</label>
+                           <input id="setup-ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
+                         </div>
+
+                         <div>
+                           <label class="modal-label" style="margin-bottom:4px;">Custom Workflow Path</label>
+                           <input id="setup-ca-addon-workflow-path" class="modal-input" type="text" placeholder=".agent/workflows/custom.md" style="margin-bottom:8px;">
+                         </div>
+                       </div>
+                     </details>                    <div id="custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
                     <div class="flex gap-2" style="margin-top: 10px;">
                         <button id="btn-save-custom-agent" class="action-btn w-full">SAVE AGENT</button>
                         <button id="btn-cancel-custom-agent" class="secondary-btn w-full">CANCEL</button>
@@ -661,6 +722,29 @@
                         REBUILD DATABASE
                     </button>
                 </div>
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Notion Database Backup</span>
+                        <span id="notion-backup-status" style="margin-left:auto; font-size:9px; color:var(--text-secondary);">Not configured</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Backup kanban.db to a Notion database for cloud-based storage and restore. Requires Notion integration token.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">Notion Database URL</span>
+                        <input id="notion-db-url-input" type="text" placeholder="https://notion.so/workspace/..." style="width:100%;">
+                    </label>
+                    <div style="font-size:9px; color:var(--text-secondary); margin-top:4px; line-height:1.3;">
+                        Enter the URL of your Notion database. The database should have properties matching kanban.db schema.
+                    </div>
+                    <div style="display:flex; gap:8px; margin-top:8px;">
+                        <button id="notion-backup-btn" class="db-action-btn" style="flex:1;">BACKUP TO NOTION</button>
+                        <button id="notion-restore-btn" class="db-action-btn" style="flex:1;">RESTORE FROM NOTION</button>
+                    </div>
+                    <button id="notion-auto-setup-btn" class="secondary-btn w-full" style="margin-top:8px;">AUTO-CREATE NOTION DATABASE</button>
+                    <div id="notion-backup-error" style="min-height:16px; color: var(--accent-red); font-size: 10px; margin-top: 6px;"></div>
+                    <div id="notion-backup-progress" style="font-size: 10px; color: var(--text-secondary); margin-top: 4px; font-family: var(--font-mono);"></div>
+                </div>
             </div>
 
         <div class="tab-content" id="workspace-mapping-fields" data-tab-content="workspace">
@@ -680,6 +764,14 @@
                     <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
                 </div>
                 <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
+
+                <div class="setup-option-group" style="display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
+                    <input type="checkbox" id="global-settings-toggle" checked style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Global Settings</span>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Persist settings across workspace switches. When disabled, settings are workspace-specific.</span>
+                    </div>
+                </div>
             </div>
 
         <div class="tab-content" id="project-mgmt-fields" data-tab-content="integration">
@@ -751,6 +843,33 @@
                             </label>
                             <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
                                 Automatically push plan changes to ClickUp as you move cards between columns
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-delete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Delete ClickUp tasks when plans are deleted in Switchboard</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When enabled, deleting a plan in Switchboard will delete the corresponding task in ClickUp
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-complete-sync" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Sync completed status to ClickUp</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                When enabled, moving a plan to COMPLETED in Switchboard will update the ClickUp task status
+                            </div>
+                        </div>
+                        <div>
+                            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                                <input id="clickup-option-exclude-backlog" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                                <span>Exclude backlog tasks from sync</span>
+                            </label>
+                            <div style="font-size:9px; color:var(--text-secondary); margin-left:20px; margin-top:2px; line-height:1.3;">
+                                Keep sync lightweight by excluding tasks whose status is named "backlog". Only active tasks will be imported.
                             </div>
                         </div>
                     </div>
@@ -1213,11 +1332,13 @@
         const dbPathDisplay = document.getElementById('current-db-path');
         const setupSaveStatus = document.getElementById('setup-save-status');
         const controlPlaneExplicitRootInput = document.getElementById('control-plane-explicit-root-input');
+        const controlPlaneModeMigrateButton = document.getElementById('btn-control-plane-mode-migrate');
+        const controlPlaneModeFreshButton = document.getElementById('btn-control-plane-mode-fresh');
 
         let editingCustomAgentId = null;
         let editingKanbanColumnId = null;
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: false };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: true };
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
@@ -1386,6 +1507,7 @@
             const tabLoadCallbacks = {
                 'setup': () => {
                     vscode.postMessage({ type: 'getGitIgnoreConfig' });
+                    vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
                 },
                 'custom-agents': () => {
                     vscode.postMessage({ type: 'getCustomAgents' });
@@ -1405,6 +1527,7 @@
                 },
                 'workspace': () => {
                     vscode.postMessage({ type: 'getWorkspaceMappings' });
+                    vscode.postMessage({ type: 'getGlobalSettingsEnabled' });
                 },
                 'sources': () => {
                     vscode.postMessage({ type: 'getPlanningSources' });
@@ -1865,6 +1988,28 @@
             customAgentPromptInput.value = agent?.promptInstructions || '';
             customAgentDragDropModeInput.value = agent?.dragDropMode || 'cli';
             customAgentKanbanInput.checked = agent?.includeInKanban === true;
+
+            // Load addons
+            const addons = agent?.addons || {};
+            document.getElementById('setup-ca-addon-switchboard-safeguards').checked = addons.switchboardSafeguards === true;
+            document.getElementById('setup-ca-addon-git-prohibition').checked = addons.gitProhibitionEnabled === true;
+            document.getElementById('setup-ca-addon-workspace-detection').checked = addons.workspaceTypeDetection === true;
+            document.getElementById('setup-ca-addon-inline-challenge').checked = addons.includeInlineChallenge === true;
+            document.getElementById('setup-ca-addon-accuracy').checked = addons.accurateCodingEnabled === true;
+            document.getElementById('setup-ca-addon-pair-programming').checked = addons.pairProgrammingEnabled === true;
+            document.getElementById('setup-ca-addon-aggressive-pair').checked = addons.aggressivePairProgramming === true;
+            document.getElementById('setup-ca-addon-advanced-reviewer').checked = addons.advancedReviewerEnabled === true;
+            document.getElementById('setup-ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
+            document.getElementById('setup-ca-addon-split-plan').checked = addons.splitPlan === true;
+            document.getElementById('setup-ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
+            document.getElementById('setup-ca-addon-ticket-update').checked = addons.ticketUpdateEnabled === true;
+            document.getElementById('setup-ca-addon-research').checked = addons.researchEnabled === true;
+            document.getElementById('setup-ca-addon-design-doc-link').value = addons.designDocLink || '';
+            document.getElementById('setup-ca-addon-workflow-path').value = addons.customWorkflowPath || '';
+
+            // Close details by default
+            document.getElementById('setup-custom-agent-addons').removeAttribute('open');
+
             customAgentError.textContent = '';
             document.getElementById('custom-agent-form').classList.remove('hidden');
             setTimeout(() => customAgentNameInput.focus(), 0);
@@ -1948,29 +2093,44 @@
                 return;
             }
 
-            const existingId = editingCustomAgentId || sanitizeCustomAgentId(name);
-            const role = toCustomAgentRole(existingId);
+            const newId = sanitizeCustomAgentId(name);
+            const role = toCustomAgentRole(newId);
             const nextAgent = {
-                id: existingId,
+                id: newId,
                 role,
                 name,
                 startupCommand,
                 promptInstructions: customAgentPromptInput.value.trim(),
                 includeInKanban: !!customAgentKanbanInput.checked,
                 kanbanOrder: 0,
-                dragDropMode: customAgentDragDropModeInput.value
+                dragDropMode: customAgentDragDropModeInput.value,
+                addons: {
+                    switchboardSafeguards: document.getElementById('setup-ca-addon-switchboard-safeguards').checked,
+                    gitProhibitionEnabled: document.getElementById('setup-ca-addon-git-prohibition').checked,                    workspaceTypeDetection: document.getElementById('setup-ca-addon-workspace-detection').checked,
+                    includeInlineChallenge: document.getElementById('setup-ca-addon-inline-challenge').checked,
+                    accurateCodingEnabled: document.getElementById('setup-ca-addon-accuracy').checked,
+                    pairProgrammingEnabled: document.getElementById('setup-ca-addon-pair-programming').checked,
+                    aggressivePairProgramming: document.getElementById('setup-ca-addon-aggressive-pair').checked,
+                    advancedReviewerEnabled: document.getElementById('setup-ca-addon-advanced-reviewer').checked,
+                    dependencyCheckEnabled: document.getElementById('setup-ca-addon-dependency-check').checked,
+                    splitPlan: document.getElementById('setup-ca-addon-split-plan').checked,
+                    complexityScoringSkill: document.getElementById('setup-ca-addon-complexity-scoring').checked,
+                    ticketUpdateEnabled: document.getElementById('setup-ca-addon-ticket-update').checked,
+                    researchEnabled: document.getElementById('setup-ca-addon-research').checked,
+                    designDocLink: document.getElementById('setup-ca-addon-design-doc-link').value.trim() || undefined,
+                    customWorkflowPath: document.getElementById('setup-ca-addon-workflow-path').value.trim() || undefined,
+                }
             };
-
             const duplicate = lastCustomAgents.find(agent =>
-                agent.id !== nextAgent.id &&
-                agent.name.toLowerCase() === nextAgent.name.toLowerCase()
+                (editingCustomAgentId ? agent.id !== editingCustomAgentId : true) &&
+                (agent.name.toLowerCase() === nextAgent.name.toLowerCase() || agent.id === nextAgent.id)
             );
             if (duplicate) {
                 customAgentError.textContent = 'Agent names must be unique.';
                 return;
             }
 
-            const previousAgent = lastCustomAgents.find(agent => agent.id === nextAgent.id);
+            const previousAgent = lastCustomAgents.find(agent => agent.id === (editingCustomAgentId || nextAgent.id));
             if (previousAgent?.includeInKanban) {
                 nextAgent.kanbanOrder = previousAgent.kanbanOrder;
             } else if (nextAgent.includeInKanban) {
@@ -1985,7 +2145,15 @@
                 nextAgent.kanbanOrder = previousAgent?.kanbanOrder || 0;
             }
 
-            lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
+            if (editingCustomAgentId && editingCustomAgentId !== nextAgent.id) {
+                const oldRole = toCustomAgentRole(editingCustomAgentId);
+                lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== editingCustomAgentId);
+                delete lastVisibleAgents[oldRole];
+                delete lastStartupCommands[oldRole];
+            } else {
+                lastCustomAgents = lastCustomAgents.filter(agent => agent.id !== nextAgent.id);
+            }
+
             lastCustomAgents.push(nextAgent);
             lastCustomAgents.sort((a, b) => (a.kanbanOrder - b.kanbanOrder) || a.name.localeCompare(b.name));
             if (!(nextAgent.role in lastVisibleAgents)) {
@@ -2474,8 +2642,8 @@
             };
             const visibleAgents = {
                 ...getCustomVisibleAgentsPatch(),
-                // gatherer is a built-in column toggled via the Kanban structure list,
-                // not a custom agent — include it explicitly so the server persists the user's preference.
+                // gatherer is a built-in agent toggled via the Agents tab checkboxes.
+                // Include it explicitly so the server persists the user's preference.
                 gatherer: lastVisibleAgents['gatherer'] !== false
             };
             lastGitIgnoreConfig = {
@@ -2647,7 +2815,10 @@
                 createLists: document.getElementById('clickup-option-create-lists')?.checked === true,
                 createCustomFields: document.getElementById('clickup-option-create-custom-fields')?.checked === true,
                 enableRealtimeSync: document.getElementById('clickup-option-enable-realtime-sync')?.checked === true,
-                enableAutoPull: document.getElementById('clickup-option-enable-auto-pull')?.checked === true
+                enableAutoPull: document.getElementById('clickup-option-enable-auto-pull')?.checked === true,
+                deleteSyncEnabled: document.getElementById('clickup-option-delete-sync')?.checked === true,
+                completeSyncEnabled: document.getElementById('clickup-option-complete-sync')?.checked === true,
+                excludeBacklog: document.getElementById('clickup-option-exclude-backlog')?.checked === true
             };
         }
 
@@ -2692,6 +2863,9 @@
             setCheckboxState('clickup-option-create-custom-fields', state.customFieldsReady);
             setCheckboxState('clickup-option-enable-realtime-sync', state.realTimeSyncEnabled);
             setCheckboxState('clickup-option-enable-auto-pull', state.autoPullEnabled);
+            setCheckboxState('clickup-option-delete-sync', state.deleteSyncEnabled === true);
+            setCheckboxState('clickup-option-complete-sync', state.completeSyncEnabled === true);
+            setCheckboxState('clickup-option-exclude-backlog', state.excludeBacklog === true);
 
             const parts = [
                 `Folder: ${state.folderReady ? 'ready' : 'not ready'}`,
@@ -2700,6 +2874,10 @@
                 `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
                 `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`
             ];
+            if (state.deleteSyncEnabled) parts.push('Delete sync: ON');
+            if (state.completeSyncEnabled) parts.push('Complete sync: ON');
+            if (state.excludeBacklog) parts.push('Backlog filter: ON');
+
             summaryEl.style.display = 'block';
             summaryEl.textContent = parts.join(' · ');
         }
@@ -2727,7 +2905,7 @@
             setCheckboxState('linear-option-enable-realtime-sync', state.realTimeSyncEnabled);
             setCheckboxState('linear-option-enable-auto-pull', state.autoPullEnabled);
             setCheckboxState('linear-option-enable-complete-sync', state.completeSyncEnabled !== false);
-            setCheckboxState('linear-option-delete-sync', state.deleteSyncEnabled !== false);
+            setCheckboxState('linear-option-delete-sync', state.deleteSyncEnabled === true);
             setCheckboxState('linear-option-exclude-backlog', state.excludeBacklog !== false);
 
             const includeCount = Array.isArray(state.includeProjectNames) ? state.includeProjectNames.length : 0;
@@ -2740,7 +2918,7 @@
                 `Realtime sync: ${state.realTimeSyncEnabled ? 'enabled' : 'disabled'}`,
                 `Auto-pull: ${state.autoPullEnabled ? 'enabled' : 'disabled'}`,
                 `Complete sync: ${state.completeSyncEnabled !== false ? 'enabled' : 'disabled'}`,
-                `Delete sync: ${state.deleteSyncEnabled !== false ? 'enabled' : 'disabled'}`
+                `Delete sync: ${state.deleteSyncEnabled === true ? 'enabled' : 'disabled'}`
             ];
             summaryEl.style.display = 'block';
             summaryEl.textContent = parts.join(' · ');
@@ -3595,6 +3773,34 @@
             vscode.postMessage({ type: 'resetDatabase' });
         });
 
+        // Notion backup configuration
+        document.getElementById('notion-db-url-input')?.addEventListener('change', () => {
+            const url = document.getElementById('notion-db-url-input')?.value.trim();
+            vscode.postMessage({ type: 'configureNotionBackup', databaseUrl: url });
+        });
+
+        document.getElementById('notion-backup-btn')?.addEventListener('click', () => {
+            // Disable buttons during operation
+            document.getElementById('notion-backup-btn').disabled = true;
+            document.getElementById('notion-restore-btn').disabled = true;
+            document.getElementById('notion-auto-setup-btn').disabled = true;
+            vscode.postMessage({ type: 'backupToNotion' });
+        });
+
+        document.getElementById('notion-restore-btn')?.addEventListener('click', () => {
+            document.getElementById('notion-backup-btn').disabled = true;
+            document.getElementById('notion-restore-btn').disabled = true;
+            document.getElementById('notion-auto-setup-btn').disabled = true;
+            vscode.postMessage({ type: 'restoreFromNotion' });
+        });
+
+        document.getElementById('notion-auto-setup-btn')?.addEventListener('click', () => {
+            document.getElementById('notion-backup-btn').disabled = true;
+            document.getElementById('notion-restore-btn').disabled = true;
+            document.getElementById('notion-auto-setup-btn').disabled = true;
+            vscode.postMessage({ type: 'autoCreateNotionDatabase' });
+        });
+
         // Initialize tabs (replaces bindAccordion calls)
         initTabs();
 
@@ -3654,6 +3860,15 @@
             container.innerHTML = '';
             workspaceMappings.forEach((mapping, index) => renderWorkspaceMappingItem(mapping, index));
         }
+
+        document.getElementById('global-settings-toggle')?.addEventListener('change', (e) => {
+            const enabled = e.target.checked;
+            vscode.postMessage({ type: 'setGlobalSettingsEnabled', enabled });
+        });
+
+        document.getElementById('prevent-agent-file-opening-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
+        });
 
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
             vscode.postMessage({
@@ -3780,6 +3995,13 @@
                         });
                     }
                     break;
+                case 'globalSettingsEnabled': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('global-settings-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
                 case 'workspaceMappings': {
                     runSetupHydration(() => {
                         const enabledCheckbox = document.getElementById('workspace-mapping-enabled');
@@ -3846,6 +4068,9 @@
                 }
                 case 'customAgents':
                     if (Array.isArray(message.customAgents)) {
+                        if (message.workspaceRoot) {
+                            currentWorkspaceRoot = message.workspaceRoot;
+                        }
                         runSetupHydration(() => {
                             lastCustomAgents = message.customAgents;
                             if (editingKanbanColumnId !== null) {
@@ -3919,6 +4144,13 @@
                 case 'aggressivePairSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('aggressive-pair-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'preventAgentFileOpeningSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('prevent-agent-file-opening-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;
@@ -4039,6 +4271,18 @@
                     setIntegrationStatus('linear', message.linearSetupComplete ? 'configured' : 'idle');
                     setIntegrationStatus('notion', message.notionSetupComplete ? 'configured' : 'idle');
 
+                    // Update Notion Database Backup status badge
+                    const notionBackupStatusEl = document.getElementById('notion-backup-status');
+                    if (notionBackupStatusEl) {
+                        if (message.notionBackupSetupComplete) {
+                            notionBackupStatusEl.textContent = 'Configured';
+                            notionBackupStatusEl.style.color = 'var(--accent-green)';
+                        } else {
+                            notionBackupStatusEl.textContent = 'Not configured';
+                            notionBackupStatusEl.style.color = 'var(--text-secondary)';
+                        }
+                    }
+
                     // Populate masked tokens if they exist
                     const tokenFieldMap = [
                         { flag: message.clickupHasToken, id: 'clickup-token-input' },
@@ -4121,6 +4365,64 @@
                     setApplyButtonBusy('notion', false);
                     setIntegrationStatus('notion', message.success ? 'configured' : 'failed', message.error || '');
                     break;
+                case 'notionBackupConfigResult': {
+                    const status = message.success ? 'Configured' : 'Not configured';
+                    const badge = document.getElementById('notion-backup-status');
+                    if (badge) badge.textContent = status;
+                    const error = document.getElementById('notion-backup-error');
+                    if (error && !message.success) error.textContent = message.error || 'Configuration failed';
+                    break;
+                }
+                case 'notionBackupResult': {
+                    const backupError = document.getElementById('notion-backup-error');
+                    const backupProgress = document.getElementById('notion-backup-progress');
+                    if (message.success) {
+                        if (backupError) backupError.textContent = '';
+                        if (backupProgress) backupProgress.textContent = `Backed up ${message.backedUp}/${message.total} plans`;
+                    } else {
+                        if (backupError) backupError.textContent = message.error || 'Backup failed';
+                        if (backupProgress) backupProgress.textContent = `Partial: ${message.backedUp}/${message.total}`;
+                    }
+                    // Re-enable buttons
+                    document.getElementById('notion-backup-btn').disabled = false;
+                    document.getElementById('notion-restore-btn').disabled = false;
+                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    break;
+                }
+                case 'notionRestoreResult': {
+                    const restoreError = document.getElementById('notion-backup-error');
+                    const restoreProgress = document.getElementById('notion-backup-progress');
+                    if (message.success) {
+                        if (restoreError) restoreError.textContent = '';
+                        if (restoreProgress) restoreProgress.textContent = `Restored ${message.restored} plans (${message.skipped} skipped)`;
+                    } else {
+                        if (restoreError) restoreError.textContent = message.error || 'Restore failed';
+                    }
+                    document.getElementById('notion-backup-btn').disabled = false;
+                    document.getElementById('notion-restore-btn').disabled = false;
+                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    break;
+                }
+                case 'notionAutoCreateResult': {
+                    const autoError = document.getElementById('notion-backup-error');
+                    if (message.success && message.databaseUrl) {
+                        const input = document.getElementById('notion-db-url-input');
+                        if (input) input.value = message.databaseUrl;
+                        if (autoError) autoError.textContent = '';
+                        document.getElementById('notion-backup-status').textContent = 'Configured';
+                    } else {
+                        if (autoError) autoError.textContent = message.error || 'Auto-create failed';
+                    }
+                    document.getElementById('notion-backup-btn').disabled = false;
+                    document.getElementById('notion-restore-btn').disabled = false;
+                    document.getElementById('notion-auto-setup-btn').disabled = false;
+                    break;
+                }
+                case 'notionBackupProgress': {
+                    const progressEl = document.getElementById('notion-backup-progress');
+                    if (progressEl) progressEl.textContent = `${message.action} plan ${message.current} of ${message.total}...`;
+                    break;
+                }
                 case 'openSetupSection':
                     if (message.section === 'project-mgmt') {
                         activateTab('integration');

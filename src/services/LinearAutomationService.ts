@@ -112,14 +112,6 @@ export class LinearAutomationService {
         return String(value || '').replace(/\s+/g, ' ').trim();
     }
 
-    private _truncate(value: string, maxLength: number): string {
-        const normalized = this._normalizeWhitespace(value);
-        if (normalized.length <= maxLength) {
-            return normalized;
-        }
-        return `${normalized.slice(0, Math.max(0, maxLength - 1)).trimEnd()}…`;
-    }
-
     private _buildStableAutomationId(issueId: string, issueIdentifier?: string): string {
         const issueSlug = this._slugify(issueIdentifier || issueId, 'issue');
         const stableHash = crypto.createHash('sha256')
@@ -157,51 +149,17 @@ export class LinearAutomationService {
         return fs.promises.readFile(resolvedPlanFile, 'utf8');
     }
 
-    private _buildGoal(issue: LinearAutomationIssueSummary): string {
-        return issue.description
-            ? issue.description
-            : `Complete the work requested in Linear issue ${issue.identifier || issue.id}.`;
-    }
-
-    private _buildProposedChanges(issue: LinearAutomationIssueSummary): string {
-        const summary = issue.description
-            ? this._truncate(issue.description, 180)
-            : `Complete the work requested in Linear issue ${issue.identifier || issue.id}.`;
-        return [
-            '- Review the Linear issue context and confirm the requested outcome.',
-            `- Implement the requested work: ${summary}`,
-            '- Capture the resulting changes in this plan so the final result can be written back to Linear.'
-        ].join('\n');
-    }
-
     private _buildPlanContent(
         issue: LinearAutomationIssueSummary,
-        rule: LinearAutomationRule,
-        planId: string,
-        sessionId: string
+        rule: LinearAutomationRule
     ): string {
         const reference = issue.identifier || issue.id;
         const metadataLines = [
             `> Imported from Linear issue \`${reference}\``,
             `> **Linear Issue ID:** ${issue.id}`,
-            `> **Plan ID:** ${planId}`,
-            `> **Session ID:** ${sessionId}`,
             `> **Automation Rule:** ${rule.name}`,
-            issue.url ? `> **URL:** ${issue.url}` : '',
-            issue.stateName ? `> **State:** ${issue.stateName}` : '',
-            issue.labels.length > 0 ? `> **Labels:** ${issue.labels.join(', ')}` : ''
-        ].filter(Boolean);
-
-        const notesLines = [
-            '## Linear Issue Notes',
-            '',
-            `**Start Column:** ${rule.targetColumn}`,
-            `**Final Column:** ${rule.finalColumn}`,
-            `**Write Back on Complete:** ${rule.writeBackOnComplete ? 'yes' : 'no'}`,
-            issue.identifier ? `**Linear Identifier:** ${issue.identifier}` : '',
-            issue.url ? `**Issue URL:** ${issue.url}` : '',
-            issue.stateName ? `**Current Linear State:** ${issue.stateName}${issue.stateType ? ` (${issue.stateType})` : ''}` : '',
-            issue.labels.length > 0 ? `**Labels:** ${issue.labels.join(', ')}` : ''
+            issue.identifier ? `> **Identifier:** ${issue.identifier}` : '',
+            issue.url ? `> **URL:** ${issue.url}` : ''
         ].filter(Boolean);
 
         return [
@@ -209,25 +167,7 @@ export class LinearAutomationService {
             '',
             ...metadataLines,
             '',
-            '## Metadata',
-            '',
-            `**Tags:** ${issue.labels.join(', ') || 'linear'}`,
-            '**Complexity:** Unknown',
-            '',
-            '## Goal',
-            '',
-            this._buildGoal(issue),
-            '',
-            '## Proposed Changes',
-            '',
-            this._buildProposedChanges(issue),
-            '',
-            ...notesLines,
-            '',
-            '## Switchboard State',
-            '',
-            `**Kanban Column:** ${rule.targetColumn}`,
-            '**Status:** active'
+            issue.description || ''
         ].join('\n');
     }
 
@@ -479,7 +419,7 @@ export class LinearAutomationService {
                 try {
                     await fs.promises.writeFile(
                         planFile,
-                        this._buildPlanContent(issueSummary, matchedRule, stableAutomationId, stableAutomationId),
+                        this._buildPlanContent(issueSummary, matchedRule),
                         { encoding: 'utf8', flag: 'wx' }
                     );
                     console.log(`[LinearAutomation] Created plan ${planFile} for Linear issue ${issue.identifier} (${normalizedIssueId})`);

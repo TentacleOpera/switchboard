@@ -21,7 +21,7 @@ function readText(result) {
     return result?.content?.[0]?.text || '';
 }
 
-function buildPlanContent(sessionId, kanbanColumn) {
+function buildPlanContent(sessionId) {
     return [
         '# Child Repo Fixture',
         '',
@@ -30,12 +30,6 @@ function buildPlanContent(sessionId, kanbanColumn) {
         '',
         `**Plan ID:** ${sessionId}`,
         `**Session ID:** ${sessionId}`,
-        '',
-        '## Switchboard State',
-        `**Kanban Column:** ${kanbanColumn}`,
-        '**Status:** active',
-        '**Last Updated:** 2026-04-15T00:00:00.000Z',
-        '**Format Version:** 1',
         ''
     ].join('\n');
 }
@@ -129,14 +123,16 @@ async function run() {
     );
     fs.writeFileSync(
         path.join(childPlansDir, 'child-fixture.md'),
-        buildPlanContent('child-fragmentation-fixture', 'custom_column_docs_ready'),
+        buildPlanContent('child-fragmentation-fixture'),
         'utf8'
     );
+
+    const db = KanbanDatabase.forWorkspace(childRepoRoot);
+    await db.createIfMissing();
 
     const imported = await importPlanFiles(childRepoRoot, controlPlaneRoot);
     assert.strictEqual(imported.count, 1, 'Expected importPlanFiles to discover the child plan fixture.');
 
-    const db = KanbanDatabase.forWorkspace(childRepoRoot);
     try {
         const ready = await db.ensureReady();
         assert.strictEqual(ready, true, 'Expected child repo KanbanDatabase to initialize for regression coverage.');
@@ -145,8 +141,8 @@ async function run() {
         assert.ok(importedPlan, 'Expected imported child fixture to be persisted.');
         assert.strictEqual(
             importedPlan?.kanbanColumn,
-            'custom_column_docs_ready',
-            'Expected child plan import to validate custom columns against the parent control-plane state.json.'
+            'CREATED',
+            'Expected importer to default to CREATED since file-based state inspection is disabled.'
         );
     } finally {
         await KanbanDatabase.invalidateWorkspace(childRepoRoot);

@@ -8,6 +8,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
+import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
 import { KanbanDatabase, WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
@@ -28,12 +29,23 @@ import { ResearchImportService } from './services/ResearchImportService';
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
 
+// Status bar item for file opening prevention toggle
+let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
+
 // Global references for bundled MCP server lifecycle
 let mcpServerProcess: ChildProcess | null = null;
 let mcpOutputChannel: vscode.OutputChannel | null = null;
 let mcpHealthCheckInterval: ReturnType<typeof setInterval> | null = null;
 const DISPATCH_SIGNING_KEY_SECRET = 'switchboard.dispatchSigningKey.v1';
 const MCP_PID_FILENAME = '.switchboard/.mcp_server.pid';
+
+// Agent File Opening Prevention: URIs explicitly allowed to stay open
+const allowedUrisToOpen = new Set<string>();
+
+// Sync context key for menu visibility. The context key name uses an "Enabled" suffix
+// to distinguish it from the configuration property "switchboard.preventAgentFileOpening".
+const preventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
+void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', preventAgentFileOpening);
 
 function getWorkspaceMcpDirectory(workspaceRoot: string): string {
     return path.join(workspaceRoot, '.switchboard', 'MCP');
@@ -1095,6 +1107,17 @@ export async function activate(context: vscode.ExtensionContext) {
         mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
     }
     const kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
+
+    const globalPlanWatcher = new GlobalPlanWatcherService(
+        (workspaceRoot: string) => (kanbanProvider as any)._getClickUpService(workspaceRoot),
+        mcpOutputChannel
+    );
+    await globalPlanWatcher.initialize();
+    context.subscriptions.push(globalPlanWatcher);
+
+    // Wire the watcher into the already-created KanbanProvider
+    await kanbanProvider.setGlobalPlanWatcher(globalPlanWatcher);
+
     const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
     const dispatchSigningKey = await getOrCreateDispatchSigningKey(context);
@@ -1305,7 +1328,7 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
     if (workspaceRoot) {
-        void taskViewerProvider.initializeKanbanDbOnStartup();
+        await taskViewerProvider.initializeKanbanDbOnStartup();
     }
     const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async () => {
         await kanbanProvider.open();
@@ -1600,6 +1623,11 @@ export async function activate(context: vscode.ExtensionContext) {
         return await taskViewerProvider.handleAnalystContextMapBatch(sessionIds, workspaceRoot);
     });
     context.subscriptions.push(analystMapBatchFromKanbanDisposable);
+
+    const triggerPlanScanDisposable = vscode.commands.registerCommand('switchboard.triggerPlanScan', async () => {
+        await kanbanProvider.triggerPlanScan();
+    });
+    context.subscriptions.push(triggerPlanScanDisposable);
 
     const batchTriggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerBatchAgentFromKanban', async (role: string, sessionIds: string[], instruction?: string, workspaceRoot?: string, targetTerminalOverride?: string) => {
         return taskViewerProvider.handleKanbanBatchTrigger(role, sessionIds, instruction, workspaceRoot, targetTerminalOverride);
@@ -2086,6 +2114,46 @@ export async function activate(context: vscode.ExtensionContext) {
             }
         }));
 
+        // Auto-close opened files (Agent File Opening Prevention)
+        context.subscriptions.push(
+            vscode.window.tabGroups.onDidChangeTabs((event) => {
+                const config = vscode.workspace.getConfiguration('switchboard');
+                if (!config.get<boolean>('preventAgentFileOpening')) {
+                    return;
+                }
+
+                for (const tab of event.opened) {
+                    if (tab.input instanceof vscode.TabInputText) {
+                        const uriString = tab.input.uri.toString();
+                        if (allowedUrisToOpen.has(uriString)) {
+                            allowedUrisToOpen.delete(uriString);
+                            continue;
+                        }
+                        vscode.window.tabGroups.close(tab);
+                    }
+                }
+            })
+        );
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('switchboard.forceOpenFile', async (uri: vscode.Uri) => {
+                if (!uri) {
+                    return;
+                }
+                allowedUrisToOpen.add(uri.toString());
+                await vscode.commands.executeCommand('vscode.open', uri);
+            })
+        );
+
+        context.subscriptions.push(
+            vscode.commands.registerCommand('switchboard.togglePreventAgentFileOpening', async () => {
+                const config = vscode.workspace.getConfiguration('switchboard');
+                const current = config.get<boolean>('preventAgentFileOpening', false);
+                await config.update('preventAgentFileOpening', !current, vscode.ConfigurationTarget.Workspace);
+                // UI refresh is handled by the configuration change listener.
+            })
+        );
+
         // 9. LEASE SYSTEM: Heartbeat removed — only used for MCP server re-registration.
     }
 
@@ -2243,8 +2311,29 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(setupStatusBarItem);
     }
 
+    // Initialize file opening prevention status bar item (unconditional — runtime toggle)
+    fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
+    const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
+    fileOpeningPreventionStatusBarItem.text = currentPreventAgentFileOpening ? '$(shield) Agent Open: Blocked' : '$(shield) Agent Open: Allowed';
+    fileOpeningPreventionStatusBarItem.tooltip = currentPreventAgentFileOpening
+        ? 'Agent file opening is blocked. Click to allow agent file opening.'
+        : 'Agent file opening is allowed. Click to block agent file opening.';
+    fileOpeningPreventionStatusBarItem.command = 'switchboard.togglePreventAgentFileOpening';
+    fileOpeningPreventionStatusBarItem.show();
+    context.subscriptions.push(fileOpeningPreventionStatusBarItem);
+
     // Listen for configuration changes
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
+        if (e.affectsConfiguration('switchboard.preventAgentFileOpening')) {
+            const value = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
+            void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', value);
+            if (fileOpeningPreventionStatusBarItem) {
+                fileOpeningPreventionStatusBarItem.text = value ? '$(shield) Agent Open: Blocked' : '$(shield) Agent Open: Allowed';
+                fileOpeningPreventionStatusBarItem.tooltip = value
+                    ? 'Agent file opening is blocked. Click to allow agent file opening.'
+                    : 'Agent file opening is allowed. Click to block agent file opening.';
+            }
+        }
         if (e.affectsConfiguration('switchboard')) {
             syncSettingsToMcp();
         }
@@ -2782,10 +2871,10 @@ export async function activate(context: vscode.ExtensionContext) {
         // Resolve effective workspace root based on mappings to ensure terminals open in correct workspace
         const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
 
-        const visibleAgents = await taskViewerProvider.getVisibleAgents();
+        const visibleAgents = await taskViewerProvider.getVisibleAgents(effectiveWorkspaceRoot);
         const includeJulesMonitor = visibleAgents.jules !== false;
-        const customAgents = await taskViewerProvider.getCustomAgents();
-        const startupCommands = await taskViewerProvider.getStartupCommands();
+        const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
+        const startupCommands = await taskViewerProvider.getStartupCommands(effectiveWorkspaceRoot);
         const allBuiltInAgents = [
             { name: 'Planner', role: 'planner' },
             { name: 'Lead Coder', role: 'lead' },
@@ -3299,7 +3388,7 @@ const AGENTS_PROTOCOL_HEADER = '# AGENTS.md - Switchboard Protocol';
 const AGENTS_BLOCK_START = '<!-- switchboard:agents-protocol:start -->';
 const AGENTS_BLOCK_END = '<!-- switchboard:agents-protocol:end -->';
 
-type AgentsProtocolStatus = 'created' | 'appended' | 'skipped' | 'failed';
+type AgentsProtocolStatus = 'created' | 'appended' | 'skipped' | 'updated' | 'failed';
 
 function getErrorMessage(error: unknown): string {
     if (error instanceof Error) {
@@ -3383,7 +3472,31 @@ async function ensureAgentsProtocol(
         };
     }
 
-    if ((hasBlockStart && hasBlockEnd) || hasProtocolHeaderLine(targetContent)) {
+    if (hasBlockStart && hasBlockEnd) {
+        // Extract existing block content
+        const existingBlockContent = targetContent.substring(
+            blockStartIndex + AGENTS_BLOCK_START.length,
+            blockEndIndex
+        ).trim();
+
+        // Compare with bundled source (trimmed to avoid whitespace differences)
+        if (existingBlockContent === sourceContent.trim()) {
+            return { status: 'skipped', reason: 'Switchboard protocol block already up-to-date' };
+        }
+
+        // Content differs — perform in-place update
+        try {
+            const before = targetContent.substring(0, blockStartIndex);
+            const after = targetContent.substring(blockEndIndex + AGENTS_BLOCK_END.length);
+            const updated = before + managedBlock + after;
+            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(updated, 'utf8'));
+            return { status: 'updated', reason: 'Switchboard protocol block updated to latest bundled version' };
+        } catch (e) {
+            return { status: 'failed', reason: `Failed to update AGENTS.md: ${getErrorMessage(e)}` };
+        }
+    }
+
+    if (hasProtocolHeaderLine(targetContent)) {
         return { status: 'skipped', reason: 'Switchboard protocol block already present' };
     }
 

@@ -26,7 +26,7 @@ Before EVERY response, you MUST:
 1. **Scan** the user's message for explicit workflow commands from the table above (prefer `/workflow` forms).
 2. **Do not auto-trigger on generic language** (for example: "review this", "delegate this", "quick start") unless the user explicitly asks to run that workflow.
 3. **If a command match is found**: Read the workflow file with `view_file .agent/workflows/[WORKFLOW].md` and execute it step-by-step. Do NOT improvise an alternative approach.
-4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `kanban_operations` skill (run `node .agent/skills/kanban_operations/get-state.js <workspace_id>`) to instantly identify the target plans.
+4. **Fast Kanban Resolution**: If the user asks about plans in specific Kanban columns (e.g. "update all created plans"), you MUST use the `query_switchboard_kanban` skill (read `.switchboard/workspace-id` for ID and DB path, then query with sqlite3) to instantly identify the target plans.
 5. **If no match is found**: Respond normally.
 
 ### Execution Rules
@@ -62,7 +62,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer the `kanban_operations` skill (run `node .agent/skills/kanban_operations/move-card.js <session_id> <target_column>`) over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
+Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer the `query_switchboard_kanban` skill (use SQL: `UPDATE plans SET kanban_column = '<target>' WHERE session_id = '<session_id>'`) over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
 
 ### 📚 Available Skills
 
@@ -71,14 +71,36 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | Skill | When to Use |
 |-------|-------------|
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
+| `clickup_api` | Direct ClickUp API access via LocalApiServer proxy (replaces call_clickup_api) |
+| `clickup_attach` | Attach files to ClickUp tasks via LocalApiServer (replaces clickup_attach) |
+| `clickup_create_subpage` | Create doc pages in ClickUp via LocalApiServer (replaces clickup_create_subpage) |
+| `clickup_create_task` | Create ClickUp tasks with optional subtasks via LocalApiServer (replaces clickup_create_task) |
+| `clickup_fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
+| `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
+| `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
 | `review` | User asks to review code changes, a PR, or specific files |
-| `kanban_operations` | Move kanban cards or query kanban state via direct database access |
+| `query_switchboard_kanban` | Query kanban state or move cards via direct SQL access to kanban.db |
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |
 | `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
+| `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 
 **Skill Files Location**: `.agent/skills/` (distributed with plugin)
+
+### 📂 Workspace Detection for Plan Creation
+
+When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/` directory to target:
+
+1. **Primary signal: Active IDE workspace** — If the user's active editor or focused workspace folder is within a specific workspace root, write plans to that workspace's `.switchboard/plans/` directory. This is the most reliable signal.
+
+2. **Secondary signal: Task content keywords** — If the active workspace signal is ambiguous (e.g., the user is in a generic file), look for project-specific keywords in the task description. This is a hint, not a rule.
+
+3. **Tertiary signal: `.switchboard/` existence** — Confirm the selected workspace has a `.switchboard/plans/` directory before writing. If it doesn't exist, the workspace may not be a Switchboard-managed project.
+
+4. **Fallback: Ask the user** — If detection is ambiguous (multiple signals conflict or no signal matches), ask the user which workspace to use. Do NOT silently default to any workspace.
+
+**Edge case**: If the user has multiple workspace folders open in VS Code, the active editor's containing workspace folder is the strongest signal.
 

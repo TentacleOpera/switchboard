@@ -24,7 +24,7 @@ export interface LinearConfig {
   autoPullEnabled: boolean;
   pullIntervalMinutes: AutoPullIntervalMinutes;
   automationRules: LinearAutomationRule[];
-  deleteSyncEnabled?: boolean;  // default: true — archive Linear issue when plan is deleted
+  deleteSyncEnabled?: boolean;  // default: false — archive Linear issue when plan is deleted (opt-in)
   completeSyncEnabled?: boolean;  // default: true — sync completed status to Linear
   excludeBacklog?: boolean;  // default: true — exclude backlog issues from sync
   selectedProjectName: string;  // Persisted project picker value for sidebar filter
@@ -179,6 +179,7 @@ export class LinearSyncService {
       autoPullEnabled: false,
       pullIntervalMinutes: 60,
       automationRules: [],
+      deleteSyncEnabled: false,  // default false — require explicit opt-in
       completeSyncEnabled: true,
       excludeBacklog: true,  // default to excluding backlog for lightweight sync
       selectedProjectName: ''  // default to no project selected
@@ -218,7 +219,7 @@ export class LinearSyncService {
       pullIntervalMinutes: normalizedInterval,
       automationRules: normalizeLinearAutomationRules(raw.automationRules),
       deleteSyncEnabled: raw.deleteSyncEnabled === undefined
-        ? (raw.setupComplete === true)  // default true for existing setups
+        ? false  // Changed from (raw.setupComplete === true) — require explicit opt-in for ALL users
         : raw.deleteSyncEnabled === true,
       completeSyncEnabled: raw.completeSyncEnabled !== false,  // default true
       excludeBacklog: raw.excludeBacklog !== false,  // default true — exclude backlog issues
@@ -1008,6 +1009,93 @@ export class LinearSyncService {
     }
   }
 
+  public async uploadAttachment(issueId: string, buffer: Buffer, fileName: string): Promise<{ url: string }> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    // 1. Request upload URL
+    const uploadRequestResult = await this.graphqlRequest(`
+      mutation($filename: String!, $contentType: String!, $size: Int!) {
+        fileUpload(filename: $filename, contentType: $contentType, size: $size) {
+          uploadPageResponse {
+            headers { key value }
+            uploadUrl
+          }
+          assetUrl
+        }
+      }
+    `, {
+      filename: fileName,
+      contentType: 'application/octet-stream',
+      size: buffer.length
+    });
+
+    const uploadData = uploadRequestResult.data?.fileUpload;
+    if (!uploadData?.uploadPageResponse) {
+      throw new Error('Failed to request Linear upload URL');
+    }
+
+    const { uploadUrl, headers } = uploadData.uploadPageResponse;
+    const assetUrl = uploadData.assetUrl;
+
+    // 2. Upload file
+    await new Promise((resolve, reject) => {
+      const parsedUrl = new URL(uploadUrl);
+      const options = {
+        hostname: parsedUrl.hostname,
+        path: parsedUrl.pathname + parsedUrl.search,
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/octet-stream',
+          'Content-Length': buffer.length
+        }
+      };
+
+      // Add custom headers from Linear
+      if (Array.isArray(headers)) {
+        for (const { key, value } of headers) {
+          (options.headers as any)[key] = value;
+        }
+      }
+
+      const req = https.request(options, (res) => {
+        if (res.statusCode && res.statusCode >= 200 && res.statusCode < 300) {
+          resolve(true);
+        } else {
+          let raw = '';
+          res.on('data', chunk => raw += chunk);
+          res.on('end', () => reject(new Error(`File upload failed with status ${res.statusCode}: ${raw}`)));
+        }
+      });
+
+      req.on('error', reject);
+      req.write(buffer);
+      req.end();
+    });
+
+    // 3. Create attachment
+    const attachmentCreateResult = await this.graphqlRequest(`
+      mutation($issueId: String!, $url: String!, $title: String!) {
+        attachmentCreate(input: { issueId: $issueId, url: $url, title: $title }) {
+          success
+          attachment { id url }
+        }
+      }
+    `, {
+      issueId,
+      url: assetUrl,
+      title: fileName
+    });
+
+    if (!attachmentCreateResult.data?.attachmentCreate?.success) {
+      throw new Error('Failed to create Linear attachment link');
+    }
+
+    return { url: assetUrl };
+  }
+
   public async updateIssueDescription(issueId: string, description: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) {
@@ -1110,6 +1198,41 @@ export class LinearSyncService {
   }
 
   // ── GraphQL Client ───────────────────────────────────────────
+
+  /**
+   * Generic GraphQL request wrapper for LocalApiServer proxy.
+   */
+  async makeGraphQLRequest(query: string, variables?: Record<string, unknown>): Promise<any> {
+    const result = await this.graphqlRequest(query, variables);
+    return result;
+  }
+
+  /**
+   * Resolve an issue title or identifier to its ID.
+   */
+  async resolveNameToId(name: string): Promise<string | null> {
+    const config = await this.loadConfig();
+    if (!config?.setupComplete) {
+      throw new Error('Linear not configured');
+    }
+
+    const normalizedName = name.trim().toLowerCase();
+
+    // 1. Check if it's an identifier (e.g., LIN-123)
+    if (this._isIssueIdentifier(name)) {
+      const issue = await this.getIssue(name);
+      return issue ? issue.id : null;
+    }
+
+    // 2. Search for issues by title
+    const issues = await this.queryIssues({ search: name });
+    if (issues.length > 0) {
+      const exactMatch = issues.find(i => i.title.toLowerCase() === normalizedName);
+      return exactMatch ? exactMatch.id : issues[0].id;
+    }
+
+    return null;
+  }
 
   /**
    * Authenticated GraphQL request to Linear API.
@@ -1354,7 +1477,7 @@ export class LinearSyncService {
 
       config.realTimeSyncEnabled = options.enableRealtimeSync === true;
       config.autoPullEnabled = options.enableAutoPull === true;
-      config.deleteSyncEnabled = options.deleteSyncEnabled !== false;
+      config.deleteSyncEnabled = options.deleteSyncEnabled === true;
       config.completeSyncEnabled = options.enableCompleteSync !== false;
       config.excludeBacklog = options.excludeBacklog !== false;  // default true
       config.setupComplete = true;
@@ -1405,12 +1528,12 @@ export class LinearSyncService {
 
         if (!result.data.issueUpdate.success) {
           console.warn(`[LinearSync] Issue update failed for ${existingIssueId}, attempting to recreate`);
-          await this._createIssue(plan, stateId, priority, config);
+          await this.createIssue(plan, stateId, priority, config);
         } else {
           console.log(`[LinearSync] Successfully updated Linear issue ${existingIssueId} for plan ${plan.sessionId}`);
         }
       } else {
-        await this._createIssue(plan, stateId, priority, config);
+        await this.createIssue(plan, stateId, priority, config);
       }
     } catch (error) {
       console.warn(`[LinearSync] Failed to sync plan ${plan.sessionId}:`, error);
@@ -1458,7 +1581,11 @@ export class LinearSyncService {
     }
   }
 
-  private async _createIssue(
+  /**
+   * Internal implementation for creating a Linear issue.
+   * Public to match ClickUpSyncService.createTask().
+   */
+  public async createIssue(
     plan: { sessionId: string; topic: string; planFile: string },
     stateId: string,
     priority: number,
@@ -1783,9 +1910,7 @@ export class LinearSyncService {
           '',
           'TODO',
           '',
-          notesLines,
-          '',
-          `## Switchboard State\n\n**Kanban Column:** ${kanbanColumn}\n**Status:** active\n`,
+          notesLines
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

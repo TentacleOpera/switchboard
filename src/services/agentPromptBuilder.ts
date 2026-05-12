@@ -15,6 +15,7 @@ export interface BatchPromptPlan {
     complexity?: string;
     dependencies?: string;
     workingDir?: string;
+    sessionId?: string;
 }
 
 /**
@@ -91,6 +92,10 @@ export interface PromptBuilderOptions {
     workspaceRoot?: string;
     /** When true, git prohibition directive is included in planner prompts (default: true). */
     gitProhibitionEnabled?: boolean;
+    /** When true (default), include batchExecutionRules and FOCUS_DIRECTIVE. When false, omit them. */
+    switchboardSafeguardsEnabled?: boolean;
+    /** Optional display label of the column where the plans originated. */
+    sourceColumnLabel?: string;
 }
 
 function applyPromptOverride(
@@ -137,7 +142,7 @@ function withCoderAccuracyInstruction(basePayload: string, enabled: boolean): st
     return `${basePayload}${accuracyInstruction}`;
 }
 
-function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDispatchContext {
+export function buildPromptDispatchContext(plans: BatchPromptPlan[]): PromptDispatchContext {
     const normalizedPlans = plans.map(plan => ({
         ...plan,
         workingDir: (plan.workingDir || '').trim()
@@ -176,7 +181,44 @@ ${perPlanDirectories}`
     };
 }
 
-const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+export const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
+
+export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
+- perform a concise adversarial review of that specific plan,
+- list at least 2 concrete flaws/edge cases and how you'll address them,
+- then execute using those corrections,
+- do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
+
+export const SPLIT_PLAN_DIRECTIVE = `\n\nSPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
+
+export const DEPENDENCY_CHECK_DIRECTIVE = `\n\n[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n`;
+
+export const ADVANCED_REVIEWER_DIRECTIVE = `
+
+ADVANCED REGRESSION ANALYSIS (enabled):
+1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
+2. Check for double-trigger bugs: if you add a UI refresh, verify no caller already triggers one.
+3. Check for race conditions: if the change involves async state (DB writes, file watchers, mtime checks), verify it doesn't conflict with concurrent systems (autoban polling, cross-IDE sync, write serialization chains).
+4. Check for orphaned references: if dead code was removed, grep for any remaining references to the removed identifiers.
+5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
+This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.`;
+
+export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`;
+
+export const DEEP_RESEARCH_DIRECTIVE =
+    `DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research ` +
+    `on the provided plan using the deep_planning skill protocol with depth set to "deep" (50-100 sources). ` +
+    `\n\nSKIP PHASE 0 (Planning Proposal): Research depth is pre-configured. Proceed directly to Phase 1.` +
+    `\n\nEXECUTE FULL DEEP PLANNING PROTOCOL:\n` +
+    `PHASE 1: Codebase Exploration — run parallel searches (find_by_name, grep, list_dir); read key implementation, config, test, and doc files.\n` +
+    `PHASE 2: External Research — use search_web with dynamic date ranges. ` +
+    `IF search_web is unavailable: complete with codebase-only analysis, note gap in "Knowledge Gaps" section, continue to Phase 3.\n` +
+    `PHASE 3: Cross-Reference — compare internal and external findings; identify gaps, anti-patterns, security issues.\n` +
+    `PHASE 4: Synthesis — produce output with: Executive Summary, Current State Analysis, External Research Findings, ` +
+    `Proposed Implementation Plan, Impact Analysis, Source Credibility Assessment, Knowledge Gaps, Recommended Next Steps.\n` +
+    `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;
+
 const DEFAULT_PLANNER_WORKFLOW = '.agent/workflows/improve-plan.md';
 
 /**
@@ -195,11 +237,13 @@ export function buildKanbanBatchPrompt(
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
-    const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? true;
+    const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? false;
     const splitPlan = options?.splitPlan ?? false;
+    const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
+    const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
+    const sourceColumnLabel = options?.sourceColumnLabel;
     const promptOverride = options?.defaultPromptOverrides?.[role] as DefaultPromptOverride | undefined;
 
-    const focusDirective = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
     const parallelInstruction = plans.length > 1
         ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
         : '';
@@ -208,19 +252,28 @@ export function buildKanbanBatchPrompt(
 1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
 2. Execute each plan fully before moving to the next (if sequential).
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
-    const inlineChallengeDirective = `For each plan, before implementation:
-- perform a concise adversarial review of that specific plan,
-- list at least 2 concrete flaws/edge cases and how you'll address them,
-- then execute using those corrections,
-- do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
+    const inlineChallengeDirective = INLINE_CHALLENGE_DIRECTIVE;
     const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
+    // Build sessionId → topic resolution map for dependency display
+    const sessionIdToTopic = new Map<string, string>();
+    plans.forEach(p => {
+        if (p.sessionId) sessionIdToTopic.set(p.sessionId, p.topic);
+    });
+
     const plansWithDeps = plans.filter(p => p.dependencies);
     const depSection = plansWithDeps.length > 0
         ? `\n\nDEPENDENCY ORDER: Execute in order; do not start a plan until its dependencies are implemented:\n${
-            plansWithDeps.map((p, i) => `${i + 1}. [${p.topic}] depends on: ${p.dependencies}`).join('\n')}\n`
+            plansWithDeps.map((p, i) => {
+                const depIds = (p.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
+                const resolvedDeps = depIds.map(depId => {
+                    const resolved = sessionIdToTopic.get(depId);
+                    return resolved || depId;
+                });
+                return `${i + 1}. [${p.topic}] depends on: ${resolvedDeps.join(', ')}`;
+            }).join('\n')}\n`
         : '';
 
     const chatCritiqueDirective =
@@ -230,7 +283,7 @@ export function buildKanbanBatchPrompt(
 
     if (role === 'planner') {
         const workflowPath = options?.plannerWorkflowPath || DEFAULT_PLANNER_WORKFLOW;
-        const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
+        const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? false;
 
         let workspaceTypeBlock = '';
         if (options?.workspaceRoot) {
@@ -246,18 +299,14 @@ export function buildKanbanBatchPrompt(
         let plannerPrompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
 
         // Include batch execution rules for multi-plan dispatches
-        if (plans.length > 1) {
+        if (plans.length > 1 && switchboardSafeguardsEnabled) {
             plannerPrompt += `${batchExecutionRules}\n\n`;
         }
 
         // Append add-on instructions if enabled
-        const aggressiveDirective = aggressivePairProgramming
-            ? `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`
-            : '';
+        const aggressiveDirective = aggressivePairProgramming ? AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE : '';
 
-        const dependencyCheckInstruction = dependencyCheckEnabled
-            ? `\n\n[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n`
-            : '';
+        const dependencyCheckInstruction = dependencyCheckEnabled ? DEPENDENCY_CHECK_DIRECTIVE : '';
 
         const designDocLink = options?.designDocLink?.trim();
         if (designDocLink) {
@@ -266,14 +315,14 @@ export function buildKanbanBatchPrompt(
 
         plannerPrompt += aggressiveDirective + dependencyCheckInstruction;
         if (splitPlan) {
-            plannerPrompt += `\n\nSPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent."`;
+            plannerPrompt += SPLIT_PLAN_DIRECTIVE;
         }
         if (workspaceTypeBlock) {
             plannerPrompt += workspaceTypeBlock + '\n';
         }
 
         // Add dispatch context and plan list (reuse outer variables from buildPromptDispatchContext)
-        plannerPrompt += `${dispatchContextPrefix}${focusDirective}`;
+        plannerPrompt += `${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}`;
 
         // Append git prohibition if enabled (add-on, default true)
         if (gitProhibitionEnabled) {
@@ -295,21 +344,14 @@ export function buildKanbanBatchPrompt(
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         const reviewerExecutionIntro = buildReviewerExecutionIntro(plans.length);
         const reviewerExecutionMode = buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
-        const advancedReviewerBlock = advancedReviewerEnabled ? `
-
-ADVANCED REGRESSION ANALYSIS (enabled):
-1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
-2. Check for double-trigger bugs: if you add a UI refresh, verify no caller already triggers one.
-3. Check for race conditions: if the change involves async state (DB writes, file watchers, mtime checks), verify it doesn't conflict with concurrent systems (autoban polling, cross-IDE sync, write serialization chains).
-4. Check for orphaned references: if dead code was removed, grep for any remaining references to the removed identifiers.
-5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
-This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.` : '';
+        const advancedReviewerBlock = advancedReviewerEnabled ? ADVANCED_REVIEWER_DIRECTIVE : '';
+        const safeguardsBlock = switchboardSafeguardsEnabled
+            ? `${batchExecutionRules}\n\n`
+            : '';
 
         return applyPromptOverride(`${reviewerExecutionIntro}
 
-${batchExecutionRules}
-
-${reviewerExecutionMode}${advancedReviewerBlock}
+${safeguardsBlock}${reviewerExecutionMode}${advancedReviewerBlock}
 
 For each plan:
 1. Use the plan file as the source of truth for the review criteria.
@@ -323,7 +365,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
 ${chatCritiqueDirective}
 
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`, dispatchContextBlock, planList, promptOverride);
@@ -333,15 +375,17 @@ ${planList}`, dispatchContextBlock, planList, promptOverride);
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         const designDocContent = options?.designDocContent?.trim();
         const designDocLink = options?.designDocLink?.trim();
+        const safeguardsBlock = switchboardSafeguardsEnabled
+            ? `${batchExecutionRules}\n\n`
+            : '';
+
         let testerPrompt = `${plans.length <= 1
             ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
             : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`}
 
 ${executionDirective}
 
-${batchExecutionRules}
-
-Mode:
+${safeguardsBlock}Mode:
 - You are the acceptance-tester-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
 - Use the attached Design Doc / PRD as the authoritative requirements baseline.
@@ -354,7 +398,7 @@ For each plan:
 4. Run verification checks as applicable and include results.
 5. Update the original plan with files changed, validation results, and remaining requirement gaps.
 
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -369,13 +413,17 @@ ${planList}`;
     }
 
     if (role === 'lead') {
-        let leadPrompt = `Please execute the following ${plans.length} plans.
+        const safeguardsBlock = switchboardSafeguardsEnabled
+            ? `${batchExecutionRules}${challengeBlock}`
+            : challengeBlock.trim();
+        const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
+        let leadPrompt = `Please execute the following ${plans.length} plans${sourceSuffix}.
 
 ${executionDirective}
 
-${batchExecutionRules}${challengeBlock}
+${safeguardsBlock}
 
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -390,16 +438,21 @@ ${planList}`;
     }
 
     if (role === 'coder') {
+        const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
         const intro = baseInstruction === 'low-complexity'
-            ? `Please execute the following ${plans.length} low-complexity plans from PLAN REVIEWED.`
-            : `Please execute the following ${plans.length} plans.`;
+            ? `Please execute the following ${plans.length} low-complexity plans${sourceSuffix}.`
+            : `Please execute the following ${plans.length} plans${sourceSuffix}.`;
+        const safeguardsBlock = switchboardSafeguardsEnabled
+            ? `${batchExecutionRules}${challengeBlock}`
+            : challengeBlock.trim();
+
         let coderPrompt = withCoderAccuracyInstruction(`${intro}
 
 ${executionDirective}
 
-${batchExecutionRules}${challengeBlock}
+${safeguardsBlock}
 
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
@@ -410,14 +463,107 @@ ${planList}`, accurateCodingEnabled);
         return applyPromptOverride(coderPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
-    return applyPromptOverride(`Please process the following ${plans.length} plans.
+    if (role === 'intern') {
+        let internPrompt = `Please process the following ${plans.length} plans.
 
-${batchExecutionRules}
-
-${dispatchContextPrefix}${focusDirective}${GIT_PROHIBITION_DIRECTIVE}
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
-${planList}`, dispatchContextBlock, planList, promptOverride);
+${planList}`;
+        return applyPromptOverride(internPrompt, dispatchContextBlock, planList, promptOverride);
+    }
+
+    if (role === 'analyst') {
+        let analystPrompt = `Please process the following ${plans.length} plans.
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+
+PLANS TO PROCESS:
+${planList}`;
+        return applyPromptOverride(analystPrompt, dispatchContextBlock, planList, promptOverride);
+    }
+
+    if (role === 'ticket_updater') {
+        const ticketUpdateDirective =
+            `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+            `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+            `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
+            `Do not modify the ticket description. Only add a comment. ` +
+            `If no ticket number is found, skip the ticket update and notify the user.`;
+
+        let updaterPrompt = `You are a Ticket Updater Agent.
+
+STEP 1: Analyze the Plan
+Generate a concise analysis covering:
+- **Goal Summary**: Brief overview of what the plan aims to achieve
+- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas
+- **Key Dependencies**: Major dependencies or blockers
+- **Implementation Notes**: Any notable implementation considerations
+- **Estimated Effort**: Rough effort estimate (if discernible from complexity)
+
+Keep the analysis under 500 words for readability in the ticket.
+
+STEP 2: Update the Ticket
+${ticketUpdateDirective}
+
+Format the analysis as:
+## AI Analysis
+
+[Your analysis content here]
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+
+PLANS TO PROCESS:
+${planList}`;
+        return applyPromptOverride(updaterPrompt, dispatchContextBlock, planList, promptOverride);
+    }
+
+    if (role === 'researcher') {
+        let researcherPrompt = `You are a Researcher Agent.
+
+${DEEP_RESEARCH_DIRECTIVE}
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+
+PLANS TO PROCESS:
+${planList}`;
+        return applyPromptOverride(researcherPrompt, dispatchContextBlock, planList, promptOverride);
+    }
+
+    if (role === 'splitter') {
+        const complexityScoringDirective =
+            `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
+            `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
+            `### Routine and ### Complex / Risky subsections. ` +
+            `Classify each implementation step by complexity before splitting.`;
+
+        let splitterPrompt = `You are a Plan Splitter Agent.
+
+STEP 1: Check for Complexity Audit
+Read the provided plan file. If it lacks a "## Complexity Audit" section with "### Routine" and "### Complex / Risky" subsections, apply the following directive:
+${complexityScoringDirective}
+
+STEP 2: Apply Split Plan Directive
+After ensuring the plan has a Complexity Audit, apply the following directive:
+${SPLIT_PLAN_DIRECTIVE}
+
+STEP 3: Dispatch Instructions (for the USER, not automated)
+After creating both files:
+- Manually drag the original file (Complex) to the Lead Coder column
+- Manually drag the _routine.md file to the Coder column
+
+Create both files in the same directory as the original plan.
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+
+PLANS TO PROCESS:
+${planList}`;
+        return applyPromptOverride(splitterPrompt, dispatchContextBlock, planList, promptOverride);
+    }
+
+    // No fallback — every built-in role must have an explicit template.
+    // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter. Custom agents should be handled at the call site, not here.`);
 }
 
 /**
@@ -435,6 +581,9 @@ export function columnToPromptRole(column: string): string | null {
             return 'reviewer';
         case 'CODE REVIEWED':
             return 'tester';
+        case 'RESEARCHER': return 'researcher';
+        case 'SPLITTER': return 'splitter';
+        case 'TICKET UPDATER': return 'ticket_updater';
         default:
             return column.startsWith('custom_agent_') ? column : null;
     }

@@ -16,7 +16,8 @@ const TEST_SESSION_ID = 'test-session-001';
 const TEST_PLAN: BatchPromptPlan = {
     topic: 'Add user authentication',
     absolutePath: '/mock/workspace/.switchboard/plans/auth_plan.md',
-    complexity: '7'
+    complexity: '7',
+    sessionId: TEST_SESSION_ID
 };
 const TEST_PLANS: BatchPromptPlan[] = [TEST_PLAN];
 
