@@ -3217,9 +3217,9 @@
             if (!container) return [];
             const ids = [];
             container.querySelectorAll('.kanban-card.selected').forEach(el => {
-                ids.push(el.dataset.session);
+                ids.push(el.dataset.planId || el.dataset.session || '');
             });
-            return ids;
+            return ids.filter(Boolean);
         }
 
         /** Get selected session IDs from the dragged card's rendered column container. */
@@ -3227,7 +3227,7 @@
             const container = cardEl ? cardEl.closest('.column-body') : null;
             if (!container) return [];
             return Array.from(container.querySelectorAll('.kanban-card.selected'))
-                .map(el => el.dataset.session)
+                .map(el => el.dataset.planId || el.dataset.session || '')
                 .filter(Boolean);
         }
 
@@ -3235,9 +3235,9 @@
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.sessionId);
+                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.planId || c.sessionId || '');
             }
-            return currentCards.filter(c => c.column === col).map(c => c.sessionId);
+            return currentCards.filter(c => c.column === col).map(c => c.planId || c.sessionId || '');
         }
 
         function escapeAttr(value) {
@@ -3328,7 +3328,7 @@
         function buildBoardSignature(cards) {
             if (!Array.isArray(cards) || cards.length === 0) return '';
             return cards
-                .map(card => `${card.workspaceRoot || ''}|${card.sessionId}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}`)
+                .map(card => `${card.workspaceRoot || ''}|${card.planId || card.sessionId || ''}|${card.column}|${card.topic || ''}|${card.planFile || ''}|${card.complexity || 'Unknown'}|${card.lastActivity || ''}`)
                 .sort()
                 .join('||');
         }
@@ -3823,29 +3823,29 @@
                 // Card selection toggle (click on card body, not on buttons)
                 el.addEventListener('click', (e) => {
                     if (e.target.closest('.card-btn') || e.target.closest('button')) return;
-                    const sid = el.dataset.session;
-                    if (selectedCards.has(sid)) {
-                        selectedCards.delete(sid);
+                    const pid = el.dataset.planId || el.dataset.session || '';
+                    if (selectedCards.has(pid)) {
+                        selectedCards.delete(pid);
                         el.classList.remove('selected');
                     } else {
-                        selectedCards.add(sid);
+                        selectedCards.add(pid);
                         el.classList.add('selected');
                         // Sync sidebar dropdown on unmodified single clicks
                         if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
-                            postKanbanMessage({ type: 'selectPlan', sessionId: sid });
+                            postKanbanMessage({ type: 'selectPlan', sessionId: el.dataset.session || '', planId: pid });
                         }
                     }
                 });
 
                 // Re-apply selection state after re-render
-                if (selectedCards.has(el.dataset.session)) {
+                if (selectedCards.has(el.dataset.planId || el.dataset.session || '')) {
                     el.classList.add('selected');
                 }
             });
 
             document.querySelectorAll('.card-btn.review').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'reviewPlan', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                    postKanbanMessage({ type: 'reviewPlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
 
@@ -3856,11 +3856,11 @@
                         // Optimistic UI: Animate out before sending to backend
                         cardEl.classList.add('card-completing');
                         setTimeout(() => {
-                            postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                            postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                         }, 350); // Slightly less than 400ms to ensure smooth handoff to the backend redraw
                     } else {
                         // Fallback if DOM traversal fails
-                        postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                        postKanbanMessage({ type: 'completePlan', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                     }
                 });
             });
@@ -3869,7 +3869,7 @@
                 btn.addEventListener('click', () => {
                     btn.disabled = true;
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                    postKanbanMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session, column, workspaceRoot: btn.dataset.workspaceRoot });
+                    postKanbanMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', column, workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
 
@@ -3877,34 +3877,36 @@
                 btn.addEventListener('click', () => {
                     btn.disabled = true;
                     btn.textContent = 'Recovering…';
-                    postKanbanMessage({ type: 'recoverSelected', sessionIds: [btn.dataset.session] });
+                    postKanbanMessage({ type: 'recoverSelected', sessionIds: [btn.dataset.session || ''], planIds: [btn.dataset.planId || ''] });
                 });
             });
 
             document.querySelectorAll('.pair-program-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const sessionId = btn.dataset.session;
-                    postKanbanMessage({ type: 'pairProgramCard', sessionId });
+                    const sessionId = btn.dataset.session || '';
+                    const planId = btn.dataset.planId || '';
+                    postKanbanMessage({ type: 'pairProgramCard', sessionId, planId });
                 });
             });
 
             document.querySelectorAll('.send-to-backlog-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                    postKanbanMessage({ type: 'sendToBacklog', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
 
             document.querySelectorAll('.send-to-new-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session, workspaceRoot: btn.dataset.workspaceRoot });
+                    postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
 
             document.querySelectorAll('.card-btn.copy-gather').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    const sessionId = btn.dataset.session;
+                    const sessionId = btn.dataset.session || '';
+                    const planId = btn.dataset.planId || '';
                     const workspaceRoot = btn.dataset.workspaceRoot;
-                    postKanbanMessage({ type: 'copyGatherPrompt', sessionId, workspaceRoot });
+                    postKanbanMessage({ type: 'copyGatherPrompt', sessionId, planId, workspaceRoot });
                     // Visual feedback
                     const originalText = btn.textContent;
                     btn.textContent = 'COPIED';
@@ -3980,7 +3982,7 @@
             // For completed cards, show a Recover button instead of Copy Prompt
             let primaryActionBtn;
             if (isCompleted) {
-                primaryActionBtn = `<button class="card-btn recover" data-session="${card.sessionId}" data-tooltip="Recover this plan">Recover</button>`;
+                primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
                 if (card.column === 'CREATED') {
@@ -3990,25 +3992,25 @@
                 } else if (card.column === 'LEAD CODED' || card.column === 'CODER CODED' || card.column === 'INTERN CODED') {
                     copyLabel = 'Copy review prompt';
                 }
-                primaryActionBtn = `<button class="card-btn copy" data-session="${card.sessionId}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
+                primaryActionBtn = `<button class="card-btn copy" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
             }
 
             const numericScore = parseInt(complexityValue, 10);
             const isHighComplexity = complexityValue === 'High' || (!isNaN(numericScore) && numericScore >= 7);
             const pairProgramBtn = (card.column === 'PLAN REVIEWED' && isHighComplexity)
-                ? `<button class="card-btn pair-program-btn" data-session="${card.sessionId}" data-tooltip="Pair programming (Lead + Coder)">Pair</button>`
+                ? `<button class="card-btn pair-program-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Pair programming (Lead + Coder)">Pair</button>`
                 : '';
             const backlogActionBtn = (!isCompleted && card.column === 'CREATED' && !showingBacklog)
-                ? `<button class="card-btn send-to-backlog-btn" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">→ Backlog</button>`
+                ? `<button class="card-btn send-to-backlog-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move to Backlog">→ Backlog</button>`
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
-                    ? `<button class="card-btn send-to-new-btn" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
+                    ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
             const copyGatherBtn = (card.column === 'CONTEXT GATHERER')
-                ? `<button class="card-btn copy-gather" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy gather prompt to clipboard">📋 Copy Gather</button>`
+                ? `<button class="card-btn copy-gather" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy gather prompt to clipboard">📋 Copy Gather</button>`
                 : '';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
-                : `<button class="card-btn icon-btn complete" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
+                : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
                        <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
                    </button>`;
             const depInfo = resolveCardDependencies(card);
@@ -4023,8 +4025,9 @@
             const depWarningHtml = card.hasBlockingDependencies
                 ? `<span class="dependency-warning" title="${escapeAttr(redTitle)}">!</span>`
                 : '';
+            const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
-                <div class="kanban-card${completedClass}" draggable="true" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
+                <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
                     <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
@@ -4035,7 +4038,7 @@
                             ${copyGatherBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
-                            <button class="card-btn icon-btn review" data-session="${card.sessionId}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
+                            <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
                                 <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M11.5 1.5l3 3L5 14H2v-3L11.5 1.5z"/></svg>
                             </button>
                             ${completeOrDoneBtn}
@@ -4064,18 +4067,19 @@
 
         function sortColumnByDependencies(cards) {
             if (cards.length <= 1) return cards;
-
-            // Build a dual-keyed lookup: sessionId AND normalized topic both map to
-            // the same card. Lets us resolve legacy topic-form deps and new
-            // sessionId-form deps uniformly to a canonical sessionId before DFS.
+            // Build a dual-keyed lookup: planId (primary), sessionId (legacy), AND
+            // normalized topic all map to the same card. Lets us resolve legacy
+            // topic-form deps and new sessionId-form deps uniformly before DFS.
             const keyToCard = new Map();
             for (const c of cards) {
-                if (c.sessionId) keyToCard.set(c.sessionId, c);
+                const cardKey = c.planId || c.sessionId || '';
+                if (cardKey) keyToCard.set(cardKey, c);
+                if (c.sessionId) keyToCard.set(c.sessionId, c); // legacy dep resolution
                 const topicKey = String(c.topic || '').trim().toLowerCase();
                 if (topicKey) keyToCard.set(topicKey, c);
             }
 
-            // Resolve each card's raw dep strings to canonical sessionIds. Drop
+            // Resolve each card's raw dep strings to canonical planIds. Drop
             // unresolved ones (cross-column or deleted targets — cross-column
             // blocking is separately surfaced via hasBlockingDependencies).
             const canonicalDepsFor = new Map();
@@ -4089,11 +4093,13 @@
                     const lookup = sessTokenMatch
                         ? keyToCard.get(key)
                         : (keyToCard.get(key) || keyToCard.get(key.toLowerCase()));
-                    if (lookup && lookup.sessionId && lookup.sessionId !== c.sessionId) {
-                        resolved.push(lookup.sessionId);
+                    const lookupKey = lookup ? (lookup.planId || lookup.sessionId || '') : '';
+                    const cardKey = c.planId || c.sessionId || '';
+                    if (lookupKey && lookupKey !== cardKey) {
+                        resolved.push(lookupKey);
                     }
                 }
-                canonicalDepsFor.set(c.sessionId, Array.from(new Set(resolved)));
+                canonicalDepsFor.set(c.planId || c.sessionId || '', Array.from(new Set(resolved)));
             }
 
             const sorted = [];
@@ -4101,25 +4107,24 @@
             const visiting = new Set();
 
             function visit(card) {
-                if (!card || !card.sessionId) return;
-                if (visited.has(card.sessionId)) return;
-                if (visiting.has(card.sessionId)) {
+                const cardKey = card ? (card.planId || card.sessionId || '') : '';
+                if (!cardKey) return;
+                if (visited.has(cardKey)) return;
+                if (visiting.has(cardKey)) {
                     // Cycle detected — mark visited to break traversal but do NOT
                     // push here. The outer visit() frame that's still on the stack
                     // will push this card exactly once when it finishes.
-                    visited.add(card.sessionId);
+                    visited.add(cardKey);
                     return;
                 }
-                visiting.add(card.sessionId);
-
-                const deps = canonicalDepsFor.get(card.sessionId) || [];
-                for (const depSessionId of deps) {
-                    const dep = keyToCard.get(depSessionId);
+                visiting.add(cardKey);
+                const deps = canonicalDepsFor.get(cardKey) || [];
+                for (const depKey of deps) {
+                    const dep = keyToCard.get(depKey);
                     if (dep) visit(dep);
                 }
-
-                visiting.delete(card.sessionId);
-                visited.add(card.sessionId);
+                visiting.delete(cardKey);
+                visited.add(cardKey);
                 sorted.push(card);
             }
 
@@ -4173,7 +4178,7 @@
                 (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
                     ? e.currentTarget
                     : e.target.closest('.kanban-card');
-            const draggedId = draggedCardEl?.dataset.session;
+            const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session;
             if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
             draggedCardEl.classList.add('dragging');
@@ -4549,6 +4554,24 @@
                     updateWorkspaceSelector();
                     updateWorkspaceFilterBadge();
                     break;
+                case 'moveCards': {
+                    const idsToMove = new Set(Array.isArray(msg.sessionIds) ? msg.sessionIds : []);
+                    const targetCol = msg.targetColumn;
+                    if (!idsToMove.size || !targetCol) break;
+                    let changed = false;
+                    currentCards = currentCards.map(card => {
+                        if (idsToMove.has(card.sessionId)) {
+                            changed = true;
+                            return { ...card, column: targetCol };
+                        }
+                        return card;
+                    });
+                    if (changed) {
+                        lastBoardSignature = buildBoardSignature(currentCards);
+                        renderBoard(currentCards);
+                    }
+                    break;
+                }
                 case 'updateBoard':
                     const nextCards = Array.isArray(msg.cards) ? msg.cards : [];
                     console.log('[Kanban WV] updateBoard received', nextCards.length, 'cards');

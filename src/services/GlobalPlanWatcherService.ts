@@ -99,7 +99,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         try {
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
             await db.ensureReady();
-            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId();
+            const workspaceId = await db.getWorkspaceId();
             if (!workspaceId) { return; }
 
             const existingPlans = await db.getAllPlans(workspaceId);
@@ -355,7 +355,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
             
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            const workspaceId = await db.getWorkspaceId();
             
             if (!workspaceId) {
                 this._outputChannel?.appendLine(`[GlobalPlanWatcher] No workspaceId for ${workspaceRoot}, skipping import`);
@@ -365,28 +365,20 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             let plan = await db.getPlanByPlanFile(relativePath, workspaceId);
             const content = await fs.promises.readFile(uri.fsPath, 'utf8');
             const metadata = await parsePlanMetadata(content, relativePath);
+
             if (!plan) {
-                // Fallback 1: plan may exist under a different path or workspace_id
-                plan = await db.getPlanBySessionId(metadata.sessionId);
-                if (plan) {
-                    // Only update plan_file for local plans — never overwrite brain/mirror paths
-                    if (plan.sourceType === 'local') {
-                        await db.updatePlanFile(plan.sessionId, relativePath);
-                    }
-                }
-            }
-            if (!plan) {
-                // Fallback 2: try absolute path lookup for legacy DB entries
+                // Fallback: try absolute path lookup for legacy DB entries
                 const absolutePath = uri.fsPath.replace(/\\/g, '/');
                 plan = await db.getPlanByPlanFile(absolutePath, workspaceId);
                 if (plan) {
                     // Update to relative path for consistency
                     if (plan.sourceType === 'local') {
-                        await db.updatePlanFile(plan.sessionId, relativePath);
+                        await db.movePlanByPlanFile(absolutePath, workspaceId, plan.kanbanColumn, relativePath);
+                        plan = await db.getPlanByPlanFile(relativePath, workspaceId);
                     }
                 }
             }
-            
+
             let fileMtime = new Date().toISOString();
             let fileBirthtime = fileMtime;
             try {
@@ -401,10 +393,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
-                // New plan - parse and insert
+                // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 const newRecord: KanbanPlanRecord = {
                     planId: uuidv4(),
-                    sessionId: metadata.sessionId,
+                    sessionId: '',
                     topic: metadata.topic,
                     planFile: relativePath,
                     kanbanColumn: metadata.kanbanColumn || 'CREATED',
@@ -429,7 +421,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 await db.upsertPlans([newRecord]);
                 plan = newRecord;
 
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${metadata.sessionId} in ${workspaceId}`);
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Imported new plan: ${relativePath} in ${workspaceId}`);
             } else {
                 // Existing plan - update metadata
                 const updatedRecord: KanbanPlanRecord = {
@@ -442,8 +434,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                 };
                 await db.upsertPlans([updatedRecord]);
                 plan = updatedRecord;
-                
-                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Updated plan: ${plan.sessionId} in ${workspaceId}`);
+
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Updated plan: ${plan.planFile} in ${workspaceId}`);
             }
 
             // ClickUp real-time sync
@@ -452,7 +444,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     const clickUp = this._getClickUpService(workspaceRoot);
                     const clickUpConfig = await clickUp.loadConfig();
                     if (clickUpConfig?.setupComplete === true && clickUpConfig.realTimeSyncEnabled === true) {
-                        clickUp.debouncedSync(plan.sessionId, {
+                        clickUp.debouncedSync(plan.planFile, {
                             planId: plan.planId,
                             sessionId: plan.sessionId,
                             topic: plan.topic,
@@ -483,13 +475,18 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
             
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
-            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            const workspaceId = await db.getWorkspaceId();
             
             if (workspaceId) {
                 const plan = await db.getPlanByPlanFile(relativePath, workspaceId);
                 if (plan) {
-                    await db.deletePlan(plan.sessionId);
-                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.sessionId}`);
+                    // Don't delete completed plans — they were archived, not deleted
+                    if (plan.status === 'completed') {
+                        this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for archived completed plan: ${plan.planFile}`);
+                        return;
+                    }
+                    await db.deletePlanByPlanFile(plan.planFile, plan.workspaceId);
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Deleted plan: ${plan.planFile}`);
                     this._onPlanDiscovered.fire({ uri, workspaceRoot });
                 }
             }

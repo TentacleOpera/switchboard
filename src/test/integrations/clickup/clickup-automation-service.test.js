@@ -256,6 +256,7 @@ async function run() {
             assert.match(updateRequest.jsonBody.description, /Switchboard Automation Result/);
             assert.match(updateRequest.jsonBody.description, /Automation Rule:\*\* Bug Summary/);
             assert.match(updateRequest.jsonBody.description, /Investigate bug/);
+            assert.match(updateRequest.jsonBody.description, /The app crashes on launch./);
             assert.doesNotMatch(updateRequest.jsonBody.description, /Pipeline:/);
 
             const updatedPlan = await db.getPlanBySessionId(createdPlan.sessionId);

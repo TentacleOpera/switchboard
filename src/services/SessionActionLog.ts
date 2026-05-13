@@ -63,6 +63,19 @@ export class SessionActionLog {
         return db;
     }
 
+    /**
+     * Resolve a plan record from either a planFile (new style) or legacy sessionId.
+     * Tries planFile first, then falls back to sessionId for backward compatibility.
+     */
+    private async _resolvePlan(sessionIdOrPlanFile: string): Promise<import('./KanbanDatabase').KanbanPlanRecord | null> {
+        const db = await this._ensureDbReady();
+        if (!db) return null;
+        const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+        const plan = await db.getPlanByPlanFile(sessionIdOrPlanFile, workspaceId);
+        if (plan) return plan;
+        return db.getPlanBySessionId(sessionIdOrPlanFile);
+    }
+
     async logEvent(type: string, payload: Record<string, any>, correlationId?: string): Promise<void> {
         const event: ActivityEvent = {
             timestamp: new Date().toISOString(),
@@ -380,8 +393,8 @@ export class SessionActionLog {
                     const plans = await db.getAllPlans(workspaceId);
                     const titleMap = new Map<string, string>();
                     for (const plan of plans) {
-                        if (plan.sessionId && plan.topic) {
-                            titleMap.set(plan.sessionId, plan.topic);
+                        if (plan.planFile && plan.topic) {
+                            titleMap.set(plan.planFile, plan.topic);
                         }
                     }
                     this._titleCache = titleMap;
@@ -430,21 +443,22 @@ export class SessionActionLog {
      * Hydrate a full run sheet from DB: merges plan_events + plans table metadata.
      * Returns the same shape callers historically expected from session .json files.
      */
-    private async _hydrateRunSheet(sessionId: string): Promise<any | null> {
+    private async _hydrateRunSheet(sessionIdOrPlanFile: string): Promise<any | null> {
         const db = await this._ensureDbReady();
         if (!db) { return null; }
 
-        const dbSheet = await db.getRunSheet(sessionId);
-        const record = await db.getPlanBySessionId(sessionId);
+        const record = await this._resolvePlan(sessionIdOrPlanFile);
+        if (!record) { return null; }
+
+        const dbSheet = await db.getRunSheetByPlanId(record.planId);
 
         // If we have a plan record but no events yet (e.g., brain plans, custom folder plans),
         // return a minimal runsheet from the record with empty events
         if (!dbSheet) {
-            if (!record) { return null; }
-            return this._composeHydratedSheet(sessionId, [], record);
+            return this._composeHydratedSheet(record.planId, [], record);
         }
 
-        return this._composeHydratedSheet(sessionId, dbSheet.events, record);
+        return this._composeHydratedSheet(record.planId, dbSheet.events, record);
     }
 
     private _composeHydratedSheet(sessionId: string, events: any[], record: any, fileSheet?: any): any {
@@ -471,11 +485,11 @@ export class SessionActionLog {
         return next;
     }
 
-    private async _doCreateRunSheet(sessionId: string, data: any): Promise<void> {
+    private async _doCreateRunSheet(planFile: string, data: any): Promise<void> {
         try {
             const normalized = (data && typeof data === 'object') ? { ...data } : {};
             if (typeof normalized.sessionId !== 'string' || !normalized.sessionId.trim()) {
-                normalized.sessionId = sessionId;
+                normalized.sessionId = planFile;
             }
             if (!Array.isArray(normalized.events)) {
                 normalized.events = [];
@@ -486,13 +500,12 @@ export class SessionActionLog {
 
             const db = await this._ensureDbReady();
             if (db) {
-                // Register plan record so completeMultiple / getPlanBySessionId work
                 const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                 await db.upsertPlans([{
-                    planId: sessionId,
-                    sessionId,
+                    planId: planFile,
+                    sessionId: planFile,
                     topic: normalized.topic || normalized.planName || '',
-                    planFile: normalized.planFile || '',
+                    planFile: normalized.planFile || planFile,
                     kanbanColumn: 'CREATED',
                     status: 'active' as const,
                     complexity: (function(c: any) {
@@ -514,12 +527,12 @@ export class SessionActionLog {
                     dispatchedIde: ''
                 }]);
                 if (normalized.events.length > 0) {
-                    await db.migrateSessionEvents(sessionId, normalized.events);
+                    await db.migrateSessionEvents(planFile, normalized.events);
                 }
             }
 
         } catch (error) {
-            console.error(`[SessionActionLog] Failed to create run sheet ${sessionId}:`, error);
+            console.error(`[SessionActionLog] Failed to create run sheet ${planFile}:`, error);
         }
     }
 
@@ -534,9 +547,9 @@ export class SessionActionLog {
         return next;
     }
 
-    private async _doUpdateRunSheet(sessionId: string, updater: (current: any) => any): Promise<void> {
+    private async _doUpdateRunSheet(planFile: string, updater: (current: any) => any): Promise<void> {
         try {
-            const current = await this._hydrateRunSheet(sessionId);
+            const current = await this._hydrateRunSheet(planFile);
             if (!current) return;
 
             // Snapshot BEFORE calling updater — updater may mutate current in-place
@@ -549,11 +562,14 @@ export class SessionActionLog {
 
             const db = await this._ensureDbReady();
             if (db) {
+                const record = await this._resolvePlan(planFile);
+                if (!record) return;
+
                 // Diff events using pre-mutation snapshot
                 const nextEvents = Array.isArray(next.events) ? next.events : [];
                 const newEvents = nextEvents.slice(prevEventLen);
                 for (const event of newEvents) {
-                    await db.appendPlanEvent(sessionId, {
+                    await db.appendPlanEventByPlanId(record.planId, {
                         eventType: 'workflow_event',
                         workflow: event.workflow || '',
                         action: event.action || '',
@@ -564,16 +580,16 @@ export class SessionActionLog {
 
                 // Diff metadata using pre-mutation snapshot
                 if (next.completed === true && prevCompleted !== true) {
-                    await db.completeMultiple([sessionId]);
+                    await db.completeMultipleByPlanFile([{ planFile: record.planFile, workspaceId: record.workspaceId }]);
                 }
                 if (next.topic && next.topic !== prevTopic) {
-                    await db.updateTopic(sessionId, next.topic);
+                    await db.updateTopicByPlanFile(record.planFile, record.workspaceId, next.topic);
                 }
             }
 
 
         } catch (error) {
-            console.error(`[SessionActionLog] Failed to update run sheet ${sessionId}:`, error);
+            console.error(`[SessionActionLog] Failed to update run sheet ${planFile}:`, error);
         }
     }
 
@@ -584,7 +600,7 @@ export class SessionActionLog {
                 const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                 if (workspaceId) {
                     const plans = await db.getActivePlans(workspaceId);
-                    const results = await Promise.all(plans.map(p => this._hydrateRunSheet(p.sessionId)));
+                    const results = await Promise.all(plans.map(p => this._hydrateRunSheet(p.planFile)));
                     return results.filter(Boolean);
                 }
             }
@@ -609,7 +625,7 @@ export class SessionActionLog {
                     const record = await db.getPlanByPlanFile(planFile, workspaceId);
                     if (record) {
                         if (!options?.includeCompleted && record.status === 'completed') return null;
-                        return this._hydrateRunSheet(record.sessionId);
+                        return this._hydrateRunSheet(record.planFile);
                     }
                     return null;
                 }
@@ -622,15 +638,18 @@ export class SessionActionLog {
         return null;
     }
 
-    async deleteRunSheet(sessionId: string): Promise<void> {
+    async deleteRunSheet(sessionIdOrPlanFile: string): Promise<void> {
         try {
             const db = await this._ensureDbReady();
             if (db) {
-                await db.deletePlanEvents(sessionId);
+                const record = await this._resolvePlan(sessionIdOrPlanFile);
+                if (record) {
+                    await db.deletePlanEventsByPlanId(record.planId);
+                }
             }
 
         } catch (error) {
-            console.error(`[SessionActionLog] Failed to delete run sheet ${sessionId}:`, error);
+            console.error(`[SessionActionLog] Failed to delete run sheet ${sessionIdOrPlanFile}:`, error);
         }
     }
 
@@ -645,7 +664,7 @@ export class SessionActionLog {
                 const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
                 if (workspaceId) {
                     const plans = await db.getCompletedPlans(workspaceId);
-                    const results = await Promise.all(plans.map(p => this._hydrateRunSheet(p.sessionId)));
+                    const results = await Promise.all(plans.map(p => this._hydrateRunSheet(p.planFile)));
                     return results.filter(Boolean);
                 }
             }

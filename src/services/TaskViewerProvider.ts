@@ -1806,6 +1806,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * No file I/O. Used by kanban for post-action refreshes.
      */
     public async refreshUI(workspaceRoot?: string) {
+        const resolved = workspaceRoot ? this._resolveWorkspaceRoot(workspaceRoot) : this._resolveWorkspaceRoot();
+        console.log(`[TaskViewerProvider] refreshUI: resolved=${resolved}, requested=${workspaceRoot || 'undefined'}`);
         if (workspaceRoot) {
             const selectedRoot = this._resolveWorkspaceRoot(workspaceRoot);
             const effectiveRoot = selectedRoot
@@ -2428,7 +2430,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 sourceColumn
             );
         }
-        await vscode.commands.executeCommand('switchboard.refreshUI');
+        await vscode.commands.executeCommand('switchboard.refreshUI', resolvedWorkspaceRoot);
     }
 
     /**
@@ -3634,21 +3636,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ];
     }
 
-    private _buildLinearImportPlanContent(node: LinearImportNode, parentIssue?: LinearIssue, sessionId?: string, createdAt?: string): string {
+    private _buildLinearImportPlanContent(node: LinearImportNode, parentIssue?: LinearIssue, createdAt?: string): string {
         const issue = node.issue;
         const stateType = String(issue.state?.type || '').toLowerCase();
         const kanbanColumn = stateType === 'backlog' ? 'BACKLOG' : 'CREATED';
         const assignee = issue.assignee ? (issue.assignee.name || issue.assignee.email) : '';
         const labels = issue.labels.map((label) => label.name).filter(Boolean).join(', ');
 
-        const yamlFrontmatter = sessionId ? [
+        const yamlFrontmatter = createdAt ? [
             '---',
-            `sessionId: ${sessionId}`,
-            createdAt ? `created: ${createdAt}` : '',
+            `created: ${createdAt}`,
             `kanbanColumn: ${kanbanColumn}`,
             '---',
             ''
-        ].filter(Boolean).join('\n') : '';
+        ].join('\n') : '';
 
         const metadataLines = [
             `> Imported from Linear issue \`${issue.identifier || issue.id}\``,
@@ -3705,71 +3706,74 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         db: KanbanDatabase,
         linearService: LinearSyncService,
         node: LinearImportNode,
-        createdSessionIds: string[],
-        parentSessionId?: string,
+        createdPlanFiles: string[],
+        parentPlanFile?: string,
         parentIssue?: LinearIssue
     ): Promise<string> {
-        const sessionId = `sess_${Date.now()}`;
         const createdAt = new Date().toISOString();
         const { planFileAbsolute } = await this._createInitiatedPlan(
             node.issue.title || this._describeLinearIssue(node.issue),
-            this._buildLinearImportPlanContent(node, parentIssue, sessionId, createdAt),
+            this._buildLinearImportPlanContent(node, parentIssue, createdAt),
             false,
             {
                 skipBrainPromotion: true,
-                sessionId,
                 createdAt,
                 suppressIntegrationSync: true
             }
         );
 
-        await linearService.setIssueIdForPlan(sessionId, node.issue.id);
-        const linked = await db.updateLinearIssueId(sessionId, node.issue.id);
+        const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+        const planFileRelative = path.relative(this._resolveWorkspaceRoot() || '', planFileAbsolute).replace(/\\/g, '/');
+        await linearService.setIssueIdForPlan(planFileRelative, node.issue.id);
+        const linked = await db.updateLinearIssueIdByPlanFile(planFileAbsolute, workspaceId, node.issue.id);
         if (!linked) {
-            throw new Error(`Failed to record the Linear issue ID for imported session ${sessionId}.`);
+            throw new Error(`Failed to record the Linear issue ID for imported plan ${planFileRelative}.`);
         }
-        if (parentSessionId) {
-            const dependencySaved = await db.updateDependencies(sessionId, parentSessionId);
-            if (!dependencySaved) {
-                throw new Error(`Failed to link imported subtask ${sessionId} to parent session ${parentSessionId}.`);
+        if (parentPlanFile) {
+            const parentPlan = await db.getPlanByPlanFile(parentPlanFile, workspaceId);
+            if (parentPlan) {
+                const dependencySaved = await db.updateDependenciesByPlanFile(planFileAbsolute, workspaceId, parentPlan.planFile);
+                if (!dependencySaved) {
+                    throw new Error(`Failed to link imported subtask ${planFileRelative} to parent ${parentPlanFile}.`);
+                }
             }
         }
 
-        createdSessionIds.push(sessionId);
+        createdPlanFiles.push(planFileRelative);
         for (const child of node.subtasks) {
             await this._createImportedLinearPlan(
                 db,
                 linearService,
                 child,
-                createdSessionIds,
-                sessionId,
+                createdPlanFiles,
+                planFileRelative,
                 node.issue
             );
         }
 
-        return sessionId;
+        return planFileRelative;
     }
 
     public async importLinearTask(
         workspaceRoot: string,
         issueId: string,
         includeSubtasks: boolean = true
-    ): Promise<{ success: boolean; sessionId?: string; importedSessionIds: string[]; error?: string; message?: string }> {
+    ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
-            return { success: false, importedSessionIds: [], error: 'No workspace open.' };
+            return { success: false, importedPlanFiles: [], error: 'No workspace open.' };
         }
 
         const effectiveRoot = await this._activateWorkspaceContext(resolvedRoot);
         const db = await this._getKanbanDb(effectiveRoot);
         if (!db) {
-            return { success: false, importedSessionIds: [], error: 'Kanban DB unavailable.' };
+            return { success: false, importedPlanFiles: [], error: 'Kanban DB unavailable.' };
         }
 
         const linearService = this._getLinearService(effectiveRoot);
         const rootNode = await this._loadLinearImportNode(linearService, issueId);
         if (!rootNode) {
-            return { success: false, importedSessionIds: [], error: `Linear issue ${issueId} was not found.` };
+            return { success: false, importedPlanFiles: [], error: `Linear issue ${issueId} was not found.` };
         }
         if (!includeSubtasks) {
             rootNode.subtasks = [];
@@ -3782,33 +3786,33 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (existingPlan) {
                 return {
                     success: false,
-                    importedSessionIds: [],
-                    error: `Linear issue ${node.issue.identifier || node.issue.id} is already linked to session ${existingPlan.sessionId}.`
+                    importedPlanFiles: [],
+                    error: `Linear issue ${node.issue.identifier || node.issue.id} is already linked to plan ${existingPlan.planFile}.`
                 };
             }
         }
 
-        const importedSessionIds: string[] = [];
-        const rootSessionId = await this._createImportedLinearPlan(
+        const importedPlanFiles: string[] = [];
+        const rootPlanFile = await this._createImportedLinearPlan(
             db,
             linearService,
             rootNode,
-            importedSessionIds
+            importedPlanFiles
         );
 
-        for (const sessionId of importedSessionIds) {
-            await this._kanbanProvider?.queueIntegrationSyncForSession(effectiveRoot, sessionId, 'CREATED');
+        for (const planFile of importedPlanFiles) {
+            await this._kanbanProvider?.queueIntegrationSyncForPlanFile(effectiveRoot, planFile, 'CREATED');
         }
         await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-        this._view?.webview.postMessage({ type: 'selectSession', sessionId: rootSessionId });
+        this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFile });
 
         return {
             success: true,
-            sessionId: rootSessionId,
-            importedSessionIds,
-            message: importedSessionIds.length === 1
+            planFile: rootPlanFile,
+            importedPlanFiles,
+            message: importedPlanFiles.length === 1
                 ? `Imported ${this._describeLinearIssue(rootNode.issue)}.`
-                : `Imported ${this._describeLinearIssue(rootNode.issue)} with ${importedSessionIds.length - 1} subtasks.`
+                : `Imported ${this._describeLinearIssue(rootNode.issue)} with ${importedPlanFiles.length - 1} subtasks.`
         };
     }
 
@@ -3816,16 +3820,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         taskId: string,
         includeSubtasks: boolean = true
-    ): Promise<{ success: boolean; sessionId?: string; importedSessionIds: string[]; error?: string; message?: string }> {
+    ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
-            return { success: false, importedSessionIds: [], error: 'No workspace open.' };
+            return { success: false, importedPlanFiles: [], error: 'No workspace open.' };
         }
 
         const effectiveRoot = await this._activateWorkspaceContext(resolvedRoot);
         const db = await this._getKanbanDb(effectiveRoot);
         if (!db) {
-            return { success: false, importedSessionIds: [], error: 'Kanban DB unavailable.' };
+            return { success: false, importedPlanFiles: [], error: 'Kanban DB unavailable.' };
         }
 
         // Check if already imported
@@ -3834,8 +3838,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (existingPlan) {
             return {
                 success: false,
-                importedSessionIds: [],
-                error: `ClickUp task ${taskId} is already linked to session ${existingPlan.sessionId}.`
+                importedPlanFiles: [],
+                error: `ClickUp task ${taskId} is already linked to plan ${existingPlan.planFile}.`
             };
         }
 
@@ -3847,9 +3851,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
 
             // Build plan content for the parent task
-            const sessionId = `sess_${Date.now()}`;
             const createdAt = new Date().toISOString();
-            const planContent = this._buildClickUpImportPlanContent(task, subtasks, details.comments, details.attachments, sessionId, createdAt);
+            const planContent = this._buildClickUpImportPlanContent(task, subtasks, details.comments, details.attachments, createdAt);
             const { planFileAbsolute: rootPlanFile } = await this._createInitiatedPlan(
                 task.name || `ClickUp Task ${task.id}`,
                 planContent,
@@ -3857,46 +3860,47 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 {
                     skipBrainPromotion: true,
                     suppressIntegrationSync: true,
-                    sessionId,
                     createdAt
                 }
             );
 
-            await db.updateClickUpTaskId(sessionId, task.id);
-            const importedSessionIds = [sessionId];
+            const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+            const rootPlanFileRelative = path.relative(effectiveRoot, rootPlanFile).replace(/\\/g, '/');
+            await db.updateClickUpTaskIdByPlanFile(rootPlanFile, workspaceId, task.id);
+            const importedPlanFiles = [rootPlanFileRelative];
 
             // Import subtasks as separate plans
             for (const subtask of subtasks) {
-                const subtaskId = `sess_${Date.now()}`;
                 const subtaskCreatedAt = new Date().toISOString();
-                const subtaskContent = this._buildClickUpImportPlanContent(subtask, [], [], [], subtaskId, subtaskCreatedAt);
-                const { sessionId: subtaskSessionId } = await this._createInitiatedPlan(
+                const subtaskContent = this._buildClickUpImportPlanContent(subtask, [], [], [], subtaskCreatedAt);
+                const { planFileAbsolute: subtaskPlanFile } = await this._createInitiatedPlan(
                     subtask.name || `ClickUp Subtask ${subtask.id}`,
                     subtaskContent,
                     false,
-                    { skipBrainPromotion: true, suppressIntegrationSync: true, sessionId: subtaskId, createdAt: subtaskCreatedAt }
+                    { skipBrainPromotion: true, suppressIntegrationSync: true, createdAt: subtaskCreatedAt }
                 );
-                await db.updateClickUpTaskId(subtaskSessionId, subtask.id);
-                await db.updateDependencies(subtaskSessionId, sessionId);
-                importedSessionIds.push(subtaskSessionId);
+                const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
+                await db.updateClickUpTaskIdByPlanFile(subtaskPlanFile, workspaceId, subtask.id);
+                await db.updateDependenciesByPlanFile(subtaskPlanFile, workspaceId, rootPlanFileRelative);
+                importedPlanFiles.push(subtaskPlanFileRelative);
             }
 
             await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId });
+            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFileRelative });
 
             const taskName = task.name || task.id;
             return {
                 success: true,
-                sessionId,
-                importedSessionIds,
-                message: importedSessionIds.length === 1
+                planFile: rootPlanFileRelative,
+                importedPlanFiles,
+                message: importedPlanFiles.length === 1
                     ? `Imported ClickUp task "${taskName}".`
-                    : `Imported ClickUp task "${taskName}" with ${importedSessionIds.length - 1} subtasks.`
+                    : `Imported ClickUp task "${taskName}" with ${importedPlanFiles.length - 1} subtasks.`
             };
         } catch (error) {
             return {
                 success: false,
-                importedSessionIds: [],
+                importedPlanFiles: [],
                 error: error instanceof Error ? error.message : 'Failed to import ClickUp task.'
             };
         }
@@ -3907,7 +3911,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         subtasks: any[] = [],
         comments: any[] = [],
         attachments: any[] = [],
-        sessionId?: string,
         createdAt?: string
     ): string {
         const statusName = task.status?.status || 'Unknown';
@@ -3924,14 +3927,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const startDate = task.start_date ? new Date(Number(task.start_date)).toLocaleDateString() : '';
         const timeEstimate = task.time_estimate ? `${Math.round(task.time_estimate / 60000)}m` : '';
 
-        const yamlFrontmatter = sessionId ? [
+        const yamlFrontmatter = createdAt ? [
             '---',
-            `sessionId: ${sessionId}`,
-            createdAt ? `created: ${createdAt}` : '',
+            `created: ${createdAt}`,
             `kanbanColumn: ${kanbanColumn}`,
             '---',
             ''
-        ].filter(Boolean).join('\n') : '';
+        ].join('\n') : '';
 
         const metaLines = [
             `> Imported from ClickUp task \`${task.id}\``,
@@ -7048,7 +7050,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({
                                 type: 'linearTaskImported',
                                 success: false,
-                                importedSessionIds: [],
+                                importedPlanFiles: [],
                                 error: 'Select a Linear issue first.'
                             });
                             break;
@@ -7073,7 +7075,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             this._view?.webview.postMessage({
                                 type: 'clickupTaskImported',
                                 success: false,
-                                importedSessionIds: [],
+                                importedPlanFiles: [],
                                 error: 'Select a ClickUp task first.'
                             });
                             break;
@@ -7114,12 +7116,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                             // Import succeeded — now move ALL imported cards (parent + subtasks) to PLAN REVIEWED
                             let moveFailed = false;
-                            if (!this._kanbanProvider || result.importedSessionIds.length === 0) {
-                                // Can't move cards without a kanban provider or session IDs
+                            if (!this._kanbanProvider || result.importedPlanFiles.length === 0) {
+                                // Can't move cards without a kanban provider or plan files
                                 moveFailed = true;
                             } else {
-                                for (const sid of result.importedSessionIds) {
-                                    const moved = await this._kanbanProvider.moveCardToColumn(workspaceRoot, sid, 'PLAN REVIEWED');
+                                for (const planFile of result.importedPlanFiles) {
+                                    const moved = await this._kanbanProvider.moveCardToColumnByPlanFile(workspaceRoot, planFile, 'PLAN REVIEWED');
                                     if (!moved) {
                                         moveFailed = true;
                                     }
@@ -7314,6 +7316,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             if (config) {
                                 config.selectedListId = String(data.listId || '').trim();
                                 config.selectedListName = String(data.listName || '').trim();
+                                config.selectedSpaceId = String(data.spaceId || '').trim();
+                                config.selectedFolderId = String(data.folderId || '').trim();
                                 await clickUp.saveConfig(config);
                                 this._invalidateClickUpConfigCache(workspaceRoot);
                             }
@@ -14345,14 +14349,13 @@ Create this file exactly as specified, then continue your work.`);
         return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}_${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}`;
     }
 
-    private _buildDraftPlanContent(title: string, sessionId?: string, createdAt?: string): string {
-        const yamlFrontmatter = sessionId ? [
+    private _buildDraftPlanContent(title: string, createdAt?: string): string {
+        const yamlFrontmatter = createdAt ? [
             '---',
-            `sessionId: ${sessionId}`,
-            createdAt ? `created: ${createdAt}` : '',
+            `created: ${createdAt}`,
             '---',
             ''
-        ].filter(Boolean).join('\n') : '';
+        ].join('\n') : '';
         return [
             yamlFrontmatter,
             `# ${title}`,
@@ -14372,10 +14375,9 @@ Create this file exactly as specified, then continue your work.`);
         ].join('\n');
     }
 
-    private async _openPlanInReviewPanel(sessionId: string, planFileAbsolute: string, topic: string): Promise<void> {
+    private async _openPlanInReviewPanel(planFileAbsolute: string, topic: string): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         await vscode.commands.executeCommand('switchboard.reviewPlan', {
-            sessionId,
             planFileAbsolute,
             topic,
             workspaceRoot: workspaceRoot || undefined,
@@ -14385,13 +14387,12 @@ Create this file exactly as specified, then continue your work.`);
 
     public async createDraftPlanTicket(): Promise<void> {
         const title = 'Untitled Plan';
-        const sessionId = `sess_${Date.now()}`;
         const createdAt = new Date().toISOString();
-        const idea = this._buildDraftPlanContent(title, sessionId, createdAt);
+        const idea = this._buildDraftPlanContent(title, createdAt);
 
         try {
-            const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { sessionId, createdAt });
-            await this._openPlanInReviewPanel(sessionId, planFileAbsolute, title);
+            const { planFileAbsolute } = await this._createInitiatedPlan(title, idea, false, { createdAt });
+            await this._openPlanInReviewPanel(planFileAbsolute, title);
         } catch (err: any) {
             const msg = err?.message || String(err);
             vscode.window.showErrorMessage(`Plan creation failed: ${msg}`);
@@ -14576,10 +14577,9 @@ Create this file exactly as specified, then continue your work.`);
         options: {
             skipBrainPromotion?: boolean;
             suppressIntegrationSync?: boolean;
-            sessionId?: string;
             createdAt?: string;
         } = {}
-    ): Promise<{ sessionId: string; planFileAbsolute: string; }> {
+    ): Promise<{ planFileAbsolute: string; }> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             throw new Error('No workspace folder found.');
@@ -14604,11 +14604,9 @@ Create this file exactly as specified, then continue your work.`);
                 : `# ${title}\n\n${headerText}${idea}\n\n## Goal\n- Clarify expected outcome and scope.\n\n## Proposed Changes\n- TODO\n\n## Verification Plan\n- TODO\n\n## Open Questions\n- TODO\n`;
             await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
 
-            const sessionId = options.sessionId || `sess_${Date.now()}`;
             const createdAt = options.createdAt || now.toISOString();
             const log = this._getSessionLog(workspaceRoot);
-            await log.createRunSheet(sessionId, {
-                sessionId,
+            await log.createRunSheet(planFileRelative, {
                 planFile: planFileRelative,
                 topic: title,
                 createdAt,
@@ -14622,7 +14620,7 @@ Create this file exactly as specified, then continue your work.`);
             // Register local plan in ownership registry
             const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
             await this._registerPlan(workspaceRoot, {
-                planId: sessionId,
+                planId: planFileRelative,
                 ownerWorkspaceId: wsId,
                 sourceType: 'local',
                 localPlanPath: planFileRelative.replace(/\\/g, '/'),
@@ -14634,21 +14632,20 @@ Create this file exactly as specified, then continue your work.`);
 
             await this._logEvent('plan_management', {
                 operation: 'create_plan',
-                sessionId,
                 planFile: planFileRelative.replace(/\\/g, '/'),
                 topic: title,
                 content
             });
             if (!options.suppressIntegrationSync) {
-                await this._kanbanProvider?.queueIntegrationSyncForSession(
+                await this._kanbanProvider?.queueIntegrationSyncForPlanFile(
                     workspaceRoot,
-                    sessionId,
+                    planFileRelative.replace(/\\/g, '/'),
                     'CREATED',
                     { immediate: true }
                 );
             }
             await this._syncFilesAndRefreshRunSheets(workspaceRoot);
-            this._view?.webview.postMessage({ type: 'selectSession', sessionId });
+            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: planFileRelative });
 
             // Non-blocking auto-promotion: copy plan to Antigravity brain.
             // Clipboard imports opt out to avoid duplicate mirrored kanban cards.
@@ -14658,7 +14655,7 @@ Create this file exactly as specified, then continue your work.`);
                 });
             }
 
-            return { sessionId, planFileAbsolute };
+            return { planFileAbsolute };
         } finally {
             setTimeout(() => this._pendingPlanCreations.delete(stablePlanPath), 2000);
         }

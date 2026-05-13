@@ -1505,7 +1505,7 @@ export async function activate(context: vscode.ExtensionContext) {
         await vscode.commands.executeCommand('switchboard.fullSync');
 
         // Trigger integration sync for imported plans (uses actual kanban column from DB)
-        if (importResult.sessionIds.length > 0) {
+        if (importResult.planFiles.length > 0) {
             await vscode.commands.executeCommand('switchboard.syncImportedPlans', workspaceRoot, importResult);
         }
 
@@ -1517,11 +1517,11 @@ export async function activate(context: vscode.ExtensionContext) {
 
     const syncImportedPlansDisposable = vscode.commands.registerCommand(
         'switchboard.syncImportedPlans',
-        async (workspaceRoot: string, importResult: { sessionIds: string[]; columns: Record<string, string> }) => {
-            if (!kanbanProvider || !importResult.sessionIds.length) return;
-            for (const sessionId of importResult.sessionIds) {
-                const targetColumn = importResult.columns[sessionId] || 'CREATED';
-                await kanbanProvider.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
+        async (workspaceRoot: string, importResult: { planFiles: string[]; columns: Record<string, string> }) => {
+            if (!kanbanProvider || !importResult.planFiles.length) return;
+            for (const planFile of importResult.planFiles) {
+                const targetColumn = importResult.columns[planFile] || 'CREATED';
+                await kanbanProvider.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
             }
         }
     );

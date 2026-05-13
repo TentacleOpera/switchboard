@@ -53,11 +53,11 @@ suite('PlanFileImporter - plan without ## Switchboard State', () => {
         const result: ImportPlanFilesResult = await importPlanFiles(tmpDir);
 
         assert.strictEqual(result.count, 1);
-        assert.strictEqual(result.sessionIds.length, 1);
+        assert.strictEqual(result.planFiles.length, 1);
 
-        // The column entry for the imported session should be CREATED
-        const sessionId = result.sessionIds[0];
-        assert.strictEqual(result.columns[sessionId], 'CREATED');
+        // The column entry for the imported plan should be CREATED
+        const planFile = result.planFiles[0];
+        assert.strictEqual(result.columns[planFile], 'CREATED');
     });
 
     test('imports plan with Switchboard State section defaults to CREATED', async () => {
@@ -83,15 +83,15 @@ suite('PlanFileImporter - plan without ## Switchboard State', () => {
         assert.strictEqual(result.count, 1);
 
         // File-based state is DISABLED — importer defaults to CREATED/active
-        const sessionId = result.sessionIds[0];
-        assert.strictEqual(result.columns[sessionId], 'CREATED');
+        const planFile = result.planFiles[0];
+        assert.strictEqual(result.columns[planFile], 'CREATED');
     });
 
     test('handles empty plans directory gracefully', async () => {
         const result: ImportPlanFilesResult = await importPlanFiles(tmpDir);
 
         assert.strictEqual(result.count, 0);
-        assert.strictEqual(result.sessionIds.length, 0);
+        assert.strictEqual(result.planFiles.length, 0);
         assert.strictEqual(Object.keys(result.columns).length, 0);
     });
 });

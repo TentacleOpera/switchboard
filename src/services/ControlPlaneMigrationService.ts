@@ -262,7 +262,7 @@ export class ControlPlaneMigrationService {
 
             // Trigger integration sync for imported plans via command
             // (ControlPlaneMigrationService is static and has no KanbanProvider reference)
-            if (importResult.sessionIds.length > 0) {
+            if (importResult.planFiles.length > 0) {
                 await vscode.commands.executeCommand('switchboard.syncImportedPlans', preview.parentDir, importResult);
             }
 

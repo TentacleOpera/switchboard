@@ -21,7 +21,7 @@ export function sanitizeTags(raw: string): string {
 }
 
 export interface PlanMetadata {
-    sessionId: string;
+    sessionId?: string;
     topic: string;
     kanbanColumn?: string;
     complexity: string;
@@ -48,15 +48,6 @@ export function inferTopicFromPath(filePath: string | undefined): string {
 }
 
 export async function parsePlanMetadata(content: string, planFile: string): Promise<PlanMetadata> {
-    // Extract sessionId from YAML frontmatter first
-    const yamlSessionIdMatch = content.match(/^---[\s\S]*?sessionId:\s*([a-z0-9_]+)/im);
-    // Fallback to legacy patterns
-    const sessionIdMatch = yamlSessionIdMatch ||
-                           content.match(/sessionId:\s*([a-z0-9_]+)/i) || 
-                           content.match(/## Metadata[\s\S]*?session[_\s]?id[:\s]+([a-z0-9_]+)/i);
-    const sessionId = sessionIdMatch?.[1] || 
-                     path.basename(planFile, '.md').replace(/^(feature_plan_\d+_|brain_|ingested_)/, '');
-
     // Extract topic
     const topicMatch = content.match(/^#\s+(.+)$/m) || 
                       content.match(/topic:\s*(.+)$/im);
@@ -118,7 +109,6 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
     }
 
     return {
-        sessionId,
         topic,
         kanbanColumn: columnMatch?.[1],
         complexity,

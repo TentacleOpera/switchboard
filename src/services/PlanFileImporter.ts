@@ -1,6 +1,7 @@
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as path from 'path';
+import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, KanbanPlanRecord, KanbanPlanStatus } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 
@@ -11,8 +12,8 @@ type ImportablePlanFile = {
 
 export interface ImportPlanFilesResult {
     count: number;
-    sessionIds: string[];
-    /** Maps sessionId → kanbanColumn for integration sync */
+    planFiles: string[];
+    /** Maps planFile → kanbanColumn for integration sync */
     columns: Record<string, string>;
 }
 
@@ -30,20 +31,20 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
 
     const plansDir = path.join(workspaceRoot, '.switchboard', 'plans');
     if (!fs.existsSync(plansDir)) {
-        return { count: 0, sessionIds: [], columns: {} };
+        return { count: 0, planFiles: [], columns: {} };
     }
 
     const files = await listImportablePlanFiles(plansDir);
 
     if (files.length === 0) {
-        return { count: 0, sessionIds: [], columns: {} };
+        return { count: 0, planFiles: [], columns: {} };
     }
 
     // Use effectiveRoot for DB and identity to ensure shared database consistency
     const db = KanbanDatabase.forWorkspace(effectiveRoot);
     const ready = await db.ensureReady();
     if (!ready) {
-        return { count: 0, sessionIds: [], columns: {} };
+        return { count: 0, planFiles: [], columns: {} };
     }
 
     const workspaceId = await ensureWorkspaceIdentity(effectiveRoot);
@@ -60,12 +61,8 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             continue;
         }
 
-        const defaultSessionId = 'import_' + crypto.createHash('sha256')
-            .update(filePath)
-            .digest('hex')
-            .slice(0, 16);
-        const planId = extractEmbeddedMetadata(content, 'Plan ID') || defaultSessionId;
-        const sessionId = extractEmbeddedMetadata(content, 'Session ID') || planId;
+        const planId = extractEmbeddedMetadata(content, 'Plan ID') || uuidv4();
+        const sessionId = ''; // session_id is no longer the unique key; plan_file+workspace_id is
         const automationRuleName = extractEmbeddedMetadata(content, 'Automation Rule');
         const clickupTaskId = extractClickUpTaskId(content);
         const linearIssueId = extractLinearIssueId(content);
@@ -133,20 +130,20 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
     }
 
     if (records.length === 0) {
-        return { count: 0, sessionIds: [], columns: {} };
+        return { count: 0, planFiles: [], columns: {} };
     }
 
     const success = await db.upsertPlans(records);
     if (!success) {
-        return { count: 0, sessionIds: [], columns: {} };
+        return { count: 0, planFiles: [], columns: {} };
     }
     const columns: Record<string, string> = {};
     for (const record of records) {
-        columns[record.sessionId] = record.kanbanColumn;
+        columns[record.planFile] = record.kanbanColumn;
     }
     return {
         count: records.length,
-        sessionIds: records.map(r => r.sessionId),
+        planFiles: records.map(r => r.planFile),
         columns
     };
 }

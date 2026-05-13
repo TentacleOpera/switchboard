@@ -38,7 +38,7 @@ describe('planMetadataUtils', () => {
 
         it('extracts basic metadata correctly', async () => {
             const metadata = await parsePlanMetadata(sampleContent, 'test.md');
-            assert.strictEqual(metadata.sessionId, 'test_123');
+            assert.strictEqual(metadata.sessionId, undefined); // sessionId no longer extracted
             assert.strictEqual(metadata.topic, 'Sample Plan');
             assert.strictEqual(metadata.kanbanColumn, 'INVESTIGATION');
             assert.strictEqual(metadata.complexity, '5');
@@ -57,9 +57,16 @@ describe('planMetadataUtils', () => {
 
         it('handles missing metadata gracefully', async () => {
             const metadata = await parsePlanMetadata('', 'brain_test.md');
-            assert.strictEqual(metadata.sessionId, 'test');
+            assert.strictEqual(metadata.sessionId, undefined); // sessionId no longer extracted from filename
             assert.strictEqual(metadata.topic, 'Test'); // derived from filename after stripping brain_ prefix
             assert.strictEqual(metadata.complexity, 'Unknown');
+        });
+
+        it('ignores YAML frontmatter sessionId (backward compat)', async () => {
+            const content = '---\nsessionId: legacy_sess_123\ncreated: 2026-01-01\n---\n\n# Legacy Plan';
+            const metadata = await parsePlanMetadata(content, 'legacy_plan.md');
+            assert.strictEqual(metadata.sessionId, undefined); // must not extract sessionId from YAML
+            assert.strictEqual(metadata.topic, 'Legacy Plan');
         });
 
         it('derives topic from filename when no topic or H1', async () => {

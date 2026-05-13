@@ -1,5 +1,61 @@
 # Fix: Prompt Generation Uses Source Column Role Instead of Destination Column
 
+## Goal
+Fix the `_generatePromptForColumn()` method in `KanbanProvider.ts` so that "Copy prompt and advance" on built-in columns generates prompts for the destination column's agent role instead of the source column's role.
+
+## Metadata
+- **Tags:** bugfix, backend, workflow
+- **Complexity:** 4
+
+## User Review Required
+Optional — manual verification of generated prompt content is recommended after deployment.
+
+## Complexity Audit
+
+### Routine
+- Single-file change (`src/services/KanbanProvider.ts`, lines 2339–2384)
+- No new dependencies or architectural patterns
+- Reuses existing `_generatePromptForDestinationRole()` helper
+
+### Complex / Risky
+- None
+
+## Edge-Case & Dependency Audit
+- **Race Conditions:** None — prompt generation is synchronous and stateless.
+- **Security:** None — no new attack surface or permission changes.
+- **Side Effects:** Changes prompt text for built-in column advancement paths (`LEAD CODED` → `CODE REVIEWED`, `CODE REVIEWED` → `ACCEPTANCE TESTED`, etc.). This is the intended bug fix. Drag-drop paths are unaffected because `promptOnDrop` does not pass `destinationColumn`.
+- **Dependencies & Conflicts:** None — self-contained change with no external dependencies.
+
+## Dependencies
+- None — this fix is self-contained.
+
+## Adversarial Synthesis
+Key risks: custom-user columns without an explicit role may receive generic execution prompts instead of source-column prompts when advanced via `promptSelected`/`promptAll` (minor edge case; custom columns typically have roles). The `kind` switch fallback assumes column-kind-to-role mapping that could drift if built-in columns change. Mitigations: add unit test coverage for role resolution and verify the existing `PLAN REVIEWED` null-role special case remains intact.
+
+## Proposed Changes
+
+### `src/services/KanbanProvider.ts`
+- **Context:** `_generatePromptForColumn()` receives a `destinationColumn` parameter for "prompt and advance" operations, but only uses it for custom columns (lines 2342–2348). For built-in columns, it falls through to source-column role resolution (lines 2350–2384), causing incorrect prompt generation when advancing from `LEAD CODED` to `CODE REVIEWED` (generates a lead execution prompt instead of a reviewer review prompt).
+- **Logic:** Use `destinationColumn || column` for role resolution. Derive `sourceColumnLabel` from the original source `column` for display context in execution prompts. Remove the redundant custom-column early-return since the unified logic handles all columns correctly.
+- **Implementation:** Modify lines 2339–2384 in `_generatePromptForColumn()`. See the existing "## Fix" section below for the complete code diff.
+- **Edge Cases:**
+  - No `destinationColumn` provided: falls back to source column behavior (preserves drag-drop `promptOnDrop` and copy-only paths).
+  - `PLAN REVIEWED`: special-cased with `role = null` for complexity routing; preserved in the fix.
+  - Custom columns: handled correctly by the unified role resolution.
+  - `COMPLETED` destination: `columnToPromptRole('COMPLETED')` returns `null` → generic execution prompt. Acceptable since COMPLETED has no active agent.
+
+## Verification Plan
+
+### Automated Tests
+- Add unit tests for `_generatePromptForColumn()` covering:
+  - Destination column role resolution for built-in columns (`LEAD CODED` → `CODE REVIEWED` → reviewer prompt)
+  - Source column fallback when `destinationColumn` is undefined
+  - `PLAN REVIEWED` complexity routing (role = null)
+  - Custom column with explicit role
+
+### Manual Verification
+(See the existing "## Testing" section below for detailed manual verification steps.)
+
 ## Bug Description
 When using the **"Copy prompt and advance"** button (`promptSelected` / `promptAll`) on plans in a coded column (e.g., `LEAD CODED`), the generated prompt is an **execution prompt** (e.g., lead coder) instead of a **reviewer prompt**, even though the plan advances to `CODE REVIEWED`.
 
@@ -173,3 +229,6 @@ private async _generatePromptForColumn(
 - `CREATED` → `PLAN REVIEWED`: Should still generate planner prompt
 - `PLAN REVIEWED` → `LEAD CODED`/`CODER CODED`: Should still use complexity routing
 - Custom column advancement: Should still use custom column's configured role
+
+## Recommendation
+Send to Coder.

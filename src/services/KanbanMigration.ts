@@ -119,26 +119,26 @@ export class KanbanMigration {
         if (!ready) return false;
 
         if (snapshotRows.length > 0) {
-            const existingIds = await db.getSessionIdSet();
+            const existingPlanFiles = await db.getPlanFileSet();
             const newRows: LegacyKanbanSnapshotRow[] = [];
             const metadataUpdates: Array<{
-                sessionId: string;
-                topic: string;
                 planFile: string;
+                workspaceId: string;
+                topic: string;
                 complexity?: string;
                 tags?: string;
                 dependencies?: string;
                 repoScope?: string;
             }> = [];
-            const deletedRowsToRevive = new Set<string>();
+            const deletedRowsToRevive: Array<{ planFile: string; workspaceId: string }> = [];
 
             for (const row of snapshotRows) {
-                if (!existingIds.has(row.sessionId)) {
+                if (!existingPlanFiles.has(row.planFile)) {
                     newRows.push(row);
                 } else {
-                    const existingRow = await db.getPlanBySessionId(row.sessionId);
+                    const existingRow = await db.getPlanByPlanFile(row.planFile, row.workspaceId);
                     if (existingRow?.status === 'deleted') {
-                        deletedRowsToRevive.add(row.sessionId);
+                        deletedRowsToRevive.push({ planFile: row.planFile, workspaceId: row.workspaceId });
                     }
                     let resolvedComplexity: string | undefined;
                     if (row.complexity && row.complexity !== 'Unknown') {
@@ -168,9 +168,9 @@ export class KanbanMigration {
                         resolvedRepoScope = parsed || undefined;
                     }
                     metadataUpdates.push({
-                        sessionId: row.sessionId,
-                        topic: row.topic,
                         planFile: row.planFile,
+                        workspaceId: row.workspaceId,
+                        topic: row.topic,
                         complexity: resolvedComplexity,
                         tags: resolvedTags,
                         dependencies: resolvedDependencies,
@@ -186,12 +186,12 @@ export class KanbanMigration {
             }
 
             if (metadataUpdates.length > 0) {
-                const updated = await db.updateMetadataBatch(metadataUpdates, { preserveTimestamps: true });
+                const updated = await db.updateMetadataBatchByPlanFile(metadataUpdates, { preserveTimestamps: true });
                 if (!updated) return false;
             }
 
-            if (deletedRowsToRevive.size > 0) {
-                const revived = await db.reviveDeletedPlans([...deletedRowsToRevive]);
+            if (deletedRowsToRevive.length > 0) {
+                const revived = await db.reviveDeletedPlansByPlanFile(deletedRowsToRevive);
                 if (!revived) return false;
             }
         }

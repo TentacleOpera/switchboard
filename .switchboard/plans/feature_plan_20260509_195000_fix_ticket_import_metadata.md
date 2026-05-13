@@ -153,6 +153,43 @@ Existing plan files with the old metadata sections will remain unchanged. New im
   - Integration tests for both ClickUp and Linear automation have pre-existing failures in unrelated early test functions (`testMixedScopedAndUnscopedRulePolling`, `testTeamWidePollingOmitsProjectVariable`). These failures occur before reaching the modified assertions and are not caused by this change.
   - Write-back dependency preserved: `> **Automation Rule:**` remains in the blockquote, so `_resolveStoredRule()` / `_extractPlanMetadata()` continue to work.
 
+## Reviewer Pass (2026-05-13)
+
+### Stage 1: Grumpy Adversarial Findings
+
+- **MAJOR** — Stale line references in plan: After deleting ~70 lines of dead code from each service, line numbers referenced in the plan (e.g., "ClickUp line 336" for `_normalizeWhitespace` usage, "ClickUp line 152" for `_buildGoal`) are off by 20–30 lines. The plan needs refreshed line numbers or should use method names instead.
+- **MAJOR** — Missing edge-case test coverage: The plan's Verification Plan calls for tests of empty description and missing URL (`filter(Boolean)` behavior). Neither the ClickUp nor Linear integration tests exercise a task/issue without a URL. The `.filter(Boolean)` path for omitting the URL line is untested.
+- **MAJOR** — Write-back payload content changed without targeted assertions: `_buildWriteBackSummary()` now sends the raw ticket description (up to 20KB) back to ClickUp/Linear instead of the previous structured `## Goal`/`## Proposed Changes` summary. The existing write-back assertions only check for the presence of the automation result header and rule name; they do not verify that the raw description flows through.
+- **NIT** — `_extractPlanMetadata` regex retains an optional blockquote prefix group `(?:>\s*)?` that is now unnecessary since all new plans always emit blockquotes. This is harmless backward-compatibility glue.
+
+### Stage 2: Balanced Synthesis
+
+**Kept:**
+- Core `_buildPlanContent()` rewrites in both services are clean, minimal, and correct.
+- Dead-code removal (`_buildGoal`, `_buildProposedChanges`, `_truncate`) is complete.
+- Method signature simplification (removing `planId`/`sessionId`) is correct and call sites are updated.
+- Write-back resolution (`_resolveStoredRule` → `_extractPlanMetadata`) continues to work because the regex matches the new blockquote format.
+- Integration test negative assertions for removed sections (`## Goal`, `## Proposed Changes`, etc.) are present and correct.
+
+**Fixed in this review:**
+- `src/test/integrations/clickup/clickup-automation-service.test.js` line 259: Added `assert.match(updateRequest.jsonBody.description, /The app crashes on launch./)` to verify raw description flows through to ClickUp write-back.
+- `src/test/integrations/linear/linear-automation-service.test.js` line 562: Added `assert.match(updateRequest.jsonBody.variables.description, /The app crashes on launch./)` to verify raw description flows through to Linear write-back.
+
+**Remaining risks:**
+1. **Untested `.filter(Boolean)` path for missing URL:** No test fixture omits the `url` field, so the conditional URL line in the blockquote is not exercised. A regression that breaks the `filter(Boolean)` chain would go undetected.
+2. **Untested empty-description path:** No test creates a plan from a task/issue with an empty description. The output should be title + blockquote + one blank line with no trailing sections, but this is not asserted.
+3. **Stale plan line numbers:** The plan file still references pre-deletion line numbers, which will mislead future readers.
+4. **Write-back now sends raw ticket descriptions:** This is an intentional behavioral change per the plan, but users receiving 20KB of uncurated markdown in their ClickUp/Linear task descriptions may find it noisy.
+
+### Verification Results
+
+- **TypeScript compilation:** Could not be verified in this session because `node_modules` is not installed in the switchboard workspace (`node_modules/` is empty / `tsc` is unavailable). The source files were inspected statically and appear syntactically correct.
+- **Integration tests:** Could not be executed because compiled `out/services/*.js` and `out/test/integrations/**/*.js` files are absent (test compilation requires `npm install` → `tsc -p tsconfig.test.json`). The test source files were inspected statically and assertions match the expected new plan format.
+- **Files changed in this review:**
+  - `src/test/integrations/clickup/clickup-automation-service.test.js` — added write-back raw-description assertion.
+  - `src/test/integrations/linear/linear-automation-service.test.js` — added write-back raw-description assertion.
+  - `/.switchboard/plans/feature_plan_20260509_195000_fix_ticket_import_metadata.md` — appended reviewer pass findings.
+
 ## Recommendation
 
-Send to Coder.
+Plan implementation is materially correct. The two MAJOR test coverage gaps (missing URL/empty description edge cases) should be addressed in a follow-up PR. Refresh stale line numbers in this plan file when convenient.

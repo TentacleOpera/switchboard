@@ -1877,6 +1877,7 @@
         let clickUpProjectMessage = '';
         let clickUpProjectLoadedOnce = false;
         let clickUpProjectLoading = false;
+        let clickUpSpacesLoadedOnce = false;
         let clickUpLoadSeq = 0;  // request sequence counter to discard stale responses
         let clickUpProjectScopeLabel = 'ClickUp list';
 
@@ -2461,13 +2462,13 @@
                             updateIntegrationTabLabel(newProvider);
                         }
                         // If hierarchy state was restored, trigger data loading cascade
-                        if (clickUpSelectedSpaceId) {
-                            // Load spaces first, then the cascade will continue in clickupSpacesLoaded handler
-                            loadClickUpSpaces();
-                        } else if (lastIntegrationProvider === 'clickup' && !clickUpProjectLoadedOnce) {
-                            // FIX: If ClickUp is active but no hierarchy saved, still try to load
-                            // This handles the case where config exists but wasn't fully saved
-                            loadClickUpProject(false);
+                        if (lastIntegrationProvider === 'clickup') {
+                            if (!clickUpSpacesLoadedOnce && !clickUpHierarchyLoading) {
+                                loadClickUpSpaces();
+                            }
+                            if (!clickUpProjectLoadedOnce && !clickUpProjectLoading && clickUpSelectedListId) {
+                                loadClickUpProject(false);
+                            }
                         }
                     }
                     break;
@@ -2737,6 +2738,7 @@
                     break;
                 case 'clickupSpacesLoaded':
                     clickUpHierarchyLoading = false;
+                    clickUpSpacesLoadedOnce = true;
                     clickUpAvailableSpaces = message.spaces || [];
                     // Continue hierarchy restore if a restore cascade is in progress
                     if (_hierarchyRestorePending) {
@@ -2974,6 +2976,7 @@
                         linearProjectIssues = [];
                         // Clear ClickUp state
                         clickUpProjectLoadedOnce = false;
+                        clickUpSpacesLoadedOnce = false;
                         selectedClickUpIssue = null;
                         clickUpProjectIssues = [];
                         clickUpSelectedSpaceId = '';
@@ -3193,8 +3196,11 @@
             if (tab === 'project') {
                 if (lastIntegrationProvider === 'clickup') {
                     renderSidebarClickUpProjectPanel();
-                    if (!clickUpProjectLoadedOnce && !clickUpProjectLoading) {
+                    if (!clickUpSpacesLoadedOnce && !clickUpHierarchyLoading) {
                         loadClickUpSpaces();
+                    }
+                    if (!clickUpProjectLoadedOnce && !clickUpProjectLoading && clickUpSelectedListId) {
+                        loadClickUpProject(false);
                     }
                 } else {
                     renderSidebarLinearProjectPanel();
@@ -3912,6 +3918,21 @@
                     } else if (level === 'list') {
                         clickUpSelectedListId = '';
                         clickUpProjectIssues = [];
+                        // If available lists are empty, trigger loading them
+                        if (clickUpSelectedSpaceId && !clickUpSelectedFolderId && clickUpAvailableDirectLists.length === 0) {
+                            vscode.postMessage({
+                                type: 'clickupLoadFolders',
+                                spaceId: clickUpSelectedSpaceId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                        } else if (clickUpSelectedSpaceId && clickUpSelectedFolderId && clickUpAvailableListsInFolder.length === 0) {
+                            vscode.postMessage({
+                                type: 'clickupLoadLists',
+                                spaceId: clickUpSelectedSpaceId,
+                                folderId: clickUpSelectedFolderId,
+                                workspaceRoot: currentWorkspaceRoot || undefined
+                            });
+                        }
                     }
                     renderSidebarClickUpProjectPanel();
                 });

@@ -559,6 +559,7 @@ async function run() {
             assert.match(updateRequest.jsonBody.variables.description, /Switchboard Automation Result/);
             assert.match(updateRequest.jsonBody.variables.description, /Automation Rule:\*\* Bug Summary/);
             assert.match(updateRequest.jsonBody.variables.description, /Investigate bug/);
+            assert.match(updateRequest.jsonBody.variables.description, /The app crashes on launch./);
 
             const refreshedDb = refreshedContext.KanbanDatabase.forWorkspace(workspaceRoot);
             await refreshedDb.ensureReady();

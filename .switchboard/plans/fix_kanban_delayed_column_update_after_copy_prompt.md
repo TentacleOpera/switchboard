@@ -235,3 +235,36 @@ Low-to-medium. Changes are localized to 3 files:
 - Refactoring of `_refreshBoard` guard (can be the simple "remove guard" option)
 
 No new dependencies. The optimistic UI pattern (`moveCards`) mirrors existing patterns like `updateBoard`.
+
+## Complexity Audit
+**Manual Complexity Override:** 3
+
+### Complex / Risky
+- None.
+
+## Completion
+
+**Status:** Completed
+
+### Changes Applied
+
+- `@/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/TaskViewerProvider.ts`
+  - **Step 1:** `handleKanbanForwardMove` now passes `resolvedWorkspaceRoot` to `switchboard.refreshUI`, eliminating the wrong-workspace refresh bug.
+  - **Step 5:** Added diagnostic logging to `refreshUI` showing the resolved workspace root.
+
+- `@/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/KanbanProvider.ts`
+  - **Step 2:** Added optimistic `moveCards` webview postMessages in `promptSelected`, `promptAll`, `moveSelected`, and `moveAll` handlers so cards move visually immediately before the heavy async refresh completes.
+  - **Step 3:** Removed redundant trailing `_refreshBoard` calls from all branches of `promptSelected` and `promptAll` (the internal callers already schedule refreshes via `kanbanForwardMove` or `dispatchConfiguredKanbanColumnAction`).
+  - **Step 4:** Replaced the global `_isRefreshing`/`_refreshPending` guard in `_refreshBoard` with a simpler no-guard approach. The 100ms debounce in `_scheduleBoardRefresh` already prevents rapid double-renders. Updated related comments.
+  - **Step 5:** Added diagnostic logging to `_refreshBoard` showing start/done/failed states with workspace root.
+
+- `@/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html`
+  - **Step 2:** Added `moveCards` message handler that optimistically updates `currentCards` array, rebuilds the board signature, and calls `renderBoard` for instant visual feedback.
+
+### Risks Addressed
+- Wrong-workspace refresh on multi-root workspaces: Step 1 directly fixes this.
+- Optimistic UI moving card to wrong column: The `moveCards` message only affects `currentCards` in the webview; any subsequent `updateBoard` message from the server overwrites it with authoritative DB state.
+- Removing `_isRefreshing` guard causing rapid re-renders: The 100ms debounce in `_scheduleBoardRefresh` already prevents this.
+
+### Pre-existing Lint
+- One TS error at line ~3987 (`import('./ArchiveManager')`) is pre-existing and intentionally extensionless per an inline comment for Webpack bundling. Not touched.

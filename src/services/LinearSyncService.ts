@@ -1164,7 +1164,7 @@ export class LinearSyncService {
     }
   }
 
-  // ── Local Sync Map (sessionId → Linear issueId) ──────────────
+  // ── Local Sync Map (planFile → Linear issueId) ──────────────
 
   async loadSyncMap(): Promise<Record<string, string>> {
     try {
@@ -1178,14 +1178,14 @@ export class LinearSyncService {
     await fs.promises.writeFile(this._syncMapPath, JSON.stringify(map, null, 2));
   }
 
-  async getIssueIdForPlan(sessionId: string): Promise<string | null> {
+  async getIssueIdForPlan(planFile: string): Promise<string | null> {
     const map = await this.loadSyncMap();
-    return map[sessionId] || null;
+    return map[planFile] || null;
   }
 
-  async setIssueIdForPlan(sessionId: string, issueId: string): Promise<void> {
+  async setIssueIdForPlan(planFile: string, issueId: string): Promise<void> {
     const map = await this.loadSyncMap();
-    map[sessionId] = issueId;
+    map[planFile] = issueId;
     await this.saveSyncMap(map);
   }
 
@@ -1504,22 +1504,22 @@ export class LinearSyncService {
     return 4;
   }
 
-  async syncPlan(plan: { sessionId: string; topic: string; planFile: string; complexity: string }, newColumn: string): Promise<void> {
+  async syncPlan(plan: { planFile: string; topic: string; complexity: string }, newColumn: string): Promise<void> {
     const config = await this.loadConfig();
     if (!config?.setupComplete) { return; }
 
     const stateId = config.columnToStateId[newColumn];
     if (!stateId) {
-      console.warn(`[LinearSync] No Linear state mapped for column "${newColumn}" - skipping sync for plan ${plan.sessionId}`);
+      console.warn(`[LinearSync] No Linear state mapped for column "${newColumn}" - skipping sync for plan ${plan.planFile}`);
       return;
     } // column not mapped
 
-    const existingIssueId = await this.getIssueIdForPlan(plan.sessionId);
+    const existingIssueId = await this.getIssueIdForPlan(plan.planFile);
     const priority = this._complexityToPriority(plan.complexity);
 
     try {
       if (existingIssueId) {
-        console.log(`[LinearSync] Updating existing Linear issue ${existingIssueId} for plan ${plan.sessionId} to state ${stateId}`);
+        console.log(`[LinearSync] Updating existing Linear issue ${existingIssueId} for plan ${plan.planFile} to state ${stateId}`);
         const result = await this.retry(() => this.graphqlRequest(`
           mutation($id: String!, $stateId: String!) {
             issueUpdate(id: $id, input: { stateId: $stateId }) { success }
@@ -1530,13 +1530,13 @@ export class LinearSyncService {
           console.warn(`[LinearSync] Issue update failed for ${existingIssueId}, attempting to recreate`);
           await this.createIssue(plan, stateId, priority, config);
         } else {
-          console.log(`[LinearSync] Successfully updated Linear issue ${existingIssueId} for plan ${plan.sessionId}`);
+          console.log(`[LinearSync] Successfully updated Linear issue ${existingIssueId} for plan ${plan.planFile}`);
         }
       } else {
         await this.createIssue(plan, stateId, priority, config);
       }
     } catch (error) {
-      console.warn(`[LinearSync] Failed to sync plan ${plan.sessionId}:`, error);
+      console.warn(`[LinearSync] Failed to sync plan ${plan.planFile}:`, error);
       throw error;
     }
   }
@@ -1586,19 +1586,19 @@ export class LinearSyncService {
    * Public to match ClickUpSyncService.createTask().
    */
   public async createIssue(
-    plan: { sessionId: string; topic: string; planFile: string },
+    plan: { planFile: string; topic: string },
     stateId: string,
     priority: number,
     config: LinearConfig
   ): Promise<void> {
-    console.log(`[LinearSync] Creating Linear issue for plan ${plan.sessionId} with title "${plan.topic}"`);
+    console.log(`[LinearSync] Creating Linear issue for plan ${plan.planFile} with title "${plan.topic}"`);
     const description = await this._buildInitialIssueDescription(plan.planFile);
 
     // Pre-mark in sync map BEFORE GraphQL call to prevent automation race condition.
-    // Marker format: `creating_${sessionId}_${timestamp}`. The timestamp is used by the
+    // Marker format: `creating_${planFile}_${timestamp}`. The timestamp is used by the
     // stale-marker sweep in importIssuesFromLinear to age out abandoned markers.
-    const tempMarker = `creating_${plan.sessionId}_${Date.now()}`;
-    await this.setIssueIdForPlan(plan.sessionId, tempMarker);
+    const tempMarker = `creating_${plan.planFile}_${Date.now()}`;
+    await this.setIssueIdForPlan(plan.planFile, tempMarker);
 
     const resolvedProjectId = await this._resolveSingleIncludeProjectId(config);
     let issueCreated = false;
@@ -1623,21 +1623,22 @@ export class LinearSyncService {
         const issueId = result.data.issueCreate.issue.id;
         const identifier = result.data.issueCreate.issue.identifier;
         // Overwrite the temp marker with the real issue ID — this is the race-free handoff.
-        await this.setIssueIdForPlan(plan.sessionId, issueId);
+        await this.setIssueIdForPlan(plan.planFile, issueId);
         issueCreated = true;
         const db = KanbanDatabase.forWorkspace(this._workspaceRoot);
         const ready = await db.ensureReady();
         if (!ready) {
-          throw new Error(`Kanban database unavailable while linking Linear issue ${issueId} to plan ${plan.sessionId}.`);
+          throw new Error(`Kanban database unavailable while linking Linear issue ${issueId} to plan ${plan.planFile}.`);
         }
-        const persisted = await db.updateLinearIssueId(plan.sessionId, issueId);
+        const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+        const persisted = await db.updateLinearIssueIdByPlanFile(plan.planFile, workspaceId, issueId);
         if (!persisted) {
-          throw new Error(`Failed to persist Linear issue ${issueId} for plan ${plan.sessionId}.`);
+          throw new Error(`Failed to persist Linear issue ${issueId} for plan ${plan.planFile}.`);
         }
-        console.log(`[LinearSync] Created Linear issue ${identifier} (ID: ${issueId}) for plan ${plan.sessionId}`);
+        console.log(`[LinearSync] Created Linear issue ${identifier} (ID: ${issueId}) for plan ${plan.planFile}`);
       } else {
-        console.error(`[LinearSync] Failed to create Linear issue for plan ${plan.sessionId}`);
-        throw new Error(`Failed to create Linear issue for plan ${plan.sessionId}.`);
+        console.error(`[LinearSync] Failed to create Linear issue for plan ${plan.planFile}`);
+        throw new Error(`Failed to create Linear issue for plan ${plan.planFile}.`);
       }
     } finally {
       // Guaranteed cleanup: if the temp marker is still present (we never replaced it
@@ -1646,12 +1647,12 @@ export class LinearSyncService {
       if (!issueCreated) {
         try {
           const map = await this.loadSyncMap();
-          if (map[plan.sessionId] === tempMarker) {
-            delete map[plan.sessionId];
+          if (map[plan.planFile] === tempMarker) {
+            delete map[plan.planFile];
             await this.saveSyncMap(map);
           }
         } catch (cleanupErr) {
-          console.warn(`[LinearSync] Failed to clean up temp marker for ${plan.sessionId}:`, cleanupErr);
+          console.warn(`[LinearSync] Failed to clean up temp marker for ${plan.planFile}:`, cleanupErr);
         }
       }
     }
@@ -1659,16 +1660,16 @@ export class LinearSyncService {
 
   // ── Debounced Sync ───────────────────────────────────────────
 
-  debouncedSync(sessionId: string, plan: any, column: string): void {
-    const existing = this._debounceTimers.get(sessionId);
+  debouncedSync(planFile: string, plan: any, column: string): void {
+    const existing = this._debounceTimers.get(planFile);
     if (existing) { clearTimeout(existing); }
-    this._debounceTimers.set(sessionId, setTimeout(async () => {
-      this._debounceTimers.delete(sessionId);
+    this._debounceTimers.set(planFile, setTimeout(async () => {
+      this._debounceTimers.delete(planFile);
       try {
         await this.syncPlan(plan, column);
         this._consecutiveFailures = 0;
       } catch (error) {
-        console.error(`[LinearSync] Failed to sync plan ${sessionId} to column ${column}:`, error);
+        console.error(`[LinearSync] Failed to sync plan ${planFile} to column ${column}:`, error);
         this._consecutiveFailures++;
       }
     }, 500));
@@ -1721,7 +1722,7 @@ export class LinearSyncService {
 
     try {
       // --- Stale marker sweep (TTL = 60s) ------------------------------------
-      // A `creating_${sessionId}_${timestamp}` marker older than 60s is assumed
+      // A `creating_${planFile}_${timestamp}` marker older than 60s is assumed
       // to be abandoned (extension restart mid-create, network stall past retry
       // budget, etc.). Removing it unblocks auto-pull for that session.
       const STALE_MARKER_TTL_MS = 60_000;
@@ -1745,13 +1746,13 @@ export class LinearSyncService {
       const syncMap = await this.loadSyncMap();
       const syncMapIssueIds = new Set(Object.values(syncMap));
 
-      // Sessions with a live (non-stale) creating_* marker. An inbound issue
-      // whose title matches one of these sessions is our own outbound create
+      // Plans with a live (non-stale) creating_* marker. An inbound issue
+      // whose title matches one of these plans is our own outbound create
       // still in flight — skip it to avoid a duplicate.
-      const sessionIdsBeingCreated = new Set<string>(
+      const planFilesBeingCreated = new Set<string>(
         Object.entries(syncMap)
           .filter(([, v]) => typeof v === 'string' && v.startsWith('creating_'))
-          .map(([sid]) => sid)
+          .map(([pf]) => pf)
       );
 
       // Resolve DB handle + workspaceId once for the scoped title fallback.
@@ -1827,9 +1828,9 @@ export class LinearSyncService {
         // Scoped title fallback: only suppress if a local session is actively
         // being created AND its topic matches this issue's title. Global title
         // matching is explicitly avoided to prevent silent import loss.
-        if (sessionIdsBeingCreated.size > 0 && ready && workspaceId) {
+        if (planFilesBeingCreated.size > 0 && ready && workspaceId) {
           const localPlan = await db.getPlanByTopic(issue.title || '', workspaceId);
-          if (localPlan && sessionIdsBeingCreated.has(localPlan.sessionId)) {
+          if (localPlan && planFilesBeingCreated.has(localPlan.planFile)) {
             skipped++;
             continue;
           }

@@ -290,17 +290,17 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     if (!plan) return;
 
-    const sessionId = plan.sessionId;
+    const planFile = plan.planFile;
 
     // Check eligibility dynamically based on integration config and external issue mapping
     const isEligible = await this._isEligibleForLiveSync(plan, workspaceRoot);
     if (!isEligible) return;
 
     // Check if plan already tracked
-    let state = this._states.get(sessionId);
+    let state = this._states.get(planFile);
     if (!state) {
-      state = this._createInitialState(sessionId);
-      this._states.set(sessionId, state);
+      state = this._createInitialState(planFile);
+      this._states.set(planFile, state);
     }
 
     // Update content change timestamp
@@ -312,12 +312,12 @@ export class ContinuousSyncService implements vscode.Disposable {
       content = await this._readPlanContent(plan.planFile, workspaceRoot);
     } catch (err) {
       // File may have been deleted between event firing and read
-      console.warn(`[ContinuousSync] Failed to read plan file for ${sessionId}:`, err);
+      console.warn(`[ContinuousSync] Failed to read plan file for ${planFile}:`, err);
       return;
     }
 
     if (content.length > this._config.maxContentSizeBytes) {
-      this._states.set(sessionId, { ...state, status: 'error' });
+      this._states.set(planFile, { ...state, status: 'error' });
       vscode.window.showWarningMessage(`Plan "${plan.topic}" exceeds 100KB limit — live sync disabled for this plan.`);
       return;
     }
@@ -327,7 +327,7 @@ export class ContinuousSyncService implements vscode.Disposable {
 
     // If hash unchanged, no sync needed
     if (hash === state.lastContentHash) {
-      this._states.set(sessionId, state);
+      this._states.set(planFile, state);
       return;
     }
 
@@ -348,14 +348,14 @@ export class ContinuousSyncService implements vscode.Disposable {
 
     // Set quiet timer to fire after QUIET_MS of no further changes
     state.quietTimer = setTimeout(() => {
-      void this._maybeSync(sessionId, workspaceRoot);
+      void this._maybeSync(planFile, workspaceRoot);
     }, this._config.quietMs);
 
-    this._states.set(sessionId, state);
+    this._states.set(planFile, state);
 
     // Check MAX_DEFER_MS ceiling - force sync if we've been editing continuously too long
     if (now - (state.firstPendingEditAt ?? now) > this._config.maxDeferMs) {
-      void this._maybeSync(sessionId, workspaceRoot);
+      void this._maybeSync(planFile, workspaceRoot);
     }
   }
 
@@ -767,10 +767,10 @@ export class ContinuousSyncService implements vscode.Disposable {
       }
 
       // Update external hash for next comparison
-      this._states.set(plan.sessionId, { ...state, lastExternalHash: externalHash });
+      this._states.set(plan.planFile, { ...state, lastExternalHash: externalHash });
       return false;
     } catch (err) {
-      console.warn(`[ContinuousSync] Conflict check failed for ${plan.sessionId}:`, err);
+      console.warn(`[ContinuousSync] Conflict check failed for ${plan.planFile}:`, err);
       return false; // On error, assume no conflict (fail-open)
     }
   }
@@ -866,7 +866,7 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     const result = await clickup.syncPlanContent(plan.clickupTaskId, content, signal);
     if (!result.success) {
-      console.warn(`[ContinuousSync] ClickUp sync failed for ${plan.sessionId}: ${result.error}`);
+      console.warn(`[ContinuousSync] ClickUp sync failed for ${plan.planFile}: ${result.error}`);
       throw new Error(result.error);
     }
     // Update rate limit tracker from response headers (if available)
@@ -893,7 +893,7 @@ export class ContinuousSyncService implements vscode.Disposable {
     }
     const result = await linear.syncPlanContent(plan.linearIssueId, content, signal);
     if (!result.success) {
-      console.warn(`[ContinuousSync] Linear sync failed for ${plan.sessionId}: ${result.error}`);
+      console.warn(`[ContinuousSync] Linear sync failed for ${plan.planFile}: ${result.error}`);
       throw new Error(result.error);
     }
     return { skipped: false };
@@ -1012,8 +1012,8 @@ export class ContinuousSyncService implements vscode.Disposable {
     for (const row of rows) {
       const isEligible = await this._isEligibleForLiveSync(row, workspaceRoot);
       if (isEligible) {
-        const state = this._createInitialState(row.sessionId);
-        this._states.set(row.sessionId, state);
+        const state = this._createInitialState(row.planFile);
+        this._states.set(row.planFile, state);
       }
     }
   }

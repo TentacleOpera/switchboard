@@ -159,8 +159,8 @@ export class ClickUpSyncService {
   // Reverse map: taskId -> listId for efficient cache invalidation on updates
   private _taskListIndex: Map<string, string> = new Map();
 
-  public isCreating(sessionId: string): boolean {
-    return this._pendingCreateSessions.has(sessionId);
+  public isCreating(planFile: string): boolean {
+    return this._pendingCreateSessions.has(planFile);
   }
 
   /**
@@ -2148,12 +2148,12 @@ export class ClickUpSyncService {
 
     const body: Record<string, unknown> = {
       name: plan.topic || `Plan ${plan.planId}`,
-      description: `${description}\n\n---\n[Switchboard] Session: ${plan.sessionId} | Plan: ${plan.planId}`,
+      description: `${description}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`,
       priority,
       tags,
       custom_fields: [
         ...(config.customFields.sessionId
-          ? [{ id: config.customFields.sessionId, value: plan.sessionId }] : []),
+          ? [{ id: config.customFields.sessionId, value: plan.planFile }] : []),
         ...(config.customFields.planId
           ? [{ id: config.customFields.planId, value: plan.planId }] : []),
         ...(config.customFields.syncTimestamp
@@ -2161,7 +2161,7 @@ export class ClickUpSyncService {
       ]
     };
 
-    this._pendingCreateSessions.add(plan.sessionId);
+    this._pendingCreateSessions.add(plan.planFile);
     try {
       const result = await this.retry(() =>
         this.httpRequest('POST', `/list/${listId}/task`, body)
@@ -2170,7 +2170,7 @@ export class ClickUpSyncService {
     } finally {
       // Always clear, even on throw. The autopull reads this set and must see
       // a consistent view once the HTTP path has resolved one way or the other.
-      this._pendingCreateSessions.delete(plan.sessionId);
+      this._pendingCreateSessions.delete(plan.planFile);
     }
   }
 
@@ -2183,7 +2183,7 @@ export class ClickUpSyncService {
       name: plan.topic || `Plan ${plan.planId}`,
       custom_fields: [
         ...(config.customFields.sessionId
-          ? [{ id: config.customFields.sessionId, value: plan.sessionId }] : []),
+          ? [{ id: config.customFields.sessionId, value: plan.planFile }] : []),
         ...(config.customFields.planId
           ? [{ id: config.customFields.planId, value: plan.planId }] : []),
         ...(config.customFields.syncTimestamp
@@ -2192,7 +2192,7 @@ export class ClickUpSyncService {
     };
 
     if (planContent) {
-      body.description = `${planContent}\n\n---\n[Switchboard] Session: ${plan.sessionId} | Plan: ${plan.planId}`;
+      body.description = `${planContent}\n\n---\n[Switchboard] PlanFile: ${plan.planFile} | Plan: ${plan.planId}`;
     }
 
     await this.retry(() =>
@@ -2256,20 +2256,20 @@ export class ClickUpSyncService {
    * Rapid moves within 500ms are coalesced — only the final position syncs.
    */
   debouncedSync(
-    sessionId: string,
+    planFile: string,
     plan: KanbanPlanRecord,
     onComplete?: (result: ClickUpSyncResult) => void
   ): void {
-    const existing = this.debounceTimers.get(sessionId);
+    const existing = this.debounceTimers.get(planFile);
     if (existing) { clearTimeout(existing); }
 
     const timer = setTimeout(async () => {
       const result = await this.syncPlan(plan);
       onComplete?.(result);
-      this.debounceTimers.delete(sessionId);
+      this.debounceTimers.delete(planFile);
     }, 500);
 
-    this.debounceTimers.set(sessionId, timer);
+    this.debounceTimers.set(planFile, timer);
   }
 
   /**
@@ -2346,7 +2346,7 @@ export class ClickUpSyncService {
 
         // If this task was just created by us and the taskId hasn't landed in
         // the plan record yet, the _pendingCreateSessions set will contain its
-        // sessionId. Skip.
+        // planFile. Skip.
         //
         // Only run the lookup when db resolved successfully. `getPlanByPlanId`
         // is a real public method on KanbanDatabase; prefer it directly over a
@@ -2354,7 +2354,7 @@ export class ClickUpSyncService {
         if (taskPlanId && dbReady && db) {
           try {
             const localPlan = await db.getPlanByPlanId(taskPlanId);
-            if (localPlan && this._pendingCreateSessions.has(localPlan.sessionId)) {
+            if (localPlan && this._pendingCreateSessions.has(localPlan.planFile)) {
               skipped++;
               continue;
             }
@@ -2365,7 +2365,7 @@ export class ClickUpSyncService {
         // been set yet (ClickUp eventually-consistent custom field propagation).
         if (!taskPlanId && this._pendingCreateSessions.size > 0 && dbReady && db && workspaceId) {
           const localPlan = await db.getPlanByTopic(task.name || '', workspaceId);
-          if (localPlan && this._pendingCreateSessions.has(localPlan.sessionId)) {
+          if (localPlan && this._pendingCreateSessions.has(localPlan.planFile)) {
             skipped++;
             continue;
           }
