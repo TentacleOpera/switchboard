@@ -667,6 +667,32 @@ export class SetupPanelProvider implements vscode.Disposable {
 
                     for (const m of incoming.mappings ?? []) {
                         if (!m.id || !m.name?.trim()) errors.push(`Mapping is missing id/name`);
+                        const mode = m.mode || 'connect';
+                        const parentFolder = m.parentFolder ? path.resolve(expandHome(m.parentFolder)) : '';
+
+                        if (mode === 'create') {
+                            if (!m.dbPath?.trim()) {
+                                errors.push(`Mapping "${m.name}": You must click "Initialize Database" before saving.`);
+                            }
+                            const childFolders = (m.workspaceFolders ?? []).map((f: string) => path.resolve(expandHome(f)));
+                            if (childFolders.includes(parentFolder)) {
+                                errors.push(`Mapping "${m.name}": parent folder cannot also be a child workspace folder`);
+                            }
+                        }
+
+                        if (mode === 'connect') {
+                            if (!m.dbPath?.trim()) {
+                                errors.push(`Mapping "${m.name}": database path is required in connect mode`);
+                            } else {
+                                const resolvedDbPath = path.resolve(expandHome(m.dbPath.trim()));
+                                if (!fs.existsSync(resolvedDbPath)) {
+                                    errors.push(`Mapping "${m.name}": database file does not exist: ${resolvedDbPath}`);
+                                } else if (!resolvedDbPath.endsWith('.db')) {
+                                    errors.push(`Mapping "${m.name}": database path must end with .db`);
+                                }
+                            }
+                        }
+
                         for (const f of m.workspaceFolders ?? []) {
                             const norm = path.resolve(expandHome(f));
                             if (seenFolders.has(norm)) errors.push(`Folder ${norm} listed in multiple mappings`);
@@ -687,6 +713,70 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: true });
                     await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                }
+                case 'initializeWorkspaceDatabase': {
+                    const parentFolder = String(message.parentFolder || '').trim();
+                    if (!parentFolder) {
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder is required.' });
+                        break;
+                    }
+                    const expandHome = (p: string): string => {
+                        const trimmed = p.trim();
+                        return trimmed.startsWith('~')
+                            ? path.join(os.homedir(), trimmed.slice(1))
+                            : trimmed;
+                    };
+                    const resolvedParent = path.resolve(expandHome(parentFolder));
+                    try {
+                        await fs.promises.access(resolvedParent, fs.constants.W_OK);
+                    } catch {
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: `Parent folder is not writable: ${resolvedParent}` });
+                        break;
+                    }
+                    const derivedDbPath = path.join(resolvedParent, '.switchboard', 'kanban.db');
+
+                    const workspaceFolders = Array.isArray(message.workspaceFolders) ? message.workspaceFolders : [];
+                    const childFolders = workspaceFolders.map((f: string) => path.resolve(expandHome(f)));
+                    if (childFolders.includes(resolvedParent)) {
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a child workspace folder.' });
+                        break;
+                    }
+
+                    try {
+                        // Direct construction to bypass mapping resolution during config setup
+                        const db = new (KanbanDatabase as any)(resolvedParent, derivedDbPath);
+                        const created = await db.createIfMissing();
+                        if (!created) {
+                            this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Failed to create database. Check permissions and try again.' });
+                            break;
+                        }
+                        // Save the mapping config with dbPath pre-filled
+                        const config = vscode.workspace.getConfiguration('switchboard');
+                        const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                        const newMapping = {
+                            id: message.mappingId || ('mapping-' + Date.now()),
+                            name: message.name || path.basename(resolvedParent),
+                            dbPath: derivedDbPath,
+                            parentFolder: resolvedParent,
+                            workspaceFolders,
+                            mode: 'create'
+                        };
+                        const existingIndex = (current.mappings || []).findIndex((m: any) => m.id === newMapping.id);
+                        const updatedMappings = existingIndex >= 0
+                            ? current.mappings.map((m: any) => m.id === newMapping.id ? newMapping : m)
+                            : [...(current.mappings || []), newMapping];
+                        await config.update(
+                            'workspaceDatabaseMappings',
+                            { ...current, mappings: updatedMappings },
+                            vscode.ConfigurationTarget.Workspace
+                        );
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: true, dbPath: derivedDbPath });
+                        await vscode.commands.executeCommand('switchboard.refreshUI');
+                    } catch (error) {
+                        const errorMessage = error instanceof Error ? error.message : String(error);
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: errorMessage });
+                    }
                     break;
                 }
                 case 'browseWorkspaceMappingDbPath': {
@@ -730,10 +820,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                         title: 'Select parent workspace folder (where .switchboard/ lives)'
                     });
                     if (parentUri?.[0]) {
+                        const selectedPath = parentUri[0].fsPath;
+                        const existingDbPath = path.join(selectedPath, '.switchboard', 'kanban.db');
+                        const existingDbDetected = fs.existsSync(existingDbPath);
                         this._panel?.webview.postMessage({
                             type: 'parentFolderSelected',
-                            path: parentUri[0].fsPath,
-                            mappingId: message.mappingId
+                            path: selectedPath,
+                            mappingId: message.mappingId,
+                            existingDbDetected
                         });
                     }
                     break;

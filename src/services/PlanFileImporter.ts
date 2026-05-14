@@ -249,7 +249,7 @@ export function sanitizeRepoScope(raw: string): string {
     return value;
 }
 
-function isRuntimeMirrorPlanFile(fileName: string): boolean {
+export function isRuntimeMirrorPlanFile(fileName: string): boolean {
     return /^brain_[0-9a-f]{64}\.md$/i.test(fileName)
         || /^ingested_[0-9a-f]{64}\.md$/i.test(fileName);
 }

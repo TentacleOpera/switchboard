@@ -149,3 +149,22 @@ const manualVerifMatch = content.match(/###\s*Manual\s+(?:Verification|Testing)\
 ---
 
 **Status: Completed**
+
+## Reviewer Notes
+
+### Stage 1: Grumpy Review (Adversarial)
+* "The core regex fix was done, but let me check the Verification Plan... Ah, 'Add a unit test for `_parseVerificationSteps`'. I look at the test files and... nothing. The coder completely skipped adding the requested unit tests for `KanbanProvider.ts` to assert that the `(Verification|Testing)` non-capturing group actually works. They marked the plan as completed without checking off half of the Automated Tests criteria. Classic 'it works on my machine' behavior." [MAJOR]
+* "The regex itself is fine. `(?:Verification|Testing)` does what it says on the tin. However, skipping tests is unacceptable, especially when it was explicitly enumerated in the plan." [NIT]
+
+### Stage 2: Balanced Synthesis
+* **What's valid:** The actual implementation in `KanbanProvider.ts` is solid. The regex update is precise, correctly handles `\r\n` and `\n`, backwards compatibility is maintained, and it captures the steps reliably.
+* **What needs fixing:** The missing unit tests. The plan explicitly requested tests for `_parseVerificationSteps`.
+* **Convergence:** The regex logic is kept as implemented. I will inject the missing unit tests into `src/services/__tests__/KanbanProvider.test.ts`.
+
+### Validation Results
+* **Files Changed:** `src/services/__tests__/KanbanProvider.test.ts` (added test suite).
+* **Status:** EXECUTED. Added missing test suite for `_parseVerificationSteps` verifying both "Manual Verification", "Manual Testing" section parsing, and empty/missing sections.
+* **Code Fixes Applied:**
+  1. `src/services/__tests__/KanbanProvider.test.ts` - Added a `suite` for `_parseVerificationSteps` with 4 test cases.
+* **Remaining Risks:** None. The parser operates safely on string content without mutating state.
+* **Final Verdict:** Ready.

@@ -6,6 +6,7 @@ import * as os from 'os';
 import { v4 as uuidv4 } from 'uuid';
 import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } from './KanbanDatabase';
 import { parsePlanMetadata } from './planMetadataUtils';
+import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
@@ -355,6 +356,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             await db.ensureReady();
             
             const relativePath = path.relative(workspaceRoot, uri.fsPath).replace(/\\/g, '/');
+            if (isRuntimeMirrorPlanFile(path.basename(relativePath))) {
+                this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipped brain mirror file: ${relativePath}`);
+                return;
+            }
             const workspaceId = await db.getWorkspaceId();
             
             if (!workspaceId) {

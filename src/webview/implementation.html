@@ -2200,7 +2200,7 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: true, ticket_updater: false, researcher: false, splitter: false };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
@@ -2871,7 +2871,8 @@
                         task: message.task,
                         subtasks: Array.isArray(message.subtasks) ? message.subtasks : [],
                         comments: Array.isArray(message.comments) ? message.comments : [],
-                        attachments: Array.isArray(message.attachments) ? message.attachments : []
+                        attachments: Array.isArray(message.attachments) ? message.attachments : [],
+                        renderedDescriptionHtml: message.renderedDescriptionHtml || ''
                     };
                     clickUpImportPending = false;
                     renderSidebarClickUpProjectPanel();
@@ -4048,13 +4049,23 @@
                 ? task.assignees.map(a => a.username || a.email).join(', ')
                 : 'Unassigned';
 
-            const descHtml = task.markdownDescription
-                ? `<pre>${escapeHtml(task.markdownDescription)}</pre>`
-                : (task.description ? `<pre>${escapeHtml(task.description)}</pre>` : '<p>No description provided.</p>');
+            let descHtml;
+            if (selectedClickUpIssue.renderedDescriptionHtml) {
+                descHtml = selectedClickUpIssue.renderedDescriptionHtml;
+            } else {
+                descHtml = task.markdownDescription
+                    ? `<pre>${escapeHtml(task.markdownDescription)}</pre>`
+                    : (task.description ? `<pre>${escapeHtml(task.description)}</pre>` : '<p>No description provided.</p>');
+            }
 
             if (_lastClickUpDetailDescriptionHtml !== descHtml && detailDescription) {
                 detailDescription.innerHTML = descHtml;
                 _lastClickUpDetailDescriptionHtml = descHtml;
+                if (selectedClickUpIssue.renderedDescriptionHtml) {
+                    detailDescription.classList.add('markdown-body');
+                } else {
+                    detailDescription.classList.remove('markdown-body');
+                }
             }
 
             const subtasksHtml = subtasks.length === 0

@@ -96,25 +96,25 @@ export interface PromptBuilderOptions {
     switchboardSafeguardsEnabled?: boolean;
     /** Optional display label of the column where the plans originated. */
     sourceColumnLabel?: string;
+    /** Persona file content for the role, used as base instructions when no override exists. */
+    personaContent?: string;
 }
 
-function applyPromptOverride(
-    generated: string,
-    dispatchContextBlock: string,
-    planList: string,
-    override: DefaultPromptOverride | undefined
+function resolveBaseInstructions(
+    role: string,
+    defaultBase: string,
+    options?: PromptBuilderOptions
 ): string {
-    if (!override || !override.text) return generated;
-    switch (override.mode) {
-        case 'prepend':
-            return `${override.text}\n\n${generated}`;
-        case 'append':
-            return `${generated}\n\n${override.text}`;
-        case 'replace':
-            return `${override.text}${dispatchContextBlock ? `\n\n${dispatchContextBlock}` : ''}\n\nPLANS TO PROCESS:\n${planList}`;
-        default:
-            return generated;
+    const override = options?.defaultPromptOverrides?.[role];
+    const base = options?.personaContent?.trim() || defaultBase;
+    if (override?.text) {
+        switch (override.mode) {
+            case 'replace': return override.text;
+            case 'prepend': return `${override.text}\n\n${base}`;
+            case 'append': return `${base}\n\n${override.text}`;
+        }
     }
+    return base;
 }
 
 function buildReviewerExecutionIntro(planCount: number): string {
@@ -242,7 +242,6 @@ export function buildKanbanBatchPrompt(
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
     const sourceColumnLabel = options?.sourceColumnLabel;
-    const promptOverride = options?.defaultPromptOverrides?.[role] as DefaultPromptOverride | undefined;
 
     const parallelInstruction = plans.length > 1
         ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
@@ -276,9 +275,6 @@ export function buildKanbanBatchPrompt(
             }).join('\n')}\n`
         : '';
 
-    const chatCritiqueDirective =
-        `When you output the adversarial critique (Grumpy and Balanced sections), include them verbatim in your chat response as formatted markdown — do not only write them to the plan file. The user must be able to read the critique directly in chat without opening the plan.`;
-
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
 
     if (role === 'planner') {
@@ -295,12 +291,12 @@ export function buildKanbanBatchPrompt(
             }
         }
 
-        // Minimal base prompt (framework-agnostic)
-        let plannerPrompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+        // Build default base instructions
+        let plannerBase = `Read ${workflowPath} and follow it step-by-step.\n\n`;
 
         // Include batch execution rules for multi-plan dispatches
         if (plans.length > 1 && switchboardSafeguardsEnabled) {
-            plannerPrompt += `${batchExecutionRules}\n\n`;
+            plannerBase += `${batchExecutionRules}\n\n`;
         }
 
         // Append add-on instructions if enabled
@@ -310,18 +306,22 @@ export function buildKanbanBatchPrompt(
 
         const designDocLink = options?.designDocLink?.trim();
         if (designDocLink) {
-            plannerPrompt += `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
+            plannerBase += `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
         }
 
-        plannerPrompt += aggressiveDirective + dependencyCheckInstruction;
+        plannerBase += aggressiveDirective + dependencyCheckInstruction;
         if (splitPlan) {
-            plannerPrompt += SPLIT_PLAN_DIRECTIVE;
+            plannerBase += SPLIT_PLAN_DIRECTIVE;
         }
         if (workspaceTypeBlock) {
-            plannerPrompt += workspaceTypeBlock + '\n';
+            plannerBase += workspaceTypeBlock + '\n';
         }
 
-        // Add dispatch context and plan list (reuse outer variables from buildPromptDispatchContext)
+        const baseInstructions = resolveBaseInstructions('planner', plannerBase, options);
+
+        let plannerPrompt = baseInstructions;
+
+        // Add dispatch context and plan list
         plannerPrompt += `${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}`;
 
         // Append git prohibition if enabled (add-on, default true)
@@ -337,10 +337,20 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
         }
 
-        return applyPromptOverride(plannerPrompt, dispatchContextBlock, planList, promptOverride);
+        return plannerPrompt;
     }
 
     if (role === 'reviewer') {
+        const DEFAULT_REVIEWER_BASE_INSTRUCTIONS = `For each plan:
+1. Use the plan file as the source of truth for the review criteria.
+2. Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
+3. Stage 2 (Balanced): synthesize Stage 1 into actionable fixes — what to keep, what to fix now, what can defer.
+4. Apply code fixes for valid CRITICAL/MAJOR findings.
+5. Run verification checks (typecheck/tests as applicable) and include results.
+6. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
+
+CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.`;
+
         const planTarget = plans.length <= 1 ? 'this plan' : 'each listed plan';
         const reviewerExecutionIntro = buildReviewerExecutionIntro(plans.length);
         const reviewerExecutionMode = buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
@@ -349,26 +359,18 @@ export function buildKanbanBatchPrompt(
             ? `${batchExecutionRules}\n\n`
             : '';
 
-        return applyPromptOverride(`${reviewerExecutionIntro}
+        const baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+
+        return `${reviewerExecutionIntro}
 
 ${safeguardsBlock}${reviewerExecutionMode}${advancedReviewerBlock}
 
-For each plan:
-1. Use the plan file as the source of truth for the review criteria.
-2. Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
-3. Stage 2 (Balanced): synthesize Stage 1 into actionable fixes — what to keep, what to fix now, what can defer.
-4. Apply code fixes for valid CRITICAL/MAJOR findings.
-5. Run verification checks (typecheck/tests as applicable) and include results.
-6. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
-
-CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.
-
-${chatCritiqueDirective}
+${baseInstructions}
 
 ${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
-${planList}`, dispatchContextBlock, planList, promptOverride);
+${planList}`;
     }
 
     if (role === 'tester') {
@@ -379,13 +381,7 @@ ${planList}`, dispatchContextBlock, planList, promptOverride);
             ? `${batchExecutionRules}\n\n`
             : '';
 
-        let testerPrompt = `${plans.length <= 1
-            ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
-            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`}
-
-${executionDirective}
-
-${safeguardsBlock}Mode:
+        const testerBase = `Mode:
 - You are the acceptance-tester-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
 - Use the attached Design Doc / PRD as the authoritative requirements baseline.
@@ -396,7 +392,17 @@ For each plan:
 2. Identify any missing, incomplete, or incorrect implementation of product requirements.
 3. Apply code fixes for valid requirement gaps.
 4. Run verification checks as applicable and include results.
-5. Update the original plan with files changed, validation results, and remaining requirement gaps.
+5. Update the original plan with files changed, validation results, and remaining requirement gaps.`;
+
+        const baseInstructions = resolveBaseInstructions('tester', testerBase, options);
+
+        let testerPrompt = `${plans.length <= 1
+            ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
+            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`}
+
+${executionDirective}
+
+${safeguardsBlock}${baseInstructions}
 
 ${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
@@ -409,7 +415,7 @@ ${planList}`;
             testerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
         }
 
-        return applyPromptOverride(testerPrompt, dispatchContextBlock, planList, promptOverride);
+        return testerPrompt;
     }
 
     if (role === 'lead') {
@@ -417,24 +423,32 @@ ${planList}`;
             ? `${batchExecutionRules}${challengeBlock}`
             : challengeBlock.trim();
         const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
+
+        let leadBase = '';
+        if (pairProgrammingEnabled) {
+            leadBase += `\n\nNote: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
+            if (aggressivePairProgramming) {
+                leadBase += ` Routine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
+            }
+        }
+
+        const baseInstructions = resolveBaseInstructions('lead', leadBase, options);
+
         let leadPrompt = `Please execute the following ${plans.length} plans${sourceSuffix}.
 
 ${executionDirective}
 
 ${safeguardsBlock}
 
+${baseInstructions}
+
 ${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
         leadPrompt += depSection;
-        if (pairProgrammingEnabled) {
-            leadPrompt += `\n\nNote: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
-            if (aggressivePairProgramming) {
-                leadPrompt += ` Routine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
-            }
-        }
-        return applyPromptOverride(leadPrompt, dispatchContextBlock, planList, promptOverride);
+
+        return leadPrompt;
     }
 
     if (role === 'coder') {
@@ -446,41 +460,54 @@ ${planList}`;
             ? `${batchExecutionRules}${challengeBlock}`
             : challengeBlock.trim();
 
+        let coderBase = '';
+        if (pairProgrammingEnabled) {
+            coderBase += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
+        }
+
+        const baseInstructions = resolveBaseInstructions('coder', coderBase, options);
+
         let coderPrompt = withCoderAccuracyInstruction(`${intro}
 
 ${executionDirective}
 
 ${safeguardsBlock}
 
+${baseInstructions}
+
 ${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
         coderPrompt += depSection;
-        if (pairProgrammingEnabled) {
-            coderPrompt += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
-        }
-        return applyPromptOverride(coderPrompt, dispatchContextBlock, planList, promptOverride);
+
+        return coderPrompt;
     }
 
     if (role === 'intern') {
-        let internPrompt = `Please process the following ${plans.length} plans.
+        const baseInstructions = resolveBaseInstructions('intern', '', options);
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+        return `Please process the following ${plans.length} plans.
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
+
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
-        return applyPromptOverride(internPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'analyst') {
-        let analystPrompt = `Please process the following ${plans.length} plans.
+        const baseInstructions = resolveBaseInstructions('analyst', '', options);
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+        return `Please process the following ${plans.length} plans.
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
+
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
-        return applyPromptOverride(analystPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'ticket_updater') {
@@ -491,7 +518,7 @@ ${planList}`;
             `Do not modify the ticket description. Only add a comment. ` +
             `If no ticket number is found, skip the ticket update and notify the user.`;
 
-        let updaterPrompt = `You are a Ticket Updater Agent.
+        const updaterBase = `You are a Ticket Updater Agent.
 
 STEP 1: Analyze the Plan
 Generate a concise analysis covering:
@@ -509,25 +536,31 @@ ${ticketUpdateDirective}
 Format the analysis as:
 ## AI Analysis
 
-[Your analysis content here]
+[Your analysis content here]`;
+
+        const baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
+
+        return `${baseInstructions}
 
 ${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
-        return applyPromptOverride(updaterPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'researcher') {
-        let researcherPrompt = `You are a Researcher Agent.
+        const researcherBase = `You are a Researcher Agent.
 
-${DEEP_RESEARCH_DIRECTIVE}
+${DEEP_RESEARCH_DIRECTIVE}`;
+
+        const baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
+
+        return `${baseInstructions}
 
 ${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
-        return applyPromptOverride(researcherPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     if (role === 'splitter') {
@@ -537,7 +570,7 @@ ${planList}`;
             `### Routine and ### Complex / Risky subsections. ` +
             `Classify each implementation step by complexity before splitting.`;
 
-        let splitterPrompt = `You are a Plan Splitter Agent.
+        const splitterBase = `You are a Plan Splitter Agent.
 
 STEP 1: Check for Complexity Audit
 Read the provided plan file. If it lacks a "## Complexity Audit" section with "### Routine" and "### Complex / Risky" subsections, apply the following directive:
@@ -552,13 +585,16 @@ After creating both files:
 - Manually drag the original file (Complex) to the Lead Coder column
 - Manually drag the _routine.md file to the Coder column
 
-Create both files in the same directory as the original plan.
+Create both files in the same directory as the original plan.`;
+
+        const baseInstructions = resolveBaseInstructions('splitter', splitterBase, options);
+
+        return `${baseInstructions}
 
 ${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
 
 PLANS TO PROCESS:
 ${planList}`;
-        return applyPromptOverride(splitterPrompt, dispatchContextBlock, planList, promptOverride);
     }
 
     // No fallback — every built-in role must have an explicit template.

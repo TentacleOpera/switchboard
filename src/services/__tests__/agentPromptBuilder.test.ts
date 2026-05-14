@@ -48,6 +48,108 @@ suite('agentPromptBuilder', () => {
         });
     });
 
+    describe('buildKanbanBatchPrompt — personaContent & overrides', () => {
+        test('uses personaContent as base instructions when no override exists', () => {
+            const persona = 'You are a specialized security reviewer. Focus on OWASP and injection risks.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes(persona), 'Should include personaContent as base instructions');
+            assert.ok(prompt.includes('assess the actual code changes'), 'Should preserve execution mode line');
+            assert.ok(prompt.includes('PLANS TO PROCESS'), 'Should preserve plan list');
+        });
+
+        test('replace override takes precedence over personaContent', () => {
+            const persona = 'You are a specialized security reviewer.';
+            const overrideText = 'Custom reviewer instructions here.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes(overrideText), 'Should include replace override text');
+            assert.ok(!prompt.includes(persona), 'Should NOT include personaContent when replace override exists');
+            assert.ok(prompt.includes('assess the actual code changes'), 'Should preserve execution mode line');
+            assert.ok(prompt.includes('PLANS TO PROCESS'), 'Should preserve plan list');
+        });
+
+        test('replace mode preserves role framing (intro, execution mode, plan list)', () => {
+            const overrideText = 'Focus only on security vulnerabilities.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(2), {
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'replace' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('Execute a direct reviewer pass in-place for each plan'), 'Should preserve reviewer execution intro');
+            assert.ok(prompt.includes(overrideText), 'Should include replace override text');
+            assert.ok(prompt.includes('PLANS TO PROCESS'), 'Should preserve plan list header');
+        });
+
+        test('falls back to hardcoded default when personaContent is empty string', () => {
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: '',
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes('For each plan:'), 'Should use hardcoded default base instructions');
+            assert.ok(prompt.includes('Stage 1 (Grumpy)'), 'Should include default Stage 1 instruction');
+        });
+
+        test('falls back to personaContent when override text is empty string', () => {
+            const persona = 'Custom persona text.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                defaultPromptOverrides: { reviewer: { text: '', mode: 'replace' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes(persona), 'Should fall back to personaContent when override text is empty');
+        });
+
+        test('prepend mode adds override before base instructions', () => {
+            const persona = 'Base persona.';
+            const overrideText = 'Prepend this.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'prepend' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            const prependIndex = prompt.indexOf(overrideText);
+            const personaIndex = prompt.indexOf(persona);
+            assert.ok(prependIndex < personaIndex, 'Prepend text should appear before persona content');
+        });
+
+        test('append mode adds override after base instructions', () => {
+            const persona = 'Base persona.';
+            const overrideText = 'Append this.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                defaultPromptOverrides: { reviewer: { text: overrideText, mode: 'append' } },
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            const personaIndex = prompt.indexOf(persona);
+            const appendIndex = prompt.indexOf(overrideText);
+            assert.ok(personaIndex < appendIndex, 'Append text should appear after persona content');
+        });
+
+        test('advanced reviewer add-on is still injected with personaContent', () => {
+            const persona = 'You are a security reviewer.';
+            const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
+                personaContent: persona,
+                advancedReviewerEnabled: true,
+                switchboardSafeguardsEnabled: false,
+                gitProhibitionEnabled: false
+            });
+            assert.ok(prompt.includes(persona), 'Should include persona content');
+            assert.ok(prompt.includes('ADVANCED REGRESSION ANALYSIS'), 'Should include advanced reviewer directive');
+        });
+    });
+
     describe('columnToPromptRole', () => {
         test('maps CREATED to planner', () => {
             assert.strictEqual(columnToPromptRole('CREATED'), 'planner');
@@ -85,8 +187,8 @@ suite('agentPromptBuilder', () => {
             assert.strictEqual(columnToPromptRole('TICKET UPDATER'), 'ticket_updater');
         });
 
-        test('maps CODED to lead (legacy normalization)', () => {
-            assert.strictEqual(columnToPromptRole('CODED'), 'lead');
+        test('maps CODED to reviewer (legacy normalization)', () => {
+            assert.strictEqual(columnToPromptRole('CODED'), 'reviewer');
         });
 
         test('returns custom_agent roles as-is', () => {

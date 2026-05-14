@@ -16,6 +16,7 @@ import {
     CustomAgentConfig,
     CustomAgentAddons,
     CustomKanbanColumnConfig,
+    KanbanColumnDefinition,
     findCustomAgentByRole,
     parseCustomAgents,
     parseCustomKanbanColumns,
@@ -222,6 +223,7 @@ type PlanRegistryEntry = {
     createdAt: string;
     updatedAt: string;
     status: 'active' | 'archived' | 'completed' | 'deleted' | 'orphan';
+    kanbanColumn?: string;
 };
 
 type PlanRegistry = {
@@ -1319,21 +1321,28 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
     }
 
+    private _filterVisibleColumns(
+        columns: KanbanColumnDefinition[],
+        visibleAgents: Record<string, boolean>
+    ): KanbanColumnDefinition[] {
+        return columns.filter(column => {
+            const fixed = column.id === 'CREATED' || column.id === 'COMPLETED';
+            if (fixed) return true;
+            if (column.source === 'built-in' && column.role && visibleAgents[column.role] === false) {
+                return false;
+            }
+            return true;
+        });
+    }
+
     private _buildSetupKanbanStructure(
         customAgents: CustomAgentConfig[],
         customKanbanColumns: CustomKanbanColumnConfig[],
         visibleAgents: Record<string, boolean>
     ): SetupKanbanStructureItem[] {
         const allColumns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns);
-        return allColumns
-            .filter((column) => {
-                const fixed = column.id === 'CREATED' || column.id === 'COMPLETED';
-                if (fixed) return true; // Always include fixed columns
-                if (column.source === 'built-in' && column.role && visibleAgents[column.role] === false) {
-                    return false; // Filter out unselected built-in agents
-                }
-                return true;
-            })
+        const visibleColumns = this._filterVisibleColumns(allColumns, visibleAgents);
+        return visibleColumns
             .map((column) => {
                 const fixed = column.id === 'CREATED' || column.id === 'COMPLETED';
                 const visible = fixed
@@ -1447,19 +1456,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _updateKanbanColumnForSession(workspaceRoot: string, sessionId: string, column: string | null): Promise<void> {
-        if (!column) return;
+    private async _updateKanbanColumnForSession(workspaceRoot: string, sessionId: string, column: string | null): Promise<boolean> {
+        if (!column) return false;
         const db = await this._getKanbanDb(workspaceRoot);
-        if (!db) return;
-        await db.updateColumn(sessionId, column);
+        if (!db) return false;
+        const updated = await db.updateColumn(sessionId, column);
+        if (!updated) return false;
 
         const plan = await db.getPlanBySessionId(sessionId);
         const planFile = typeof plan?.planFile === 'string' ? plan.planFile.trim() : '';
-        if (!planFile) {
-            return;
-        }
+        if (!planFile) return false;
 
         // File-based state writes are disabled. KanbanDatabase is the sole source of truth.
+        return true;
     }
 
     /** Triggers a debounced Kanban board refresh after an Agents-tab dispatch. */
@@ -2260,7 +2269,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (workflowName) {
             await this._updateSessionRunSheet(sessionId, workflowName, outcome, true, resolvedWorkspaceRoot);
         }
-        await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, normalizedTargetColumn);
+        const columnUpdated = await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, normalizedTargetColumn);
+        if (!columnUpdated) {
+            console.warn(`[TaskViewerProvider] _applyManualKanbanColumnChange: column update failed for ${sessionId}`);
+            return false;
+        }
         console.log(`[TaskViewerProvider] _applyManualKanbanColumnChange: column updated to ${normalizedTargetColumn} for ${sessionId}`);
 
         if (normalizedTargetColumn === 'COMPLETED') {
@@ -5673,6 +5686,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const plannerWorkflowPath = plannerConfig?.workflowFilePath || vscode.workspace.getConfiguration('switchboard').get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md');
 
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+        const personaContent = await this.getPersonaForRole(role);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
@@ -5690,6 +5704,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             designDocLink,
             designDocContent,
             defaultPromptOverrides,
+            personaContent: personaContent?.trim() || undefined,
             workspaceRoot,
             gitProhibitionEnabled,
             switchboardSafeguardsEnabled
@@ -5800,10 +5815,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
         for (const role of roles) {
             const config: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
-            if (config && config.prompt) {
+            if (config && config.prompt?.trim()) {
                 overrides[role] = {
-                    text: config.prompt,
-                    mode: 'append'
+                    text: config.prompt.trim(),
+                    mode: 'replace'
                 };
             }
         }
@@ -7403,12 +7418,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                         try {
                             const details = await clickUp.getTaskDetails(data.taskId);
+
+                            let renderedDescriptionHtml = '';
+                            try {
+                                const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
+                                renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                            } catch {
+                                const descriptionText = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
+                                renderedDescriptionHtml = `<pre>${descriptionText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+                            }
+
                             this._view?.webview.postMessage({
                                 type: 'clickupTaskDetailsLoaded',
                                 task: this._mapClickUpTaskToSidebar(details.task),
                                 subtasks: details.subtasks.map(s => this._mapClickUpTaskToSidebar(s)),
                                 comments: details.comments.map(c => this._mapClickUpComment(c)),
-                                attachments: details.attachments.map(a => this._mapClickUpAttachment(a))
+                                attachments: details.attachments.map(a => this._mapClickUpAttachment(a)),
+                                renderedDescriptionHtml
                             });
                         } catch (error) {
                             this._view?.webview.postMessage({
@@ -8555,6 +8581,7 @@ What would you like to find?`;
         if (!fs.existsSync(stagingDir)) {
             await fs.promises.mkdir(stagingDir, { recursive: true });
         }
+        let anyMirrorChanged = false;
 
         if (!resolvedPlanFolder || !fs.existsSync(resolvedPlanFolder)) {
             return;
@@ -8638,6 +8665,7 @@ What would you like to find?`;
             }
 
             await fs.promises.writeFile(mirrorPath, content);
+            anyMirrorChanged = true;
 
             // Mark mirror as recently written so staging watcher doesn't bounce content back.
             // TTL is set AFTER writeFile so the 2000ms window starts from when the write
@@ -8669,7 +8697,9 @@ What would you like to find?`;
         }
         this._managedImportMirrorsForActiveFolder = desiredMirrors;
 
-        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        if (anyMirrorChanged || cleanupMissingManagedImports) {
+            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        }
     }
 
     private _disposeConfiguredPlanWatcher() {
@@ -8956,17 +8986,34 @@ What would you like to find?`;
                 const entries: Record<string, PlanRegistryEntry> = {};
                 const staleEntries: PlanRegistryEntry[] = [];
                 for (const p of allPlans) {
-                    const normalizedPlanId = this._normalizeRegistryPlanId(p.planId || p.sessionId, p.sourceType);
-                    const canonicalSessionId = this._getRegistrySessionId(normalizedPlanId, p.sourceType);
+                    let effectiveSourceType = p.sourceType;
+                    let effectivePlanId = p.planId || p.sessionId;
+                    let effectiveLocalPlanPath = p.planFile;
+                    let effectiveMirrorPath = p.mirrorPath || undefined;
+
+                    // Canonicalize local entries that actually point to brain mirror files
+                    if (effectiveSourceType === 'local' && effectiveLocalPlanPath) {
+                        const basename = path.basename(effectiveLocalPlanPath);
+                        const match = basename.match(/^(?:brain|ingested)_([0-9a-f]{64})\.md$/i);
+                        if (match) {
+                            effectiveSourceType = 'brain';
+                            effectivePlanId = match[1];
+                            effectiveMirrorPath = basename;
+                            effectiveLocalPlanPath = '';
+                        }
+                    }
+
+                    const normalizedPlanId = this._normalizeRegistryPlanId(effectivePlanId, effectiveSourceType);
+                    const canonicalSessionId = this._getRegistrySessionId(normalizedPlanId, effectiveSourceType);
 
                     if (p.planId !== normalizedPlanId || p.sessionId !== canonicalSessionId) {
                         staleEntries.push({
                             planId: normalizedPlanId,
                             ownerWorkspaceId: p.workspaceId,
-                            sourceType: p.sourceType,
-                            localPlanPath: p.planFile,
+                            sourceType: effectiveSourceType,
+                            localPlanPath: effectiveLocalPlanPath,
                             brainSourcePath: p.brainSourcePath || undefined,
-                            mirrorPath: p.mirrorPath || undefined,
+                            mirrorPath: effectiveMirrorPath,
                             topic: p.topic,
                             createdAt: p.createdAt,
                             updatedAt: p.updatedAt,
@@ -8977,10 +9024,10 @@ What would you like to find?`;
                     entries[normalizedPlanId] = {
                         planId: normalizedPlanId,
                         ownerWorkspaceId: p.workspaceId,
-                        sourceType: p.sourceType,
-                        localPlanPath: p.planFile,
+                        sourceType: effectiveSourceType,
+                        localPlanPath: effectiveLocalPlanPath,
                         brainSourcePath: p.brainSourcePath || undefined,
-                        mirrorPath: p.mirrorPath || undefined,
+                        mirrorPath: effectiveMirrorPath,
                         topic: p.topic,
                         createdAt: p.createdAt,
                         updatedAt: p.updatedAt,
@@ -9130,7 +9177,7 @@ What would you like to find?`;
             // the workspace. mirrorPath is just the filename (e.g. brain_<hash>.md); prepend
             // the staging directory to form a workspace-relative path.
             const insertPlanFile: string = entry.mirrorPath
-                ? path.join('.switchboard', 'plans', entry.mirrorPath).replace(/\\/g, '/')
+                ? path.join('.switchboard', 'plans', path.basename(entry.mirrorPath)).replace(/\\/g, '/')
                 : (entry.localPlanPath || '');
 
             let insertComplexity: string = existing?.complexity || 'Unknown';
@@ -9171,7 +9218,7 @@ What would you like to find?`;
                 sessionId: sessionId,
                 topic: entry.topic || '(untitled)',
                 planFile: insertPlanFile,
-                kanbanColumn: existing?.kanbanColumn || 'CREATED',
+                kanbanColumn: entry.kanbanColumn || existing?.kanbanColumn || 'CREATED',
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
                 complexity: insertComplexity,
                 tags: insertTags,
@@ -9910,8 +9957,12 @@ What would you like to find?`;
 
         const activeEntry = candidates.find((plan) => plan.status === 'active');
         if (activeEntry) {
-            if (activeEntry.planFile !== normalizedRelativePath) {
-                await db.updatePlanFile(activeEntry.sessionId, normalizedRelativePath);
+            const normalizeForCompare = (p: string) =>
+                p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+            const storedNormalized = normalizeForCompare(activeEntry.planFile);
+            const desiredNormalized = normalizeForCompare(normalizedRelativePath);
+            if (storedNormalized !== desiredNormalized || (!storedNormalized && !desiredNormalized)) {
+                await db.updatePlanFile(activeEntry.sessionId, normalizedRelativePath, true);
             }
             return activeEntry;
         }
@@ -9932,8 +9983,12 @@ What would you like to find?`;
             // Best effort only — keep existing topic fallback if the file is momentarily unreadable.
         }
 
-        if (deletedEntry.planFile !== normalizedRelativePath) {
-            await db.updatePlanFile(deletedEntry.sessionId, normalizedRelativePath);
+        const normalizeForCompareDel = (p: string) =>
+            p.replace(/\\/g, '/').replace(/^\.\//, '').replace(/\/+$/, '');
+        const storedNormalizedDel = normalizeForCompareDel(deletedEntry.planFile);
+        const desiredNormalizedDel = normalizeForCompareDel(normalizedRelativePath);
+        if (storedNormalizedDel !== desiredNormalizedDel || (!storedNormalizedDel && !desiredNormalizedDel)) {
+            await db.updatePlanFile(deletedEntry.sessionId, normalizedRelativePath, true);
         }
         await db.reviveDeletedPlans([deletedEntry.sessionId]);
         await this._registerPlan(workspaceRoot, {
@@ -11198,6 +11253,14 @@ What would you like to find?`;
                 ? await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot)
                 : '';
 
+            let inheritedKanbanColumn: string | undefined;
+            if (managedImportSourcePath && db && workspaceId) {
+                const existingBySource = await db.getPlanByBrainSourcePath(managedImportSourcePath, workspaceId);
+                if (existingBySource) {
+                    inheritedKanbanColumn = existingBySource.kanbanColumn;
+                }
+            }
+
             // DB-level dedup: if kanban.db already knows about this plan, do not create a
             // second session file. Deleted local rows are repaired above before we reach this branch.
             if (db && workspaceId) {
@@ -11316,10 +11379,12 @@ What would you like to find?`;
                 ownerWorkspaceId: wsId,
                 sourceType: 'local',
                 localPlanPath: normalizedPlanFileRelative,
+                brainSourcePath: managedImportSourcePath || '',
                 topic,
                 createdAt: new Date(fileCreationTimeMs).toISOString(),
                 updatedAt: new Date().toISOString(),
-                status: 'active'
+                status: 'active',
+                kanbanColumn: inheritedKanbanColumn
             });
 
             if (!suppressFollowupSync) {
@@ -11656,9 +11721,14 @@ What would you like to find?`;
         const planFileAbsolute = this._getPlanPathFromSheet(workspaceRoot, sheet);
         const planText = await fs.promises.readFile(planFileAbsolute, 'utf8');
         const stats = await fs.promises.stat(planFileAbsolute);
-        const customAgents = await this.getCustomAgents(workspaceRoot);
-        const customKanbanColumns = await this._getCustomKanbanColumns(workspaceRoot);
-        const columns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns).map(column => ({ id: column.id, label: column.label }));
+        const [customAgents, customKanbanColumns, visibleAgents] = await Promise.all([
+            this.getCustomAgents(workspaceRoot),
+            this._getCustomKanbanColumns(workspaceRoot),
+            this.getVisibleAgents(workspaceRoot)
+        ]);
+        const allColumns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns);
+        const columns = this._filterVisibleColumns(allColumns, visibleAgents)
+            .map(column => ({ id: column.id, label: column.label }));
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
         const dependencies = this._parsePlanDependencies(planText);
         const row = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
@@ -11852,11 +11922,14 @@ What would you like to find?`;
                     if (!column) {
                         return { ok: false, message: 'Column is required.' };
                     }
-                    const [customAgents, customKanbanColumns] = await Promise.all([
+                    const [customAgents, customKanbanColumns, visibleAgents] = await Promise.all([
                         this.getCustomAgents(workspaceRoot),
-                        this._getCustomKanbanColumns(workspaceRoot)
+                        this._getCustomKanbanColumns(workspaceRoot),
+                        this.getVisibleAgents(workspaceRoot)
                     ]);
-                    const columns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns).map(entry => entry.id);
+                    const allColumns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns);
+                    const columns = this._filterVisibleColumns(allColumns, visibleAgents)
+                        .map(entry => entry.id);
                     if (!columns.includes(column)) {
                         return { ok: false, message: `Unknown column '${column}'.` };
                     }
@@ -12083,7 +12156,12 @@ What would you like to find?`;
             }
 
             await vscode.env.clipboard.writeText(textToCopy);
-            this._view?.webview.postMessage({ type: 'copyPlanLinkResult', success: true });
+
+            // Defer the copyPlanLinkResult message until after the column-advance
+            // attempt so that only ONE message is sent — either pure success or
+            // success-with-warning. Sending it immediately here caused a double
+            // toast when the column advance subsequently failed.
+            let advanceWarning: string | undefined;
 
             const isTesterEligible = effectiveColumn === 'CODE REVIEWED' && role === 'tester'
                 && await this._isAcceptanceTesterActive(resolvedWorkspaceRoot);
@@ -12100,31 +12178,44 @@ What would you like to find?`;
                 try {
                     const targetColumn = this._targetColumnForRole(role);
                     if (targetColumn) {
-                        await this._applyManualKanbanColumnChange(
+                        const advanced = await this._applyManualKanbanColumnChange(
                             sessionId,
                             targetColumn,
                             workflowName,
                             `Auto-advanced after copying ${role} prompt`,
                             resolvedWorkspaceRoot
                         );
-                        await this._kanbanProvider?.queueIntegrationSyncForSession(
-                            resolvedWorkspaceRoot,
-                            sessionId,
-                            targetColumn
-                        );
-                        // Record IDE dispatch identity after copy-prompt
-                        await this._kanbanProvider?._recordDispatchIdentity(
-                            resolvedWorkspaceRoot, sessionId, targetColumn, undefined, true
-                        );
-                        this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // debounced board refresh (avoids stale-data flash)
-                        console.log(`[TaskViewerProvider] _handleCopyPlanLink: card advanced to ${targetColumn} for ${sessionId} via workflow '${workflowName}'`);
+                        if (advanced) {
+                            await this._kanbanProvider?.queueIntegrationSyncForSession(
+                                resolvedWorkspaceRoot,
+                                sessionId,
+                                targetColumn
+                            );
+                            // Record IDE dispatch identity after copy-prompt
+                            await this._kanbanProvider?._recordDispatchIdentity(
+                                resolvedWorkspaceRoot, sessionId, targetColumn, undefined, true
+                            );
+                            this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // debounced board refresh (avoids stale-data flash)
+                            console.log(`[TaskViewerProvider] _handleCopyPlanLink: card advanced to ${targetColumn} for ${sessionId} via workflow '${workflowName}'`);
+                        } else {
+                            console.warn(`[TaskViewerProvider] _handleCopyPlanLink: column advance failed for ${sessionId} — copy succeeded but card remains in place`);
+                            advanceWarning = 'Prompt copied but card could not be advanced. Try refreshing the board.';
+                        }
                     } else {
                         await this._updateSessionRunSheet(sessionId, workflowName);
                     }
                 } catch (updateError) {
-                    console.error(`[TaskViewerProvider] Failed to auto-advance runsheet after copy for ${sessionId}:`, updateError);
+                    console.error(`[TaskViewerProvider] Failed to auto-advance card after copy for ${sessionId}:`, updateError);
+                    advanceWarning = 'Prompt copied but card advance errored. Try refreshing the board.';
                 }
             }
+
+            // Send single copyPlanLinkResult — with warning if column advance failed/errored
+            this._view?.webview.postMessage({
+                type: 'copyPlanLinkResult',
+                success: true,
+                ...(advanceWarning ? { warning: advanceWarning } : {})
+            });
             return true;
         } catch (e: any) {
             const errorMessage = e?.message || String(e);
@@ -12199,6 +12290,32 @@ What would you like to find?`;
             } else {
                 // Local plan: use sessionId as planId
                 await this._updatePlanRegistryStatus(resolvedWorkspaceRoot, sessionId, 'completed');
+            }
+
+            // Managed imports: fix registry key, clean active tracking, and immediately purge race-recreated mirrors
+            const isManagedImport = sheet?.source === 'managed-import' ||
+                (sheet?.planFile && /^ingested_[0-9a-f]{64}\.md$/i.test(path.basename(sheet.planFile)));
+            if (isManagedImport) {
+                // 1. Update registry using sessionId (managed imports register with sessionId as planId)
+                await this._updatePlanRegistryStatus(resolvedWorkspaceRoot, sessionId, 'completed');
+
+                // 2. Remove from active tracking so cleanup pass will purge any race-recreated mirror
+                if (sheet.planFile) {
+                    const mirrorFilename = path.basename(sheet.planFile);
+                    this._managedImportMirrorsForActiveFolder.delete(mirrorFilename);
+                }
+
+                // 3. Immediate cleanup of any mirror recreated during the race window
+                try {
+                    const configuredPlanFolder = this._normalizeConfiguredPlanFolder(
+                        await this.getPlanIngestionFolder(resolvedWorkspaceRoot), resolvedWorkspaceRoot
+                    );
+                    if (configuredPlanFolder) {
+                        await this._syncConfiguredPlanFolder(configuredPlanFolder, resolvedWorkspaceRoot, true);
+                    }
+                } catch (e) {
+                    console.warn('[TaskViewerProvider] Post-completion configured-folder sync failed:', e);
+                }
             }
 
             // Autoban engine doesn't track individual sessions — no cleanup needed
@@ -14016,13 +14133,13 @@ What would you like to find?`;
                 messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Write Stage 1 findings to ${reviewerFindingsPath}
 - Write Stage 2 synthesis to ${reviewerSynthesisPath}
-- Post both in chat first, then apply fixes and update the plan. Keep file outputs as archival artifacts.
+- Apply fixes and update the plan. Keep file outputs as archival artifacts.
 - Strict format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
             } else {
                 messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Do NOT write plan/review artifact files in light mode.
-- Post findings and synthesis directly in chat, then apply fixes and update the plan.
+- Apply fixes and update the plan after posting findings in chat.
 - Suggested format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
             }

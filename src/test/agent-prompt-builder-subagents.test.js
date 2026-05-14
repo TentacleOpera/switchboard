@@ -85,23 +85,25 @@ function testGitProhibitionDirective() {
     console.log('  PASS: Git prohibition directive correct for all roles');
 }
 
-function testChatCritiqueDirective() {
-    console.log('Testing chat critique directive presence...');
-    // Reviewer includes chat critique directive in the prompt
-    const promptRoles = ['reviewer'];
-    for (const role of promptRoles) {
-        const prompt = buildKanbanBatchPrompt(role, plans1);
-        assert.ok(prompt.includes(chatCritiqueText), `Role ${role} SHOULD include chat critique directive`);
+function testGitProhibitionDisabledForExecutionRoles() {
+    console.log('Testing git prohibition is excluded when disabled for execution roles...');
+    const executionRoles = ['lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+    for (const role of executionRoles) {
+        const prompt = buildKanbanBatchPrompt(role, plans1, { gitProhibitionEnabled: false });
+        assert.ok(!prompt.includes('GIT POLICY'), `Role ${role} should NOT include git prohibition when gitProhibitionEnabled: false`);
     }
-    // Planner does NOT include chat critique in the prompt — it's in the workflow file
-    const plannerPrompt = buildKanbanBatchPrompt('planner', plans1);
-    assert.ok(!plannerPrompt.includes(chatCritiqueText), 'Planner should NOT include chat critique in prompt (it is in the workflow file)');
-    const nonCritiqueRoles = ['tester', 'lead', 'coder'];
-    for (const role of nonCritiqueRoles) {
+    console.log('  PASS: Git prohibition is excluded for execution roles when disabled');
+}
+
+function testChatCritiqueDirective() {
+    console.log('Testing chat critique directive absence...');
+    // No role should include the chat critique directive after the bugfix
+    const allRoles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
+    for (const role of allRoles) {
         const prompt = buildKanbanBatchPrompt(role, plans1);
         assert.ok(!prompt.includes(chatCritiqueText), `Role ${role} should NOT include chat critique directive`);
     }
-    console.log('  PASS: Chat critique directive correctly limited to reviewer');
+    console.log('  PASS: Chat critique directive absent from all roles');
 }
 
 function testNoRepoContextForUnscopedPlans() {
@@ -281,6 +283,7 @@ try {
     testMultiplePlans();
     testExecutionDirective();
     testGitProhibitionDirective();
+    testGitProhibitionDisabledForExecutionRoles();
     testChatCritiqueDirective();
     testNoRepoContextForUnscopedPlans();
     testSingleWorkingDirectoryContext();

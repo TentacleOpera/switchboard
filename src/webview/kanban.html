@@ -2394,12 +2394,12 @@
             ticket_updater: [
                 { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
                 { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-                { id: 'ticketUpdateEnabled', label: 'Ticket Update', tooltip: 'Update associated ticket with AI analysis', default: true }
+                { id: 'ticketUpdateEnabled', label: 'Ticket Update', tooltip: 'Update associated ticket with AI analysis', default: false }
             ],
             researcher: [
                 { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
                 { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-                { id: 'researchEnabled', label: 'Deep Research', tooltip: 'Enable deep research mode', default: true }
+                { id: 'researchEnabled', label: 'Deep Research', tooltip: 'Enable deep research mode', default: false }
             ],
             splitter: [
                 { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
@@ -2419,8 +2419,8 @@
             tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
             intern: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
             analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
-            ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: true } },
-            researcher: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, researchEnabled: true } },
+            ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: false } },
+            researcher: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, researchEnabled: false } },
             splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false } }
         };
 
@@ -2519,61 +2519,8 @@
         async function refreshPreview() {
             const preview = document.getElementById('promptPreview');
             if (!preview) return;
-
-            let prompt = '';
-            if (currentRole === 'planner') {
-                const workflowPath = document.getElementById('workflowFilePath').value;
-                const safeguards = document.getElementById('plannerAddonSwitchboardSafeguards').checked;
-                const depCheck = document.getElementById('plannerAddonDependencyCheck').checked;
-                const aggPair = document.getElementById('plannerAddonAggressivePairProgramming').checked;
-                const gitProhib = document.getElementById('plannerAddonGitProhibition').checked;
-                const desDoc = document.getElementById('plannerAddonDesignDoc').checked;
-                const splitPlan = document.getElementById('plannerAddonSplitPlan').checked;
-
-                prompt = `Read ${workflowPath} and follow it step-by-step.\n\n`;
-                if (safeguards) {
-                    prompt += `CRITICAL INSTRUCTIONS:\n1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.\n2. Execute each plan fully before moving to the next (if sequential).\n3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n[FOCUS DIRECTIVE ENABLED]\nTreat the absolute path as the single source of truth.\n\n`;
-                }
-                if (depCheck) {
-                    prompt += `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n\n`;
-                }
-                if (aggPair) {
-                    prompt += `PAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n\n`;
-                }
-                if (gitProhib) {
-                    prompt += `GIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.\n\n`;
-                }
-                if (desDoc) {
-                    // Note: designDocLink would ideally be fetched here or passed in.
-                    // For now, we'll indicate it will be appended.
-                    prompt += `DESIGN DOC REFERENCE: Enabled. (Link will be injected at runtime from planner settings)\n\n`;
-                }
-                if (splitPlan) {
-                    prompt += `SPLIT PLAN MODE: Enabled. Planner will produce TWO separate files per plan (Original for Complex/Risky only, companion _routine.md for Routine only). Both files will include full shared context.\n\n`;
-                }
-            } else {
-                const config = roleConfigs[currentRole];
-
-                // If custom override exists, use it
-                if (config?.prompt) {
-                    prompt = config.prompt;
-                } else {
-                    // Request default persona from backend
-                    postKanbanMessage({ type: 'getPersonaForRole', role: currentRole });
-                    preview.value = 'Loading default persona...';
-                    return; // Will be updated when personaContent message arrives
-                }
-
-                // Add addons
-                const addons = ROLE_ADDONS[currentRole] || [];
-                addons.forEach(addon => {
-                    const cb = document.getElementById(`addon_${addon.id}`);
-                    if (cb && cb.checked) {
-                        prompt += `\n\n[${addon.label}]\n${addon.tooltip}`;
-                    }
-                });
-            }
-            preview.value = prompt.trim() || '(No prompt content)';
+            postKanbanMessage({ type: 'getPromptPreview', role: currentRole });
+            preview.value = 'Loading preview...';
         }
 
         // ── AGENTS TAB ────────────────────────────────────────────────────────────
@@ -2890,7 +2837,7 @@
             { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
-        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: true };
+        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: true, ticket_updater: false, researcher: false, splitter: false };
         let columns = columnDefinitions
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
@@ -3805,7 +3752,16 @@
                 const isPlanningColumn = PLANNING_COLUMNS.includes(col);
                 const sortedItems = isPlanningColumn
                     ? sortColumnByDependencies(items)
-                    : [...items].sort((a, b) => b._ts - a._ts);
+                    : [...items].sort((a, b) => {
+                        const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                        const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                        if (isNaN(createdA) || isNaN(createdB)) {
+                            // Malformed dates: fall back to _ts-only sort
+                            return (b._ts || 0) - (a._ts || 0);
+                        }
+                        if (createdA !== createdB) return createdA - createdB;
+                        return (b._ts || 0) - (a._ts || 0);
+                    });
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -3985,12 +3941,27 @@
                 primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
-                if (card.column === 'CREATED') {
-                    copyLabel = 'Copy planning prompt';
-                } else if (card.column === 'PLAN REVIEWED') {
-                    copyLabel = 'Copy coder prompt';
-                } else if (card.column === 'LEAD CODED' || card.column === 'CODER CODED' || card.column === 'INTERN CODED') {
-                    copyLabel = 'Copy review prompt';
+                // Defensively normalize CODED_AUTO so getNextColumn works on a real column ID
+                const sourceColumn = (card.column === 'CODED_AUTO')
+                    ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED')
+                    : card.column;
+                const nextColId = getNextColumn(sourceColumn);
+                if (nextColId) {
+                    const nextDef = columnDefinitions.find(d => d.id === nextColId);
+                    if (nextDef) {
+                        const isCustom = nextDef.kind === 'custom-user' || nextDef.kind === 'custom-agent';
+                        if (isCustom) {
+                            copyLabel = 'Copy advance prompt';
+                        } else if (nextDef.role === 'planner' || nextDef.id === 'PLAN REVIEWED') {
+                            copyLabel = 'Copy planning prompt';
+                        } else if (['lead', 'coder', 'intern'].includes(nextDef.role)) {
+                            copyLabel = 'Copy coder prompt';
+                        } else if (nextDef.role === 'reviewer' || nextDef.id === 'CODE REVIEWED') {
+                            copyLabel = 'Copy review prompt';
+                        } else {
+                            copyLabel = 'Copy advance prompt';
+                        }
+                    }
                 }
                 primaryActionBtn = `<button class="card-btn copy" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-column="${escapeAttr(card.column)}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy prompt and advance">${copyLabel}</button>`;
             }
@@ -4613,25 +4584,11 @@
                     }
                     break;
                 }
-                case 'personaContent': {
-                    const { role, content, error } = msg;
-                    const preview = document.getElementById('promptPreview');
-                    if (role !== currentRole || !preview) break;
-
-                    if (error || content === null) {
-                        preview.value = '(No default persona found)';
-                    } else {
-                        // Append addons to persona content
-                        let prompt = content;
-                        const addons = ROLE_ADDONS[currentRole] || [];
-                        addons.forEach(addon => {
-                            const cb = document.getElementById(`addon_${addon.id}`);
-                            if (cb && cb.checked) {
-                                prompt += `\n\n[${addon.label}]\n${addon.tooltip}`;
-                            }
-                        });
-                        preview.value = prompt.trim() || '(No prompt content)';
-                    }
+                case 'promptPreviewResult': {
+                    const { role, preview } = msg;
+                    if (role !== currentRole) break;
+                    const previewEl = document.getElementById('promptPreview');
+                    if (previewEl) previewEl.value = preview || '(No prompt content)';
                     break;
                 }
                 case 'fileExistsResult': {

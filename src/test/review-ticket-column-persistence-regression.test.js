@@ -17,9 +17,11 @@ function run() {
     const setColumnBranch = providerSource.slice(start, end);
 
     assert.ok(
-        setColumnBranch.includes('const [customAgents, customKanbanColumns] = await Promise.all([')
-        && setColumnBranch.includes('const columns = this._buildKanbanColumnsForWorkspace(customAgents, customKanbanColumns).map(entry => entry.id);'),
-        'Expected ticket-view column updates to validate against the live Kanban column list.'
+        setColumnBranch.includes('const [customAgents, customKanbanColumns, visibleAgents] = await Promise.all([')
+        && setColumnBranch.includes('this.getVisibleAgents(workspaceRoot)')
+        && setColumnBranch.includes('this._filterVisibleColumns(allColumns, visibleAgents)')
+        && setColumnBranch.includes('.map(entry => entry.id);'),
+        'Expected ticket-view column updates to validate against the visible Kanban column list.'
     );
     assert.ok(
         setColumnBranch.includes('const currentRow = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);') &&

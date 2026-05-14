@@ -10,6 +10,7 @@ export interface WorkspaceDatabaseMapping {
     dbPath: string;
     parentFolder?: string;
     workspaceFolders: string[];
+    mode?: 'create' | 'connect';
 }
 
 export type KanbanPlanStatus = 'active' | 'archived' | 'completed' | 'deleted';
@@ -421,12 +422,59 @@ export class KanbanDatabase {
     private static _warnedUnmappedRoots = new Set<string>();
     private static _sqlJsPromise: Promise<SqlJsStatic> | null = null;
 
+    /**
+     * Expand ~ to home directory. Shared by _redirectToParentIfMapped and forWorkspace.
+     */
+    private static _expandHome(p: string): string {
+        const trimmed = p.trim();
+        return trimmed.startsWith('~')
+            ? path.join(os.homedir(), trimmed.slice(1))
+            : trimmed;
+    }
+
+    /**
+     * Redirects a child workspace root to its parent when workspaceDatabaseMappings
+     * is configured. When a mapping has parentFolder, uses that; otherwise falls back
+     * to the first workspaceFolders entry (consistent with resolveEffectiveWorkspaceRoot).
+     * Returns the original path if no mapping matches or if outside the extension host.
+     */
+    private static _redirectToParentIfMapped(resolvedRoot: string): string {
+        try {
+            const vscode = require('vscode');
+            const cfg = vscode.workspace.getConfiguration('switchboard')
+                             .get('workspaceDatabaseMappings') as
+                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const mapping of cfg.mappings) {
+                    if (!Array.isArray(mapping.workspaceFolders)) continue;
+                    const isChild = mapping.workspaceFolders.some(
+                        (f: string) => path.resolve(KanbanDatabase._expandHome(f)) === resolvedRoot
+                    );
+                    if (isChild) {
+                        // Use explicit parentFolder if set; otherwise fall back to first
+                        // workspaceFolders entry (same logic as resolveEffectiveWorkspaceRoot)
+                        const parentEntry = mapping.parentFolder || mapping.workspaceFolders[0];
+                        if (parentEntry) {
+                            const parentResolved = path.resolve(KanbanDatabase._expandHome(parentEntry));
+                            if (parentResolved !== resolvedRoot) {
+                                console.log(`[KanbanDatabase] Redirecting child workspace ${resolvedRoot} -> parent ${parentResolved}`);
+                                return parentResolved;
+                            }
+                        }
+                    }
+                }
+            }
+        } catch { /* outside extension host */ }
+        return resolvedRoot;
+    }
+
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
         const validation = KanbanDatabase.isValidWorkspaceRoot(workspaceRoot);
         if (!validation.valid) {
             throw new Error(`Invalid workspace root: ${validation.error}`);
         }
-        const stable = validation.resolved!;
+        let stable = KanbanDatabase._redirectToParentIfMapped(validation.resolved!);
+
         const existing = KanbanDatabase._instances.get(stable);
         if (existing) {
             return existing;
@@ -434,14 +482,6 @@ export class KanbanDatabase {
 
         let resolvedDbPath: string | undefined;
         
-        // Helper to expand ~ to home directory
-        const expandHome = (p: string): string => {
-            const trimmed = p.trim();
-            return trimmed.startsWith('~')
-                ? path.join(os.homedir(), trimmed.slice(1))
-                : trimmed;
-        };
-
         // Check workspace mappings if enabled
         try {
             const vscode = require('vscode');
@@ -453,15 +493,15 @@ export class KanbanDatabase {
                     if (!Array.isArray(m.workspaceFolders)) return false;
 
                     // Check if this is the parent folder
-                    const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === stable;
+                    const isParent = m.parentFolder && path.resolve(KanbanDatabase._expandHome(m.parentFolder)) === stable;
 
                     // Check if this is in the child folders list
-                    const isChild = m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable);
+                    const isChild = m.workspaceFolders.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
 
                     return isParent || isChild;
                 });
                 if (mapping?.dbPath) {
-                    resolvedDbPath = path.resolve(expandHome(mapping.dbPath));
+                    resolvedDbPath = path.resolve(KanbanDatabase._expandHome(mapping.dbPath));
                     console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);
                 } else {
                     console.log(`[KanbanDatabase] Workspace '${stable}' not in any mapping; using default database location`);
@@ -472,10 +512,7 @@ export class KanbanDatabase {
         // Fallback to customDbPath, VS Code setting, or default
         if (!resolvedDbPath) {
             if (customDbPath !== undefined && customDbPath.trim() !== '') {
-                const trimmed = customDbPath.trim();
-                const expanded = trimmed.startsWith('~')
-                    ? path.join(require('os').homedir(), trimmed.slice(1))
-                    : trimmed;
+                const expanded = KanbanDatabase._expandHome(customDbPath.trim());
                 resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
             } else {
                 // Try reading from VS Code settings (safe to fail outside extension host)
@@ -487,9 +524,7 @@ export class KanbanDatabase {
                     // Outside extension host (e.g. unit tests) — use default
                 }
                 if (settingValue) {
-                    const expanded = settingValue.startsWith('~')
-                        ? path.join(require('os').homedir(), settingValue.slice(1))
-                        : settingValue;
+                    const expanded = KanbanDatabase._expandHome(settingValue);
                     resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
                 } else {
                     resolvedDbPath = path.join(stable, '.switchboard', 'kanban.db');
@@ -516,7 +551,7 @@ export class KanbanDatabase {
      * Drains any in-flight writes before tearing down to prevent silent data loss.
      */
     public static async invalidateWorkspace(workspaceRoot: string): Promise<void> {
-        const stable = path.resolve(workspaceRoot);
+        const stable = KanbanDatabase._redirectToParentIfMapped(path.resolve(workspaceRoot));
         const existing = KanbanDatabase._instances.get(stable);
         if (existing) {
             // Drain in-flight writes before nulling _db to prevent silent data loss
@@ -1346,12 +1381,15 @@ export class KanbanDatabase {
     }
 
     /** @deprecated plan_file is now the unique key; file renames create new plans. */
-    public async updatePlanFile(sessionId: string, planFile: string): Promise<boolean> {
-        console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}`);
-        const result = this._persistedUpdate(
-            'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?',
-            [this._ensureRelativePlanFile(planFile), new Date().toISOString(), sessionId]
-        );
+    public async updatePlanFile(sessionId: string, planFile: string, skipTimestampUpdate?: boolean): Promise<boolean> {
+        console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}, skipTimestampUpdate=${skipTimestampUpdate}`);
+        const sql = skipTimestampUpdate
+            ? 'UPDATE plans SET plan_file = ? WHERE session_id = ?'
+            : 'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?';
+        const params = skipTimestampUpdate
+            ? [this._ensureRelativePlanFile(planFile), sessionId]
+            : [this._ensureRelativePlanFile(planFile), new Date().toISOString(), sessionId];
+        const result = this._persistedUpdate(sql, params);
         if (this._db) {
             try {
                 const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
@@ -1980,6 +2018,19 @@ export class KanbanDatabase {
         return rows.length > 0 ? rows[0] : null;
     }
 
+    public async getPlanByBrainSourcePath(brainSourcePath: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
+        if (!(await this.ensureReady()) || !this._db) return null;
+        const normalized = this._ensureRelativePlanFile(brainSourcePath);
+        const stmt = this._db.prepare(
+            `SELECT ${PLAN_COLUMNS} FROM plans
+             WHERE workspace_id = ? AND status = 'active' AND brain_source_path = ?
+             ORDER BY updated_at DESC LIMIT 1`,
+            [workspaceId, normalized]
+        );
+        const rows = this._readRows(stmt);
+        return rows.length > 0 ? rows[0] : null;
+    }
+
     public async getPlanByTopic(topic: string, workspaceId: string): Promise<KanbanPlanRecord | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
         const stmt = this._db.prepare(
@@ -2485,6 +2536,60 @@ export class KanbanDatabase {
             );
             removed += emptyCount;
             console.log(`[KanbanDatabase] Removed ${emptyCount} brain plan(s) with empty plan_file`);
+        }
+
+        // Delete rows with malformed plan_file containing absolute-looking path segments
+        const malformedPlanFileStmt = this._db.prepare(
+            `SELECT COUNT(*) as cnt FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND (plan_file LIKE '%/Users/%' OR plan_file LIKE '%/home/%')`,
+            [workspaceId]
+        );
+        let malformedPlanFileCount = 0;
+        try {
+            if (malformedPlanFileStmt.step()) {
+                malformedPlanFileCount = (malformedPlanFileStmt.getAsObject() as any).cnt as number;
+            }
+        } finally {
+            malformedPlanFileStmt.free();
+        }
+        if (malformedPlanFileCount > 0) {
+            this._db.run(
+                `DELETE FROM plans
+                 WHERE workspace_id = ? AND status = 'active'
+                   AND (plan_file LIKE '%/Users/%' OR plan_file LIKE '%/home/%')`,
+                [workspaceId]
+            );
+            removed += malformedPlanFileCount;
+            console.log(`[KanbanDatabase] Removed ${malformedPlanFileCount} plan(s) with malformed plan_file`);
+        }
+
+        // Delete rows where mirror_path contains path separators (not a basename)
+        const malformedMirrorStmt = this._db.prepare(
+            `SELECT COUNT(*) as cnt FROM plans
+             WHERE workspace_id = ? AND status = 'active'
+               AND mirror_path IS NOT NULL AND mirror_path != ''
+               AND mirror_path LIKE '%/%'`,
+            [workspaceId]
+        );
+        let malformedMirrorCount = 0;
+        try {
+            if (malformedMirrorStmt.step()) {
+                malformedMirrorCount = (malformedMirrorStmt.getAsObject() as any).cnt as number;
+            }
+        } finally {
+            malformedMirrorStmt.free();
+        }
+        if (malformedMirrorCount > 0) {
+            this._db.run(
+                `DELETE FROM plans
+                 WHERE workspace_id = ? AND status = 'active'
+                   AND mirror_path IS NOT NULL AND mirror_path != ''
+                   AND mirror_path LIKE '%/%'`,
+                [workspaceId]
+            );
+            removed += malformedMirrorCount;
+            console.log(`[KanbanDatabase] Removed ${malformedMirrorCount} plan(s) with malformed mirror_path`);
         }
 
         if (removed > 0) {
@@ -3810,7 +3915,21 @@ FROM plans
             return planFile;
         }
         const normalized = planFile.replace(/\\/g, '/');
-        if (!path.isAbsolute(normalized)) return normalized;
+        if (!path.isAbsolute(normalized)) {
+            // Reject paths that contain absolute-looking segments after .switchboard/plans
+            const segments = normalized.split('/');
+            if (segments.length > 3) {
+                const afterPrefix = segments.slice(2);
+                if (afterPrefix.some(s => /^(Users|home|[A-Za-z]:)$/.test(s) || s === '..')) {
+                    console.warn(
+                        `[KanbanDatabase] _ensureRelativePlanFile: malformed path with absolute-looking segment, ` +
+                        `returning empty. planFile=${planFile}`
+                    );
+                    return '';
+                }
+            }
+            return normalized;
+        }
 
         const workspaceNormalized = this._workspaceRoot.replace(/\\/g, '/');
         if (normalized.startsWith(workspaceNormalized)) {

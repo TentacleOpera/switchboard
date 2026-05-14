@@ -1206,6 +1206,13 @@ export async function activate(context: vscode.ExtensionContext) {
         await cleanWorkspace(effectiveStateRoot, mcpOutputChannel);
         console.timeLog('switchboard.activate', 'cleanWorkspace completed');
 
+        // Remove legacy static rule files so the Kanban checkbox is the sole
+        // control surface for git prohibition.
+        const workspaceRoots = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [];
+        for (const root of workspaceRoots) {
+            await cleanupLegacyAgentRules(root);
+        }
+
         // Dispose orphaned Switchboard terminals from a previous session.
         // Prior logic only matched exact state.json names, which misses renamed/stale terminals.
         const knownAgentNames = new Set([
@@ -3609,6 +3616,27 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
     }
 }
 
+/**
+ * Remove legacy static rule files that are now dynamically injected via
+ * agentPromptBuilder.ts so the Kanban "Git Prohibition" checkbox is the
+ * sole control surface.
+ */
+async function cleanupLegacyAgentRules(workspaceRoot: string): Promise<void> {
+    const legacyFiles = [
+        '.agent/rules/no_git_for_agents.md',
+    ];
+    for (const relativePath of legacyFiles) {
+        const fullPath = path.join(workspaceRoot, relativePath);
+        try {
+            await fs.promises.access(fullPath);
+            await fs.promises.unlink(fullPath);
+            mcpOutputChannel?.appendLine(`[Switchboard] Removed legacy rule file: ${relativePath}`);
+        } catch {
+            // File does not exist or cannot be removed — non-fatal
+        }
+    }
+}
+
 async function maybeOfferControlPlaneOnboarding(workspaceRoot: string): Promise<void> {
     const resolvedWorkspaceRoot = path.resolve(workspaceRoot || '');
     if (!resolvedWorkspaceRoot) {
@@ -3688,6 +3716,15 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         } catch {
             await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: false });
         }
+    }
+
+    // 2a. Blocklist: remove files that should never be distributed even if present in source
+    const blocklist = ['.agent/rules/no_git_for_agents.md'];
+    for (const blockPath of blocklist) {
+        const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
+        try {
+            await vscode.workspace.fs.delete(blockUri, { useTrash: false });
+        } catch { /* non-fatal */ }
     }
 
     // 2b. AGENTS.md scaffolding (non-destructive, failure-isolated)

@@ -1338,7 +1338,7 @@
         let editingCustomAgentId = null;
         let editingKanbanColumnId = null;
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: true };
+        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: true, ticket_updater: false, researcher: false, splitter: false };
         let lastCustomAgents = [];
         let lastCustomKanbanColumns = [];
         let lastKanbanStructure = [];
@@ -3812,33 +3812,74 @@
             if (!container) return;
             const div = document.createElement('div');
             div.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); border-radius:4px; padding:10px; margin-bottom:8px;';
+            const mode = mapping.mode || 'connect';
             div.innerHTML = `
+                <div style="margin-bottom:8px;">
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Mode:</label>
+                    <div style="display:flex; gap:12px; font-size:11px;">
+                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                            <input type="radio" name="mode-${index}" value="create" ${mode === 'create' ? 'checked' : ''} data-mode-toggle style="cursor:pointer;">
+                            <span>Create new database</span>
+                        </label>
+                        <label style="display:flex; align-items:center; gap:4px; cursor:pointer;">
+                            <input type="radio" name="mode-${index}" value="connect" ${mode === 'connect' ? 'checked' : ''} data-mode-toggle style="cursor:pointer;">
+                            <span>Connect to existing database</span>
+                        </label>
+                    </div>
+                </div>
                 <div style="display:flex; gap:8px; margin-bottom:8px;">
                     <input type="text" data-field="name" placeholder="Mapping name" value="${mapping.name || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
-                    <div style="display:flex; flex:2; gap:4px;">
-                        <input type="text" data-field="dbPath" placeholder="Database path" value="${mapping.dbPath || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
-                        <button data-action="browseDbPath" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
-                    </div>
                     <button data-action="remove" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Remove</button>
                 </div>
                 <div style="margin-bottom:8px;">
-                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Parent Workspace Folder (where .switchboard/ lives):</label>
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Parent Folder: <span style="font-weight:normal;">The folder that owns the .switchboard/ directory. Database will be created here (Create mode) or this is where .switchboard/ lives (Connect mode).</span></label>
                     <div style="display:flex; gap:4px;">
                         <input type="text" data-field="parentFolder" placeholder="e.g. /Users/patrickvuleta/Documents/Gitlab" value="${mapping.parentFolder || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
                         <button data-action="browseParentFolder" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
                     </div>
                 </div>
+                <div class="connect-mode-fields" style="${mode === 'create' ? 'display:none;' : ''} margin-bottom:8px;">
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Database Path: <span style="font-weight:normal;">Select an existing kanban.db file to share across workspaces.</span></label>
+                    <div style="display:flex; gap:4px;">
+                        <input type="text" data-field="dbPath" placeholder="Database path" value="${mapping.dbPath || ''}" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px;">
+                        <button data-action="browseDbPath" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Browse</button>
+                    </div>
+                </div>
+                <div class="create-mode-fields" style="${mode === 'connect' ? 'display:none;' : ''} margin-bottom:8px;">
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Derived Database Path:</label>
+                    <div data-field="derivedDbPath" style="flex:1; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-secondary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; margin-bottom:8px;">
+                        ${mapping.parentFolder ? mapping.parentFolder + '/.switchboard/kanban.db' : 'Auto-computed from parent folder'}
+                    </div>
+                    <button data-action="initDb" class="secondary-btn" style="padding:6px 12px; font-size:10px;">Initialize Database</button>
+                    <div data-field="initStatus" style="margin-top:6px; font-size:10px; display:none;"></div>
+                </div>
+                <div data-field="existingDbWarning" style="display:none; background:rgba(209,134,22,0.1); border:1px solid var(--accent-orange); border-radius:3px; padding:6px 8px; margin-bottom:8px; font-size:10px; color:var(--accent-orange);">
+                    Existing database detected at this location.
+                    <button data-action="switchToConnect" style="margin-left:8px; padding:2px 8px; font-size:10px; background:transparent; border:1px solid var(--accent-orange); color:var(--accent-orange); border-radius:3px; cursor:pointer;">Switch to Connect mode</button>
+                </div>
                 <div style="margin-bottom:8px;">
-                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Child Workspace Folders (one per line):</label>
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Child Workspace Folders: <span style="font-weight:normal;">Additional workspace folders that should use this same database (one per line).</span></label>
                     <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
                     <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
                 </div>
                 <input type="hidden" data-field="id" value="${mapping.id || ''}">
+                <input type="hidden" data-field="mode" value="${mode}">
             `;
             container.appendChild(div);
             div.querySelector('button[data-action="remove"]')?.addEventListener('click', () => {
                 div.remove();
                 workspaceMappings.splice(index, 1);
+            });
+            const modeRadios = div.querySelectorAll('input[data-mode-toggle]');
+            modeRadios.forEach(radio => {
+                radio.addEventListener('change', () => {
+                    const newMode = radio.value;
+                    div.querySelector('[data-field="mode"]').value = newMode;
+                    const connectFields = div.querySelector('.connect-mode-fields');
+                    const createFields = div.querySelector('.create-mode-fields');
+                    if (connectFields) connectFields.style.display = newMode === 'connect' ? '' : 'none';
+                    if (createFields) createFields.style.display = newMode === 'create' ? '' : 'none';
+                });
             });
             div.querySelector('button[data-action="browseDbPath"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
@@ -3851,6 +3892,35 @@
             div.querySelector('button[data-action="browseFolders"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 vscode.postMessage({ type: 'browseWorkspaceMappingFolder', mappingId });
+            });
+            div.querySelector('button[data-action="initDb"]')?.addEventListener('click', () => {
+                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
+                const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value || '';
+                const name = div.querySelector('[data-field="name"]')?.value || '';
+                const workspaceFoldersText = div.querySelector('[data-field="workspaceFolders"]')?.value || '';
+                const workspaceFolders = workspaceFoldersText.split('\n').map(f => f.trim()).filter(Boolean);
+                const initBtn = div.querySelector('button[data-action="initDb"]');
+                const statusDiv = div.querySelector('[data-field="initStatus"]');
+                if (initBtn) initBtn.disabled = true;
+                if (statusDiv) {
+                    statusDiv.style.display = 'block';
+                    statusDiv.textContent = 'Initializing...';
+                    statusDiv.style.color = 'var(--text-secondary)';
+                }
+                vscode.postMessage({
+                    type: 'initializeWorkspaceDatabase',
+                    mappingId,
+                    parentFolder,
+                    name,
+                    workspaceFolders
+                });
+            });
+            div.querySelector('button[data-action="switchToConnect"]')?.addEventListener('click', () => {
+                const connectRadio = div.querySelector('input[data-mode-toggle][value="connect"]');
+                if (connectRadio) {
+                    connectRadio.checked = true;
+                    connectRadio.dispatchEvent(new Event('change'));
+                }
             });
         }
 
@@ -3889,8 +3959,9 @@
                 const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value.trim() || '';
                 const foldersText = div.querySelector('[data-field="workspaceFolders"]')?.value.trim() || '';
                 const id = div.querySelector('[data-field="id"]')?.value || ('mapping-' + Date.now() + '-' + i);
+                const mode = div.querySelector('[data-field="mode"]')?.value || 'connect';
                 const workspaceFolders = foldersText.split('\n').map(f => f.trim()).filter(Boolean);
-                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders });
+                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders, mode });
             }
             workspaceMappings = updatedMappings;
         }
@@ -3901,7 +3972,8 @@
                 name: '',
                 dbPath: '',
                 parentFolder: '',
-                workspaceFolders: []
+                workspaceFolders: [],
+                mode: 'connect'
             });
             renderWorkspaceMappings();
         });
@@ -4054,6 +4126,29 @@
                     }
                     break;
                 }
+                case 'workspaceMappingInitResult': {
+                    const container = document.getElementById('workspace-mappings-container');
+                    if (container && message.mappingId) {
+                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
+                        const mappingDiv = idInput?.parentElement;
+                        const initBtn = mappingDiv?.querySelector('button[data-action="initDb"]');
+                        const statusDiv = mappingDiv?.querySelector('[data-field="initStatus"]');
+                        const dbInput = mappingDiv?.querySelector('[data-field="dbPath"]');
+                        if (initBtn) initBtn.disabled = false;
+                        if (statusDiv) {
+                            statusDiv.style.display = 'block';
+                            if (message.ok) {
+                                statusDiv.textContent = 'Database initialized successfully.';
+                                statusDiv.style.color = 'var(--accent-green)';
+                                if (dbInput) dbInput.value = message.dbPath || '';
+                            } else {
+                                statusDiv.textContent = String(message.error || 'Initialization failed.');
+                                statusDiv.style.color = 'var(--accent-red)';
+                            }
+                        }
+                    }
+                    break;
+                }
                 case 'parentFolderSelected': {
                     const container = document.getElementById('workspace-mappings-container');
                     if (container && message.mappingId) {
@@ -4062,6 +4157,14 @@
                         const input = mappingDiv?.querySelector('[data-field="parentFolder"]');
                         if (input) {
                             input.value = message.path;
+                        }
+                        const derivedPathDiv = mappingDiv?.querySelector('[data-field="derivedDbPath"]');
+                        if (derivedPathDiv) {
+                            derivedPathDiv.textContent = message.path + '/.switchboard/kanban.db';
+                        }
+                        const warningDiv = mappingDiv?.querySelector('[data-field="existingDbWarning"]');
+                        if (warningDiv) {
+                            warningDiv.style.display = message.existingDbDetected ? '' : 'none';
                         }
                     }
                     break;

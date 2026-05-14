@@ -1390,41 +1390,46 @@ export class PlanningPanelProvider {
 
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
-            const workspaceId = await this._getWorkspaceId(workspaceRoot);
-            
-            // Run heal scan first (idempotent, fast if recent)
-            if (this._cacheService) {
-                const kanbanDb = (this._cacheService as any)._kanbanDb;
+            const allRoots = this._getWorkspaceRoots();
+            const allDocs: any[] = [];
+            const seenSlugs = new Set<string>();
+
+            for (const root of allRoots) {
+                const wsId = await this._getWorkspaceId(root);
+                const cacheService = this._adapterFactories.getCacheService(root);
+
+                // Run heal scan first (idempotent, fast if recent)
+                const kanbanDb = (cacheService as any)._kanbanDb;
                 if (kanbanDb) {
-                    // Check if heal needed (last scan > 1 hour ago)
-                    const lastScan = await kanbanDb.getMeta('last_heal_scan_' + workspaceId);
+                    const lastScan = await kanbanDb.getMeta('last_heal_scan_' + wsId);
                     const oneHourAgo = Date.now() - (60 * 60 * 1000);
                     if (!lastScan || new Date(lastScan).getTime() < oneHourAgo) {
-                        await kanbanDb.healImports(workspaceRoot, workspaceId);
+                        await kanbanDb.healImports(root, wsId);
+                    }
+                }
+
+                // Query DB for imported docs
+                const dbEntries = await cacheService.getImportedDocs(wsId);
+
+                for (const entry of dbEntries) {
+                    if (!seenSlugs.has(entry.slugPrefix)) {
+                        seenSlugs.add(entry.slugPrefix);
+                        allDocs.push({
+                            sourceId: entry.sourceId,
+                            docId: entry.remoteDocId || entry.slugPrefix,
+                            docName: entry.docName,
+                            parentDocName: entry.parentDocName || entry.docName,
+                            slugPrefix: entry.slugPrefix,
+                            canSync: ['clickup', 'linear', 'notion'].includes(entry.sourceId),
+                            order: entry.displayOrder || 0,
+                            lastSyncedAt: entry.lastSyncedAt || entry.importedAt
+                        });
                     }
                 }
             }
-            
-            // Query DB for imported docs
-            let dbEntries: any[] = [];
-            if (this._cacheService) {
-                dbEntries = await this._cacheService.getImportedDocs(workspaceId);
-            }
-            
-            // Map to expected format
-            const docs = dbEntries.map(entry => ({
-                sourceId: entry.sourceId,
-                docId: entry.remoteDocId || entry.slugPrefix,
-                docName: entry.docName,
-                parentDocName: entry.parentDocName || entry.docName,
-                slugPrefix: entry.slugPrefix,
-                canSync: ['clickup', 'linear', 'notion'].includes(entry.sourceId),
-                order: entry.displayOrder || 0,
-                lastSyncedAt: entry.lastSyncedAt || entry.importedAt
-            }));
-            
-            console.log('[PlanningPanelProvider] Sending importedDocsReady with docs:', docs);
-            this._panel?.webview.postMessage({ type: 'importedDocsReady', docs });
+
+            console.log('[PlanningPanelProvider] Sending importedDocsReady with docs:', allDocs);
+            this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: allDocs });
         } catch (err) {
             console.error('[PlanningPanelProvider] Error fetching imported docs:', err);
             this._panel?.webview.postMessage({ type: 'importedDocsReady', docs: [], error: String(err) });
@@ -1433,11 +1438,19 @@ export class PlanningPanelProvider {
 
     private async _handleFetchDocsFile(workspaceRoot: string, slugPrefix: string, requestId: number): Promise<void> {
         try {
-            // Use cache service to resolve the actual file path (handles hash-based filenames)
+            // Search all workspace roots via their DBs first (handles hash-based filenames)
             let filePath: string | null = null;
-            if (this._cacheService) {
-                const workspaceId = await this._getWorkspaceId(workspaceRoot);
-                filePath = await this._cacheService.resolveImportedDocPath(slugPrefix, workspaceId);
+            const allRoots = this._getWorkspaceRoots();
+            for (const root of allRoots) {
+                const wsId = await this._getWorkspaceId(root);
+                const cacheService = this._adapterFactories.getCacheService(root);
+                filePath = await cacheService.resolveImportedDocPath(slugPrefix, wsId);
+                if (filePath) {
+                    if (fs.existsSync(filePath)) {
+                        break;
+                    }
+                    filePath = null; // DB entry stale, keep searching
+                }
             }
 
             if (!filePath) {

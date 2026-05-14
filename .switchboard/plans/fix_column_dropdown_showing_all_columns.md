@@ -166,3 +166,77 @@ The existing test does string-level assertions on the `setColumn` branch. Update
 - **Regression test fragility:** `src/test/review-ticket-column-persistence-regression.test.js` relies on string matching of the `setColumn` branch. It will fail after this change and must be updated before merge.
 
 **Recommendation:** Send to Coder.
+
+## Reviewer Pass
+
+**Date reviewed:** 2026-05-14
+
+### Stage 1 — Grumpy Adversarial Findings
+
+*[Clears throat, adjusts glasses, leans into microphone]*
+
+**CRITICAL:** None. The implementation is functionally correct. I'm as surprised as you are.
+
+**MAJOR:** None. The core filtering logic is sound, the integration points are correct, and the edge cases are handled.
+
+**NITs:**
+- **Missing `_filterVisibleColumns` unit test (NIT):** The Verification Plan explicitly called for "Add a test asserting that `_filterVisibleColumns` excludes built-in columns whose `role` is disabled in `visibleAgents` while keeping fixed columns (`CREATED`, `COMPLETED`) and custom columns." This was not delivered. The regression test was updated, but no dedicated test for the new helper existed. When you add a helper, you test the helper. This is not optional — it's hygiene.
+- **Redundant `visible` computation in `_buildSetupKanbanStructure` (NIT):** After `_filterVisibleColumns` has already evicted hidden built-in columns, the `visible` property computed at lines 1348-1352 is dead logic — it will always be `true` for every remaining item. Callers filtering by `item.visible !== false` still work, but the semantic intent is now misleading. Either the filtering belongs elsewhere, or the `visible` computation should be removed. Not a bug, but a wart.
+
+### Stage 2 — Balanced Synthesis
+
+**What to keep:**
+- The `_filterVisibleColumns` helper design is clean, focused, and reusable.
+- Integration in `getReviewTicketData` and `updateReviewTicket` is correct and consistent.
+- The regression test update accurately reflects the new code shape.
+- The `renderColumns` edge-case fallback (lines 779-785 in `review.html`) correctly preserves plans already in hidden columns.
+- TypeScript compilation is clean for modified files.
+
+**What to fix now:**
+- Add the missing `_filterVisibleColumns` unit test. This is small, high-value, and closes the verification gap.
+
+**What can defer:**
+- Removing the redundant `visible` computation in `_buildSetupKanbanStructure`. It is harmless dead code with no functional impact.
+
+### Fixes Applied
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `src/test/column-dropdown-filter-visible-columns.test.js:1-127` | Added dedicated unit/regression test for `_filterVisibleColumns`. Tests source-code structure (signature, fixed-column handling, built-in filtering, custom-column preservation) and behavioral outcomes across three visibility scenarios (all visible, one hidden, all built-in hidden). |
+
+### Validation
+
+- **Regression test (`node src/test/review-ticket-column-persistence-regression.test.js`):** Passed.
+- **New unit test (`node src/test/column-dropdown-filter-visible-columns.test.js`):** Passed.
+- **TypeScript compilation (`npx tsc --noEmit`):** No new errors in modified files.
+
+### Remaining Risks
+
+- None beyond those already documented in the plan (e.g., race condition between fetching dropdown list and validating `setColumn`).
+- The redundant `visible` computation in `_buildSetupKanbanStructure` may confuse future maintainers but has no runtime effect.
+
+---
+
+## Execution Results
+
+**Date executed:** 2026-05-14
+
+### Changes Applied
+
+| # | File | Change |
+|---|------|--------|
+| 1 | `src/services/TaskViewerProvider.ts:1322-1334` | Added `_filterVisibleColumns` private helper that filters out built-in columns whose associated agent role is disabled in `visibleAgents`, while always keeping fixed columns (`CREATED`, `COMPLETED`) and custom columns. |
+| 2 | `src/services/TaskViewerProvider.ts:1336-` | Refactored `_buildSetupKanbanStructure` to use `_filterVisibleColumns`, eliminating the duplicated inline filter logic. |
+| 3 | `src/services/TaskViewerProvider.ts:11670-11677` | `getReviewTicketData` now fetches `visibleAgents` alongside `customAgents` and `customKanbanColumns`, and uses `_filterVisibleColumns` before mapping to the dropdown `{id, label}` objects. |
+| 4 | `src/services/TaskViewerProvider.ts:11871-11878` | `updateReviewTicket` `setColumn` validation now fetches `visibleAgents` and uses `_filterVisibleColumns` before checking if the requested column is valid. |
+| 5 | `src/test/review-ticket-column-persistence-regression.test.js:19-25` | Updated string assertions to match the new filtered code shape (`visibleAgents` fetched, `_filterVisibleColumns` called). |
+| 6 | `src/services/TaskViewerProvider.ts:15-27` | Added `KanbanColumnDefinition` import from `./agentConfig`. |
+
+### Validation
+
+- **TypeScript compilation (`npx tsc --noEmit`):** No new errors in modified files. Pre-existing module-resolution warnings in `ClickUpSyncService.ts:2309` and `KanbanProvider.ts:3991` are unrelated.
+- **Regression test (`node src/test/review-ticket-column-persistence-regression.test.js`):** Passed.
+
+### Remaining Risks
+
+- None beyond those already documented in the plan (e.g., race condition between fetching dropdown list and validating `setColumn`).
