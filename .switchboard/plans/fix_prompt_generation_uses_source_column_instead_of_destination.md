@@ -230,5 +230,42 @@ private async _generatePromptForColumn(
 - `PLAN REVIEWED` → `LEAD CODED`/`CODER CODED`: Should still use complexity routing
 - Custom column advancement: Should still use custom column's configured role
 
-## Recommendation
-Send to Coder.
+## Implementation Status
+- **Status:** Complete
+- **Reviewer Pass:** Executed by Gemini CLI
+- **Files Modified:**
+  - `src/services/KanbanProvider.ts`: Updated `_generatePromptForColumn` to use `destinationColumn` for role resolution and fixed `PLAN REVIEWED` complexity routing.
+- **Verification Results:**
+  - **Unit Tests:** `src/test/kanban-prompt-generation-unit.test.js` created and PASSED.
+    - Verified `LEAD CODED` -> `CODE REVIEWED` (Reviewer prompt)
+    - Verified `PLAN REVIEWED` -> `LEAD CODED` (Complexity-routed execution prompt)
+    - Verified `PLAN REVIEWED` -> `CUSTOM_AGENT` (Custom role prompt)
+    - Verified `CREATED` -> `PLAN REVIEWED` (Planner prompt)
+  - **Regression Tests:** `node src/test/kanban-card-prompt-labels-regression.test.js` and `node src/test/kanban-batch-prompt-regression.test.js` PASSED.
+
+## Final Verdict
+**Ready** - The logic correctly implements the requested fix while preserving critical complexity routing for the `PLAN REVIEWED` handoff. The code has been refactored in-place by the reviewer to remove redundant fallback chains and array lookups.
+
+### 🛡️ Reviewer Pass: Adversarial Critique (Grumpy Principal Engineer)
+
+**[CRITICAL] Rube Goldberg Role Resolution (Spaghetti Fallback Chain)**
+You created a role-resolution ping-pong machine! `roleSourceDef.role` defaults to `'planner'`, which you then manually bypassed with an obscure `roleSourceColumn === 'PLAN REVIEWED'` conditional. Then the `switch` statement explicitly set `role` to `null`. Then `columnToPromptRole` blindly forced it back to `'lead'`. Then you wrote a bespoke, hardcoded `if (column === 'PLAN REVIEWED')` block *at the very end* to jam it BACK to `null` to trigger complexity routing! This is unmaintainable logic.
+
+**[MAJOR] Redundant Array Searches for Existing References**
+You already looked up `roleSourceDef` at the top of the function. Yet, in your override block at the end, you performed a completely redundant `allColumns.find(c => c.id === destinationColumn)` to get `destDef`. They are literally the exact same reference if `destinationColumn` is defined! Stop doing unnecessary O(N) lookups.
+
+**[NIT] Unnecessary Conditional Redundancy**
+Your check `column === 'PLAN REVIEWED' && destinationColumn !== 'PLAN REVIEWED'` is overly defensive. It's impossible to advance from `PLAN REVIEWED` *to* `PLAN REVIEWED` using "Copy prompt and advance" because columns don't route to themselves. The defensive coding obfuscates the core intent: "If advancing from PLAN REVIEWED to a coded lane, use complexity routing."
+
+### ⚖️ Reviewer Pass: Balanced Synthesis
+
+- **What to Keep**: The functional outcome is completely correct. The bug is fixed, complexity routing is preserved for `PLAN REVIEWED` -> `LEAD CODED`, and fallback drag-and-drop works flawlessly. The unit tests are highly rigorous and accurately assert against all regressions.
+- **What to Fix Now (Refactored in-place)**: The execution flow has been refactored to remove the ping-pong mutations. The `PLAN REVIEWED` drag-and-drop fallback is handled cleanly at the start, the redundant array search was removed, and we skip `columnToPromptRole` for `PLAN REVIEWED` to prevent the forced `'lead'` mutation from triggering in the first place, completely removing the need for a convoluted override block at the end.
+- **What to Defer**: `columnToPromptRole` still hardcodes `PLAN REVIEWED` -> `lead` for other callers (like `TaskViewerProvider`). Resolving this legacy hardcoding can be deferred to a separate cleanup task since the local scope is now clean.
+
+### ✅ Verification Phase
+- Applied code fixes to `src/services/KanbanProvider.ts` to flatten and simplify the role-resolution conditionals.
+- Re-ran `node src/test/kanban-prompt-generation-unit.test.js`: **PASSED**
+- Re-ran `node src/test/kanban-card-prompt-labels-regression.test.js`: **PASSED**
+- Re-ran `node src/test/kanban-batch-prompt-regression.test.js`: **PASSED**
+**ACCURACY VERIFICATION COMPLETE**

@@ -1988,15 +1988,18 @@
         <div class="setup-section">
             <div class="setup-section-title">Terminal Context</div>
             <div class="setup-field">
-                <label class="cli-toggle-inline" id="clear-terminal-before-prompt-label" data-tooltip="Send /clear to CLI agents before dispatching prompts (adds 2s delay)">
+                <label class="cli-toggle-inline" id="clear-terminal-before-prompt-label" data-tooltip="Send /clear to CLI agents before dispatching prompts (delay is configurable)">
                     <label class="toggle-switch">
                         <input type="checkbox" id="clear-terminal-before-prompt-toggle">
                         <span class="toggle-slider"></span>
                     </label>
                     <span class="toggle-label">Clear before prompt</span>
                 </label>
-                <div class="hint-text">
-                    Clears terminal context before each prompt dispatch (2s delay)
+                <div class="hint-text" id="clear-delay-container" style="display:none; margin-top:4px; align-items:center; gap:6px;">
+                    <label style="font-size:11px;">Delay:</label>
+                    <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="1500"
+                           style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
+                    <span style="font-size:10px; opacity:0.7;">ms (0–10000)</span>
                 </div>
             </div>
         </div>
@@ -2347,88 +2350,20 @@
 
     <div id="tooltip-overlay"></div>
 
+    <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
         const vscode = acquireVsCodeApi();
         const kanbanBoard = document.getElementById('kanban-board');
 
         // ── PROMPTS TAB ─────────────────────────────────────────────────────────
-        const ROLE_ADDONS = {
-            planner: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'dependencyCheck', label: 'Dependency Check', tooltip: 'Query Kanban for cross-plan dependencies', default: false },
-                { id: 'designDoc', label: 'Design Doc Reference', tooltip: 'Include design doc as planning context', default: false },
-                { id: 'aggressivePairProgramming', label: 'Aggressive Pair Programming', tooltip: 'Assume Coder can handle more independently', default: false },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: false },
-                { id: 'splitPlan', label: 'Split Plan', tooltip: 'Produce separate Routine and Complex plan files', default: false }
-            ],
-            lead: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Coder handles Routine tasks concurrently', default: false },
-                { id: 'leadChallenge', label: 'Inline Challenge Step', tooltip: 'Internal review before code generation', default: false },
-                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            coder: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'pairProgramming', label: 'Pair Programming', tooltip: 'Only do Routine (Band A) work', default: false },
-                { id: 'accurateCoding', label: 'Accurate Coding', tooltip: 'Emphasize correctness over speed', default: false },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            reviewer: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'advancedRegression', label: 'Advanced Regression Analysis', tooltip: 'Trace all callers of modified functions', default: false },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            tester: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            intern: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            analyst: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
-            ],
-            ticket_updater: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-                { id: 'ticketUpdateEnabled', label: 'Ticket Update', tooltip: 'Update associated ticket with AI analysis', default: false }
-            ],
-            researcher: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-                { id: 'researchEnabled', label: 'Deep Research', tooltip: 'Enable deep research mode', default: false }
-            ],
-            splitter: [
-                { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
-                { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-                { id: 'complexityScoringSkill', label: 'Complexity Scoring', tooltip: 'Invoke complexity scoring before split', default: false }
-            ]
-        };
 
-        const DEFAULT_CONFIG = {
-            planner: {
-                workflowFilePath: '.agent/workflows/improve-plan.md',
-                addons: { switchboardSafeguards: true, dependencyCheck: false, designDoc: false, aggressivePairProgramming: false, gitProhibition: false, splitPlan: false }
-            },
-            lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true } },
-            coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true } },
-            reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, gitProhibition: true } },
-            tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
-            intern: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
-            analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
-            ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: false } },
-            researcher: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, researchEnabled: false } },
-            splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false } }
-        };
+        const DEFAULT_CONFIG = { ...DEFAULT_ROLE_CONFIG };
 
         let currentRole = 'planner';
         let roleConfigs = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
         function loadRoleConfigs() {
-            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
+            const roles = ROLE_KEYS;
             roles.forEach(role => {
                 postKanbanMessage({ type: 'getSetting', key: `roleConfig_${role}` });
             });
@@ -2837,7 +2772,7 @@
             { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested', role: 'tester', autobanEnabled: false },
             { id: 'COMPLETED', label: 'Completed', kind: 'completed', autobanEnabled: false }
         ];
-        let lastVisibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true, gatherer: true, ticket_updater: false, researcher: false, splitter: false };
+        let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let columns = columnDefinitions
             .filter(col => !col.role || lastVisibleAgents[col.role] !== false)
             .map(col => col.id);
@@ -2847,6 +2782,7 @@
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = false;
         let clearTerminalBeforePrompt = false;
+        let clearTerminalBeforePromptDelay = 1500;
         let collapseCodersEnabled = true;
         // Restore collapse toggle from webview state if available
         try {
@@ -3135,11 +3071,19 @@
         function updateClearTerminalBeforePromptUi() {
             const toggle = document.getElementById('clear-terminal-before-prompt-toggle');
             const toggleLabel = document.getElementById('clear-terminal-before-prompt-label');
+            const delayContainer = document.getElementById('clear-delay-container');
+            const delayInput = document.getElementById('clear-terminal-delay-input');
             if (toggle) {
                 toggle.checked = !!clearTerminalBeforePrompt;
             }
             if (toggleLabel) {
                 toggleLabel.classList.toggle('is-off', !clearTerminalBeforePrompt);
+            }
+            if (delayContainer) {
+                delayContainer.style.display = clearTerminalBeforePrompt ? 'flex' : 'none';
+            }
+            if (delayInput) {
+                delayInput.value = String(clearTerminalBeforePromptDelay);
             }
         }
 
@@ -3753,14 +3697,17 @@
                 const sortedItems = isPlanningColumn
                     ? sortColumnByDependencies(items)
                     : [...items].sort((a, b) => {
+                        const tsA = a._ts || 0;
+                        const tsB = b._ts || 0;
+                        if (tsA !== tsB) {
+                            return tsB - tsA; // newest activity first
+                        }
                         const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                         const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                         if (isNaN(createdA) || isNaN(createdB)) {
-                            // Malformed dates: fall back to _ts-only sort
-                            return (b._ts || 0) - (a._ts || 0);
+                            return 0;
                         }
-                        if (createdA !== createdB) return createdA - createdB;
-                        return (b._ts || 0) - (a._ts || 0);
+                        return createdB - createdA; // tiebreak: newest plan first
                     });
                 countEl.textContent = items.length;
 
@@ -3941,10 +3888,16 @@
                 primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
-                // Defensively normalize CODED_AUTO so getNextColumn works on a real column ID
-                const sourceColumn = (card.column === 'CODED_AUTO')
-                    ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED')
-                    : card.column;
+                const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+                let sourceColumn = card.column;
+
+                // When a card is in the AUTOCODE bucket (visually collapsed or stored as CODED_AUTO),
+                // the next step is always the column after the coded lanes.
+                if (sourceColumn === 'CODED_AUTO' || (collapseCodersEnabled && CODED_IDS.includes(sourceColumn))) {
+                    const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
+                    sourceColumn = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
+                }
+
                 const nextColId = getNextColumn(sourceColumn);
                 if (nextColId) {
                     const nextDef = columnDefinitions.find(d => d.id === nextColId);
@@ -4259,7 +4212,7 @@
                     if (tgtIdx === srcIdx) return;
 
                     const sourceColumnForPrompt = prevCol;
-                    const dropMode = columnDragDropModes[resolvedTarget] || 'cli';
+                    const dropMode = columnDragDropModes['CODED_AUTO'] || 'cli';
                     const dispatchType = tgtIdx < srcIdx
                         ? 'backward'
                         : (dropMode === 'prompt' ? 'prompt' : (!cliTriggersEnabled ? 'move' : 'cli'));
@@ -4667,7 +4620,17 @@
                     break;
                 case 'clearTerminalBeforePromptState':
                     clearTerminalBeforePrompt = msg.enabled !== false;
+                    if (msg.delay !== undefined) {
+                        clearTerminalBeforePromptDelay = msg.delay;
+                    }
                     updateClearTerminalBeforePromptUi();
+                    break;
+                case 'clearTerminalBeforePromptDelayState':
+                    if (msg.delay !== undefined) {
+                        clearTerminalBeforePromptDelay = msg.delay;
+                        const delayInput = document.getElementById('clear-terminal-delay-input');
+                        if (delayInput) delayInput.value = String(msg.delay);
+                    }
                     break;
                 case 'liveSyncUpdate': {
                     window.liveSyncStates = window.liveSyncStates || {};
@@ -4784,7 +4747,9 @@
                 }
                 case 'updateColumnDragDropModes':
                     if (msg.modes && typeof msg.modes === 'object') {
-                        columnDragDropModes = msg.modes;
+                        for (const [key, value] of Object.entries(msg.modes)) {
+                            columnDragDropModes[key] = value;
+                        }
                         // Update toggle icons to reflect received modes
                         document.querySelectorAll('.mode-toggle').forEach(toggle => {
                             const colId = toggle.dataset.column;
@@ -4984,6 +4949,15 @@
             clearTerminalBeforePrompt = checked;
             updateClearTerminalBeforePromptUi();
             postKanbanMessage({ type: 'toggleClearTerminalBeforePrompt', enabled: checked });
+        });
+        document.getElementById('clear-terminal-delay-input')?.addEventListener('change', (event) => {
+            const value = parseInt(event.target?.value, 10);
+            if (!isNaN(value)) {
+                const clamped = Math.min(Math.max(value, 0), 10000);
+                clearTerminalBeforePromptDelay = clamped;
+                event.target.value = String(clamped);
+                postKanbanMessage({ type: 'updateClearTerminalBeforePromptDelay', delay: clamped });
+            }
         });
         document.getElementById('pairProgrammingModeSelect')?.addEventListener('change', (e) => {
             const select = e.target;
@@ -5717,15 +5691,7 @@
         }
 
         function renderKanbanAssignedAgentOptions(selectedRole) {
-            const roles = [
-                { key: 'planner', label: 'Planner' },
-                { key: 'lead', label: 'Lead Coder' },
-                { key: 'coder', label: 'Coder' },
-                { key: 'reviewer', label: 'Reviewer' },
-                { key: 'tester', label: 'Acceptance Tester' },
-                { key: 'intern', label: 'Intern' },
-                { key: 'analyst', label: 'Analyst' }
-            ];
+            const roles = BUILT_IN_AGENT_LABELS;
             const options = roles.map(r => `<option value="${r.key}"${r.key === selectedRole ? ' selected' : ''}>${r.label}</option>`).join('');
             kanbanColumnAssignedAgentInput.innerHTML = options;
         }

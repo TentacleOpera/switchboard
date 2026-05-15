@@ -8,16 +8,18 @@ const agentConfigPath = path.join(process.cwd(), 'src', 'services', 'agentConfig
 const taskViewerPath = path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts');
 const setupPanelPath = path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts');
 const setupHtmlPath = path.join(process.cwd(), 'src', 'webview', 'setup.html');
+const kanbanHtmlPath = path.join(process.cwd(), 'src', 'webview', 'kanban.html');
 
 const agentConfigSource = fs.readFileSync(agentConfigPath, 'utf8');
 const taskViewerSource = fs.readFileSync(taskViewerPath, 'utf8');
 const setupPanelSource = fs.readFileSync(setupPanelPath, 'utf8');
 const setupHtmlSource = fs.readFileSync(setupHtmlPath, 'utf8');
+const kanbanHtmlSource = fs.readFileSync(kanbanHtmlPath, 'utf8');
 
 function run() {
     assert.match(
         agentConfigSource,
-        /export interface CustomKanbanColumnConfig[\s\S]*triggerPrompt:\s*string;[\s\S]*dragDropMode:\s*'cli'\s*\|\s*'prompt';/,
+        /export interface CustomKanbanColumnConfig[\s\S]*triggerPrompt:\s*string;[\s\S]*dragDropMode:\s*'cli'\s*\|\s*'prompt'\s*\|\s*'disabled';/,
         'Expected agentConfig.ts to declare the persisted CustomKanbanColumnConfig shape.'
     );
     assert.match(
@@ -28,7 +30,7 @@ function run() {
 
     assert.match(
         taskViewerSource,
-        /type SetupKanbanStructureItem = \{[\s\S]*source:\s*'built-in' \| 'custom-agent' \| 'custom-user';[\s\S]*assignedAgent\?: string;[\s\S]*triggerPrompt\?: string;[\s\S]*dragDropMode:\s*'cli' \| 'prompt';[\s\S]*editable: boolean;[\s\S]*deletable: boolean;/,
+        /type SetupKanbanStructureItem = \{[\s\S]*source:\s*'built-in' \| 'custom-agent' \| 'custom-user';[\s\S]*assignedAgent\?: string;[\s\S]*triggerPrompt\?: string;[\s\S]*dragDropMode:\s*'cli' \| 'prompt' \| 'disabled';[\s\S]*editable: boolean;[\s\S]*deletable: boolean;/,
         'Expected TaskViewerProvider.ts to expose the expanded setup item fields for column management.'
     );
     assert.match(
@@ -54,14 +56,14 @@ function run() {
     );
 
     assert.match(
-        setupHtmlSource,
+        kanbanHtmlSource,
         /id="btn-add-kanban-column"[\s\S]*ADD COLUMN[\s\S]*id="btn-restore-kanban-defaults"[\s\S]*RESTORE DEFAULTS/s,
-        'Expected setup.html to include Add Column and Restore Defaults controls.'
+        'Expected kanban.html to include Add Column and Restore Defaults controls.'
     );
     assert.match(
-        setupHtmlSource,
+        kanbanHtmlSource,
         /id="kanban-column-modal"[\s\S]*id="kanban-column-label"[\s\S]*id="kanban-column-assigned-agent"[\s\S]*id="kanban-column-trigger-prompt"[\s\S]*id="kanban-column-dragdrop"/s,
-        'Expected setup.html to include the custom-column modal fields.'
+        'Expected kanban.html to include the custom-column modal fields.'
     );
     assert.match(
         setupHtmlSource,

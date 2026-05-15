@@ -565,17 +565,32 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'dbPathUpdated', ...dbPath });
                     break;
                 }
+                case 'getAllDbPaths': {
+                    const allDbPaths = await this._taskViewerProvider.handleGetAllDbPaths();
+                    this._panel.webview.postMessage({ type: 'allDbPathsUpdated', databases: allDbPaths });
+                    break;
+                }
                 case 'setLocalDb':
-                    await this._taskViewerProvider.handleSetLocalDb();
+                    await this._taskViewerProvider.handleSetLocalDb(
+                        typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
+                    );
                     break;
                 case 'setCustomDbPath':
-                    await this._taskViewerProvider.handleSetCustomDbPath(message.path);
+                    await this._taskViewerProvider.handleSetCustomDbPath(
+                        message.path,
+                        typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
+                    );
                     break;
                 case 'setPresetDbPath':
-                    await this._taskViewerProvider.handleSetPresetDbPath(message.preset);
+                    await this._taskViewerProvider.handleSetPresetDbPath(
+                        message.preset,
+                        typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
+                    );
                     break;
                 case 'resetDatabase':
-                    await this._taskViewerProvider.handleResetDatabase();
+                    await this._taskViewerProvider.handleResetDatabase(
+                        typeof message.targetWorkspaceRoot === 'string' ? message.targetWorkspaceRoot : undefined
+                    );
                     break;
                 case 'getPlanningPanelSyncMode': {
                     const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
@@ -1130,6 +1145,11 @@ export class SetupPanelProvider implements vscode.Disposable {
         const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource};">`;
         content = content.replace('<head>', `<head>\n    ${csp}`);
         content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+
+        // Inject shared defaults
+        const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
+        content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
+
         return content;
     }
 }

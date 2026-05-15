@@ -5,7 +5,6 @@ import * as crypto from 'crypto';
 import * as os from 'os';
 import { ChildProcess, fork, execFileSync } from 'child_process';
 import { TaskViewerProvider } from './services/TaskViewerProvider';
-import { InboxWatcher } from './services/InboxWatcher';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
@@ -36,6 +35,7 @@ let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
 let mcpServerProcess: ChildProcess | null = null;
 let mcpOutputChannel: vscode.OutputChannel | null = null;
 let mcpHealthCheckInterval: ReturnType<typeof setInterval> | null = null;
+let kanbanProvider: KanbanProvider | null = null;
 const DISPATCH_SIGNING_KEY_SECRET = 'switchboard.dispatchSigningKey.v1';
 const MCP_PID_FILENAME = '.switchboard/.mcp_server.pid';
 
@@ -98,6 +98,54 @@ function setLastCopiedMcpVersion(workspaceRoot: string, version: string): void {
     } catch (e) {
         console.error('Failed to write MCP version:', e);
     }
+}
+
+// --- Agent version tracking (mirrors MCP version pattern above) ---
+
+function getAgentVersionFilePath(workspaceRoot: string): string {
+    return path.join(workspaceRoot, '.switchboard', '.agent_version.json');
+}
+
+// Intentionally uses synchronous I/O: called infrequently (once per activation),
+// reads a tiny JSON file from local disk — negligible event-loop impact.
+function getLastCopiedAgentVersion(workspaceRoot: string): string | undefined {
+    const versionFilePath = getAgentVersionFilePath(workspaceRoot);
+    try {
+        if (fs.existsSync(versionFilePath)) {
+            const versionData = JSON.parse(fs.readFileSync(versionFilePath, 'utf-8'));
+            return versionData.version;
+        }
+    } catch (e) {
+        console.error('Failed to read last agent version:', e);
+    }
+    return undefined;
+}
+
+function setLastCopiedAgentVersion(workspaceRoot: string, version: string): void {
+    const versionFilePath = getAgentVersionFilePath(workspaceRoot);
+    try {
+        const versionData = { version, lastUpdated: new Date().toISOString() };
+        fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
+    } catch (e) {
+        console.error('Failed to write agent version:', e);
+    }
+}
+
+function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
+    const currentVersion = getExtensionVersion(extensionPath);
+    const lastVersion = getLastCopiedAgentVersion(workspaceRoot);
+
+    // Refresh if we can't determine versions (defensive: always copy)
+    if (!currentVersion || !lastVersion) {
+        return true;
+    }
+
+    // Refresh if versions differ
+    if (currentVersion !== lastVersion) {
+        return true;
+    }
+
+    return false;
 }
 
 function shouldRefreshMcpWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
@@ -535,10 +583,10 @@ function findWorkspaceRootForPath(candidate: string): string | null {
     }
 
     // Second: if the path is in an allowed external directory (brain or custom folder),
-    // fall back to the preferred workspace root so the command has a root to operate against.
+    // fall back to the kanban selection so the command has a root to operate against.
     const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
     if (isPathWithin(brainDir, absoluteCandidate)) {
-        return getPreferredWorkspaceRoot();
+        return kanbanProvider?.getCurrentWorkspaceRoot() || null;
     }
 
     try {
@@ -550,24 +598,12 @@ function findWorkspaceRootForPath(candidate: string): string | null {
                 : customFolder;
             const resolved = path.resolve(expanded);
             if (isPathWithin(resolved, absoluteCandidate)) {
-                return getPreferredWorkspaceRoot();
+                return kanbanProvider?.getCurrentWorkspaceRoot() || null;
             }
         }
     } catch { /* ignore */ }
 
     return null;
-}
-
-function getPreferredWorkspaceRoot(): string | null {
-    const activeUri = vscode.window.activeTextEditor?.document?.uri;
-    if (activeUri) {
-        const folder = vscode.workspace.getWorkspaceFolder(activeUri);
-        if (folder) {
-            return folder.uri.fsPath;
-        }
-    }
-    const [firstFolder] = vscode.workspace.workspaceFolders || [];
-    return firstFolder?.uri.fsPath || null;
 }
 
 function isCompatibleIdeName(termIdeName: string | undefined, currentIdeName: string): boolean {
@@ -643,8 +679,6 @@ async function waitWithTimeout<T>(promise: Thenable<T> | Promise<T>, timeoutMs: 
 }
 
 // Terminal Command Queue Watcher
-let inboxWatcher: InboxWatcher | null = null;
-
 
 /**
  * Attach IPC listeners and stream piping to an MCP server process.
@@ -710,16 +744,6 @@ function attachMcpListeners(process: ChildProcess, workspaceRoot: string, stateR
 
                     // Store terminal in registry under suffixed key for IDE isolation
                     registeredTerminals.set(internalName, terminal);
-
-                    if (!inboxWatcher) {
-                        inboxWatcher = new InboxWatcher(stateRoot, registeredTerminals, mcpOutputChannel!);
-                        inboxWatcher.start();
-                    }
-
-                    // Update the InboxWatcher with the new terminal registry
-                    if (inboxWatcher) {
-                        inboxWatcher.updateRegisteredTerminals(registeredTerminals);
-                    }
 
                     // Send back the PID with the correlation ID
                     process.send({
@@ -1102,11 +1126,11 @@ function syncSettingsToMcp() {
 
 export async function activate(context: vscode.ExtensionContext) {
     console.time('switchboard.activate');
-    const workspaceRoot = getPreferredWorkspaceRoot();
     if (!mcpOutputChannel) {
         mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
     }
-    const kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
+    kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
+    const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
     const globalPlanWatcher = new GlobalPlanWatcherService(
         (workspaceRoot: string) => (kanbanProvider as any)._getClickUpService(workspaceRoot),
@@ -1116,7 +1140,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(globalPlanWatcher);
 
     // Wire the watcher into the already-created KanbanProvider
-    await kanbanProvider.setGlobalPlanWatcher(globalPlanWatcher);
+    await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
     const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
@@ -1157,7 +1181,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         });
                     });
                     // Refresh the Kanban UI
-                    kanbanProvider._scheduleBoardRefresh();
+                    kanbanProvider!._scheduleBoardRefresh();
                 }
             })
         );
@@ -1177,7 +1201,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 0. LIFECYCLE CLEANUP: Scrub transient state before any subsystem initializes
     if (workspaceRoot) {
-        const effectiveStateRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(workspaceRoot);
+        const effectiveStateRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(workspaceRoot);
         if (!mcpOutputChannel) {
             mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
         }
@@ -1311,14 +1335,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewProvider);
     taskViewerProvider.setKanbanProvider(kanbanProvider);
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
-    kanbanProvider.setTaskViewerProvider(taskViewerProvider);
+    kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
-        const selectedWorkspaceRoot = candidateWorkspaceRoot || getPreferredWorkspaceRoot();
+        const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
             return null;
         }
-        return kanbanProvider.resolveEffectiveWorkspaceRoot(selectedWorkspaceRoot);
+        return kanbanProvider!.resolveEffectiveWorkspaceRoot(selectedWorkspaceRoot);
     };
 
     const getStateJsonPath = (candidateWorkspaceRoot?: string): string | null => {
@@ -1328,17 +1352,17 @@ export async function activate(context: vscode.ExtensionContext) {
         }
         return path.join(stateRoot, '.switchboard', 'state.json');
     };
-    void kanbanProvider.initializeIntegrationAutoPull();
+    void kanbanProvider!.initializeIntegrationAutoPull();
     context.subscriptions.push(
         vscode.workspace.onDidChangeWorkspaceFolders(() => {
-            void kanbanProvider.initializeIntegrationAutoPull();
+            void kanbanProvider!.initializeIntegrationAutoPull();
         })
     );
     if (workspaceRoot) {
         await taskViewerProvider.initializeKanbanDbOnStartup();
     }
     const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async () => {
-        await kanbanProvider.open();
+        await kanbanProvider!.open();
     });
     context.subscriptions.push(openKanbanDisposable);
 
@@ -1364,7 +1388,7 @@ export async function activate(context: vscode.ExtensionContext) {
         getCacheService,
         syncDesignDocLinkForActiveSources: (root) => (kanbanProvider as any)._syncDesignDocLinkForActiveSources(root)
     });
-    kanbanProvider.setPlannerPromptWriter(plannerPromptWriter);
+    kanbanProvider!.setPlannerPromptWriter(plannerPromptWriter);
 
     const researchImportService = new ResearchImportService();
     // Adapters will be registered lazily when needed via KanbanProvider factory methods
@@ -1374,14 +1398,8 @@ export async function activate(context: vscode.ExtensionContext) {
         researchImportService,
         plannerPromptWriter,
         () => {
-            const activeTextEditor = vscode.window.activeTextEditor;
-            if (activeTextEditor) {
-                const activeWorkspaceFolder = vscode.workspace.getWorkspaceFolder(activeTextEditor.document.uri);
-                if (activeWorkspaceFolder) {
-                    return activeWorkspaceFolder.uri.fsPath;
-                }
-            }
-            return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            return kanbanProvider!.getCurrentWorkspaceRoot()
+                ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         },
         {
             getNotionService: (root) => (kanbanProvider as any)._getNotionService(root),
@@ -1402,9 +1420,11 @@ export async function activate(context: vscode.ExtensionContext) {
     const triggerPlanningPanelSyncDisposable = vscode.commands.registerCommand(
         'switchboard.triggerPlanningPanelSync',
         async (mode?: string) => {
-            const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+            const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
             if (workspaceRoot) {
                 await planningPanelProvider.triggerSync(workspaceRoot, mode);
+            } else {
+                vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             }
         }
     );
@@ -1423,9 +1443,9 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setupControlPlaneDisposable);
     const clearControlPlaneCacheDisposable = vscode.commands.registerCommand('switchboard.clearControlPlaneCache', async () => {
-        const selectedWorkspaceRoot = getPreferredWorkspaceRoot();
+        const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
-            vscode.window.showWarningMessage('No workspace open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         const confirm = await vscode.window.showWarningMessage(
@@ -1436,7 +1456,7 @@ export async function activate(context: vscode.ExtensionContext) {
         if (confirm !== 'Clear Cache') {
             return;
         }
-        await kanbanProvider.clearControlPlaneCache(selectedWorkspaceRoot);
+        await kanbanProvider!.clearControlPlaneCache(selectedWorkspaceRoot);
         await vscode.commands.executeCommand('switchboard.refreshControlPlaneRuntime');
         await taskViewerProvider.postSetupPanelState(selectedWorkspaceRoot);
         await taskViewerProvider.refreshUI(selectedWorkspaceRoot);
@@ -1446,18 +1466,15 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(clearControlPlaneCacheDisposable);
     const refreshControlPlaneRuntimeDisposable = vscode.commands.registerCommand('switchboard.refreshControlPlaneRuntime', async () => {
-        const selectedWorkspaceRoot = getPreferredWorkspaceRoot() || workspaceRoot;
+        const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         const stateRoot = resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
         if (!mcpOutputChannel) {
             mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
         }
-        inboxWatcher?.stop();
-        inboxWatcher = new InboxWatcher(stateRoot, registeredTerminals, mcpOutputChannel);
-        inboxWatcher.start();
-        inboxWatcher.syncAllTerminals();
         await syncTerminalRegistryWithState(stateRoot);
         taskViewerProvider.refresh();
         if (mcpServerProcess) {
@@ -1477,10 +1494,10 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(fullSyncDisposable);
 
     // Reset Kanban Database command — deletes local DB and rebuilds from plan files
-    const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.resetKanbanDb', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+    const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.resetKanbanDb', async (targetWorkspaceRoot?: string) => {
+        const workspaceRoot = targetWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
 
@@ -1505,6 +1522,16 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
 
+        const backupPath = path.join(workspaceRoot, '.switchboard', 'kanban-state-backup.json');
+        let restoreResult = { restored: 0, skipped: 0 };
+        if (fs.existsSync(backupPath)) {
+            try {
+                restoreResult = await db.restoreFromBackup(backupPath);
+            } catch (e) {
+                console.error('[resetKanbanDb] Backup restore failed:', e);
+            }
+        }
+
         const importResult = await importPlanFiles(
             workspaceRoot,
             resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot
@@ -1516,8 +1543,9 @@ export async function activate(context: vscode.ExtensionContext) {
             await vscode.commands.executeCommand('switchboard.syncImportedPlans', workspaceRoot, importResult);
         }
 
+        const restoredPart = restoreResult.restored > 0 ? `Restored ${restoreResult.restored} plan(s) from backup. ` : '';
         vscode.window.showInformationMessage(
-            `Kanban database reset. Imported ${importResult.count} plan(s) from .switchboard/plans/.`
+            `Kanban database reset. ${restoredPart}Imported ${importResult.count} plan(s) from .switchboard/plans/.`
         );
     });
     context.subscriptions.push(resetKanbanDbDisposable);
@@ -1528,7 +1556,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!kanbanProvider || !importResult.planFiles.length) return;
             for (const planFile of importResult.planFiles) {
                 const targetColumn = importResult.columns[planFile] || 'CREATED';
-                await kanbanProvider.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
+                await kanbanProvider!.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
             }
         }
     );
@@ -1536,9 +1564,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Reconcile Kanban Databases command — merge split databases
     const reconcileKanbanDisposable = vscode.commands.registerCommand('switchboard.reconcileKanbanDbs', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         const homedir = os.homedir();
@@ -1601,7 +1629,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(
         vscode.workspace.onDidChangeConfiguration(async e => {
             if (e.affectsConfiguration('switchboard.kanban.dbPath')) {
-                const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+                const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
                 if (workspaceRoot) {
                     await KanbanDatabase.invalidateWorkspace(workspaceRoot);
                     vscode.commands.executeCommand('switchboard.refreshUI');
@@ -1632,7 +1660,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(analystMapBatchFromKanbanDisposable);
 
     const triggerPlanScanDisposable = vscode.commands.registerCommand('switchboard.triggerPlanScan', async () => {
-        await kanbanProvider.triggerPlanScan();
+        await kanbanProvider!.triggerPlanScan();
     });
     context.subscriptions.push(triggerPlanScanDisposable);
 
@@ -1682,7 +1710,7 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewPlanFromKanbanDisposable);
 
     const mcpMoveKanbanCardDisposable = vscode.commands.registerCommand('switchboard.mcpMoveKanbanCard', async (sessionId: string, target: string, workspaceRoot?: string) => {
-        return kanbanProvider.handleMcpMove(sessionId, target, workspaceRoot);
+        return kanbanProvider!.handleMcpMove(sessionId, target, workspaceRoot);
     });
     context.subscriptions.push(mcpMoveKanbanCardDisposable);
 
@@ -1737,7 +1765,7 @@ export async function activate(context: vscode.ExtensionContext) {
     const checkAnalystAvailabilityDisposable = vscode.commands.registerCommand(
         'switchboard.checkAnalystAvailability',
         async (): Promise<{ available: boolean }> => {
-            const workspaceRoot = getPreferredWorkspaceRoot();
+            const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
             if (!workspaceRoot) {
                 return { available: false };
             }
@@ -1768,9 +1796,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(setClickUpTokenDisposable);
 
     const importFromClickUpDisposable = vscode.commands.registerCommand('switchboard.importFromClickUp', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
 
@@ -1918,9 +1946,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(setNotionTokenDisposable);
 
     const fetchNotionDesignDocDisposable = vscode.commands.registerCommand('switchboard.fetchNotionDesignDoc', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         const service = new NotionFetchService(workspaceRoot, context.secrets);
@@ -1945,8 +1973,11 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(fetchNotionDesignDocDisposable);
 
     const importFromLinearDisposable = vscode.commands.registerCommand('switchboard.importFromLinear', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (!workspaceRoot) { vscode.window.showErrorMessage('No workspace folder open.'); return; }
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+            return;
+        }
 
         const service = new LinearSyncService(workspaceRoot, context.secrets);
         const config = await service.loadConfig();
@@ -2013,7 +2044,7 @@ export async function activate(context: vscode.ExtensionContext) {
         taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
     };
 
-    // Start InboxWatcher (Outbox Pattern for terminal commands)
+    // Initialize Control Plane Runtime
     if (workspaceRoot) {
         const runtimeStateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
         try {
@@ -2022,44 +2053,22 @@ export async function activate(context: vscode.ExtensionContext) {
                 mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
             }
 
-            mcpOutputChannel.appendLine('[Extension] Creating InboxWatcher...');
-
-            inboxWatcher = new InboxWatcher(runtimeStateRoot, registeredTerminals, mcpOutputChannel);
-
-            mcpOutputChannel.appendLine('[Extension] Starting InboxWatcher...');
-
-            inboxWatcher.start();
-
-            context.subscriptions.push({
-                dispose: () => {
-                    inboxWatcher?.stop();
-                    inboxWatcher = null;
-                }
-            });
-
-            // 3. PERSISTENCE SYNC: Re-claim terminals from state.json
+            // 1. PERSISTENCE SYNC: Re-claim terminals from state.json
             await syncTerminalRegistryWithState(runtimeStateRoot);
 
-            // 4. Static inbox dirs only — no dynamic provisioning for arbitrary terminals.
-            inboxWatcher.syncAllTerminals();
-
-            // 5. REACTIVITY: Listen for new terminals in real-time
+            // 2. REACTIVITY: Listen for new terminals in real-time
             context.subscriptions.push(vscode.window.onDidOpenTerminal(() => {
-                // Static inbox dirs only — no dynamic provisioning for arbitrary terminals.
-                inboxWatcher?.syncAllTerminals();
                 // Re-sync registry so locate works for terminals restored after a window reload
                 const currentStateRoot = resolveEffectiveStateRoot(workspaceRoot) || runtimeStateRoot;
                 void syncTerminalRegistryWithState(currentStateRoot);
             }));
 
             context.subscriptions.push(vscode.window.onDidCloseTerminal((terminal) => {
-                // Keep folders for history, but refresh scanning
-                inboxWatcher?.syncAllTerminals();
                 // Ensure state.json is updated when terminal is closed manually
                 taskViewerProvider.handleTerminalClosed(terminal);
             }));
 
-            // 6. STATE SYNC: Watch state.json for server-side changes (e.g. agent registering or renaming terminals)
+            // 3. STATE SYNC: Watch state.json for server-side changes (e.g. agent registering or renaming terminals)
             const stateWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(runtimeStateRoot, '.switchboard/state.json'));
             stateWatcher.onDidChange(() => { syncTerminalRegistryWithState(runtimeStateRoot); taskViewerProvider.refresh(); });
             stateWatcher.onDidCreate(() => { syncTerminalRegistryWithState(runtimeStateRoot); taskViewerProvider.refresh(); });
@@ -2083,10 +2092,9 @@ export async function activate(context: vscode.ExtensionContext) {
                 mcpOutputChannel?.appendLine(`[Extension] fs.watch fallback for state.json failed: ${e}`);
             }
 
-            mcpOutputChannel.appendLine('[Extension] InboxWatcher initialized successfully');
         } catch (e) {
-            console.error('[Extension] Failed to initialize InboxWatcher:', e);
-            mcpOutputChannel?.appendLine(`[Extension] ERROR: Failed to initialize InboxWatcher: ${e}`);
+            console.error('[Extension] Failed to initialize Control Plane Runtime:', e);
+            mcpOutputChannel?.appendLine(`[Extension] ERROR: Failed to initialize Control Plane Runtime: ${e}`);
         }
 
         // Spawn bundled MCP server (Non-blocking)
@@ -2109,7 +2117,6 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
             if (state.focused) {
                 refreshMcpStatus().catch(() => { });
-                inboxWatcher?.triggerScan();
                 if (workspaceRoot) {
                     const currentStateRoot = resolveEffectiveStateRoot(workspaceRoot) || runtimeStateRoot;
                     void syncTerminalRegistryWithState(currentStateRoot).finally(() => {
@@ -2283,11 +2290,6 @@ export async function activate(context: vscode.ExtensionContext) {
             for (const [k, v] of newRegistry) {
                 registeredTerminals.set(k, v);
             }
-
-            // Update InboxWatcher folder state and registry
-            if (inboxWatcher) {
-                inboxWatcher.updateRegisteredTerminals(registeredTerminals);
-            }
         } catch (e) {
             mcpOutputChannel?.appendLine(`[Extension] Failed to sync terminal registry: ${e}`);
         }
@@ -2355,9 +2357,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Manual refresh integration cache command
     const refreshIntegrationCacheDisposable = vscode.commands.registerCommand('switchboard.refreshIntegrationCache', async () => {
-        const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+        const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace folder found.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         await taskViewerProvider.forceRefreshIntegrationCache(workspaceRoot);
@@ -2387,12 +2389,20 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(recheckMcpDisposable);
 
     const housekeepingDisposable = vscode.commands.registerCommand('switchboard.housekeepNow', async () => {
-        if (!workspaceRoot || !inboxWatcher) {
-            vscode.window.showWarningMessage('Switchboard housekeeping unavailable: InboxWatcher is not running.');
+        const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!selectedWorkspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         try {
-            await inboxWatcher.runHousekeepingNow();
+            // 1. Archive old run sheets (>30 days) via SessionActionLog
+            const sessionLog = new SessionActionLog(selectedWorkspaceRoot);
+            await sessionLog.archiveOldSheets({ olderThanDays: 30 });
+
+            // 2. Clean transient .switchboard/ subdirectories
+            const { cleanWorkspace } = require('./lifecycle/cleanWorkspace');
+            await cleanWorkspace(selectedWorkspaceRoot, mcpOutputChannel ?? undefined);
+
             vscode.window.showInformationMessage('Switchboard housekeeping complete.');
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -2411,8 +2421,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register Clean Working Memory command
     const cleanWorkspaceDisposable = vscode.commands.registerCommand('switchboard.cleanWorkspace', async () => {
-        if (!workspaceRoot) {
-            vscode.window.showWarningMessage('No workspace folder found.');
+        const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!selectedWorkspaceRoot) {
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
         const confirm = await vscode.window.showWarningMessage(
@@ -2421,7 +2432,7 @@ export async function activate(context: vscode.ExtensionContext) {
             'Clean'
         );
         if (confirm === 'Clean') {
-            const effectiveStateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
+            const effectiveStateRoot = resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
             await cleanWorkspace(effectiveStateRoot, mcpOutputChannel ?? undefined);
             vscode.window.showInformationMessage('Switchboard working memory cleaned.');
             taskViewerProvider.refresh();
@@ -2490,9 +2501,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(connectMcpDisposable);
 
     const copyMcpConfigDisposable = vscode.commands.registerCommand('switchboard.copyMcpConfig', async () => {
-        const wsRoot = getPreferredWorkspaceRoot();
+        const wsRoot = kanbanProvider?.getCurrentWorkspaceRoot();
         if (!wsRoot) {
-            vscode.window.showErrorMessage('No workspace folder open.');
+            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
             return;
         }
 
@@ -2528,7 +2539,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register MCP setup command (legacy — writes to VS Code workspace settings)
     const setupMcpDisposable = vscode.commands.registerCommand('switchboard.setupMcp', async () => {
-        const selectedWorkspaceRoot = getPreferredWorkspaceRoot();
+        const selectedWorkspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot();
         const stateRoot = selectedWorkspaceRoot ? (resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot) : undefined;
         await handleMcpSetup(context, taskViewerProvider, stateRoot);
     });
@@ -2862,22 +2873,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(reviewSendToAgentDisposable);
 
     async function createAgentGrid() {
-        // Use kanban's currently selected workspace, fall back to activation-time workspace, then to roots[0]
-        const currentWorkspaceRoot = kanbanProvider.getCurrentWorkspaceRoot() 
-            ?? workspaceRoot 
+        const currentWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot()
             ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-
         if (!currentWorkspaceRoot) {
             vscode.window.showWarningMessage('No workspace folder found.');
             return;
         }
-
-        // Verify workspace hasn't changed during async operations
-        const verifyWorkspace = () => kanbanProvider.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
-
-        // Resolve effective workspace root based on mappings to ensure terminals open in correct workspace
-        const effectiveWorkspaceRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
-
+        const verifyWorkspace = () => kanbanProvider!.getCurrentWorkspaceRoot() === currentWorkspaceRoot;
+        const effectiveWorkspaceRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(currentWorkspaceRoot);
         const visibleAgents = await taskViewerProvider.getVisibleAgents(effectiveWorkspaceRoot);
         const includeJulesMonitor = visibleAgents.jules !== false;
         const customAgents = await taskViewerProvider.getCustomAgents(effectiveWorkspaceRoot);
@@ -2890,29 +2893,20 @@ export async function activate(context: vscode.ExtensionContext) {
             { name: 'Reviewer', role: 'reviewer' },
             { name: 'Analyst', role: 'analyst' }
         ];
-
         const agents: { name: string; role: string }[] = [];
-        
         for (const builtIn of allBuiltInAgents) {
             if (visibleAgents[builtIn.role] !== false) {
                 agents.push(builtIn);
             }
         }
-
         for (const agent of customAgents) {
-            if (visibleAgents[agent.role] === false) {
-                continue;
-            }
+            if (visibleAgents[agent.role] === false) { continue; }
             agents.push({ name: agent.name, role: agent.role });
         }
-
         if (includeJulesMonitor) {
             agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
         }
-
-        const normalizeGridTerminalName = (value: string | undefined): string =>
-            (value || '').trim();
-
+        const normalizeGridTerminalName = (value: string | undefined): string => (value || '').trim();
         const matchesGridAgentName = (terminal: vscode.Terminal, agentName: string): boolean => {
             const creationName = (terminal.creationOptions as vscode.TerminalOptions | undefined)?.name;
             const terminalName = normalizeGridTerminalName(terminal.name);
@@ -2921,26 +2915,17 @@ export async function activate(context: vscode.ExtensionContext) {
             const prefixedCreatedName = createdName.startsWith(`${agentName} `);
             return terminalName === agentName || createdName === agentName || prefixedTerminalName || prefixedCreatedName;
         };
-
         const clearGridBlockers = async () => {
             const agentNames = new Set(agents.map(a => a.name));
-            if (!includeJulesMonitor) {
-                agentNames.add('Jules Monitor');
-            }
-
-            // Drop stale in-memory references for grid agents.
+            if (!includeJulesMonitor) { agentNames.add('Jules Monitor'); }
             for (const [name, terminal] of Array.from(registeredTerminals.entries())) {
                 const bareName = stripIdeSuffix(name);
                 if ((agentNames.has(name) || agentNames.has(bareName)) && terminal.exitStatus !== undefined) {
                     registeredTerminals.delete(name);
                 }
             }
-
-            // If Jules is hidden, proactively close any existing monitor terminal.
             if (!includeJulesMonitor) {
-                const julesMatches = vscode.window.terminals.filter(t =>
-                    t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor')
-                );
+                const julesMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor'));
                 for (const terminal of julesMatches) {
                     mcpOutputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
                     terminal.dispose();
@@ -2948,17 +2933,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 registeredTerminals.delete('Jules Monitor');
                 registeredTerminals.delete(suffixedName('Jules Monitor'));
             }
-
-            // Remove dead/duplicate terminals that would confuse name-based matching.
             for (const agent of agents) {
-                const matches = vscode.window.terminals.filter(t =>
-                    t.exitStatus === undefined && matchesGridAgentName(t, agent.name)
-                );
+                const matches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
                 if (matches.length === 0) continue;
-
                 const healthy: vscode.Terminal[] = [];
                 for (const term of matches) {
-                    // Use exitStatus instead of PID — terminals with undefined exitStatus are alive
                     if (term.exitStatus !== undefined) {
                         mcpOutputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
                         term.dispose();
@@ -2966,7 +2945,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                     healthy.push(term);
                 }
-
                 if (healthy.length > 1) {
                     for (const extra of healthy.slice(1)) {
                         mcpOutputChannel?.appendLine(`[Extension] Disposing duplicate grid terminal '${extra.name}' for agent '${agent.name}'`);
@@ -2974,13 +2952,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                 }
             }
-
-            // Clear stale state entries for grid agents before re-registering.
             await taskViewerProvider.updateState(async (state: any) => {
                 if (!state.terminals) state.terminals = {};
                 const currentIde = vscode.env.appName || '';
                 for (const name of agentNames) {
-                    // Delete both bare and suffixed keys for clean migration
                     for (const key of [name, suffixedName(name)]) {
                         const entry = state.terminals[key];
                         if (!entry) continue;
@@ -2991,21 +2966,14 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             });
         };
-
-        // 1. INITIALIZE TERMINALS
-        // Signal the sidebar that creation is underway to suppress flickering.
         taskViewerProvider.sendLoadingState(true);
         try {
             await clearGridBlockers();
             const createdTerminals: vscode.Terminal[] = [];
             const batchRegistrations: any[] = [];
-
             for (let i = 0; i < agents.length; i++) {
                 const agent = agents[i];
-                let terminal = vscode.window.terminals.find(t =>
-                    t.exitStatus === undefined && matchesGridAgentName(t, agent.name)
-                );
-
+                let terminal = vscode.window.terminals.find(t => t.exitStatus === undefined && matchesGridAgentName(t, agent.name));
                 const alreadyExisted = !!terminal;
                 if (!terminal) {
                     const gridTermOpts: vscode.TerminalOptions = {
@@ -3015,8 +2983,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     };
                     terminal = vscode.window.createTerminal(gridTermOpts);
                 }
-
-                // Skip PID resolution for agent grid terminals — not needed for terminal messaging
                 batchRegistrations.push({
                     name: suffixedName(agent.name),
                     purpose: 'agent-grid',
@@ -3027,7 +2993,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     ideName: vscode.env.appName
                 });
                 mcpOutputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
-
                 registeredTerminals.set(suffixedName(agent.name), terminal);
                 createdTerminals.push(terminal);
                 terminal.show();
@@ -3035,13 +3000,10 @@ export async function activate(context: vscode.ExtensionContext) {
                     try {
                         await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
                     } catch (e) {
-                        // Some VS Code-compatible IDEs do not implement this command.
                         mcpOutputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
                     }
                 }
             }
-
-            // Batch-register all terminals.
             if (batchRegistrations.length > 0) {
                 let ipcSent = false;
                 if (mcpServerProcess) {
@@ -3053,8 +3015,6 @@ export async function activate(context: vscode.ExtensionContext) {
                         mcpOutputChannel?.appendLine(`[Extension] IPC send failed (MCP server may have exited): ${e}`);
                     }
                 }
-                // Always persist role registrations locally, even when IPC appears healthy.
-                // This guarantees terminal registration is durable and visible to the sidebar.
                 await taskViewerProvider.updateState(async (state: any) => {
                     if (!state.terminals) state.terminals = {};
                     for (const reg of batchRegistrations) {
@@ -3073,13 +3033,9 @@ export async function activate(context: vscode.ExtensionContext) {
                     mcpOutputChannel?.appendLine(`[Extension] MCP server not running — registrations were persisted to state.json`);
                 }
             }
-
-            // Auto-execute startup commands for each agent terminal
             try {
                 for (const agent of agents) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
-                    // Note: Agent-specific fallbacks (e.g., jules_monitor → 'jules')
-                    // are handled inside TaskViewerProvider.getAgentStartupCommand.
                     if (cmd && cmd.trim()) {
                         const terminal = registeredTerminals.get(suffixedName(agent.name));
                         if (terminal) {
@@ -3091,11 +3047,6 @@ export async function activate(context: vscode.ExtensionContext) {
             } catch (e) {
                 mcpOutputChannel?.appendLine(`[Extension] Startup command execution failed: ${e}`);
             }
-
-            if (inboxWatcher) {
-                inboxWatcher.updateRegisteredTerminals(registeredTerminals);
-            }
-
             vscode.window.showInformationMessage(`Agent Grid initialized: ${agents.map(a => a.name).join(', ')}`);
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -3124,7 +3075,7 @@ export async function activate(context: vscode.ExtensionContext) {
  * Resolve workspace root considering workspace database mappings.
  * Returns the parent directory of the mapped database if a match is found.
  */
-function resolveWorkspaceRootForMcp(workspaceRoot: string | null): string | null {
+function resolveWorkspaceRootForMcp(workspaceRoot: string | null | undefined): string | null {
     if (!workspaceRoot) return null;
 
     try {
@@ -3164,7 +3115,7 @@ function resolveWorkspaceRootForMcp(workspaceRoot: string | null): string | null
 async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskViewerProvider, stateRootOverride?: string) {
     const folders = vscode.workspace.workspaceFolders || [];
     let serverPath: string | undefined;
-    const preferredRoot = getPreferredWorkspaceRoot();
+    const preferredRoot = kanbanProvider?.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     const workspaceRoot = resolveWorkspaceRootForMcp(preferredRoot);
     const stateRoot = stateRootOverride || (preferredRoot ? preferredRoot : undefined);
 
@@ -3704,6 +3655,9 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agent');
     const agentFiles = await crawlDirectory(agentSourceUri);
 
+    // 2a. Version-gated workflow migration
+    const needsWorkflowMigration = shouldRefreshAgentWorkspaceFiles(extensionUri.fsPath, workspaceUri.fsPath);
+
     for (const relativePath of agentFiles) {
         const srcUri = vscode.Uri.joinPath(agentSourceUri, relativePath);
         const destUri = vscode.Uri.joinPath(workspaceUri, '.agent', relativePath);
@@ -3711,6 +3665,15 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         // Ensure parent directory exists
         await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.dirname(destUri.fsPath)));
 
+        const isWorkflowFile = relativePath.startsWith('workflows' + path.sep) && relativePath.endsWith('.md');
+
+        if (isWorkflowFile && needsWorkflowMigration) {
+            // Workflow files are canonical extension definitions — always overwrite on version change
+            await vscode.workspace.fs.copy(srcUri, destUri, { overwrite: true });
+            continue;
+        }
+
+        // Existing behavior: skip if file already exists (preserves user customizations)
         try {
             await vscode.workspace.fs.stat(destUri);
         } catch {
@@ -3718,7 +3681,13 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         }
     }
 
-    // 2a. Blocklist: remove files that should never be distributed even if present in source
+    // Update agent version tracking after successful copy
+    const currentVersion = getExtensionVersion(extensionUri.fsPath);
+    if (currentVersion) {
+        setLastCopiedAgentVersion(workspaceUri.fsPath, currentVersion);
+    }
+
+    // 2b. Blocklist: remove files that should never be distributed even if present in source
     const blocklist = ['.agent/rules/no_git_for_agents.md'];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
@@ -3842,11 +3811,6 @@ async function autoRegisterTerminals(workspaceRoot: string) {
         }
     }
 
-    // Update InboxWatcher with new registry
-    if (registered > 0 && inboxWatcher) {
-        inboxWatcher.updateRegisteredTerminals(registeredTerminals);
-    }
-
     if (registered > 0) {
         mcpOutputChannel?.appendLine(`[AutoReg] Auto-registered ${registered} terminal(s)`);
     }
@@ -3856,7 +3820,7 @@ async function autoRegisterTerminals(workspaceRoot: string) {
  * Show interactive setup wizard
  */
 async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvider?: TaskViewerProvider) {
-    const workspaceRoot = getPreferredWorkspaceRoot();
+    const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
     if (!workspaceRoot) {
         vscode.window.showErrorMessage('No workspace folder open');
         return;
@@ -4634,7 +4598,7 @@ export function deactivate() {
         mcpServerProcess = null;
 
         // Clean up PID file
-        const workspaceRoot = getPreferredWorkspaceRoot();
+        const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
         if (workspaceRoot) {
             persistMcpPid(workspaceRoot, null);
         }

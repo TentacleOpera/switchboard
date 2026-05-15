@@ -152,3 +152,31 @@ if (nextColId) {
 ## Recommendation
 
 Implemented. Ready for user commit.
+
+## Reviewer-Executor Pass
+
+### Stage 1: Grumpy Review (Adversarial)
+
+- **[MAJOR] Missing Unit Test:** "Add a minimal unit test extracting the label resolution logic" – YOU DIDN'T DO IT! The plan clearly states a regression test must be added to assert `CREATED -> custom column` and `CODED_AUTO synthetic card -> next real column` but there is NO new test in the commit diff. You cannot claim "Implemented. Ready for user commit." without adding the tests you explicitly planned.
+- **[NIT] Lint Configuration Warning:** Standard `npm run lint` fails on ESLint 9+ due to missing `eslint.config.js` while the repo still uses `.eslintrc.json`. Not your fault for this specific plan, but it blocks automated validation steps from passing cleanly.
+- **[NIT] Code extraction in Test:** Since the label logic is inline in the HTML template instead of a standalone export, testing it requires a clunky AST extraction or regex matcher in Node.js instead of a clean unit test import.
+
+### Stage 2: Balanced Synthesis
+
+- The core implementation in `kanban.html` perfectly follows the plan, properly replacing the source-based logic with destination-based role evaluation. 
+- Defensively casting `CODED_AUTO` is present and matches the click-handler fallback.
+- The only genuine failure is the missing regression test. The code itself is robust, so the fix is simply to write and add the test.
+
+### Stage 3: Action Taken
+
+- **Fixed:** Added the missing unit test `src/test/kanban-card-prompt-labels-regression.test.js`.
+- The test uses regex to extract the `let copyLabel` block from the HTML template, wraps it in `new Function(...)` to evaluate the label synchronously, and executes all 5 explicit assertions listed in the plan (Custom Column fallback, planner, coder, reviewer, and `CODED_AUTO` synthetic fallback).
+
+### Stage 4: Verification Results
+
+- **Test execution:** `node src/test/kanban-card-prompt-labels-regression.test.js` executed successfully. Output: `kanban card prompt labels regression test passed`.
+- **Validation:** Visual code inspection of `src/webview/kanban.html` confirms the JS implementation perfectly matches the planned changes. 
+
+### Remaining Risks
+- **None:** Label resolution logic works seamlessly and is now covered by an automated test.
+

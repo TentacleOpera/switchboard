@@ -309,7 +309,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _cachedDefaultPromptOverrides: Partial<Record<string, DefaultPromptOverride>> = {};
 
     // Hard workspace ownership scoping
-    private _activeWorkspaceRoot: string | null = null;
     private _workspaceId: string | null = null;
     private _workspaceIdRoot: string | null = null;
     private _planRegistry: PlanRegistry = { version: 1, entries: {} };
@@ -584,9 +583,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _getWorkspaceRoot(): string | null {
-        if (this._activeWorkspaceRoot) { return this._activeWorkspaceRoot; }
-        const roots = this._getWorkspaceRoots();
-        return roots.length > 0 ? roots[0] : null;
+        return this._resolveWorkspaceRoot();
     }
 
     /**
@@ -603,59 +600,45 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+        // If an explicit workspaceRoot argument is provided and valid, use it
+        if (workspaceRoot) {
+            const resolved = path.resolve(workspaceRoot);
+            const allowed = this._getAllowedRoots();
+            if (allowed.has(resolved)) { return resolved; }
+        }
+
+        // Delegate to kanban (single source of truth), with validation guard
+        const kanbanRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+        if (kanbanRoot) {
+            const allowed = this._getAllowedRoots();
+            if (allowed.has(kanbanRoot)) { return kanbanRoot; }
+        }
+
+        // Fallback: first allowed root
         const roots = this._getWorkspaceRoots();
-        // Build allowed roots: actual VS Code folders + mapped workspace folders (if mapping enabled)
+        return roots.length > 0 ? roots[0] : null;
+    }
+
+    private _getAllowedRoots(): Set<string> {
+        const roots = this._getWorkspaceRoots();
         const allowedRoots = new Set<string>(roots);
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: any[] } | undefined;
+                { enabled?: boolean; mappings?: any[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                const expandHome = (p: string): string => {
-                    const trimmed = p.trim();
-                    return trimmed.startsWith('~')
-                        ? path.join(require('os').homedir(), trimmed.slice(1))
-                        : trimmed;
-                };
                 for (const m of cfg.mappings) {
-                    // Watch the PARENT workspace folder where .switchboard/ lives,
-                    // not the child workspaceFolders (which share the DB but shouldn't create plans)
                     if (typeof m.parentWorkspaceFolder === 'string') {
-                        allowedRoots.add(path.resolve(expandHome(m.parentWorkspaceFolder)));
+                        const p = m.parentWorkspaceFolder.trim();
+                        const expanded = p.startsWith('~')
+                            ? path.join(os.homedir(), p.slice(1))
+                            : p;
+                        allowedRoots.add(path.resolve(expanded));
                     }
                 }
             }
         } catch { /* fall through */ }
-
-        if (allowedRoots.size === 0) {
-            return null;
-        }
-        if (workspaceRoot) {
-            const resolved = path.resolve(workspaceRoot);
-            if (allowedRoots.has(resolved)) {
-                this._activeWorkspaceRoot = resolved;
-                return resolved;
-            }
-        }
-        // NEW: Check kanban first (source of truth), then cached state
-        if (this._kanbanProvider) {
-            const kanbanCurrent = this._kanbanProvider.getCurrentWorkspaceRoot();
-            if (kanbanCurrent && allowedRoots.has(kanbanCurrent)) {
-                // Only use kanban if different from cached (user explicitly switched)
-                if (kanbanCurrent !== this._activeWorkspaceRoot) {
-                    this._activeWorkspaceRoot = kanbanCurrent;
-                    return kanbanCurrent;
-                }
-            }
-        }
-        
-        if (this._activeWorkspaceRoot && allowedRoots.has(this._activeWorkspaceRoot)) {
-            return this._activeWorkspaceRoot;
-        }
-
-        // ULTIMATE FALLBACK: roots[0] (original behavior)
-        this._activeWorkspaceRoot = roots[0] || Array.from(allowedRoots)[0];
-        return this._activeWorkspaceRoot;
+        return allowedRoots;
     }
 
     private _resolveStateWorkspaceRoot(workspaceRoot?: string): string | null {
@@ -699,7 +682,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (db) {
                     const record = await db.getPlanBySessionId(sessionId);
                     if (record) {
-                        this._activeWorkspaceRoot = effectiveWorkspaceRoot;
                         return effectiveWorkspaceRoot;
                     }
                 }
@@ -722,13 +704,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const absoluteCandidate = path.resolve(candidatePath);
         const preferred = preferredWorkspaceRoot ? this._resolveWorkspaceRoot(preferredWorkspaceRoot) : null;
         if (preferred && this._isPathWithinRoot(absoluteCandidate, preferred)) {
-            this._activeWorkspaceRoot = preferred;
             return preferred;
         }
 
         for (const workspaceRoot of orderedRoots) {
             if (this._isPathWithinRoot(absoluteCandidate, workspaceRoot)) {
-                this._activeWorkspaceRoot = workspaceRoot;
                 return workspaceRoot;
             }
         }
@@ -742,7 +722,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             throw new Error('No workspace folder found.');
         }
         const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selectedRoot) || selectedRoot;
-        this._activeWorkspaceRoot = effectiveRoot;
         await this._ensureTombstonesLoaded(effectiveRoot);
         await this._getOrCreateWorkspaceId(effectiveRoot);
         await this._loadPlanRegistry(effectiveRoot);
@@ -1169,6 +1148,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public setKanbanProvider(provider: KanbanProvider) {
         this._kanbanProvider = provider;
         this._kanbanProvider.updateAutobanConfig(this._getAutobanBroadcastState());
+
+        // Sync workspace context when the user switches workspaces on the kanban board
+        provider.onWorkspaceChange((newRoot) => {
+            console.log(`[TaskViewerProvider] Workspace changed to: ${newRoot}`);
+            this._workspaceId = null;
+            this._workspaceIdRoot = null;
+            void this._activateWorkspaceContext(newRoot).then(() => {
+                this.refresh();
+            });
+        });
     }
 
     public setSetupPanelProvider(provider: SetupPanelProvider) {
@@ -1823,7 +1812,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 ? (this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selectedRoot) || selectedRoot)
                 : null;
             if (effectiveRoot) {
-                if (this._activeWorkspaceRoot !== effectiveRoot) {
+                const currentRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+                if (currentRoot !== effectiveRoot) {
                     this._workspaceId = null;
                     this._workspaceIdRoot = null;
                 }
@@ -2867,6 +2857,65 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             isRepoScoped: controlPlaneStatus.isRepoScoped,
             error: controlPlaneStatus.error
         };
+    }
+
+    public async handleGetAllDbPaths(): Promise<Array<{
+        dbPath: string;
+        workspaceRoots: string[];
+        isMapped: boolean;
+        parentFolder?: string;
+    }>> {
+        const folders = vscode.workspace.workspaceFolders || [];
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+
+        // Map: dbPath -> { workspaceRoots: string[], isMapped, parentFolder }
+        const dbMap = new Map<string, { workspaceRoots: string[]; isMapped: boolean; parentFolder?: string }>();
+
+        for (const folder of folders) {
+            const root = folder.uri.fsPath;
+            try {
+                const db = KanbanDatabase.forWorkspace(root);
+                const dbPath = db.dbPath;
+
+                // Determine if this root is mapped
+                let isMapped = false;
+                let parentFolder: string | undefined;
+                if (mappings.enabled && Array.isArray(mappings.mappings)) {
+                    const mapping = mappings.mappings.find((m: any) => {
+                        if (!m.workspaceFolders || !Array.isArray(m.workspaceFolders)) return false;
+                        const mappedFolders = m.workspaceFolders.map((f: string) => path.resolve(f));
+                        return mappedFolders.includes(path.resolve(root));
+                    });
+                    if (mapping) {
+                        isMapped = true;
+                        parentFolder = mapping.parentFolder;
+                    }
+                }
+
+                const existing = dbMap.get(dbPath);
+                if (existing) {
+                    existing.workspaceRoots.push(root);
+                    // If any root sharing this DB is mapped, the whole entry is mapped
+                    if (isMapped) {
+                        existing.isMapped = true;
+                    }
+                    if (parentFolder && !existing.parentFolder) {
+                        existing.parentFolder = parentFolder;
+                    }
+                } else {
+                    dbMap.set(dbPath, { workspaceRoots: [root], isMapped, parentFolder });
+                }
+            } catch (err) {
+                console.error(`[TaskViewerProvider] Failed to resolve DB for root ${root}:`, err);
+                continue;
+            }
+        }
+
+        return Array.from(dbMap.entries()).map(([dbPath, info]) => ({
+            dbPath,
+            ...info
+        }));
     }
 
     public async handleGetControlPlaneStatus(workspaceRoot?: string): Promise<import('./KanbanProvider').ControlPlaneSelectionStatus> {
@@ -4346,7 +4395,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             description: task.description?.trim() || 'No description provided.',
             markdownDescription: task.markdownDescription || '',
             list: task.list,
-            url: task.url
+            url: task.url,
+            parentId: task.parentId || task.parent || null
         };
     }
 
@@ -6205,9 +6255,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._postSharedWebviewMessage({ type: 'saveDefaultPromptOverridesResult', success: true });
     }
 
-    public async handleSetLocalDb(): Promise<void> {
-        const wsRoot = this._getWorkspaceRoot();
+    public async handleSetLocalDb(targetWorkspaceRoot?: string): Promise<void> {
+        const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         if (!wsRoot) {
+            if (targetWorkspaceRoot) {
+                vscode.window.showErrorMessage(`Workspace root not found: ${targetWorkspaceRoot}`);
+            }
             return;
         }
 
@@ -6241,7 +6294,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._refreshSessionStatus();
     }
 
-    public async handleSetCustomDbPath(customPath: string): Promise<void> {
+    public async handleSetCustomDbPath(customPath: string, targetWorkspaceRoot?: string): Promise<void> {
         if (!customPath || !customPath.trim()) {
             vscode.window.showErrorMessage('Custom database path cannot be empty.');
             return;
@@ -6253,9 +6306,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const wsRoot = this._getWorkspaceRoot();
+        const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         if (!wsRoot) {
-            vscode.window.showErrorMessage('No workspace root found.');
+            vscode.window.showErrorMessage(targetWorkspaceRoot ? `Workspace root not found: ${targetWorkspaceRoot}` : 'No workspace root found.');
             return;
         }
 
@@ -6285,7 +6338,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._refreshSessionStatus();
     }
 
-    public async handleSetPresetDbPath(preset: string): Promise<void> {
+    public async handleSetPresetDbPath(preset: string, targetWorkspaceRoot?: string): Promise<void> {
         const homedir = os.homedir();
         let presetPath = '';
         switch (preset) {
@@ -6303,9 +6356,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
                 }
                 if (!presetPath) {
-                    const fallback = process.platform === 'win32'
-                        ? path.join(homedir, 'Google Drive', 'Switchboard', 'kanban.db')
-                        : path.join(homedir, 'Google Drive', 'Switchboard', 'kanban.db');
+                    const fallback = path.join(homedir, 'Google Drive', 'Switchboard', 'kanban.db');
                     const parentDir = path.dirname(fallback);
                     if (fs.existsSync(path.dirname(parentDir))) {
                         presetPath = fallback;
@@ -6409,7 +6460,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const presetConfig = vscode.workspace.getConfiguration('switchboard');
-        const wsRoot = this._getWorkspaceRoot();
+        const wsRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
 
         if (wsRoot) {
             const oldDbPath = presetConfig.get<string>('kanban.dbPath', '');
@@ -6438,14 +6489,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._refreshSessionStatus();
     }
 
-    public async handleResetDatabase(): Promise<void> {
+    public async handleResetDatabase(targetWorkspaceRoot?: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(targetWorkspaceRoot) || this._getWorkspaceRoot();
         const resetConfirm = await vscode.window.showWarningMessage(
             'Reset the kanban database? All plan metadata will be permanently deleted.',
             { modal: true },
             'Reset Database'
         );
         if (resetConfirm === 'Reset Database') {
-            vscode.commands.executeCommand('switchboard.resetKanbanDb');
+            vscode.commands.executeCommand('switchboard.resetKanbanDb', resolvedRoot);
         }
     }
 
@@ -12950,7 +13002,6 @@ What would you like to find?`;
             : this._resolveWorkspaceRoot();
         if (!selectedWorkspaceRoot) return;
         const resolvedWorkspaceRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
-        this._activeWorkspaceRoot = resolvedWorkspaceRoot;
 
         try {
             let workspaceId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
@@ -12987,12 +13038,20 @@ What would you like to find?`;
             // Feed sidebar dropdown from the same kanban snapshot so both surfaces
             // reflect the same effective repo-scope snapshot.
             if (this._view) {
+                // Filter out ghost plans: plan files that don't exist in this workspace
+                const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
+                    const planFile = row.planFile || '';
+                    if (!planFile) return false;
+                    const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
+                    return fs.existsSync(planPath);
+                });
+
                 const visibleActiveRows = repoScope
-                    ? activeRows.filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : activeRows;
+                    ? filterGhostPlans(activeRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(activeRows);
                 const visibleCompletedRows = repoScope
-                    ? completedRows.filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : completedRows;
+                    ? filterGhostPlans(completedRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(completedRows);
                 const sheets = [...visibleActiveRows, ...visibleCompletedRows].map(row => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',
@@ -13710,7 +13769,7 @@ What would you like to find?`;
 
         if (!terminal) return false;
 
-        // Log the session event for observability parity with InboxWatcher
+        // Log the session event for observability
         await this._logEvent('dispatch', {
             timestamp: new Date().toISOString(),
             dispatchId: messageId,
@@ -13727,6 +13786,9 @@ What would you like to find?`;
         // with the /clear input. Clipboard paste uses a different input path
         // that avoids this.
         const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', false);
+        const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 1500);
+        const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
+
         const paced = meta.sender !== meta.recipient;
         if (clearBeforePrompt) {
             try {
@@ -13735,7 +13797,7 @@ What would you like to find?`;
                 await new Promise(r => setTimeout(r, paced ? 1000 : 100));
                 terminal.sendText('', true);
                 // Wait for the CLI to process the clear before sending the prompt
-                await new Promise(r => setTimeout(r, paced ? 1500 : 500));
+                await new Promise(r => setTimeout(r, paced ? clearDelay : Math.max(100, Math.round(clearDelay / 3))));
             } catch (e) {
                 console.error(`[TaskViewerProvider] /clear paste failed: ${e}`);
                 // No fallback to sendText('/clear') — that would re-introduce
@@ -15987,6 +16049,10 @@ Create this file exactly as specified, then continue your work.`);
 
             // Inject nonce into inline <script> tags
             content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+
+            // Inject shared defaults
+            const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
+            content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
             // Inject Codicon CSS with webview-safe URI
             const codiconUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'codicons', 'dist', 'codicon.css'));

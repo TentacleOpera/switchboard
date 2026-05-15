@@ -1204,7 +1204,7 @@ export class ClickUpSyncService {
 
     const taskResult = await this.httpRequest(
       'GET',
-      `/task/${normalizedTaskId}?subtasks=true&include_markdown_description=true`
+      `/task/${normalizedTaskId}?include_subtasks=true&include_markdown_description=true`
     );
     if (taskResult.status !== 200) {
       throw new Error(`Failed to fetch ClickUp task ${normalizedTaskId}: ${taskResult.status}`);
@@ -1212,7 +1212,7 @@ export class ClickUpSyncService {
 
     const task = this._normalizeClickUpTask(taskResult.data);
 
-    // Extract subtasks from the task response (returned when subtasks=true param is used)
+    // Extract subtasks from the task response (returned when include_subtasks=true param is used)
     const subtasks = Array.isArray(taskResult.data?.subtasks)
       ? taskResult.data.subtasks.map((subtask: any) => this._normalizeClickUpTask(subtask))
       : [];

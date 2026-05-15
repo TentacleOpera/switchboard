@@ -1819,6 +1819,7 @@
         </div>
     </div>
 
+    <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
         const vscode = acquireVsCodeApi();
 
@@ -2200,7 +2201,7 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
-        let lastVisibleAgents = { planner: true, lead: true, coder: true, intern: true, reviewer: true, tester: false, analyst: true, jules: true, gatherer: true, ticket_updater: false, researcher: false, splitter: false };
+        let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
         // Autoban engine state (received from backend)
@@ -3319,6 +3320,9 @@
             const stateFilter = String(linearProjectStateFilterValue || '').trim();
             const projectFilter = String(linearProjectPickerValue || '').trim();
             return linearProjectIssues.filter((issue) => {
+                if (issue?.parentId) {
+                    return false;
+                }
                 if (stateFilter && String(issue?.state?.name || '') !== stateFilter) {
                     return false;
                 }
@@ -4037,6 +4041,10 @@
                 [detailAskAgentButton, detailImportTaskButton].forEach(el => {
                     if (el) el.disabled = true;
                 });
+                _lastClickUpDetailDescriptionHtml = '';
+                _lastClickUpDetailSubtasksHtml = '';
+                _lastClickUpDetailCommentsHtml = '';
+                _lastClickUpDetailAttachmentsHtml = '';
                 return;
             }
 

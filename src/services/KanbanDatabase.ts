@@ -2538,11 +2538,15 @@ export class KanbanDatabase {
             console.log(`[KanbanDatabase] Removed ${emptyCount} brain plan(s) with empty plan_file`);
         }
 
-        // Delete rows with malformed plan_file containing absolute-looking path segments
+        // Delete rows with malformed plan_file containing absolute-looking path segments directly after plans/ or at the root
         const malformedPlanFileStmt = this._db.prepare(
             `SELECT COUNT(*) as cnt FROM plans
              WHERE workspace_id = ? AND status = 'active'
-               AND (plan_file LIKE '%/Users/%' OR plan_file LIKE '%/home/%')`,
+               AND (
+                 plan_file LIKE '/Users/%' OR plan_file LIKE 'Users/%' OR
+                 plan_file LIKE '/home/%' OR plan_file LIKE 'home/%' OR
+                 plan_file LIKE '.switchboard/plans/Users/%' OR plan_file LIKE '.switchboard/plans/home/%'
+               )`,
             [workspaceId]
         );
         let malformedPlanFileCount = 0;
@@ -2557,7 +2561,11 @@ export class KanbanDatabase {
             this._db.run(
                 `DELETE FROM plans
                  WHERE workspace_id = ? AND status = 'active'
-                   AND (plan_file LIKE '%/Users/%' OR plan_file LIKE '%/home/%')`,
+                   AND (
+                     plan_file LIKE '/Users/%' OR plan_file LIKE 'Users/%' OR
+                     plan_file LIKE '/home/%' OR plan_file LIKE 'home/%' OR
+                     plan_file LIKE '.switchboard/plans/Users/%' OR plan_file LIKE '.switchboard/plans/home/%'
+                   )`,
                 [workspaceId]
             );
             removed += malformedPlanFileCount;
@@ -3505,6 +3513,140 @@ FROM plans
             try { this._db.exec('ROLLBACK'); } catch { /* ignore rollback failure */ }
             throw error;
         }
+    }
+
+    private get _kanbanStateBackupPath(): string {
+        return path.join(this._workspaceRoot, '.switchboard', 'kanban-state-backup.json');
+    }
+
+    private async _writeKanbanStateBackup(): Promise<void> {
+        if (!this._workspaceRoot || !this._db) return;
+        try {
+            const workspaceId = await this.getWorkspaceId();
+            if (!workspaceId) return;
+
+            const stmt = this._db.prepare(
+                `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+                        repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
+                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
+                        clickup_task_id, linear_issue_id
+                 FROM plans WHERE workspace_id = ? AND status = 'active'`,
+                [workspaceId]
+            );
+            const plans: any[] = [];
+            while (stmt.step()) {
+                plans.push(stmt.getAsObject());
+            }
+            stmt.free();
+
+            const backup = {
+                workspaceId,
+                exportedAt: new Date().toISOString(),
+                version: 1,
+                plans
+            };
+
+            const tmpPath = this._kanbanStateBackupPath + '.tmp';
+            await fs.promises.writeFile(tmpPath, JSON.stringify(backup, null, 2), 'utf8');
+            await fs.promises.rename(tmpPath, this._kanbanStateBackupPath);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to write kanban state backup:', error);
+        }
+    }
+
+    public async restoreFromBackup(backupPath: string): Promise<{ restored: number; skipped: number }> {
+        if (!(await this.ensureReady()) || !this._db) return { restored: 0, skipped: 0 };
+
+        try {
+            await fs.promises.access(backupPath);
+        } catch {
+            return { restored: 0, skipped: 0 };
+        }
+
+        let backup: any;
+        try {
+            const raw = await fs.promises.readFile(backupPath, 'utf8');
+            backup = JSON.parse(raw);
+        } catch {
+            return { restored: 0, skipped: 0 };
+        }
+
+        const plans = Array.isArray(backup.plans) ? backup.plans : [];
+        if (plans.length === 0) return { restored: 0, skipped: 0 };
+
+        let restored = 0;
+        let skipped = 0;
+        const workspaceId = await this.getWorkspaceId();
+        if (!workspaceId) return { restored: 0, skipped: plans.length };
+
+        const now = new Date().toISOString();
+
+        this._db.run('BEGIN');
+        try {
+            for (const p of plans) {
+                const planFile = p.plan_file || p.planFile || '';
+                // Validate the plan file still exists on disk
+                const absolutePath = planFile && !path.isAbsolute(planFile)
+                    ? path.join(this._workspaceRoot, planFile)
+                    : planFile;
+                
+                if (planFile) {
+                    try {
+                        await fs.promises.access(absolutePath);
+                    } catch {
+                        skipped++;
+                        continue;
+                    }
+                }
+
+                const record: KanbanPlanRecord = {
+                    planId: p.plan_id || p.planId || '',
+                    sessionId: p.session_id || p.sessionId || '',
+                    topic: p.topic || '',
+                    planFile: planFile.replace(/\\/g, '/'),
+                    kanbanColumn: p.kanban_column || p.kanbanColumn || 'CREATED',
+                    status: 'active',
+                    complexity: p.complexity || 'Unknown',
+                    tags: p.tags || '',
+                    dependencies: p.dependencies || '',
+                    repoScope: p.repo_scope || p.repoScope || '',
+                    workspaceId,
+                    createdAt: p.created_at || p.createdAt || now,
+                    updatedAt: now,
+                    lastAction: 'restored_from_backup',
+                    sourceType: p.source_type || p.sourceType || 'local',
+                    brainSourcePath: p.brain_source_path || p.brainSourcePath || '',
+                    mirrorPath: p.mirror_path || p.mirrorPath || '',
+                    routedTo: p.routed_to || p.routedTo || '',
+                    dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
+                    dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
+                    clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
+                    linearIssueId: p.linear_issue_id || p.linearIssueId || ''
+                };
+
+                try {
+                    this._db.run(UPSERT_PLAN_SQL, [
+                        record.planId, record.sessionId, record.topic, record.planFile, record.kanbanColumn,
+                        record.status, record.complexity, record.tags, record.dependencies, record.repoScope,
+                        record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
+                        record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId
+                    ]);
+                    restored++;
+                } catch (e) {
+                    console.error(`[KanbanDatabase] Failed to restore plan ${record.planFile}:`, e);
+                    skipped++;
+                }
+            }
+            this._db.run('COMMIT');
+        } catch (e) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] Bulk restore failed:', e);
+            return { restored: 0, skipped: plans.length };
+        }
+
+        await this._persist();
+        return { restored, skipped };
     }
 
     private async exportStateToFile(): Promise<void> {

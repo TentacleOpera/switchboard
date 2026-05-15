@@ -154,7 +154,7 @@ function testReplaceOverrideKeepsRepoContext() {
             }
         }
     });
-    assert.ok(prompt.startsWith('CUSTOM CODER PROMPT'), 'Replace override should still replace the main prompt body');
+    assert.ok(prompt.includes('CUSTOM CODER PROMPT'), 'Replace override should still replace the main prompt body');
     assert.ok(prompt.includes('WORKING DIRECTORY: /workspace/be'), 'Replace override should keep the working directory block');
     assert.ok(prompt.includes('PLANS TO PROCESS:\n- [plan-1] Plan File: /abs/path/to/1.md'), 'Replace override should keep the canonical plan list');
     console.log('  PASS: Replace overrides retain repo dispatch context');

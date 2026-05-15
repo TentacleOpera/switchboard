@@ -356,3 +356,57 @@ const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.res
 ---
 
 **Recommendation:** Complexity is 7 (multi-file coordination, new message types, dynamic UI, command signature change). Send to **Lead Coder**.
+
+---
+
+## Reviewer Pass — 2026-05-15
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **CRITICAL** | Database tab goes stale after any DB operation (setLocalDb, setCustomDbPath, setPresetDbPath, resetDatabase). These handlers send `dbPathUpdated` via `_postSharedWebviewMessage`, but the setup.html `dbPathUpdated` handler references removed DOM elements (`dbPathDisplay`, `dbCustomPathInput`) and never triggers a refresh of the dynamic card list. User changes DB location → UI shows old state until tab switch. | `TaskViewerProvider.ts:6286,6331,6482`; `setup.html:4342-4372` |
+| 2 | **CRITICAL** | `isMapped` flag is order-dependent when grouping roots by shared DB path. When a second root is merged into an existing `dbMap` entry, its `isMapped` and `parentFolder` are silently discarded. If the first root processed is unmapped but the second is mapped, the grouped entry incorrectly shows `isMapped: false`, causing mapped DBs to appear editable. | `TaskViewerProvider.ts:2896-2901` |
+| 3 | **MAJOR** | `dbPathUpdated` handler in setup.html references `dbCustomPathInput` (null) without null guard on lines 4361-4362 (`dbCustomPathInput.value = pathValue` / `.classList.remove('hidden')`). If a custom DB path is active, this throws `TypeError: Cannot set properties of null`. | `setup.html:4361-4362` |
+| 4 | **MAJOR** | `dbConnectionResult` handler references phantom `dbPathDisplay` element — always null-guarded so no crash, but dead code. | `setup.html:4377-4383` |
+| 5 | **MAJOR** | `getProposedPath()` function references null `dbCustomPathInput` (latent crash). Function has zero callers — dead code. | `setup.html:3455-3472` |
+| 6 | **NIT** | Redundant ternary in Google Drive fallback: both `win32` and non-`win32` branches produce identical path. | `TaskViewerProvider.ts:6352-6354` |
+| 7 | **NIT** | No test coverage for the entire feature (0 of 4 planned automated tests exist). | N/A |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| #1 CRITICAL: stale DB tab | **Fix now** — Replace dead `dbPathUpdated` handler with `getAllDbPaths` refresh request | User-facing data staleness after every DB operation |
+| #2 CRITICAL: isMapped order-dependent | **Fix now** — OR `isMapped` across roots sharing same DB, preserve first `parentFolder` | Incorrect UI state for mapped DBs depending on folder iteration order |
+| #3 MAJOR: TypeError on null | **Fix now** — Subsumed by #1 fix (entire dead handler replaced) | Crash when custom DB path is active |
+| #4 MAJOR: dead dbConnectionResult | **Fix now** — Replace with no-op comment | Small cleanup, prevents confusion |
+| #5 MAJOR: dead getProposedPath | **Fix now** — Remove function | Latent crash risk, zero callers |
+| #6 NIT: redundant ternary | **Fix now** — Collapse to single path | Trivial while in the area |
+| #7 NIT: no tests | **Defer** | Not a code defect; flag as remaining risk |
+
+### Stage 3: Code Fixes Applied
+
+**Files changed:**
+
+1. **`src/services/TaskViewerProvider.ts`** (lines 2896-2908):
+   - Fixed `isMapped` OR logic: when merging a root into an existing `dbMap` entry, if the new root is mapped, set `existing.isMapped = true`. Also preserve `parentFolder` if not already set.
+   - Fixed redundant Google Drive fallback ternary (line 6358-6359): collapsed `process.platform === 'win32' ? X : X` to just `X`.
+
+2. **`src/webview/setup.html`**:
+   - Removed orphaned `dbCustomPathInput` and `dbPathDisplay` variable declarations (was lines 1271-1272).
+   - Replaced dead `dbPathUpdated` handler (was lines 4342-4372) with minimal handler that updates `workspaceRoot`/`currentDbPath` variables, calls `renderControlPlaneSelectionStatus`, and posts `getAllDbPaths` to refresh the Database tab card list.
+   - Replaced dead `dbConnectionResult` handler with no-op comment.
+   - Removed dead `getProposedPath()` function (was lines 3455-3472).
+
+### Stage 4: Verification Results
+
+- **TypeScript check (`tsc --noEmit`):** 2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated relative import path issues). No new errors introduced.
+- **Test suite (`vscode-test`):** 47/47 tests passing. No regressions.
+- **No new tests added** for this feature (deferred — see Remaining Risks).
+
+### Remaining Risks
+
+1. **No automated test coverage** for `handleGetAllDbPaths()` grouping logic, `targetWorkspaceRoot` parameter flow, or dynamic UI rendering. The plan specified 4 automated tests; none exist. This should be addressed before considering the feature production-hardened.
+2. **`currentDbPath` variable** (setup.html line 1288) is now write-only (set in `dbPathUpdated` handler, never read after `getProposedPath` removal). Harmless but dead — can be removed in a future cleanup pass.
+3. **`dbPathUpdated` message** is still sent by backend handlers to both sidebar and setup panel. The sidebar webview may have its own handler for this message type. The setup panel handler now only updates JS variables and requests a refresh — this is correct but should be verified that the sidebar still functions properly with the shared message.

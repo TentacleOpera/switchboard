@@ -55,6 +55,7 @@ export interface LinearIssue {
   createdAt: string;
   updatedAt: string;
   url: string;
+  parentId: string | null;
 }
 
 export interface LinearComment {
@@ -360,7 +361,8 @@ export class LinearSyncService {
         : [],
       createdAt: String(raw?.createdAt || '').trim(),
       updatedAt: String(raw?.updatedAt || '').trim(),
-      url: String(raw?.url || '').trim()
+      url: String(raw?.url || '').trim(),
+      parentId: String(raw?.parent?.id || '').trim() || null
     };
   }
 
@@ -415,6 +417,7 @@ export class LinearSyncService {
             assignee { id name email }
             project { id name }
             labels { nodes { id name } }
+            parent { id }
             createdAt
             updatedAt
             url

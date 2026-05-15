@@ -58,7 +58,7 @@ export function getAntigravityHash(rawPath: string): string {
 
 /**
  * Sends text to a terminal with chunking and pacing to prevent input corruption.
- * Shared by InboxWatcher (inbox-based delivery) and TaskViewerProvider (direct push).
+ * Used by TaskViewerProvider for direct terminal push.
  */
 export async function sendRobustText(
     terminal: vscode.Terminal,

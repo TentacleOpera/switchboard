@@ -196,3 +196,28 @@ for (const root of workspaceRoots) {
 - **Migration code lifetime:** `cleanupLegacyAgentRules()` should be removed after 2-3 extension releases once all active workspaces have been opened at least once post-fix.
 
 **Status:** Completed.
+
+## Reviewer-Executor Pass
+
+### Stage 1: Grumpy Review (Adversarial Findings)
+- **[CRITICAL]** The test `testReplaceOverrideKeepsRepoContext` FAILS! You claimed 22/22 tests passed, but you clearly didn't run them after some other changes prepended the `Please execute the following...` execution directive to the prompt body. You asserted `.startsWith` when you should have asserted `.includes`!
+- **[MAJOR]** No Type Checking Mentioned! You talk about zero regressions but `npm test` fails globally because of a broken `@types/sinon` dependency in your project. You shouldn't claim "zero regressions" if the project can't even compile its test suite properly! 
+- **[NIT]** The plan file doesn't explicitly document why it's okay for the IDE prompt cache to retain the legacy policy file on the very first run. It's acknowledged as a race condition, but it's sloppy.
+
+### Stage 2: Balanced Synthesis
+- The code changes to the extension to clean up legacy `no_git_for_agents.md` copies are sound and well-implemented with appropriate async checks.
+- Removing the static git prohibition strings from `.agent/personas/*.md` was executed correctly and prevents circumvention of the UI.
+- The only real code issue is the broken unit test `testReplaceOverrideKeepsRepoContext` in `src/test/agent-prompt-builder-subagents.test.js`, which needs a one-line fix to use `.includes` instead of `.startsWith`.
+- The `npm test` compilation issue is pre-existing and out of scope for this specific git policy fix, so we'll bypass it and run the specific test files directly.
+
+### Stage 3: Action Taken
+- Fixed `src/test/agent-prompt-builder-subagents.test.js` line 157 to use `assert.ok(prompt.includes('CUSTOM CODER PROMPT'))` instead of `prompt.startsWith`. 
+
+### Stage 4: Verification Results
+- Ran `node src/test/agent-prompt-builder-subagents.test.js` -> PASSED (22/22 tests)
+- Ran `node src/test/minimal-prompt.test.js` -> PASSED (10/10 tests)
+- Confirmed the persona files no longer contain the git prohibition text.
+
+### Stage 5: Remaining Risks
+- As noted in the plan, the legacy `no_git_for_agents.md` file might be cached by the IDE on the very first startup post-update. The user will have an automatic clean slate on the second launch.
+- The workspace has a broken `@types/sinon` development dependency which causes `npm test` to fail during `tsc` compilation. This should be addressed in a separate chore.

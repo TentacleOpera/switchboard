@@ -164,3 +164,21 @@ Rationale: This keeps `CODED_AUTO` (and any future frontend-only synthetic colum
 - The merge strategy in Step 2 is additive; it cannot remove valid backend state.
 
 **Recommendation: Send to Coder.**
+
+---
+
+## Direct Reviewer Pass
+
+### Stage 1: Grumpy Principal Engineer Review
+- **Findings:** Hmph. The frontend fixes are actually implemented as requested in `kanban.html`. You correctly hooked `dropMode` to the synthetic `CODED_AUTO` column and implemented the backend `effectiveModes` payload merge logic rather than blowing away the whole object. The minimal required fixes were done without over-engineering state persistence for a synthetic bucket. Acceptable.
+- **Severity:** NIT
+
+### Stage 2: Balanced Synthesis
+- **Assessment:** The implementation in `src/webview/kanban.html` meets the exact requirements of the plan. 
+- **Actionable Fixes:** None required. The implementation is solid.
+
+### Validation Results
+- **Files Changed:** `src/webview/kanban.html`
+- **Tests:** `kanban-coded-auto-batching-regression.test.js` and `kanban-coded-auto-prompt-mode-regression.test.js` verified and passing.
+- **Remaining Risks:** None.
+- **Status:** **APPROVED & VERIFIED**

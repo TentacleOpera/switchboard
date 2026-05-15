@@ -664,9 +664,16 @@ export class ControlPlaneMigrationService {
             return;
         }
 
+        // Check if agent workflow files need migration (version-gated)
+        const needsAgentMigration = this._shouldRefreshAgentVersion(parentDir, extensionPath);
+
         const bundledAgentDir = path.join(extensionPath, BUNDLED_AGENT_DIR);
         if (fs.existsSync(bundledAgentDir)) {
-            await this._copyDirectoryRecursive(bundledAgentDir, path.join(parentDir, '.agent'), { overwrite: false });
+            await this._copyDirectoryRecursive(
+                bundledAgentDir,
+                path.join(parentDir, '.agent'),
+                { overwrite: false, overwriteWorkflows: needsAgentMigration }
+            );
         }
 
         const bundledAgentsFile = path.join(extensionPath, BUNDLED_AGENTS_FILE);
@@ -685,6 +692,14 @@ export class ControlPlaneMigrationService {
                 { overwrite: false }
             );
         }
+
+        // Update agent version tracking after successful copy
+        if (extensionPath) {
+            const currentVersion = this._getExtensionVersion(extensionPath);
+            if (currentVersion) {
+                this._setAgentVersion(parentDir, currentVersion);
+            }
+        }
     }
 
     private static _resolveBundledMcpDirectory(extensionPath: string): string | null {
@@ -693,6 +708,47 @@ export class ControlPlaneMigrationService {
             path.join(extensionPath, 'src', 'mcp-server')
         ];
         return candidates.find((candidate) => fs.existsSync(path.join(candidate, 'mcp-server.js'))) || null;
+    }
+
+    private static _getExtensionVersion(extensionPath: string): string | undefined {
+        const packageJsonPath = path.join(extensionPath, 'package.json');
+        try {
+            const packageJson = JSON.parse(fs.readFileSync(packageJsonPath, 'utf-8'));
+            return packageJson.version;
+        } catch {
+            return undefined;
+        }
+    }
+
+    private static _getAgentVersionFilePath(rootDir: string): string {
+        return path.join(rootDir, '.switchboard', '.agent_version.json');
+    }
+
+    private static _getLastAgentVersion(rootDir: string): string | undefined {
+        try {
+            const versionFilePath = this._getAgentVersionFilePath(rootDir);
+            if (fs.existsSync(versionFilePath)) {
+                const versionData = JSON.parse(fs.readFileSync(versionFilePath, 'utf-8'));
+                return versionData.version;
+            }
+        } catch { /* non-fatal */ }
+        return undefined;
+    }
+
+    private static _setAgentVersion(rootDir: string, version: string): void {
+        try {
+            const versionFilePath = this._getAgentVersionFilePath(rootDir);
+            const versionData = { version, lastUpdated: new Date().toISOString() };
+            fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
+        } catch { /* non-fatal */ }
+    }
+
+    private static _shouldRefreshAgentVersion(rootDir: string, extensionPath?: string): boolean {
+        if (!extensionPath) return false;
+        const currentVersion = this._getExtensionVersion(extensionPath);
+        const lastVersion = this._getLastAgentVersion(rootDir);
+        if (!currentVersion || !lastVersion) return true;
+        return currentVersion !== lastVersion;
     }
 
     private static async _copyRepoPlanFiles(parentDir: string, repo: DiscoveredRepo): Promise<number> {
@@ -919,18 +975,22 @@ export class ControlPlaneMigrationService {
     private static async _copyDirectoryRecursive(
         sourceDir: string,
         targetDir: string,
-        options: { overwrite: boolean }
+        options: { overwrite: boolean; overwriteWorkflows?: boolean },
+        basePath: string = ''
     ): Promise<void> {
         await fs.promises.mkdir(targetDir, { recursive: true });
         const entries = await fs.promises.readdir(sourceDir, { withFileTypes: true });
         for (const entry of entries) {
             const sourcePath = path.join(sourceDir, entry.name);
             const targetPath = path.join(targetDir, entry.name);
+            const entryRelativePath = basePath ? path.join(basePath, entry.name) : entry.name;
             if (entry.isDirectory()) {
-                await this._copyDirectoryRecursive(sourcePath, targetPath, options);
+                await this._copyDirectoryRecursive(sourcePath, targetPath, options, entryRelativePath);
                 continue;
             }
-            if (!options.overwrite && fs.existsSync(targetPath)) {
+            const isWorkflowFile = entryRelativePath.startsWith('workflows' + path.sep) && entry.name.endsWith('.md');
+            const shouldOverwrite = options.overwrite || (isWorkflowFile && options.overwriteWorkflows);
+            if (!shouldOverwrite && fs.existsSync(targetPath)) {
                 continue;
             }
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });

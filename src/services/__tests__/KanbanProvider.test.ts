@@ -1,6 +1,8 @@
 import * as assert from 'assert';
 import * as sinon from 'sinon';
 import * as vscode from 'vscode';
+import * as path from 'path';
+import * as fs from 'fs';
 import { KanbanProvider, KanbanCard } from '../KanbanProvider';
 import { KanbanColumnDefinition } from '../agentConfig';
 
@@ -30,11 +32,11 @@ suite('KanbanProvider', () => {
         mockContext = {
             extensionUri: vscode.Uri.file('/test'),
             workspaceState: {
-                get: sandbox.stub().returns(undefined),
+                get: sandbox.stub().callsFake((_key: string, def: any) => def),
                 update: sandbox.stub().resolves()
             },
             globalState: {
-                get: sandbox.stub().returns(undefined),
+                get: sandbox.stub().callsFake((_key: string, def: any) => def),
                 update: sandbox.stub().resolves()
             },
             secrets: {
@@ -272,6 +274,59 @@ suite('KanbanProvider', () => {
             `;
             const steps = (provider as any)._parseVerificationSteps(content);
             assert.deepStrictEqual(steps, []);
+        });
+    });
+
+    suite('refreshWithData', () => {
+        test('filters out ghost plans whose files do not exist', async () => {
+            const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+            const activeRows: any[] = [
+                { planId: 'active-1', sessionId: 's1', planFile: 'exists.md', kanbanColumn: 'CREATED' },
+                { planId: 'active-2', sessionId: 's2', planFile: 'missing.md', kanbanColumn: 'CREATED' }
+            ];
+            const completedRows: any[] = [
+                { planId: 'comp-1', sessionId: 's3', planFile: 'exists-comp.md' },
+                { planId: 'comp-2', sessionId: 's4', planFile: 'missing-comp.md' }
+            ];
+
+            const existsStub = sandbox.stub(fs, 'existsSync');
+            existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'exists.md')).returns(true);
+            existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'missing.md')).returns(false);
+            existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'exists-comp.md')).returns(true);
+            existsStub.withArgs(path.resolve(resolvedWorkspaceRoot, 'missing-comp.md')).returns(false);
+
+            // Stub _getKanbanDb to avoid real path validation
+            const mockDb = {
+                ensureReady: sandbox.stub().resolves(true)
+            };
+            sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
+
+            // Mock panel and webview
+            const postMessageStub = sandbox.stub();
+            (provider as any)._panel = {
+                webview: {
+                    postMessage: postMessageStub
+                }
+            };
+
+            // Mock other dependencies
+            sandbox.stub(provider as any, '_getCustomAgents').resolves([]);
+            sandbox.stub(provider as any, '_getCustomKanbanColumns').resolves([]);
+            sandbox.stub(provider as any, '_getVisibleAgents').resolves({});
+            sandbox.stub(provider as any, '_getWorkspaceItems').returns([]);
+
+            await provider.refreshWithData(activeRows, completedRows, workspaceRoot);
+
+            // Verify updateBoard message
+            const updateBoardCall = postMessageStub.getCalls().find((call: any) => call.args[0].type === 'updateBoard');
+            assert.ok(updateBoardCall, 'Should have sent updateBoard message');
+            const cards = updateBoardCall.args[0].cards;
+            
+            assert.strictEqual(cards.length, 2, 'Should only have 2 cards after filtering');
+            assert.ok(cards.find((c: any) => c.planId === 'active-1'), 'Should contain active-1');
+            assert.ok(cards.find((c: any) => c.planId === 'comp-1'), 'Should contain comp-1');
+            assert.ok(!cards.find((c: any) => c.planId === 'active-2'), 'Should NOT contain active-2');
+            assert.ok(!cards.find((c: any) => c.planId === 'missing-comp'), 'Should NOT contain missing-comp');
         });
     });
 });

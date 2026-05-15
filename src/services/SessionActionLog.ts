@@ -718,6 +718,14 @@ export class SessionActionLog {
     }
 
     /**
+     * Archive old run sheets based on age.
+     * Currently only prunes the DB activity log as run sheets are now stored in DB.
+     */
+    async archiveOldSheets(options: { olderThanDays: number }): Promise<void> {
+        await this.cleanup(options.olderThanDays * 24);
+    }
+
+    /**
      * Clean up old session logs based on retention policy
      */
     async cleanup(retentionHours: number): Promise<void> {

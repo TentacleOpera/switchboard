@@ -97,6 +97,8 @@ export interface KanbanCard {
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     private _panel?: vscode.WebviewPanel;
+    private _onWorkspaceChangeEmitter = new vscode.EventEmitter<string>();
+    public readonly onWorkspaceChange = this._onWorkspaceChangeEmitter.event;
     private _disposables: vscode.Disposable[] = [];
     private _sessionLogs = new Map<string, SessionActionLog>();
     private _sessionWatcher?: vscode.FileSystemWatcher;
@@ -126,6 +128,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _showingBacklog: boolean = false;
     private _allowUnknownComplexityAutoMove: boolean;
     private _clearTerminalBeforePrompt: boolean;
+    private _clearTerminalBeforePromptDelay: number;
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
@@ -247,6 +250,10 @@ export class KanbanProvider implements vscode.Disposable {
         this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
         this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', false);
         this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', false);
+        this._clearTerminalBeforePromptDelay = Math.min(Math.max(
+            vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 1500),
+            0
+        ), 10000);
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
@@ -478,32 +485,32 @@ export class KanbanProvider implements vscode.Disposable {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
-    private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+    private _getAllowedRoots(): Set<string> {
         const roots = this._getWorkspaceRoots();
-        // Build allowed roots: actual VS Code folders + mapped workspace folders (if mapping enabled)
         const allowedRoots = new Set<string>(roots);
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                const expandHome = (p: string): string => {
-                    const trimmed = p.trim();
-                    return trimmed.startsWith('~')
-                        ? path.join(require('os').homedir(), trimmed.slice(1))
-                        : trimmed;
-                };
                 for (const m of cfg.mappings) {
+                    // KanbanProvider uses workspaceFolders (child folders sharing a DB),
+                    // not parentWorkspaceFolder (used by TaskViewerProvider for .switchboard/ location)
                     for (const wf of m.workspaceFolders ?? []) {
-                        allowedRoots.add(path.resolve(expandHome(wf)));
+                        const expanded = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        allowedRoots.add(path.resolve(expanded));
                     }
                 }
             }
         } catch { /* fall through */ }
+        return allowedRoots;
+    }
 
-        if (allowedRoots.size === 0) {
-            return null;
-        }
+    private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
+        const allowedRoots = this._getAllowedRoots();
+        if (allowedRoots.size === 0) { return null; }
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);
             if (allowedRoots.has(resolved)) {
@@ -514,8 +521,14 @@ export class KanbanProvider implements vscode.Disposable {
         if (this._currentWorkspaceRoot && allowedRoots.has(this._currentWorkspaceRoot)) {
             return this._currentWorkspaceRoot;
         }
-        this._currentWorkspaceRoot = roots[0] || Array.from(allowedRoots)[0];
-        return this._currentWorkspaceRoot;
+
+        const autoSelect = vscode.workspace.getConfiguration('switchboard').get<boolean>('autoSelectFirstWorkspace', true);
+        if (autoSelect) {
+            this._currentWorkspaceRoot = this._getWorkspaceRoots()[0] || Array.from(allowedRoots)[0];
+            return this._currentWorkspaceRoot;
+        }
+
+        return null;
     }
 
     private _resolvePersistedWorkspace(persisted: unknown): string | null {
@@ -574,6 +587,31 @@ export class KanbanProvider implements vscode.Disposable {
      */
     public getCurrentWorkspaceRoot(): string | null {
         return this._currentWorkspaceRoot;
+    }
+
+    public setCurrentWorkspaceRoot(workspaceRoot: string): void {
+        const resolved = path.resolve(workspaceRoot);
+        const allowed = this._getAllowedRoots();
+        if (allowed.has(resolved)) {
+            if (this._currentWorkspaceRoot !== resolved) {
+                this._currentWorkspaceRoot = resolved;
+                this._onWorkspaceChangeEmitter.fire(resolved);
+                
+                // Persist selection for next activation
+                if (this._workspaceSaveTimeout) {
+                    clearTimeout(this._workspaceSaveTimeout);
+                }
+                this._workspaceSaveTimeout = setTimeout(async () => {
+                    const roots = this._getWorkspaceRoots();
+                    const index = roots.indexOf(resolved);
+                    await this._context.workspaceState.update('kanban.lastSelectedWorkspace', {
+                        index: index >= 0 ? index : 0,
+                        name: path.basename(resolved),
+                        pathSegments: this._getPathSegments(resolved)
+                    });
+                }, 100);
+            }
+        }
     }
 
     /**
@@ -834,8 +872,18 @@ export class KanbanProvider implements vscode.Disposable {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
 
+            // Filter out ghost plans: plan files that don't exist in this workspace
+            const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
+                const planFile = row.planFile || '';
+                if (!planFile) return false;
+                const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
+                return fs.existsSync(planPath);
+            });
+            const activeRowsFiltered = filterGhostPlans(activeRows);
+            const completedRowsFiltered = filterGhostPlans(completedRows);
+
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
-            const cards: KanbanCard[] = activeRows.map(row => {
+            const cards: KanbanCard[] = activeRowsFiltered.map(row => {
                 const deps = (typeof row.dependencies === 'string')
                     ? row.dependencies.split(',').map(d => d.trim()).filter(Boolean)
                     : [];
@@ -854,7 +902,7 @@ export class KanbanProvider implements vscode.Disposable {
                 };
             });
 
-            cards.push(...completedRows.map(rec => ({
+            cards.push(...completedRowsFiltered.map(rec => ({
                 planId: rec.planId,
                 sessionId: rec.sessionId,
                 topic: rec.topic || rec.planFile || 'Untitled',
@@ -945,7 +993,8 @@ export class KanbanProvider implements vscode.Disposable {
             });
             this._panel.webview.postMessage({
                 type: 'clearTerminalBeforePromptState',
-                enabled: this._clearTerminalBeforePrompt
+                enabled: this._clearTerminalBeforePrompt,
+                delay: this._clearTerminalBeforePromptDelay
             });
 
             let agentNames: Record<string, string> = {};
@@ -981,7 +1030,7 @@ export class KanbanProvider implements vscode.Disposable {
                 });
             }
 
-            console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRows.length} active + ${completedRows.length} completed) to kanban webview`);
+            console.log(`[KanbanProvider] refreshWithData: sent ${cards.length} cards (${activeRowsFiltered.length} active + ${completedRowsFiltered.length} completed) to kanban webview`);
         } catch (e) {
             console.error('[KanbanProvider] refreshWithData FAILED:', e);
         }
@@ -1687,7 +1736,8 @@ export class KanbanProvider implements vscode.Disposable {
             });
             this._panel.webview.postMessage({
                 type: 'clearTerminalBeforePromptState',
-                enabled: this._clearTerminalBeforePrompt
+                enabled: this._clearTerminalBeforePrompt,
+                delay: this._clearTerminalBeforePromptDelay
             });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
@@ -1959,7 +2009,7 @@ export class KanbanProvider implements vscode.Disposable {
         } catch { /* file may not exist or be invalid */ }
 
         // Merge with roleConfigs from workspaceState
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
         for (const role of roles) {
             const config: any = this._getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
             if (config && config.prompt?.trim()) {
@@ -2380,15 +2430,23 @@ export class KanbanProvider implements vscode.Disposable {
         const sourceColumnLabel = sourceColumnDef?.label || column;
 
         let role: string | null = null;
+
         if (roleSourceDef?.role) {
             // PLAN REVIEWED's role ('planner') is for destination dispatch (moving TO it).
             // When it is the source (and we are not moving to it), we want execution (role=null).
-            if (roleSourceColumn === 'PLAN REVIEWED') {
-                if (destinationColumn === 'PLAN REVIEWED') {
-                    role = roleSourceDef.role;
-                }
+            if (roleSourceColumn === 'PLAN REVIEWED' && destinationColumn !== 'PLAN REVIEWED') {
+                role = null;
             } else {
                 role = roleSourceDef.role;
+            }
+        }
+
+        // The original source column PLAN REVIEWED requires complexity-based role selection (role=null)
+        // when advancing to implementation stages (coded lanes). This overrides the explicit 
+        // role ('lead' or 'coder') of the destination column.
+        if (column === 'PLAN REVIEWED' && destinationColumn && destinationColumn !== 'PLAN REVIEWED') {
+            if (roleSourceDef?.kind === 'coded') {
+                role = null;
             }
         }
 
@@ -2405,15 +2463,11 @@ export class KanbanProvider implements vscode.Disposable {
             }
         }
 
-        if (!role) {
-            role = columnToPromptRole(roleSourceColumn); // final fallback for unknowns
-        }
-
-        // The original source column PLAN REVIEWED requires complexity-based role selection (role=null)
-        // rather than the hardcoded 'lead' fallback from columnToPromptRole,
-        // unless we specifically chose a destination role.
-        if (column === 'PLAN REVIEWED' && !destinationColumn) {
-            role = null;
+        // Final fallback for unknowns. Skip PLAN REVIEWED to prevent the legacy
+        // columnToPromptRole mapping from forcing a hardcoded 'lead' role, which
+        // would bypass complexity routing.
+        if (!role && roleSourceColumn !== 'PLAN REVIEWED') {
+            role = columnToPromptRole(roleSourceColumn);
         }
 
         return this._generatePromptForDestinationRole(cards, role, workspaceRoot, sourceColumnLabel);
@@ -3588,18 +3642,7 @@ export class KanbanProvider implements vscode.Disposable {
                 break;
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
-                    this._resolveWorkspaceRoot(msg.workspaceRoot);
-
-                    // Debounce the persistence to prevent race conditions on rapid switches
-                    if (this._workspaceSaveTimeout) {
-                        clearTimeout(this._workspaceSaveTimeout);
-                    }
-                    this._workspaceSaveTimeout = setTimeout(async () => {
-                        const roots = this._getWorkspaceRoots();
-                        const index = roots.indexOf(msg.workspaceRoot);
-                        const pathSegments = this._getPathSegments(msg.workspaceRoot);
-                        await this._context.workspaceState.update('kanban.lastSelectedWorkspace', { index, pathSegments });
-                    }, 100);
+                    this.setCurrentWorkspaceRoot(msg.workspaceRoot);
 
                     this._setupSessionWatcher();
                     // Sync TaskViewerProvider's plan watcher to the new workspace
@@ -3985,7 +4028,25 @@ export class KanbanProvider implements vscode.Disposable {
                 }
                 this._panel?.webview.postMessage({
                     type: 'clearTerminalBeforePromptState',
-                    enabled: this._clearTerminalBeforePrompt
+                    enabled: this._clearTerminalBeforePrompt,
+                    delay: this._clearTerminalBeforePromptDelay
+                });
+                break;
+            case 'updateClearTerminalBeforePromptDelay':
+                const clampedDelay = Math.min(Math.max(msg.delay ?? 1500, 0), 10000);
+                this._clearTerminalBeforePromptDelay = clampedDelay;
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'terminal.clearBeforePromptDelay',
+                        clampedDelay,
+                        true
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist clearTerminalBeforePromptDelay:', err);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'clearTerminalBeforePromptDelayState',
+                    delay: clampedDelay
                 });
                 break;
             case 'updateRoutingConfig':
@@ -4308,6 +4369,7 @@ export class KanbanProvider implements vscode.Disposable {
                                     targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             }
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
@@ -4317,7 +4379,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
                     if (movedParts.length > 0) {
@@ -4329,6 +4390,7 @@ export class KanbanProvider implements vscode.Disposable {
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, msg.sessionIds, {
@@ -4349,7 +4411,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                     } else {
                         // DB-first: update column immediately
                         const dbMs2 = this._getKanbanDb(workspaceRoot);
@@ -4360,6 +4421,7 @@ export class KanbanProvider implements vscode.Disposable {
                                     nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             }
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                         if (this._cliTriggersEnabled) {
                             const role = this._columnToRole(nextCol);
                             if (role) {
@@ -4376,7 +4438,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                     }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -4416,6 +4477,7 @@ export class KanbanProvider implements vscode.Disposable {
                                     targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             }
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         if (this._cliTriggersEnabled) {
                             if (sids.length === 1) {
                                 await vscode.commands.executeCommand('switchboard.triggerAgentFromKanban', role, sids[0], undefined, workspaceRoot);
@@ -4425,7 +4487,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         movedParts.push(`${sids.length} → ${targetCol}`);
                     }
                     await this._refreshBoard(workspaceRoot);
@@ -4436,6 +4497,7 @@ export class KanbanProvider implements vscode.Disposable {
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                         if (dispatchSpec.dragDropMode === 'prompt' || this._cliTriggersEnabled) {
                             const instruction = dispatchSpec.role === 'planner' ? 'improve-plan' : undefined;
                             const dispatched = await this._taskViewerProvider.dispatchConfiguredKanbanColumnAction(dispatchSpec.role, sessionIds, {
@@ -4455,7 +4517,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                     } else {
                         // DB-first: update column immediately
                         const dbMa2 = this._getKanbanDb(workspaceRoot);
@@ -4466,6 +4527,7 @@ export class KanbanProvider implements vscode.Disposable {
                                     nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                             }
                         }
+                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                         if (this._cliTriggersEnabled) {
                             const role = this._columnToRole(nextCol);
                             if (role) {
@@ -4477,7 +4539,6 @@ export class KanbanProvider implements vscode.Disposable {
                         } else {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                         }
-                        this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                     }
                     await this._refreshBoard(workspaceRoot);
                     vscode.window.showInformationMessage(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
@@ -4559,8 +4620,8 @@ export class KanbanProvider implements vscode.Disposable {
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     break;
                 }
 
@@ -4582,8 +4643,8 @@ export class KanbanProvider implements vscode.Disposable {
                                         targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                                 }
                             }
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
+                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                         vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`);
@@ -4600,8 +4661,8 @@ export class KanbanProvider implements vscode.Disposable {
                                 nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
+                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to next stage.`);
                 }
                 break;
@@ -4648,8 +4709,8 @@ export class KanbanProvider implements vscode.Disposable {
                             await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
                         }
                     }
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     break;
                 }
 
@@ -4672,8 +4733,8 @@ export class KanbanProvider implements vscode.Disposable {
                                         targetCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                                 }
                             }
-                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
+                            await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
                         vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`);
@@ -4691,8 +4752,8 @@ export class KanbanProvider implements vscode.Disposable {
                                 nextCol === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                         }
                     }
-                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
+                    await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
                     vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                 }
                 break;
@@ -5652,6 +5713,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const csp = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-${nonce}' ${webview.cspSource}; style-src 'unsafe-inline' ${webview.cspSource}; img-src ${webview.cspSource} data:; font-src ${webview.cspSource}; connect-src 'none';">`;
         content = content.replace('<head>', `<head>\n    ${csp}`);
         content = content.replace(/<script>/g, `<script nonce="${nonce}">`);
+
+        // Inject shared defaults
+        const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
+        content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
 
         // Inject initial workspace root as a data attribute on <body>
         const workspaceRoot = this._resolveWorkspaceRoot();
