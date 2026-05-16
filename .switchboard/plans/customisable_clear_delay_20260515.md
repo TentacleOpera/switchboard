@@ -228,4 +228,46 @@ Key risks: applying a single delay value without paced/non-paced scaling would m
 
 ---
 
-**Recommendation**: Complexity ≤ 6 → **Send to Coder**.
+## Review Results (2026-05-16)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| # | File | Finding | Severity |
+|---|------|---------|----------|
+| 1 | `package.json` | New setting correctly typed, bounded, described. Boolean description updated. | — (no issue) |
+| 2 | `TaskViewerProvider.ts` | Config read with runtime clamping present. Paced/non-paced scaling with `Math.max(100, Math.round(clearDelay / 3))` correct. First setTimeout left hardcoded. Default 1500 ms produces zero regression. | — (no issue) |
+| 3 | `KanbanProvider.ts` | Private field, constructor clamping, all three broadcast sites include delay, `updateClearTerminalBeforePromptDelay` case with clamping + persistence + echo. `msg.delay ?? 1500` correctly uses nullish coalescing (0 is treated as 0, not missing). | — (no issue) |
+| 4 | `kanban.html` | `clear-delay-container` used `class="hint-text"` which dragged in `font-family: var(--font-mono)` and `letter-spacing: 0.5px` from the stylesheet — unintended monospace rendering on the delay input and label. | NIT |
+| 5 | `kanban.html` | Display toggling via `style.display = 'flex'/'none'` works correctly with inline style properties preserved. | — (no issue) |
+| 6 | `kanban.html` | `change` event (not `input`) on delay input. Client-side clamping. State variable, UI update function, message handlers all wired correctly. | — (no issue) |
+
+**No CRITICAL or MAJOR findings.**
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Verdict | Action Taken |
+|---------|---------|--------------|
+| `hint-text` CSS class contamination on delay container | Fix now — trivial | Removed `class="hint-text"`, preserved needed styles inline (`font-size:10px; color:var(--text-secondary)`) |
+| All other implementation | Keep | No changes needed |
+
+### Stage 3 — Code Fixes Applied
+
+- **`src/webview/kanban.html` line 1998**: Removed `class="hint-text"` from `clear-delay-container` div. Added `font-size:10px; color:var(--text-secondary)` inline to preserve the intended hint-text color/size without inheriting monospace font and letter-spacing. This ensures the delay input renders in the default VS Code input font rather than monospace.
+
+### Stage 4 — Verification
+
+- **TypeScript check (`tsc --noEmit`)**: 2 pre-existing errors in unrelated files (`ClickUpSyncService.ts`, `KanbanProvider.ts` — relative import path issues). Zero errors related to the clear-delay feature.
+- **Webpack build (`npm run compile`)**: Compiled successfully. No warnings related to the feature.
+- **Manual verification items** (from Verification Plan): Not yet checked — requires VS Code runtime with the extension active.
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/webview/kanban.html` | Removed `class="hint-text"` from `clear-delay-container`, added inline `font-size` and `color` styles |
+
+### Remaining Risks
+
+- **Stale cached value in KanbanProvider**: If user edits `settings.json` directly (bypassing the UI), the KanbanProvider's `_clearTerminalBeforePromptDelay` field goes stale until the next webview refresh. This is consistent with the existing boolean toggle behavior and is an acceptable trade-off.
+- **No automated tests**: The Verification Plan items are all manual. No test infrastructure exists for this feature area.
+- **setup.html deferred**: No Terminal Context UI in setup.html yet. Follow-up plan needed if parity is desired.

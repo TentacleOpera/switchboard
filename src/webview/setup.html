@@ -1148,7 +1148,7 @@
 
                     <div class="db-subsection">
                         <div class="subsection-header"><span>Rebuild</span></div>
-                        <div style="font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;">Delete and recreate from plan files.</div>
+                        <div style="font-size:10px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;">If the database is corrupted, this will delete and recreate it. If a <code>kanban-state-backup.json</code> exists, plan columns and metadata will be restored from it first; any new plan files in <code>.switchboard/plans/</code> will then be imported.</div>
                         <button class="db-reset-btn db-action-btn danger w-full" data-db-index="${index}">REBUILD DATABASE</button>
                     </div>
 

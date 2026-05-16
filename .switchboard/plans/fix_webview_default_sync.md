@@ -218,3 +218,54 @@ Implement **Option A** (shared module) + **Option C** (mandatory CI check).
 Key risks: CSP restrictions may block external script loads if nonce handling is misconfigured; `TaskViewerProvider` (implementation.html) uses a `WebviewView` rather than a `WebviewPanel`, requiring careful verification of URI resolution paths; adding a new JS file to `src/webview/` is automatically copied by webpack but any future build system changes could silently drop it. Mitigations: test all three panels in both dev (`src/webview/`) and prod (`dist/webview/`) paths, add CI check as backstop, and verify file presence in build output.
 
 **Recommendation:** Send to Coder.
+
+---
+
+## Review Pass — Reviewer-Executor
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Status |
+|---|----------|---------|--------|
+| 1 | **MAJOR** | `BUILT_IN_AGENT_LABELS` in `sharedDefaults.js` was missing `jules` and `gatherer` entries. These roles exist in `DEFAULT_VISIBLE_AGENTS` and are shown in the kanban agents tab, but were excluded from the assignable-agent dropdown (`renderKanbanAssignedAgentOptions`). This is exactly the kind of drift the plan was meant to prevent. | **Fixed** (see below) |
+| 2 | **MAJOR** | `check-webview-sync.js` existed but did not verify that `BUILT_IN_AGENT_LABELS` key set covers all `DEFAULT_VISIBLE_AGENTS` keys. Without this check, the exact bug in Finding 1 would pass CI silently. | **Fixed** (see below) |
+| 3 | NIT | `ROLE_ADDONS` missing `jules`/`gatherer` entries — these roles have no addon UI, so omission is correct per plan edge-case note. | Accepted (no change needed) |
+| 4 | NIT | `module.exports` doesn't separate visibility keys from config keys — cosmetic design smell for test tooling. | Deferred |
+| 5 | — | Nonce injection order is correct: `/<script>/g` regex does not match `<script src="..." nonce="...">`, and the injected tag already includes the nonce. | No issue |
+| 6 | — | `dist/webview/sharedDefaults.js` matches source; webpack CopyPlugin pattern covers `src/webview/*.js`. | No issue |
+| 7 | — | All three HTML files correctly use `{ ...DEFAULT_VISIBLE_AGENTS }`. Core drift is eliminated. | No issue |
+| 8 | — | `DEFAULT_CONFIG` in kanban.html correctly uses `{ ...DEFAULT_ROLE_CONFIG }`; `loadRoleConfigs` uses `ROLE_KEYS`. | No issue |
+| 9 | — | `PROMPT_ROLES` filtering via `PROMPT_OVERRIDE_EXCLUDED_KEYS` preserves original 7-role subset. | No issue |
+
+### Stage 2: Balanced Synthesis
+
+- **Keep:** All core mechanics — `SHARED_DEFAULTS_SCRIPT` injection, spread patterns, `PROMPT_OVERRIDE_EXCLUDED_KEYS`, nonce handling.
+- **Fix now:** Findings 1 and 2 (behavioral regression + CI gap).
+- **Defer:** Findings 3 and 4 (no behavioral impact).
+
+### Code Fixes Applied
+
+1. **`src/webview/sharedDefaults.js`** — Added `gatherer` (`Context Gatherer`) and `jules` (`Jules`) to `BUILT_IN_AGENT_LABELS`. This ensures the kanban column assignment dropdown includes all roles present in `DEFAULT_VISIBLE_AGENTS`.
+2. **`.agent/scripts/check-webview-sync.js`** — Added cross-verification that `BUILT_IN_AGENT_LABELS` key set covers all `DEFAULT_VISIBLE_AGENTS` keys (and vice versa). The script now exits non-zero if the two key sets diverge, preventing the exact class of bug from Finding 1.
+3. **`dist/webview/sharedDefaults.js`** — Synced to match updated source.
+
+### Verification Results
+
+- `node .agent/scripts/check-webview-sync.js` → **exit 0** (all checks pass)
+- Negative test: temporarily removed `gatherer`/`jules` from `BUILT_IN_AGENT_LABELS` → script correctly reported `❌ BUILT_IN_AGENT_LABELS is missing keys that exist in DEFAULT_VISIBLE_AGENTS: jules, gatherer` → **exit 1**
+- `npx tsc --noEmit` → 2 pre-existing errors (unrelated import path issues in `ClickUpSyncService.ts` and `KanbanProvider.ts`). **Zero new type errors introduced by this plan.**
+- `diff src/webview/sharedDefaults.js dist/webview/sharedDefaults.js` → **no differences**
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/webview/sharedDefaults.js` | Added `gatherer` and `jules` to `BUILT_IN_AGENT_LABELS` |
+| `.agent/scripts/check-webview-sync.js` | Added `BUILT_IN_AGENT_LABELS` ↔ `DEFAULT_VISIBLE_AGENTS` key-set cross-check |
+| `dist/webview/sharedDefaults.js` | Synced from source |
+
+### Remaining Risks
+
+- Manual testing of all three panels (step 7 of the architectural refactor plan) has not been performed in this review pass. The code changes are mechanically correct but runtime verification in VS Code is recommended.
+- `ROLE_ADDONS` still lacks `jules`/`gatherer` entries. If future UI needs addon configuration for these roles, they must be added to `sharedDefaults.js`.
+- The `check-webview-sync.js` script is not yet wired into CI/pre-commit. It exists and passes, but requires manual invocation or hook integration.

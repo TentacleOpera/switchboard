@@ -1337,6 +1337,7 @@ export async function activate(context: vscode.ExtensionContext) {
     taskViewerProvider.setSetupPanelProvider(setupPanelProvider);
     kanbanProvider!.setTaskViewerProvider(taskViewerProvider);
     setupPanelProvider.setTaskViewerProvider(taskViewerProvider);
+    setupPanelProvider.setKanbanProvider(kanbanProvider!);
     const resolveEffectiveStateRoot = (candidateWorkspaceRoot?: string): string | null => {
         const selectedWorkspaceRoot = candidateWorkspaceRoot || kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
@@ -1502,7 +1503,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
 
         const confirm = await vscode.window.showWarningMessage(
-            'This will delete the local Kanban database and rebuild it from plan files. Continue?',
+            'This will delete the local Kanban database and rebuild it. If a backup exists, column assignments will be restored first, then plan files will be re-imported. Continue?',
             { modal: true },
             'Reset'
         );
@@ -1526,6 +1527,7 @@ export async function activate(context: vscode.ExtensionContext) {
         let restoreResult = { restored: 0, skipped: 0 };
         if (fs.existsSync(backupPath)) {
             try {
+                await db.createIfMissing();
                 restoreResult = await db.restoreFromBackup(backupPath);
             } catch (e) {
                 console.error('[resetKanbanDb] Backup restore failed:', e);
@@ -2039,8 +2041,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(linearUpdateDescriptionDisposable);
 
     const refreshMcpStatus = async () => {
-        if (!workspaceRoot) return;
-        const mcpStatus = await checkMcpConnection(context, workspaceRoot);
+        const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (!currentRoot) return;
+        const mcpStatus = await checkMcpConnection(context, currentRoot);
         taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
     };
 
@@ -2059,7 +2062,8 @@ export async function activate(context: vscode.ExtensionContext) {
             // 2. REACTIVITY: Listen for new terminals in real-time
             context.subscriptions.push(vscode.window.onDidOpenTerminal(() => {
                 // Re-sync registry so locate works for terminals restored after a window reload
-                const currentStateRoot = resolveEffectiveStateRoot(workspaceRoot) || runtimeStateRoot;
+                const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+                const currentStateRoot = currentRoot ? (resolveEffectiveStateRoot(currentRoot) || currentRoot) : runtimeStateRoot;
                 void syncTerminalRegistryWithState(currentStateRoot);
             }));
 
@@ -2117,8 +2121,9 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
             if (state.focused) {
                 refreshMcpStatus().catch(() => { });
-                if (workspaceRoot) {
-                    const currentStateRoot = resolveEffectiveStateRoot(workspaceRoot) || runtimeStateRoot;
+                const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+                if (currentRoot) {
+                    const currentStateRoot = resolveEffectiveStateRoot(currentRoot) || currentRoot;
                     void syncTerminalRegistryWithState(currentStateRoot).finally(() => {
                         taskViewerProvider.refresh();
                     });
@@ -2400,7 +2405,6 @@ export async function activate(context: vscode.ExtensionContext) {
             await sessionLog.archiveOldSheets({ olderThanDays: 30 });
 
             // 2. Clean transient .switchboard/ subdirectories
-            const { cleanWorkspace } = require('./lifecycle/cleanWorkspace');
             await cleanWorkspace(selectedWorkspaceRoot, mcpOutputChannel ?? undefined);
 
             vscode.window.showInformationMessage('Switchboard housekeeping complete.');
@@ -2444,7 +2448,9 @@ export async function activate(context: vscode.ExtensionContext) {
     if (workspaceRoot) {
         const statePrunerInterval = setInterval(async () => {
             try {
-                const statePath = getStateJsonPath(workspaceRoot);
+                const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+                if (!currentRoot) return;
+                const statePath = getStateJsonPath(currentRoot);
                 if (statePath) {
                     const pruned = await pruneZombieTerminalEntries(statePath);
                     if (pruned > 0) {
@@ -2466,8 +2472,9 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Register Connect MCP command
     const connectMcpDisposable = vscode.commands.registerCommand('switchboard.connectMcp', async () => {
-        if (workspaceRoot) {
-            const stateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
+        const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
+        if (currentRoot) {
+            const stateRoot = resolveEffectiveStateRoot(currentRoot) || currentRoot;
             // 1. Write VS Code workspace settings (mcpServers in .vscode/settings.json)
             try {
                 await handleMcpSetup(context, taskViewerProvider, stateRoot);
@@ -2477,12 +2484,12 @@ export async function activate(context: vscode.ExtensionContext) {
 
             // 2. Setup global Antigravity config
             try {
-                await setupGlobalAntigravityMcpConfig(workspaceRoot, stateRoot);
+                await setupGlobalAntigravityMcpConfig(currentRoot, stateRoot);
             } catch (e) {
                 mcpOutputChannel?.appendLine(`[Connect MCP] Antigravity config failed: ${e}`);
             }
             try {
-                await writeAllIdeMcpConfigs(context, workspaceRoot, stateRoot);
+                await writeAllIdeMcpConfigs(context, currentRoot, stateRoot);
             } catch (e) {
                 mcpOutputChannel?.appendLine(`[ConnectMCP] IDE MCP config write failed: ${e}`);
             }

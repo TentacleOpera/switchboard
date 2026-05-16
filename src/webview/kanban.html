@@ -612,14 +612,15 @@
             to { transform: rotate(360deg); }
         }
 
-        /* AGENTS Tab Styles */
+        /* Shared Subsection Styles */
         .subsection-header {
           display:flex; align-items:center; gap:8px;
           font-family:var(--font-mono); font-size:10px; font-weight:600;
-          color:var(--text-secondary); text-transform:uppercase;
+          color:var(--accent-teal); text-transform:uppercase;
           letter-spacing:1px; margin-bottom:8px;
         }
         .db-subsection { border-top:1px solid var(--border-color); padding:10px 0; }
+        .subsection-actions { display:flex; gap:10px; margin-bottom:8px; }
         .startup-row { display:flex; align-items:center; gap:6px; margin-bottom:6px; font-size:11px; }
         .startup-row input[type="text"] {
           background:#0a0a0a; color:var(--text-primary);
@@ -1433,7 +1434,6 @@
 
         /* Setup Tab Styles - matching setup.html */
         #setup-tab-content {
-            padding: 16px;
             overflow-y: auto;
             background: var(--bg-color);
         }
@@ -1442,20 +1442,6 @@
             border: 1px solid var(--border-color);
             background: var(--panel-bg);
             margin-bottom: 12px;
-        }
-
-        .setup-section-title {
-            display: flex;
-            align-items: center;
-            justify-content: space-between;
-            padding: 12px 14px;
-            font-family: var(--font-mono);
-            font-size: 11px;
-            letter-spacing: 1px;
-            text-transform: uppercase;
-            color: var(--text-secondary);
-            border-bottom: 1px solid var(--border-color);
-            background: var(--panel-bg);
         }
 
         .setup-field {
@@ -1488,7 +1474,7 @@
 
         /* Dependency Tree and UAT Styles */
         #dependencies-tab-content, #uat-tab-content {
-            padding: 20px;
+            overflow: hidden;
         }
 
         .uat-plan-section {
@@ -1535,29 +1521,6 @@
             color: var(--text-secondary);
             font-style: italic;
             padding: 4px 0;
-        }
-
-        .dep-tree-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 20px;
-            padding-bottom: 10px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .dep-tree-title {
-            font-family: var(--font-mono);
-            font-size: 14px;
-            color: var(--accent-teal);
-            text-shadow: var(--glow-teal);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-
-        .dep-tree-actions {
-            display: flex;
-            gap: 10px;
         }
 
         .dep-tree-container {
@@ -1705,14 +1668,6 @@
             height: 100%;
         }
 
-        .prompts-tab h2 {
-            margin-top: 0;
-            margin-bottom: 20px;
-            font-size: 18px;
-            font-weight: 600;
-            color: var(--text-primary);
-        }
-
         .role-selector-section {
             margin-bottom: 24px;
             padding: 12px;
@@ -1748,14 +1703,6 @@
             background: #0a0a0a;
             border-radius: 8px;
             border: 1px solid var(--border-color);
-        }
-
-        .config-section h3 {
-            margin-top: 0;
-            margin-bottom: 8px;
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
         }
 
         .section-desc {
@@ -1919,100 +1866,114 @@
 
     <!-- Dependencies Tab Content -->
     <div id="dependencies-tab-content" class="kanban-tab-content">
-        <div class="dep-tree-header">
-            <div class="dep-tree-title">Plan Dependencies</div>
-            <div class="dep-tree-actions">
-                <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">COPY PROMPT</button>
-                <button class="strip-btn" id="btn-rebuild-deps" data-tooltip="Send to analyst terminal">SEND TO ANALYST</button>
-                <button class="strip-btn" id="btn-refresh-deps" data-tooltip="Reload dependency map from database">REFRESH</button>
+        <div style="padding:12px; overflow-y:auto; height:100%;">
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Plan Dependencies</span></div>
+                <div class="subsection-actions">
+                    <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">COPY PROMPT</button>
+                    <button class="strip-btn" id="btn-rebuild-deps" data-tooltip="Send to analyst terminal">SEND TO ANALYST</button>
+                    <button class="strip-btn" id="btn-refresh-deps" data-tooltip="Reload dependency map from database">REFRESH</button>
+                </div>
             </div>
-        </div>
-        <div class="dep-tree-container" id="dep-tree-container">
-            <div class="empty-state">No plans in CREATED or PLAN REVIEWED columns. Create a plan to see dependencies here.</div>
-        </div>
-        <div class="dep-legend">
-            <div class="legend-item">
-                <div class="legend-box created"></div>
-                <span>CREATED</span>
+            <div class="dep-tree-container" id="dep-tree-container">
+                <div class="empty-state">No plans in CREATED or PLAN REVIEWED columns. Create a plan to see dependencies here.</div>
             </div>
-            <div class="legend-item">
-                <div class="legend-box planned"></div>
-                <span>PLAN REVIEWED</span>
-            </div>
-            <div class="legend-item">
-                <div class="legend-box blocking"></div>
-                <span>⚠️ BLOCKED</span>
+            <div class="dep-legend">
+                <div class="legend-item">
+                    <div class="legend-box created"></div>
+                    <span>CREATED</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box planned"></div>
+                    <span>PLAN REVIEWED</span>
+                </div>
+                <div class="legend-item">
+                    <div class="legend-box blocking"></div>
+                    <span>⚠️ BLOCKED</span>
+                </div>
             </div>
         </div>
     </div>
 
     <!-- UAT Tab Content -->
     <div id="uat-tab-content" class="kanban-tab-content">
-        <div class="dep-tree-header">
-            <div class="dep-tree-title">User Acceptance Testing</div>
-            <div class="dep-tree-actions">
-                <button class="strip-btn" id="btn-refresh-uat" data-tooltip="Reload UAT checklist from database">REFRESH</button>
+        <div style="padding:12px; overflow-y:auto; height:100%;">
+            <div class="db-subsection">
+                <div class="subsection-header"><span>User Acceptance Testing</span></div>
+                <div class="subsection-actions">
+                    <button class="strip-btn" id="btn-refresh-uat" data-tooltip="Reload UAT checklist from database">REFRESH</button>
+                </div>
             </div>
-        </div>
-        <div class="dep-tree-container" id="uat-checklist-container">
-            <div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>
+            <div class="dep-tree-container" id="uat-checklist-container">
+                <div class="empty-state">No plans in CODE REVIEWED or ACCEPTANCE TESTED columns with manual verification steps.</div>
+            </div>
         </div>
     </div>
 
     <!-- Setup Tab Content -->
     <div id="setup-tab-content" class="kanban-tab-content">
-        <div class="setup-section">
-            <div class="setup-section-title">Routing Configuration</div>
-            <div class="setup-field">
-                <button class="strip-btn w-full" id="btn-routing-map" data-tooltip="Configure complexity-based routing rules">OPEN ROUTING MAP</button>
-                <div class="hint-text" style="margin-top:6px;">
-                    Drag complexity levels to assign to agent tiers
+        <div style="padding:12px; overflow-y:auto; height:100%;">
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Routing Configuration</span></div>
+                <div class="setup-section">
+                    <div class="setup-field">
+                        <button class="strip-btn w-full" id="btn-routing-map" data-tooltip="Configure complexity-based routing rules">OPEN ROUTING MAP</button>
+                        <div class="hint-text" style="margin-top:6px;">
+                            Drag complexity levels to assign to agent tiers
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="setup-section">
-            <div class="setup-section-title">Batch Operations</div>
-            <div class="setup-field">
-                <label class="cli-toggle-inline" id="unknown-complexity-label-setup" data-tooltip="When OFF, batch moves skip plans with unknown complexity">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="unknown-complexity-toggle">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span class="toggle-label">Unknown → Auto</span>
-                </label>
-                <div class="hint-text">
-                    Include plans with unknown complexity in batch moves
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Batch Operations</span></div>
+                <div class="setup-section">
+                    <div class="setup-field">
+                        <label class="cli-toggle-inline" id="unknown-complexity-label-setup" data-tooltip="When OFF, batch moves skip plans with unknown complexity">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="unknown-complexity-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Unknown &rarr; Auto</span>
+                        </label>
+                        <div class="hint-text">
+                            Include plans with unknown complexity in batch moves
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="setup-section">
-            <div class="setup-section-title">Terminal Context</div>
-            <div class="setup-field">
-                <label class="cli-toggle-inline" id="clear-terminal-before-prompt-label" data-tooltip="Send /clear to CLI agents before dispatching prompts (delay is configurable)">
-                    <label class="toggle-switch">
-                        <input type="checkbox" id="clear-terminal-before-prompt-toggle">
-                        <span class="toggle-slider"></span>
-                    </label>
-                    <span class="toggle-label">Clear before prompt</span>
-                </label>
-                <div class="hint-text" id="clear-delay-container" style="display:none; margin-top:4px; align-items:center; gap:6px;">
-                    <label style="font-size:11px;">Delay:</label>
-                    <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="1500"
-                           style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
-                    <span style="font-size:10px; opacity:0.7;">ms (0–10000)</span>
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Terminal Context</span></div>
+                <div class="setup-section">
+                    <div class="setup-field">
+                        <label class="cli-toggle-inline" id="clear-terminal-before-prompt-label" data-tooltip="Send /clear to CLI agents before dispatching prompts (delay is configurable)">
+                            <label class="toggle-switch">
+                                <input type="checkbox" id="clear-terminal-before-prompt-toggle">
+                                <span class="toggle-slider"></span>
+                            </label>
+                            <span class="toggle-label">Clear before prompt</span>
+                        </label>
+                        <div id="clear-delay-container" style="display:none; margin-top:4px; align-items:center; gap:6px; font-size:10px; color:var(--text-secondary);">
+                            <label style="font-size:11px;">Delay:</label>
+                            <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="1500"
+                                   style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
+                            <span style="font-size:10px; opacity:0.7;">ms (0&ndash;10000)</span>
+                        </div>
+                    </div>
                 </div>
             </div>
-        </div>
-        <div class="setup-section">
-            <div class="setup-section-title">Kanban Structure</div>
-            <div class="setup-field">
-                <div class="flex gap-2" style="margin-bottom:10px;">
-                    <button id="btn-add-kanban-column" class="strip-btn w-full">ADD COLUMN</button>
-                    <button id="btn-restore-kanban-defaults" class="strip-btn w-full">RESTORE DEFAULTS</button>
-                </div>
-                <div id="kanban-structure-list" class="kanban-structure-list"></div>
-                <div class="hint-text">
-                    Drag active middle columns to change board order. New and Completed stay fixed.
+            <div class="db-subsection">
+                <div class="subsection-header"><span>Kanban Structure</span></div>
+                <div class="setup-section">
+                    <div class="setup-field">
+                        <div class="flex gap-2" style="margin-bottom:10px;">
+                            <button id="btn-add-kanban-column" class="strip-btn w-full">ADD COLUMN</button>
+                            <button id="btn-restore-kanban-defaults" class="strip-btn w-full">RESTORE DEFAULTS</button>
+                        </div>
+                        <div id="kanban-structure-list" class="kanban-structure-list"></div>
+                        <div class="hint-text">
+                            Drag active middle columns to change board order. New and Completed stay fixed.
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
@@ -2021,7 +1982,6 @@
     <!-- Agents Tab Content -->
     <div id="agents-tab-content" class="kanban-tab-content">
       <div style="padding:12px; overflow-y:auto; height:100%;">
-        <div style="font-size:11px; color:var(--accent-teal); margin-bottom:10px; font-family:var(--font-mono); letter-spacing:1px; font-weight:600;">AGENT CONFIGURATION</div>
 
         <!-- Agent Visibility & CLI Commands -->
         <div class="db-subsection">
@@ -2035,6 +1995,7 @@
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. gemini" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="research_planner" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Research Planner</label><input type="text" data-role="research_planner" id="agents-tab-cmd-research-planner" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="gatherer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Context Gatherer</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Clipboard context gathering only</span></div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
@@ -2120,10 +2081,11 @@
     <!-- Prompts Tab Content -->
     <div id="prompts-tab-content" class="kanban-tab-content">
       <div class="prompts-tab">
-        <h2>Prompt Configuration</h2>
-        
+
         <!-- Role Selector -->
-        <div class="role-selector-section">
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Role Selector</span></div>
+          <div class="role-selector-section">
           <label for="roleSelect">Role:</label>
           <select id="roleSelect">
             <option value="planner" selected>Planner</option>
@@ -2135,103 +2097,143 @@
             <option value="analyst">Analyst</option>
             <option value="ticket_updater">Ticket Updater</option>
             <option value="researcher">Researcher</option>
+            <option value="research_planner">Research Planner</option>
             <option value="splitter">Splitter Agent</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
+          </div>
         </div>
-        
+
         <!-- Planner-specific configuration -->
         <div id="plannerConfig" class="role-config">
-          <div class="config-section workflow-section">
-            <h3>Workflow File</h3>
-            <p class="section-desc">The workflow file defines the planning methodology.</p>
-            
-            <div class="input-group">
-              <label for="workflowFilePath">Workflow File Path:</label>
-              <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
-              <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
-            </div>
-            <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
-            
-            <div class="example-paths">
-              <strong>Example paths:</strong>
-              <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
-              <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
-              <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Workflow File</span></div>
+            <div class="config-section workflow-section">
+              <p class="section-desc">The workflow file defines the planning methodology.</p>
+              
+              <div class="input-group">
+                <label for="workflowFilePath">Workflow File Path:</label>
+                <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
+                <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
+              </div>
+              <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
+              
+              <div class="example-paths">
+                <strong>Example paths:</strong>
+                <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
+                <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
+                <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+              </div>
             </div>
           </div>
           
-          <div class="config-section addons-section">
-            <h3>Add-ons</h3>
-            <p class="section-desc">Planner-specific orchestration features.</p>
-            
-            <div class="checkbox-group">
-              <label class="checkbox-item" title="Include batch execution rules and focus directive">
-                <input type="checkbox" id="plannerAddonSwitchboardSafeguards">
-                <span>Switchboard Safeguards</span>
-                <span class="tooltip">Include batch execution rules and focus directive</span>
-              </label>
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Add-ons</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc">Planner-specific orchestration features.</p>
               
-              <label class="checkbox-item" title="Query Kanban for dependencies between active plans">
-                <input type="checkbox" id="plannerAddonDependencyCheck">
-                <span>Dependency Check</span>
-                <span class="tooltip">Query Kanban for cross-plan dependencies</span>
-              </label>
-              
-              <label class="checkbox-item" title="Append design doc/PRD as context for planning">
-                <input type="checkbox" id="plannerAddonDesignDoc">
-                <span>Design Doc Reference</span>
-                <span class="tooltip">Include design doc as planning context</span>
-              </label>
-              
-              <label class="checkbox-item" title="Aggressive pair programming mode">
-                <input type="checkbox" id="plannerAddonAggressivePairProgramming">
-                <span>Aggressive Pair Programming</span>
-                <span class="tooltip">Assume Coder can handle more independently</span>
-              </label>
+              <div class="checkbox-group">
+                <label class="checkbox-item" title="Include batch execution rules and focus directive">
+                  <input type="checkbox" id="plannerAddonSwitchboardSafeguards">
+                  <span>Switchboard Safeguards</span>
+                  <span class="tooltip">Include batch execution rules and focus directive</span>
+                </label>
+                
+                <label class="checkbox-item" title="Query Kanban for dependencies between active plans">
+                  <input type="checkbox" id="plannerAddonDependencyCheck">
+                  <span>Dependency Check</span>
+                  <span class="tooltip">Query Kanban for cross-plan dependencies</span>
+                </label>
+                
+                <label class="checkbox-item" title="Append design doc/PRD as context for planning">
+                  <input type="checkbox" id="plannerAddonDesignDoc">
+                  <span>Design Doc Reference</span>
+                  <span class="tooltip">Include design doc as planning context</span>
+                </label>
+                
+                <label class="checkbox-item" title="Aggressive pair programming mode">
+                  <input type="checkbox" id="plannerAddonAggressivePairProgramming">
+                  <span>Aggressive Pair Programming</span>
+                  <span class="tooltip">Assume Coder can handle more independently</span>
+                </label>
 
-              <label class="checkbox-item" title="Prohibit git commands in the prompt">
-                <input type="checkbox" id="plannerAddonGitProhibition">
-                <span>Git Prohibition</span>
-                <span class="tooltip">Include git prohibition directive</span>
-              </label>
+                <label class="checkbox-item" title="Prohibit git commands in the prompt">
+                  <input type="checkbox" id="plannerAddonGitProhibition">
+                  <span>Git Prohibition</span>
+                  <span class="tooltip">Include git prohibition directive</span>
+                </label>
 
-              <label class="checkbox-item" title="Produce separate Routine and Complex plan files">
-                <input type="checkbox" id="plannerAddonSplitPlan">
-                <span>Split Plan</span>
-                <span class="tooltip">Produce separate Routine and Complex plan files</span>
-              </label>
+                <label class="checkbox-item" title="Produce separate Routine and Complex plan files">
+                  <input type="checkbox" id="plannerAddonSplitPlan">
+                  <span>Split Plan</span>
+                  <span class="tooltip">Produce separate Routine and Complex plan files</span>
+                </label>
+              </div>
+            </div>
+          </div>
+        </div>
+        
+        <!-- Research Planner-specific configuration -->
+        <div id="research_plannerConfig" class="role-config" style="display: none;">
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Deep Planning Settings</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc">Configure research depth and deep planning behavior.</p>
+              
+              <div class="checkbox-group">
+                <label class="checkbox-item" title="Enable full deep planning protocol (50-100 sources)">
+                  <input type="checkbox" id="rp-enable-deep-planning">
+                  <span>Enable Deep Planning</span>
+                  <span class="tooltip">Triggers deep_planning skill protocol. Skips planning proposal phase.</span>
+                </label>
+                
+                <div class="input-group" style="margin-top:10px;">
+                  <label for="rp-research-depth">Research Depth:</label>
+                  <select id="rp-research-depth" style="flex:1;">
+                    <option value="quick">Quick (5-10 sources)</option>
+                    <option value="standard">Standard (15-30 sources)</option>
+                    <option value="deep" selected>Deep (50-100+ sources)</option>
+                    <option value="academic">Academic (100-200+ sources)</option>
+                  </select>
+                </div>
+              </div>
             </div>
           </div>
         </div>
         
         <!-- Non-planner roles: Prompt customization -->
         <div id="promptCustomization" class="role-config" style="display: none;">
-          <div class="config-section prompt-section">
-            <h3>Prompt Customization</h3>
-            <p class="section-desc">Customize the system prompt for this role.</p>
-            
-            <textarea id="rolePromptTextarea" placeholder="Enter custom prompt for this role..."></textarea>
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Prompt Customization</span></div>
+            <div class="config-section prompt-section">
+              <p class="section-desc">Customize the system prompt for this role.</p>
+              
+              <textarea id="rolePromptTextarea" placeholder="Enter custom prompt for this role..."></textarea>
+            </div>
           </div>
           
-          <div class="config-section addons-section">
-            <h3>Add-ons</h3>
-            <p class="section-desc" id="roleAddonsDesc">Role-specific orchestration features.</p>
-            
-            <div id="roleAddonsGroup" class="checkbox-group">
-              <!-- Role-specific add-ons injected here via JavaScript -->
+          <div class="db-subsection">
+            <div class="subsection-header"><span>Add-ons</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc" id="roleAddonsDesc">Role-specific orchestration features.</p>
+              
+              <div id="roleAddonsGroup" class="checkbox-group">
+                <!-- Role-specific add-ons injected here via JavaScript -->
+              </div>
             </div>
           </div>
         </div>
         
         <!-- Preview section (shown for all roles) -->
-        <div class="config-section preview-section">
-          <h3>Preview</h3>
-          <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
-            <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent:</span>
-            <button id="refreshPreview" class="secondary-btn">Refresh Preview</button>
+        <div class="db-subsection">
+          <div class="subsection-header"><span>Preview</span></div>
+          <div class="config-section preview-section">
+            <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
+              <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent:</span>
+              <button id="refreshPreview" class="secondary-btn">Refresh Preview</button>
+            </div>
+            <textarea id="promptPreview" readonly></textarea>
           </div>
-          <textarea id="promptPreview" readonly></textarea>
         </div>
       </div>
     </div>
@@ -2384,11 +2386,13 @@
 
         async function handleRoleChange() {
             const plannerConfig = document.getElementById('plannerConfig');
+            const researchPlannerConfig = document.getElementById('research_plannerConfig');
             const promptCustomization = document.getElementById('promptCustomization');
-            if (!plannerConfig || !promptCustomization) return;
+            if (!plannerConfig || !researchPlannerConfig || !promptCustomization) return;
 
             plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
-            promptCustomization.style.display = currentRole === 'planner' ? 'none' : 'block';
+            researchPlannerConfig.style.display = currentRole === 'research_planner' ? 'block' : 'none';
+            promptCustomization.style.display = (currentRole === 'planner' || currentRole === 'research_planner') ? 'none' : 'block';
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
@@ -2399,6 +2403,11 @@
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
+            } else if (currentRole === 'research_planner') {
+                const config = roleConfigs.research_planner;
+                document.getElementById('rp-enable-deep-planning').checked = !!config.enableDeepPlanning;
+                document.getElementById('rp-research-depth').value = config.researchDepth || 'deep';
+                renderRoleAddons(currentRole);
             } else {
                 const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
                 document.getElementById('rolePromptTextarea').value = config.prompt || '';
@@ -2407,7 +2416,6 @@
 
             refreshPreview();
         }
-
         function renderRoleAddons(role) {
             const group = document.getElementById('roleAddonsGroup');
             const desc = document.getElementById('roleAddonsDesc');
@@ -2644,17 +2652,6 @@
             julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
           };
         }
-        function promptsTabCollectConfig() {
-          return {
-            accurateCodingEnabled: document.getElementById('prompts-tab-accurate-coding-toggle')?.checked ?? false,
-            advancedReviewerEnabled: document.getElementById('prompts-tab-advanced-reviewer-toggle')?.checked ?? false,
-            dependencyCheckEnabled: document.getElementById('prompts-tab-dependency-check-toggle')?.checked ?? false,
-            leadChallengeEnabled: document.getElementById('prompts-tab-lead-challenge-toggle')?.checked ?? false,
-            aggressivePairProgramming: document.getElementById('prompts-tab-aggressive-pair-toggle')?.checked ?? false,
-            designDocEnabled: document.getElementById('prompts-tab-design-doc-toggle')?.checked ?? false,
-            designDocLink: document.getElementById('prompts-tab-design-doc-input')?.value?.trim() ?? '',
-          };
-        }
         function agentsTabSaveConfig() {
           vscode.postMessage({ type: 'saveStartupCommands', ...agentsTabCollectConfig() });
         }
@@ -2666,31 +2663,10 @@
         document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
           i.addEventListener('blur', agentsTabSaveConfig);
         });
-        // Prompts tab autosave on checkbox change or text blur
-        document.querySelectorAll('#prompts-tab-content input[type="checkbox"]').forEach(cb => {
-          cb.addEventListener('change', () => {
-            vscode.postMessage({ type: 'savePromptsConfig', ...promptsTabCollectConfig() });
-          });
-        });
-        document.getElementById('prompts-tab-design-doc-input')?.addEventListener('blur', () => {
-          vscode.postMessage({ type: 'savePromptsConfig', ...promptsTabCollectConfig() });
-        });
-
-        // Save overrides
-        document.getElementById('prompts-tab-btn-save-overrides')?.addEventListener('click', () => {
-          promptsTabSaveDraft();
-          vscode.postMessage({ type: 'saveDefaultPromptOverrides', overrides: promptsTabOverrides });
-          promptsTabUpdateSummary();
-          promptsTabRenderTabs();
-        });
-
-        // Clear override for current role
-        document.getElementById('prompts-tab-btn-clear-override')?.addEventListener('click', () => {
-          delete promptsTabOverrides[promptsTabEditingRole];
-          promptsTabLoadForm();
-          promptsTabRenderTabs();
-          promptsTabUpdateSummary();
-        });
+        // NOTE: Prompts tab autosave is handled by initPromptsTabListeners() and saveRoleConfig(),
+        // which correctly read from actual element IDs (plannerAddon*, roleAddonsGroup, etc.).
+        // The old promptsTabCollectConfig() was removed — it referenced non-existent element IDs
+        // and caused data loss by sending all-false values on every checkbox change.
 
         /* ── Tooltip overlay system ─────────────────────────────────── */
         const tooltipOverlay = document.getElementById('tooltip-overlay');
@@ -2939,6 +2915,27 @@
                     if (!roleConfigs[currentRole]) roleConfigs[currentRole] = { prompt: '', addons: {} };
                     roleConfigs[currentRole].prompt = e.target.value;
                     saveRoleConfig(currentRole);
+                });
+            }
+
+            // Research Planner specific listeners
+            const rpEnableDeepPlanning = document.getElementById('rp-enable-deep-planning');
+            if (rpEnableDeepPlanning) {
+                rpEnableDeepPlanning.addEventListener('change', (e) => {
+                    if (!roleConfigs.research_planner) roleConfigs.research_planner = { enableDeepPlanning: false, researchDepth: 'deep', addons: {} };
+                    roleConfigs.research_planner.enableDeepPlanning = e.target.checked;
+                    saveRoleConfig('research_planner');
+                    refreshPreview();
+                });
+            }
+
+            const rpResearchDepth = document.getElementById('rp-research-depth');
+            if (rpResearchDepth) {
+                rpResearchDepth.addEventListener('change', (e) => {
+                    if (!roleConfigs.research_planner) roleConfigs.research_planner = { enableDeepPlanning: false, researchDepth: 'deep', addons: {} };
+                    roleConfigs.research_planner.researchDepth = e.target.value;
+                    saveRoleConfig('research_planner');
+                    refreshPreview();
                 });
             }
 
@@ -3697,17 +3694,14 @@
                 const sortedItems = isPlanningColumn
                     ? sortColumnByDependencies(items)
                     : [...items].sort((a, b) => {
-                        const tsA = a._ts || 0;
-                        const tsB = b._ts || 0;
-                        if (tsA !== tsB) {
-                            return tsB - tsA; // newest activity first
-                        }
                         const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                         const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                         if (isNaN(createdA) || isNaN(createdB)) {
-                            return 0;
+                            // Malformed dates: fall back to _ts-only sort
+                            return (b._ts || 0) - (a._ts || 0);
                         }
-                        return createdB - createdA; // tiebreak: newest plan first
+                        if (createdA !== createdB) return createdA - createdB;
+                        return (b._ts || 0) - (a._ts || 0);
                     });
                 countEl.textContent = items.length;
 
@@ -5288,10 +5282,16 @@
                 });
             };
 
+            const automationRulesSection = document.createElement('div');
+            automationRulesSection.className = 'db-subsection';
+            container.appendChild(automationRulesSection);
+
             const automationRulesHeader = document.createElement('div');
-            automationRulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px; margin-bottom:8px;';
-            automationRulesHeader.textContent = 'AUTOMATION RULES';
-            container.appendChild(automationRulesHeader);
+            automationRulesHeader.className = 'subsection-header';
+            const automationRulesSpan = document.createElement('span');
+            automationRulesSpan.textContent = 'AUTOMATION RULES';
+            automationRulesHeader.appendChild(automationRulesSpan);
+            automationRulesSection.appendChild(automationRulesHeader);
 
             const batchRow = document.createElement('div');
             batchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -5317,7 +5317,7 @@
 
             batchRow.appendChild(batchLabel);
             batchRow.appendChild(batchSelect);
-            container.appendChild(batchRow);
+            automationRulesSection.appendChild(batchRow);
 
             const complexityRow = document.createElement('div');
             complexityRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -5349,7 +5349,7 @@
 
             complexityRow.appendChild(complexityLabel);
             complexityRow.appendChild(complexitySelect);
-            container.appendChild(complexityRow);
+            automationRulesSection.appendChild(complexityRow);
 
             const routingRow = document.createElement('div');
             routingRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -5378,7 +5378,7 @@
 
             routingRow.appendChild(routingLabel);
             routingRow.appendChild(routingSelect);
-            container.appendChild(routingRow);
+            automationRulesSection.appendChild(routingRow);
 
             const maxSendsRow = document.createElement('div');
             maxSendsRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
@@ -5409,21 +5409,23 @@
             maxSendsRow.appendChild(maxSendsLabel);
             maxSendsRow.appendChild(maxSendsInput);
             maxSendsRow.appendChild(sessionCapBadge);
-            container.appendChild(maxSendsRow);
+            automationRulesSection.appendChild(maxSendsRow);
 
-            const sep = document.createElement('div');
-            sep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
-            container.appendChild(sep);
+            const columnRulesSection = document.createElement('div');
+            columnRulesSection.className = 'db-subsection';
+            container.appendChild(columnRulesSection);
 
             const rulesHeader = document.createElement('div');
-            rulesHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
-            rulesHeader.textContent = 'COLUMN RULES';
-            container.appendChild(rulesHeader);
+            rulesHeader.className = 'subsection-header';
+            const rulesSpan = document.createElement('span');
+            rulesSpan.textContent = 'COLUMN RULES';
+            rulesHeader.appendChild(rulesSpan);
+            columnRulesSection.appendChild(rulesHeader);
 
             const timingExplanation = document.createElement('div');
             timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
             timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
-            container.appendChild(timingExplanation);
+            columnRulesSection.appendChild(timingExplanation);
 
             columnTransitions.forEach(({ column, label, defaultMin, floorPerPlan }) => {
                 const idSuffix = getAutobanRuleIdSuffix(column);
@@ -5480,22 +5482,24 @@
                 ruleRow.appendChild(everyLbl);
                 ruleRow.appendChild(minInput);
                 ruleRow.appendChild(minLbl);
-                container.appendChild(ruleRow);
+                columnRulesSection.appendChild(ruleRow);
             });
 
-            const poolSep = document.createElement('div');
-            poolSep.style.cssText = 'border-top:1px solid var(--border-color); margin:4px 0;';
-            container.appendChild(poolSep);
+            const terminalPoolsSection = document.createElement('div');
+            terminalPoolsSection.className = 'db-subsection';
+            container.appendChild(terminalPoolsSection);
 
             const poolsHeader = document.createElement('div');
-            poolsHeader.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); letter-spacing:1.5px;';
-            poolsHeader.textContent = 'TERMINAL POOLS';
-            container.appendChild(poolsHeader);
+            poolsHeader.className = 'subsection-header';
+            const poolsSpan = document.createElement('span');
+            poolsSpan.textContent = 'TERMINAL POOLS';
+            poolsHeader.appendChild(poolsSpan);
+            terminalPoolsSection.appendChild(poolsHeader);
 
             const poolsHelp = document.createElement('div');
             poolsHelp.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
             poolsHelp.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
-            container.appendChild(poolsHelp);
+            terminalPoolsSection.appendChild(poolsHelp);
 
             autobanRoles.forEach(({ role, label }) => {
                 const poolEntries = getRolePoolEntries(role);
@@ -5594,8 +5598,7 @@
                         roleBlock.appendChild(terminalRow);
                     });
                 }
-
-                container.appendChild(roleBlock);
+                terminalPoolsSection.appendChild(roleBlock);
             });
 
             const resetRow = document.createElement('div');

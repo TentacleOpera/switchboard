@@ -179,3 +179,26 @@ None. `TaskViewerProvider` and `implementation.html` currently have no automated
 ---
 
 **Recommendation:** Send to Coder. Implementation is already complete; remaining work is manual verification and addressing the pre-existing `_lastClickUpDetailDescriptionHtml` cache invalidation bug.
+
+## 🛡️ Verification Phase
+
+### Stage 1: Grumpy Review (Adversarial Findings)
+1. **[MAJOR] Double-Escaping Fallback Boilerplate**: The implementer copy-pasted the exact `try/catch` fallback block from `LinearSyncService` into `TaskViewerProvider.ts` without realizing how terrible it is. By manually regex-replacing HTML entities in the `catch` block and sending a `<pre>` string as `renderedDescriptionHtml`, the frontend thinks it's legitimately rendered markdown and applies the `.markdown-body` CSS class to plain text! Since the frontend *already* has a robust `escapeHtml()` function and `<pre>` wrapper logic natively baked into `descHtml = task.markdownDescription ? ...`, the backend should simply return an empty string on error (`renderedDescriptionHtml = ''`) and let the frontend do its job.
+2. **[MAJOR] Lingering CSS State**: When `selectedClickUpIssue` is cleared (e.g., clicking away from a task), the DOM element `detailDescription.innerHTML` is cleared, but `detailDescription.classList.remove('markdown-body')` is NOT called. The element keeps the `.markdown-body` class lingering like a bad smell, which could bleed into empty state UI styling if not careful.
+3. **[NIT] Un-DRY string fallback**: `(details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.'` is repeated twice in the try/catch block. Assign it to a variable before the try-catch block.
+
+### Stage 2: Balanced Synthesis & Fixes
+- **Actionable Fix 1**: Refactored the `TaskViewerProvider.ts` markdown rendering fallback. If `markdown.api.render` fails, we simply assign `renderedDescriptionHtml = ''`. This correctly hands off the fallback responsibility to the frontend, which already has the `<pre>` wrapper logic in place. (Applied to both ClickUp and Linear provider paths for consistency).
+- **Actionable Fix 2**: Added `detailDescription.classList.remove('markdown-body')` to the `!selectedClickUpIssue` branch in `implementation.html` to ensure the CSS class doesn't leak into empty states.
+- **Actionable Fix 3**: Consolidated the description string assignment outside the try block.
+
+### Code Fixes Applied
+- `src/services/TaskViewerProvider.ts`: Removed regex HTML-escaping from the catch blocks (ClickUp & Linear paths).
+- `src/webview/implementation.html`: Added class removal in `renderSidebarClickUpTaskDetail`.
+
+### Verification Results
+- **Compile/Typecheck**: No TypeScript errors introduced.
+- **Cache Invalidation**: The original cache invalidation bug mentioned in the plan (`_lastClickUpDetailDescriptionHtml` not being reset) was verified to be correctly fixed by the initial implementation pass.
+- **Robustness**: The fallback logic is now properly separated between backend (markdown render) and frontend (plain-text escaping).
+
+**ACCURACY VERIFICATION COMPLETE**

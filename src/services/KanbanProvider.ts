@@ -589,29 +589,32 @@ export class KanbanProvider implements vscode.Disposable {
         return this._currentWorkspaceRoot;
     }
 
-    public setCurrentWorkspaceRoot(workspaceRoot: string): void {
+    public setCurrentWorkspaceRoot(workspaceRoot: string): boolean {
         const resolved = path.resolve(workspaceRoot);
         const allowed = this._getAllowedRoots();
-        if (allowed.has(resolved)) {
-            if (this._currentWorkspaceRoot !== resolved) {
-                this._currentWorkspaceRoot = resolved;
-                this._onWorkspaceChangeEmitter.fire(resolved);
-                
-                // Persist selection for next activation
-                if (this._workspaceSaveTimeout) {
-                    clearTimeout(this._workspaceSaveTimeout);
-                }
-                this._workspaceSaveTimeout = setTimeout(async () => {
-                    const roots = this._getWorkspaceRoots();
-                    const index = roots.indexOf(resolved);
-                    await this._context.workspaceState.update('kanban.lastSelectedWorkspace', {
-                        index: index >= 0 ? index : 0,
-                        name: path.basename(resolved),
-                        pathSegments: this._getPathSegments(resolved)
-                    });
-                }, 100);
-            }
+        if (!allowed.has(resolved)) {
+            console.error(`[KanbanProvider] Rejected invalid workspace: ${workspaceRoot}`);
+            return false;
         }
+        if (this._currentWorkspaceRoot !== resolved) {
+            this._currentWorkspaceRoot = resolved;
+            this._onWorkspaceChangeEmitter.fire(resolved);
+
+            // Persist selection for next activation
+            if (this._workspaceSaveTimeout) {
+                clearTimeout(this._workspaceSaveTimeout);
+            }
+            this._workspaceSaveTimeout = setTimeout(async () => {
+                const roots = this._getWorkspaceRoots();
+                const index = roots.indexOf(resolved);
+                await this._context.workspaceState.update('kanban.lastSelectedWorkspace', {
+                    index: index >= 0 ? index : 0,
+                    name: path.basename(resolved),
+                    pathSegments: this._getPathSegments(resolved)
+                });
+            }, 100);
+        }
+        return true;
     }
 
     /**
@@ -872,11 +875,14 @@ export class KanbanProvider implements vscode.Disposable {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
 
-            // Filter out ghost plans: plan files that don't exist in this workspace
+            // Filter out ghost plans: plan files that don't exist in this workspace or are outside the workspace root.
+            // Only filter ACTIVE plans — completed plans may have been archived (file moved)
+            // and should still appear in the COMPLETED column; the DB is the source of truth.
             const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                 const planFile = row.planFile || '';
                 if (!planFile) return false;
                 const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
+                if (!planPath.startsWith(resolvedWorkspaceRoot)) return false;
                 return fs.existsSync(planPath);
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
@@ -1653,14 +1659,10 @@ export class KanbanProvider implements vscode.Disposable {
                     };
                 });
 
-                // Completed plans from DB
-                const completedRecordsRaw = await db.getCompletedPlans(workspaceId, completedLimit);
-                const completedRecords = completedRecordsRaw.filter(rec => {
-                    const planFile = rec.planFile || '';
-                    if (!planFile) return false;
-                    const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
-                    return fs.existsSync(planPath);
-                });
+                // Completed plans from DB — don't filter by file existence;
+                // completed plans may have been archived (file moved) and should still appear.
+                const completedRecords = (await db.getCompletedPlans(workspaceId, completedLimit))
+                    .filter(rec => rec.planFile);
                 cards.push(...completedRecords.map(rec => ({
                     planId: rec.planId,
                     sessionId: rec.sessionId,
@@ -1780,7 +1782,9 @@ export class KanbanProvider implements vscode.Disposable {
             ]);
             const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
 
-            // Filter out ghost plans: plan files that don't exist in this workspace
+            // Filter out ghost plans: plan files that don't exist in this workspace.
+            // Only filter ACTIVE plans — completed plans may have been archived (file moved)
+            // and should still appear in the COMPLETED column; the DB is the source of truth.
             const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                 const planFile = row.planFile || '';
                 if (!planFile) return false;
@@ -2047,7 +2051,7 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<Record<string, string>> {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'research_planner'];
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         for (const role of roles) {
             try {
@@ -2060,7 +2064,9 @@ export class KanbanProvider implements vscode.Disposable {
                     personaContent: personaContent?.trim() || undefined,
                     defaultPromptOverrides,
                     gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role as any] ?? true,
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role as any] ?? true
+                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role as any] ?? true,
+                    enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
+                    researchDepth: promptsConfig.researchPlanner?.researchDepth
                 });
                 previews[role] = preview;
             } catch {
@@ -2116,6 +2122,7 @@ export class KanbanProvider implements vscode.Disposable {
         const researcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_researcher', undefined);
         const splitterConfig: any = this._getSetting('switchboard.prompts.roleConfig_splitter', undefined);
         const ticketUpdaterConfig: any = this._getSetting('switchboard.prompts.roleConfig_ticket_updater', undefined);
+        const researchPlannerConfig: any = this._getSetting('switchboard.prompts.roleConfig_research_planner', undefined);
 
         return {
             accurateCodingEnabled: coderConfig?.addons?.accurateCoding ?? leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
@@ -2128,6 +2135,10 @@ export class KanbanProvider implements vscode.Disposable {
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
             splitPlan: plannerConfig?.addons?.splitPlan ?? false,
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
+            researchPlanner: {
+                enableDeepPlanning: researchPlannerConfig?.enableDeepPlanning ?? false,
+                researchDepth: researchPlannerConfig?.researchDepth || 'deep'
+            },
             gitProhibitionByRole: {
                 planner: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
                 lead: leadConfig?.addons?.gitProhibition ?? true,
@@ -2139,6 +2150,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
                 splitter: splitterConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
+                research_planner: researchPlannerConfig?.addons?.gitProhibition ?? true,
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
@@ -2151,6 +2163,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
                 splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
+                research_planner: researchPlannerConfig?.addons?.switchboardSafeguards ?? true,
             },
         };
     }
@@ -2511,7 +2524,7 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         // Built-in non-execution roles that buildKanbanBatchPrompt supports
-        if (role === 'researcher' || role === 'splitter' || role === 'analyst' || role === 'ticket_updater') {
+        if (role === 'researcher' || role === 'splitter' || role === 'analyst' || role === 'ticket_updater' || role === 'research_planner') {
             const repoScopeMap = new Map<string, string>();
             const db = this._getKanbanDb(workspaceRoot);
             if (await db.ensureReady()) {
@@ -2531,7 +2544,9 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaceRoot,
                 sourceColumnLabel,
                 gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
-                switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true
+                switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
+                enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
+                researchDepth: promptsConfig.researchPlanner?.researchDepth
             });
         }
 
@@ -2813,7 +2828,8 @@ export class KanbanProvider implements vscode.Disposable {
             gatherer: true,
             ticket_updater: false,
             researcher: false,
-            splitter: false
+            splitter: false,
+            research_planner: false
         };
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {

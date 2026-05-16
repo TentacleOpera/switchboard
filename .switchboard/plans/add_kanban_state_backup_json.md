@@ -262,3 +262,51 @@ If the database is corrupted, this will delete and recreate it. If a <code>kanba
 ---
 
 **Recommendation:** Send to Coder.
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | `_writeKanbanStateBackup()` was NEVER wired into `_persist()` — the method existed but was dead code. Backup file would never be written. | CRITICAL | **FIXED** |
+| 2 | `db.createIfMissing()` was NOT called before `restoreFromBackup()` in `resetKanbanDb` — after DB file deletion, `_initialize()` refuses to create a new DB, so `ensureReady()` returns false and restore always silently fails with `{ restored: 0, skipped: 0 }`. | CRITICAL | **FIXED** |
+| 3 | Setup panel Database tab rebuild description was NOT updated — still said "Delete and recreate from plan files." instead of mentioning backup restore behavior. | MAJOR | **FIXED** |
+| 4 | Confirmation dialog in `resetKanbanDb` still said "rebuild it from plan files" — misleading about actual rebuild flow. | NIT | **FIXED** |
+| 5 | `dispose()` called `exportStateToFile()` but not `_writeKanbanStateBackup()` — final backup could be stale on deactivation. | NIT | **FIXED** |
+
+### Stage 2: Balanced Synthesis
+
+All 5 findings were fixed immediately. No findings deferred.
+
+**What was correct in the implementation (kept as-is):**
+- `_writeKanbanStateBackup()` method implementation: atomic temp-file rename, correct SQL query, only active plans, proper error handling.
+- `restoreFromBackup()` method implementation: transaction wrapping (BEGIN/COMMIT), async `fs.promises.access()`, plan-file existence validation, graceful skip of missing files, correct `UPSERT_PLAN_SQL` usage.
+- Toast message logic in extension.ts (conditional `restoredPart`).
+- `UPSERT_PLAN_SQL` correctly preserves `kanban_column` on conflict (confirmed — `kanban_column` is NOT in the `DO UPDATE SET` clause).
+
+### Code Fixes Applied
+
+**File: `src/services/KanbanDatabase.ts`**
+- Line 3730: Added `void this._writeKanbanStateBackup();` after `void this.exportStateToFile();` in `_persist()`.
+- Line 866: Added `void this._writeKanbanStateBackup();` in `dispose()`.
+
+**File: `src/extension.ts`**
+- Line 1530: Added `await db.createIfMissing();` before `restoreResult = await db.restoreFromBackup(backupPath);` in `resetKanbanDb`.
+- Line 1506: Updated confirmation dialog text to mention backup restore.
+
+**File: `src/webview/setup.html`**
+- Line 1151: Updated rebuild description to mention `kanban-state-backup.json` restore behavior.
+
+### Validation Results
+
+- **TypeScript compilation (`tsc --noEmit`):** No new errors introduced. Pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated import path issues) remain unchanged.
+- **No test suite found** for kanban backup functionality (plan's Verification Plan section lists desired tests but they were not implemented as part of this plan).
+
+### Remaining Risks
+
+1. **No automated tests** for `_writeKanbanStateBackup` or `restoreFromBackup` — the plan's Verification Plan lists 4 desired test cases but none were implemented. Manual validation per the plan's Validation section is recommended.
+2. **Fire-and-forget backup writes** under extreme churn may capture slightly stale snapshots — this is acceptable per the plan's Edge-Case audit but worth noting.
+3. **Backup file not gitignored by default** — the plan notes `.switchboard/` is typically ignored, but if not, `kanban-state-backup.json` could leak workspace-internal metadata into git.

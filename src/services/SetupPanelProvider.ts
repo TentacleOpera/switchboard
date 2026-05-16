@@ -7,6 +7,7 @@ import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase } from './KanbanDatabase';
+import type { KanbanProvider } from './KanbanProvider';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
     handleGetControlPlaneStatus?: (workspaceRoot?: string) => Promise<any>;
@@ -18,6 +19,7 @@ type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
 export class SetupPanelProvider implements vscode.Disposable {
     private _panel?: vscode.WebviewPanel;
     private _taskViewerProvider?: TaskViewerProvider;
+    private _kanbanProvider?: KanbanProvider;
     private _disposables: vscode.Disposable[] = [];
     private _pendingSection?: string;
 
@@ -29,6 +31,10 @@ export class SetupPanelProvider implements vscode.Disposable {
 
     public setTaskViewerProvider(provider: TaskViewerProvider): void {
         this._taskViewerProvider = provider;
+    }
+
+    public setKanbanProvider(provider: KanbanProvider): void {
+        this._kanbanProvider = provider;
     }
 
     public async open(section?: string): Promise<void> {
@@ -89,6 +95,17 @@ export class SetupPanelProvider implements vscode.Disposable {
         return vscode.workspace.workspaceFolders?.find((folder) =>
             path.resolve(folder.uri.fsPath) === path.resolve(resolvedRoot)
         )?.uri;
+    }
+
+    private _getCurrentWorkspaceRoot(): string | null {
+        // Try to get the kanban-selected workspace
+        const kanbanRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+        if (kanbanRoot) {
+            return kanbanRoot;
+        }
+
+        // Fallback to first workspace folder (handles early initialization)
+        return vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || null;
     }
 
     private async _handleMessage(message: any): Promise<void> {
@@ -178,7 +195,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'detectControlPlaneCandidate': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const candidate = await ControlPlaneMigrationService.detectCandidateParent(workspaceRoot);
                     this._panel.webview.postMessage({ type: 'controlPlaneCandidateResult', ...candidate });
                     break;
@@ -189,7 +210,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'executeControlPlaneMigration': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const result = await vscode.window.withProgress(
                         {
                             location: vscode.ProgressLocation.Notification,
@@ -220,7 +245,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'executeControlPlaneFreshSetup': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const result = await vscode.window.withProgress(
                         {
                             location: vscode.ProgressLocation.Notification,
@@ -442,7 +471,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getCustomAgents': {
-                    const workspaceRoot = (this._taskViewerProvider as any)._resolveWorkspaceRoot?.();
+                    const workspaceRoot = this._getCurrentWorkspaceRoot() || undefined;
                     const customAgents = await this._taskViewerProvider.getCustomAgents(workspaceRoot);
                     this._panel.webview.postMessage({ type: 'customAgents', customAgents, workspaceRoot });
                     break;
@@ -515,7 +544,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'saveIntegrationProviderPreference': {
                     const provider = message.provider === 'clickup' ? 'clickup' : 'linear';
-                    const folderUri = this._getWorkspaceFolderUri();
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     await config.update(
                         'integrations.preferredProvider',
@@ -544,7 +573,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         notion: message.notion === true,
                         'local-folder': message.localFolder === true
                     };
-                    const folderUri = this._getWorkspaceFolderUri();
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     await config.update(
                         'planning.enabledSources',
@@ -593,7 +622,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                     );
                     break;
                 case 'getPlanningPanelSyncMode': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const mode = await this._getPlanningPanelSyncMode(workspaceRoot);
                     const selectedContainers = await this._getPlanningPanelSelectedContainers(workspaceRoot);
                     this._panel?.webview.postMessage({
@@ -604,14 +637,22 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'setPlanningPanelSyncMode': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const syncMode = typeof message.mode === 'string' ? message.mode : 'no-sync';
                     await this._setPlanningPanelSyncMode(workspaceRoot, syncMode);
                     await this._triggerPlanningPanelSync(workspaceRoot, syncMode);
                     break;
                 }
                 case 'fetchAvailableSyncContainers': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const containers = await this._fetchAvailableSyncContainers(workspaceRoot);
                     const selected = await this._getPlanningPanelSelectedContainers(workspaceRoot);
                     this._panel?.webview.postMessage({
@@ -622,14 +663,18 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'setPlanningPanelSelectedContainers': {
-                    const workspaceRoot = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '';
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    if (!workspaceRoot) {
+                        vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
+                        return;
+                    }
                     const containers = Array.isArray(message.containers) ? message.containers.map((v: unknown) => String(v)) : [];
                     await this._setPlanningPanelSelectedContainers(workspaceRoot, containers);
                     await this._triggerPlanningPanelSync(workspaceRoot, 'sync-selected');
                     break;
                 }
                 case 'getPlanningSources': {
-                    const folderUri = this._getWorkspaceFolderUri();
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     const enabledSources = config.get<any>('planning.enabledSources', {
                         clickup: true,
@@ -907,7 +952,7 @@ export class SetupPanelProvider implements vscode.Disposable {
             message: 'Saved the explicit Control Plane root. Board behavior will fully update once the shared control-plane provider wiring is present.',
             explicitControlPlaneRoot: normalizedRoot,
             effectiveControlPlaneRoot: normalizedRoot,
-            workspaceRoot: workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+            workspaceRoot: workspaceRoot || this._getCurrentWorkspaceRoot() || '',
             mode: 'explicit'
         };
     }
@@ -938,7 +983,7 @@ export class SetupPanelProvider implements vscode.Disposable {
             message: 'Reset the explicit Control Plane override. Auto-detect will fully apply once the shared control-plane provider wiring is present.',
             explicitControlPlaneRoot: '',
             effectiveControlPlaneRoot: '',
-            workspaceRoot: workspaceRoot || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath || '',
+            workspaceRoot: workspaceRoot || this._getCurrentWorkspaceRoot() || '',
             mode: 'auto'
         };
     }

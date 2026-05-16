@@ -134,3 +134,21 @@ Key risks: (1) ClickUp task list endpoint may return `parent` as a string while 
 ## Recommendation
 
 Complexity = 3. **Completed.**
+
+## Review Execution
+
+### Stage 1 — Grumpy Critique
+> "Let's see if this 'harmless frontend filter' actually works. For ClickUp, we added `parentId: task.parentId || task.parent || null`. Okay, defensive, fine. But what about Linear? We fetch `parent { id }` and map it. However, the UI filter in `implementation.html` just does `if (issue?.parentId) { return false; }`. What if a top-level issue has a parent project ID mapped onto `parentId` by accident in the future? And why rely on structural typing in TypeScript instead of full regression tests for the GraphQL mapping? It's 'good enough' to hide the subtasks, but it relies heavily on the `PlanningPanelCacheService` self-healing on refresh. I guess it works, but I don't like it."
+
+### Stage 2 — Balanced Synthesis
+- **Grumpy's Point on Future Collisions (NIT)**: The `parentId` field in `LinearIssue` is explicitly mapped from the GraphQL `parent { id }` field, which strictly refers to parent *issues* in Linear, not projects. The risk of collision is virtually zero.
+- **Grumpy's Point on Cache State (NIT)**: Stale cache without `parentId` will indeed fail open (showing subtasks as top-level until cache clears). This is a known, transient, acceptable side-effect documented in the plan.
+- **Implementation Verification**: Checked `TaskViewerProvider.ts`, `LinearSyncService.ts`, and `implementation.html`. All required logic (GraphQL query updates, typing, defensive fallback mapping, and early-return filter) is implemented exactly as planned.
+- **Action**: No code changes needed. The implementation fulfills the goal.
+
+### Validation Results
+- **Code Fixes Applied**: None required.
+- **Verification Run**: Compiled successfully with `npx tsc --noEmit`. No new structural typing issues introduced.
+- **Remaining Risks**: Legacy cached entries in `PlanningPanelCacheService` will continue to leak subtasks into the list view until they expire or the user forces a refresh.
+
+**ACCURACY VERIFICATION COMPLETE**

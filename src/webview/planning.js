@@ -1714,10 +1714,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const complexityInput = document.querySelector('input[name="complexity"]:checked');
         const importToggle = document.getElementById('import-toggle');
 
-        // Use state instead of DOM query for mode
         const complexity = complexityInput ? complexityInput.value : 'quick';
         const importEnabled = importToggle ? importToggle.checked : false;
-        const mode = state.researchMode; // Use stored mode
 
         const complexityLabels = {
             quick: 'Quick (5-10 sources)',
@@ -1726,16 +1724,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             academic: 'Academic (100-200+ sources)'
         };
 
-        const isWebMode = mode === 'web';
-        const skillName = isWebMode ? 'web_research' : 'deep_planning';
-        const taskType = isWebMode ? 'conduct comprehensive research on the following topic' : 'create a comprehensive implementation plan for the following task';
-        const depthLabel = isWebMode ? 'Research depth' : 'Planning depth';
+        const skillName = 'web_research';
+        const taskType = 'conduct comprehensive research on the following topic';
+        const depthLabel = 'Research depth';
 
         // Use configured local docs folder path with fallback
         const configuredPath = state.localFolderPath;
         const saveLocation = configuredPath || '[CONFIGURE LOCAL DOCS FOLDER]';
         const saveAction = 'save the results';
-        const protocolAction = isWebMode ? 'proposing a research plan' : 'proposing a planning approach';
+        const protocolAction = 'proposing a research plan';
 
         let prompt = `Use the ${skillName} skill to ${taskType}.\n\n`;
         prompt += `${depthLabel}: ${complexityLabels[complexity] || complexity}\n\n`;
@@ -1744,7 +1741,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (!configuredPath) {
                 prompt += `NOTE: Local docs folder not configured. Please configure it in the Local Docs tab before saving.\n\n`;
             } else {
-                prompt += `IMPORTANT: After completing the ${isWebMode ? 'research' : 'plan'}, ${saveAction} to ${saveLocation} using the write_to_file tool so I can review them later.\n\n`;
+                prompt += `IMPORTANT: After completing the research, ${saveAction} to ${saveLocation} using the write_to_file tool so I can review them later.\n\n`;
             }
         }
 

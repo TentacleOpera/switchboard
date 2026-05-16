@@ -98,6 +98,10 @@ export interface PromptBuilderOptions {
     sourceColumnLabel?: string;
     /** Persona file content for the role, used as base instructions when no override exists. */
     personaContent?: string;
+    /** When true, the research_planner role triggers the full deep research protocol. */
+    enableDeepPlanning?: boolean;
+    /** The research depth to use for the deep research protocol (e.g. 'quick', 'standard', 'deep', 'academic'). */
+    researchDepth?: string;
 }
 
 function resolveBaseInstructions(
@@ -554,6 +558,39 @@ ${planList}`;
 ${DEEP_RESEARCH_DIRECTIVE}`;
 
         const baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
+
+        return `${baseInstructions}
+
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+
+PLANS TO PROCESS:
+${planList}`;
+    }
+
+    if (role === 'research_planner') {
+        const enableDeepPlanning = options?.enableDeepPlanning ?? false;
+        const depth = options?.researchDepth || 'deep';
+
+        const depthLabels: Record<string, string> = {
+            quick: 'Quick (5-10 sources)',
+            standard: 'Standard (15-30 sources)',
+            deep: 'Deep (50-100+ sources)',
+            academic: 'Academic (100-200+ sources)'
+        };
+        const label = depthLabels[depth] || depth;
+
+        let rpBase = `You are a Research Planner Agent.`;
+
+        if (enableDeepPlanning) {
+            // Replace depth in DEEP_RESEARCH_DIRECTIVE
+            const customDeepDirective = DEEP_RESEARCH_DIRECTIVE.replace('depth set to "deep" (50-100 sources)', `depth set to "${depth}" (${label})`)
+                .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
+            rpBase += `\n\n${customDeepDirective}`;
+        } else {
+            rpBase += `\n\nUse the web_research skill to conduct comprehensive research on the following topic.\n\nResearch depth: ${label}\n\nPlease begin by proposing a research plan for my approval, following the web_research skill protocol.`;
+        }
+
+        const baseInstructions = resolveBaseInstructions('research_planner', rpBase, options);
 
         return `${baseInstructions}
 

@@ -3244,6 +3244,7 @@
                 searchInput: document.getElementById('sidebar-linear-project-search'),
                 projectPicker: document.getElementById('sidebar-linear-project-picker'),
                 stateFilter: document.getElementById('sidebar-linear-state-filter'),
+                clickUpStatusFilter: document.getElementById('sidebar-clickup-status-filter'),
                 refreshButton: document.getElementById('sidebar-linear-project-refresh'),
                 emptyState: document.getElementById('sidebar-linear-project-empty'),
                 openSetupButton: document.getElementById('sidebar-linear-project-open-setup'),
@@ -3523,7 +3524,7 @@
                 return;
             }
 
-            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, refreshButton, emptyState, backButton } = getProjectTabElements();
+            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, backButton } = getProjectTabElements();
             if (!listView || !taskView) {
                 return;
             }
@@ -3532,6 +3533,7 @@
             if (searchInput) searchInput.classList.remove('hidden');
             if (projectPicker) projectPicker.classList.remove('hidden');
             if (stateFilter) stateFilter.classList.remove('hidden');
+            if (clickUpStatusFilter) clickUpStatusFilter.classList.add('hidden');
             if (refreshButton) refreshButton.classList.remove('hidden');
             if (hierarchyNav) hierarchyNav.classList.add('hidden');
 
@@ -3690,7 +3692,7 @@
                 return;
             }
 
-            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, refreshButton, emptyState, issuesContainer, backButton } = getProjectTabElements();
+            const { listView, taskView, hierarchyNav, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, backButton } = getProjectTabElements();
             if (!listView || !taskView) {
                 return;
             }
@@ -3699,6 +3701,9 @@
             if (searchInput) searchInput.classList.add('hidden');
             if (projectPicker) projectPicker.classList.add('hidden');
             if (stateFilter) stateFilter.classList.add('hidden');
+            if (clickUpStatusFilter) {
+                clickUpStatusFilter.classList.toggle('hidden', !clickUpSelectedListId);
+            }
             // Keep refresh button visible for ClickUp to allow manual refresh
             if (refreshButton) {
                 refreshButton.classList.remove('hidden');
@@ -3945,8 +3950,8 @@
         }
 
         function renderSidebarClickUpStatusFilterOptions() {
-            const { stateFilter } = getProjectTabElements();
-            if (!stateFilter) return;
+            const { clickUpStatusFilter } = getProjectTabElements();
+            if (!clickUpStatusFilter) return;
 
             const statuses = Array.from(new Set(
                 clickUpProjectIssues.map(task => task.status || 'Unknown')
@@ -3958,11 +3963,11 @@
             `;
 
             if (_lastClickUpStateFilterHtml !== html) {
-                stateFilter.innerHTML = html;
+                clickUpStatusFilter.innerHTML = html;
                 _lastClickUpStateFilterHtml = html;
-                stateFilter.value = clickUpProjectStatusFilterValue || '';
+                clickUpStatusFilter.value = clickUpProjectStatusFilterValue || '';
                 // Use onclick to avoid listener leak (replaces previous handler)
-                stateFilter.onchange = (e) => {
+                clickUpStatusFilter.onchange = (e) => {
                     clickUpProjectStatusFilterValue = e.target.value;
                     renderSidebarClickUpProjectList();
                 };
@@ -4041,6 +4046,9 @@
                 [detailAskAgentButton, detailImportTaskButton].forEach(el => {
                     if (el) el.disabled = true;
                 });
+                if (detailDescription) {
+                    detailDescription.classList.remove('markdown-body');
+                }
                 _lastClickUpDetailDescriptionHtml = '';
                 _lastClickUpDetailSubtasksHtml = '';
                 _lastClickUpDetailCommentsHtml = '';
@@ -4223,6 +4231,9 @@
                         </select>
                         <select id="sidebar-linear-state-filter" class="project-select">
                             <option value="">All states</option>
+                        </select>
+                        <select id="sidebar-clickup-status-filter" class="project-select hidden">
+                            <option value="">All statuses</option>
                         </select>
                         <button id="sidebar-linear-project-refresh" class="secondary-btn" type="button">REFRESH</button>
                     </div>

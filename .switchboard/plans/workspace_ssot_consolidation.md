@@ -750,3 +750,70 @@ const effectiveRoot = kanbanProvider.resolveEffectiveWorkspaceRoot(workspaceRoot
 ---
 
 **Recommendation:** Send to Coder (complexity ≤ 6).
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | File | Lines |
+|---|----------|---------|------|-------|
+| 1 | MAJOR | `housekeepNow` uses `require('./lifecycle/cleanWorkspace')` instead of existing top-level import at line 22 | `src/extension.ts` | 2403 |
+| 2 | MAJOR | `setCurrentWorkspaceRoot` returns `void` instead of `boolean` — silently swallows invalid workspace roots with no diagnostic signal | `src/services/KanbanProvider.ts` | 592-615 |
+| 3 | CRITICAL | `onDidOpenTerminal` closure captures activation-time `workspaceRoot` — stale after kanban workspace switch | `src/extension.ts` | 2062 |
+| 4 | CRITICAL | `onDidChangeWindowState` closure captures activation-time `workspaceRoot` — stale after kanban workspace switch | `src/extension.ts` | 2120-2121 |
+| 5 | MAJOR | `refreshMcpStatus` closure captures activation-time `workspaceRoot` — 5-min health check and focus handler target wrong workspace | `src/extension.ts` | 2042 |
+| 6 | MAJOR | `connectMcp` command uses activation-time `workspaceRoot` instead of `kanbanProvider.getCurrentWorkspaceRoot()` | `src/extension.ts` | 2469-2470 |
+| 7 | MAJOR | State pruner `setInterval` closure captures activation-time `workspaceRoot` — prunes wrong workspace after switch | `src/extension.ts` | 2449 |
+| 8 | NIT | `SWITCHBOARD_STRICT_INBOX_AUTH` env variable still set — InboxWatcher-era dead code | `src/extension.ts` | 1145, 1195 |
+| 9 | NIT | `runtime.workspaceMode` setting still referenced — InboxWatcher-era remnant | `src/extension.ts` | 1146 |
+| 10 | NIT | `dispatchSigningKey` still generated — InboxWatcher dispatch signature verification orphan | `src/extension.ts` | 1147 |
+
+### Stage 2: Balanced Synthesis
+
+**What was correctly implemented (no changes needed):**
+- Phase 1: InboxWatcher fully removed (3 files deleted, 26 references removed from extension.ts)
+- Phase 2: `_activeWorkspaceRoot` fully removed from TaskViewerProvider (15 references), thin delegation wrapper with `_getAllowedRoots` guard correctly implemented
+- Phase 3: All 12 command handlers correctly switched to `kanbanProvider.getCurrentWorkspaceRoot()`
+- Phase 4: `autoSelectFirstWorkspace` setting added, `_getAllowedRoots` helper added to both providers, `KanbanProvider._resolveWorkspaceRoot` refactored
+- Comments updated in `terminalUtils.ts` and `TaskViewerProvider.ts`
+- `cleanWorkspace.ts` retains `inbox`/`outbox` in `TRANSIENT_DIRS`
+
+**Fixes applied (CRITICAL/MAJOR only):**
+
+| # | Fix Applied | File |
+|---|-------------|------|
+| 1 | Replaced `require('./lifecycle/cleanWorkspace')` with existing top-level `cleanWorkspace` import | `src/extension.ts` |
+| 2 | Changed `setCurrentWorkspaceRoot` return type from `void` to `boolean`; returns `false` with `console.error` on invalid root | `src/services/KanbanProvider.ts` |
+| 3 | `onDidOpenTerminal` now reads `kanbanProvider.getCurrentWorkspaceRoot()` at invocation time | `src/extension.ts` |
+| 4 | `onDidChangeWindowState` now reads `kanbanProvider.getCurrentWorkspaceRoot()` at invocation time | `src/extension.ts` |
+| 5 | `refreshMcpStatus` now reads `kanbanProvider.getCurrentWorkspaceRoot()` at invocation time | `src/extension.ts` |
+| 6 | `connectMcp` command now reads `kanbanProvider.getCurrentWorkspaceRoot()` at invocation time | `src/extension.ts` |
+| 7 | State pruner `setInterval` now reads `kanbanProvider.getCurrentWorkspaceRoot()` at invocation time | `src/extension.ts` |
+
+**Deferred (NIT — harmless dead code, can clean up in follow-up):**
+- `SWITCHBOARD_STRICT_INBOX_AUTH` env variable (line 1195)
+- `runtime.workspaceMode` setting reference (line 1146)
+- `dispatchSigningKey` generation (line 1147)
+
+### Validation Results
+
+- **TypeScript build (`npx tsc --noEmit`):** 2 pre-existing errors (unrelated `TS2835` extension import issues in `ClickUpSyncService.ts` and `KanbanProvider.ts`). **Zero new errors introduced.**
+- **Webpack build (`npm run compile`):** Compiled successfully.
+- **No `InboxWatcher` references remain** in `src/` directory.
+- **No `_activeWorkspaceRoot` references remain** in `src/` directory.
+- **No `getPreferredWorkspaceRoot` references remain** in `src/` directory.
+
+### Files Changed by Review
+
+| File | Changes |
+|------|---------|
+| `src/extension.ts` | 7 fixes: removed `require()` in housekeepNow, replaced stale `workspaceRoot` captures in `onDidOpenTerminal`, `onDidChangeWindowState`, `refreshMcpStatus`, `connectMcp`, state pruner |
+| `src/services/KanbanProvider.ts` | `setCurrentWorkspaceRoot` return type `void→boolean`, added rejection logging |
+
+### Remaining Risks
+
+1. **Activation-time `workspaceRoot` still exists** at line 1133 and is used by ~10 activation-time setup blocks (lifecycle cleanup, terminal disposal, MCP spawn, setup checks). These are one-shot calls during `activate()` where the activation-time value is correct. However, the variable's continued existence is a latent risk — future developers may add closures that capture it. Consider a follow-up to rename it to `activationWorkspaceRoot` to make the scope intent explicit.
+2. **InboxWatcher-era settings** (`strictInboxAuth`, `workspaceMode`, `dispatchSigningKey`) are still set at activation. They're harmless but confusing. A cleanup pass should remove them.
+3. **`workspaceFolders?.[0]` fallbacks** still exist in 5 places in `extension.ts` (lines 1402, 2877, 3118, 3823, 4601) and 9 places in `SetupPanelProvider.ts`. These are acceptable as fallbacks when kanban returns null, but `SetupPanelProvider.ts` should be audited in a follow-up to see if any of its 9 `workspaceFolders?.[0]` usages should also respect kanban selection.

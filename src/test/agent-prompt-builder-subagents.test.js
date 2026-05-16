@@ -278,6 +278,24 @@ function testUnknownRoleThrows() {
     console.log('  PASS: Unknown role correctly throws error');
 }
 
+function testResearchPlannerPrompt() {
+    console.log('Testing research_planner prompt template...');
+    // Default (no deep planning)
+    const prompt1 = buildKanbanBatchPrompt('research_planner', plans1);
+    assert.ok(prompt1.includes('You are a Research Planner Agent.'), 'Should start with base persona');
+    assert.ok(prompt1.includes('Use the web_research skill to conduct comprehensive research'), 'Should include web_research fallback when deep planning disabled');
+    assert.ok(prompt1.includes('Research depth: Deep (50-100+ sources)'), 'Should use default deep depth');
+    
+    // Deep planning enabled, custom depth
+    const prompt2 = buildKanbanBatchPrompt('research_planner', plans1, { enableDeepPlanning: true, researchDepth: 'quick' });
+    assert.ok(prompt2.includes('You are a Research Planner Agent.'), 'Should start with base persona');
+    assert.ok(prompt2.includes('DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research'), 'Should include deep research directive');
+    assert.ok(prompt2.includes('depth set to "quick" (Quick (5-10 sources))'), 'Should inject configured depth into directive');
+    assert.ok(prompt2.includes('TARGET SOURCE COUNT: Quick (5-10 sources)'), 'Should inject configured depth into target count');
+    assert.ok(!prompt2.includes('Use the web_research skill to conduct comprehensive research'), 'Should not include web_research fallback when deep planning enabled');
+    console.log('  PASS: research_planner prompt templates correctly implemented');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
@@ -299,6 +317,7 @@ try {
     testSplitPlanEnabledCustomWorkflow();
     testSplitPlanWithAggressivePairProgramming();
     testInternAnalystPrompts();
+    testResearchPlannerPrompt();
     testUnknownRoleThrows();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {

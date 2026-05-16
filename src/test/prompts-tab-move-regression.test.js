@@ -32,21 +32,24 @@ function run() {
         'Expected Prompts tab button with data-tab="prompts" attribute'
     );
     
-    // Verify all renamed elements exist with prompts-tab-* prefix
+    // Verify prompts tab elements exist with actual IDs used in the HTML
     const promptsTabElements = [
-        'prompts-tab-design-doc-toggle',
-        'prompts-tab-design-doc-input',
-        'prompts-tab-accurate-coding-toggle',
-        'prompts-tab-lead-challenge-toggle',
-        'prompts-tab-advanced-reviewer-toggle',
-        'prompts-tab-aggressive-pair-toggle',
-        'prompts-tab-prompt-role-tabs',
-        'prompts-tab-prompt-preview-text',
-        'prompts-tab-prompt-mode',
-        'prompts-tab-prompt-text',
-        'prompts-tab-btn-clear-override',
-        'prompts-tab-prompt-override-summary',
-        'prompts-tab-btn-save-overrides'
+        'prompts-tab-content',
+        'prompts-tab-workflow-path-status',
+        'roleSelect',
+        'workflowFilePath',
+        'validateWorkflowPath',
+        'plannerAddonSwitchboardSafeguards',
+        'plannerAddonDependencyCheck',
+        'plannerAddonDesignDoc',
+        'plannerAddonAggressivePairProgramming',
+        'plannerAddonGitProhibition',
+        'plannerAddonSplitPlan',
+        'rolePromptTextarea',
+        'roleAddonsDesc',
+        'roleAddonsGroup',
+        'refreshPreview',
+        'promptPreview'
     ];
 
     promptsTabElements.forEach(elementId => {
@@ -57,7 +60,7 @@ function run() {
         );
     });
 
-    // Verify old agents-tab-* element IDs NO LONGER EXIST
+    // Verify old agents-tab-* prompt element IDs NO LONGER EXIST
     const oldAgentsTabElements = [
         'agents-tab-design-doc-toggle',
         'agents-tab-design-doc-input',
@@ -87,84 +90,34 @@ function run() {
     // Test 2: JavaScript Function Verification
     console.log('Test 2: JavaScript Function Verification');
     
-    // Verify renamed globals exist
+    // Verify prompts tab functions exist
     expectRegex(
         kanbanSource,
-        /const\s+PROMPTS_TAB_ROLES\s*=/,
-        'Expected PROMPTS_TAB_ROLES global to exist'
-    );
-    expectRegex(
-        kanbanSource,
-        /let\s+promptsTabOverrides\s*=/,
-        'Expected promptsTabOverrides global to exist'
+        /function\s+handleRoleChange\s*\(/,
+        'Expected handleRoleChange function to exist'
     );
     expectRegex(
         kanbanSource,
-        /let\s+promptsTabPreviews\s*=/,
-        'Expected promptsTabPreviews global to exist'
+        /function\s+saveRoleConfig\s*\(/,
+        'Expected saveRoleConfig function to exist'
     );
     expectRegex(
         kanbanSource,
-        /let\s+promptsTabEditingRole\s*=/,
-        'Expected promptsTabEditingRole global to exist'
-    );
-
-    // Verify old globals NO LONGER EXIST
-    expectNoRegex(
-        kanbanSource,
-        /const\s+AGENTS_TAB_PROMPT_ROLES\s*=/,
-        'Expected old AGENTS_TAB_PROMPT_ROLES global to NOT exist'
-    );
-    expectNoRegex(
-        kanbanSource,
-        /let\s+agentsTabPromptOverrides\s*=/,
-        'Expected old agentsTabPromptOverrides global to NOT exist'
-    );
-    expectNoRegex(
-        kanbanSource,
-        /const\s+agentsTabPromptPreviews\s*=/,
-        'Expected old agentsTabPromptPreviews global to NOT exist'
-    );
-    expectNoRegex(
-        kanbanSource,
-        /let\s+agentsTabEditingRole\s*=/,
-        'Expected old agentsTabEditingRole global to NOT exist'
-    );
-
-    // Verify renamed functions exist
-    expectRegex(
-        kanbanSource,
-        /function\s+promptsTabSaveDraft\s*\(/,
-        'Expected promptsTabSaveDraft function to exist'
+        /function\s+renderRoleAddons\s*\(/,
+        'Expected renderRoleAddons function to exist'
     );
     expectRegex(
         kanbanSource,
-        /function\s+promptsTabLoadForm\s*\(/,
-        'Expected promptsTabLoadForm function to exist'
+        /function\s+refreshPreview\s*\(/,
+        'Expected refreshPreview function to exist'
     );
     expectRegex(
         kanbanSource,
-        /function\s+promptsTabUpdateSummary\s*\(/,
-        'Expected promptsTabUpdateSummary function to exist'
-    );
-    expectRegex(
-        kanbanSource,
-        /function\s+promptsTabLoadPreview\s*\(/,
-        'Expected promptsTabLoadPreview function to exist'
-    );
-    expectRegex(
-        kanbanSource,
-        /function\s+promptsTabRenderTabs\s*\(/,
-        'Expected promptsTabRenderTabs function to exist'
-    );
-    expectRegex(
-        kanbanSource,
-        /function\s+promptsTabCollectConfig\s*\(/,
-        'Expected promptsTabCollectConfig function to exist'
+        /function\s+initPromptsTabListeners\s*\(/,
+        'Expected initPromptsTabListeners function to exist'
     );
 
     // Verify old function names NO LONGER EXIST
-    // Note: agentsTabCollectConfig still exists for the agents tab's CLI commands section
     expectNoRegex(
         kanbanSource,
         /function\s+agentsTabSaveCurrentRoleDraft\s*\(/,
@@ -191,11 +144,11 @@ function run() {
         'Expected old agentsTabRenderRoleTabs function to NOT exist'
     );
 
-    // Verify promptsTabCollectConfig uses #prompts-tab-content selector
-    expectRegex(
+    // Verify the broken promptsTabCollectConfig has been removed
+    expectNoRegex(
         kanbanSource,
-        /function\s+promptsTabCollectConfig\(\)[\s\S]*?getElementById\(['"]prompts-tab-/,
-        'Expected promptsTabCollectConfig to use prompts-tab- element IDs'
+        /function\s+promptsTabCollectConfig\s*\(/,
+        'Expected broken promptsTabCollectConfig function to NOT exist (referenced non-existent element IDs)'
     );
 
     console.log('✓ Test 2 passed\n');
@@ -420,19 +373,113 @@ function run() {
         'Expected planner.designDocLink config key'
     );
 
-    // Verify save functionality exists
+    // Verify save functionality exists (saveRoleConfig uses postKanbanMessage)
     expectRegex(
         kanbanSource,
-        /saveDefaultPromptOverrides/,
-        'Expected saveDefaultPromptOverrides message to be sent'
+        /saveRoleConfig/,
+        'Expected saveRoleConfig function to exist for saving role config'
     );
     expectRegex(
         kanbanSource,
-        /vscode\.postMessage/,
-        'Expected vscode.postMessage to be used for saving config'
+        /postKanbanMessage/,
+        'Expected postKanbanMessage to be used for saving config'
     );
 
     console.log('✓ Test 8 passed\n');
+
+    // Test 9: Header Unification Verification
+    console.log('Test 9: Header Unification Verification');
+    
+    // Verify .subsection-header uses var(--accent-teal) color
+    expectRegex(
+        kanbanSource,
+        /\.subsection-header\s*\{[^}]*color:\s*var\(--accent-teal\)/,
+        'Expected .subsection-header to use var(--accent-teal) color'
+    );
+
+    // Verify no dep-tree-header, dep-tree-title, dep-tree-actions CSS classes remain
+    expectNoRegex(
+        kanbanSource,
+        /\.dep-tree-header\s*\{/,
+        'Expected .dep-tree-header CSS to be removed'
+    );
+    expectNoRegex(
+        kanbanSource,
+        /\.dep-tree-title\s*\{/,
+        'Expected .dep-tree-title CSS to be removed'
+    );
+    expectNoRegex(
+        kanbanSource,
+        /\.dep-tree-actions\s*\{/,
+        'Expected .dep-tree-actions CSS to be removed'
+    );
+    expectNoRegex(
+        kanbanSource,
+        /\.setup-section-title\s*\{/,
+        'Expected .setup-section-title CSS to be removed'
+    );
+    expectNoRegex(
+        kanbanSource,
+        /\.prompts-tab\s+h2\s*\{/,
+        'Expected .prompts-tab h2 CSS to be removed'
+    );
+    expectNoRegex(
+        kanbanSource,
+        /\.config-section\s+h3\s*\{/,
+        'Expected .config-section h3 CSS to be removed'
+    );
+
+    // Verify .subsection-actions CSS exists
+    expectRegex(
+        kanbanSource,
+        /\.subsection-actions\s*\{/,
+        'Expected .subsection-actions CSS to exist'
+    );
+
+    // Verify no "AGENT CONFIGURATION" top-level heading in agents tab
+    expectNoRegex(
+        kanbanSource,
+        /AGENT CONFIGURATION/,
+        'Expected "AGENT CONFIGURATION" heading to be removed from agents tab'
+    );
+
+    // Verify no "Prompt Configuration" h2 in prompts tab
+    expectNoRegex(
+        kanbanSource,
+        /<h2[^>]*>Prompt Configuration<\/h2>/,
+        'Expected <h2>Prompt Configuration</h2> to be removed from prompts tab'
+    );
+
+    // Verify subsection headers exist in all tabs
+    expectRegex(
+        kanbanSource,
+        /<div class="subsection-header"><span>Plan Dependencies<\/span><\/div>/,
+        'Expected "Plan Dependencies" subsection header in Dependencies tab'
+    );
+    expectRegex(
+        kanbanSource,
+        /<div class="subsection-header"><span>User Acceptance Testing<\/span><\/div>/,
+        'Expected "User Acceptance Testing" subsection header in UAT tab'
+    );
+    expectRegex(
+        kanbanSource,
+        /<div class="subsection-header"><span>Routing Configuration<\/span><\/div>/,
+        'Expected "Routing Configuration" subsection header in Setup tab'
+    );
+
+    // Verify action buttons are in .subsection-actions rows
+    expectRegex(
+        kanbanSource,
+        /<div class="subsection-actions">[\s\S]*?btn-copy-deps-prompt/,
+        'Expected Dependencies tab action buttons in .subsection-actions row'
+    );
+    expectRegex(
+        kanbanSource,
+        /<div class="subsection-actions">[\s\S]*?btn-refresh-uat/,
+        'Expected UAT tab refresh button in .subsection-actions row'
+    );
+
+    console.log('✓ Test 9 passed\n');
 
     console.log('All tests passed! ✓');
 }

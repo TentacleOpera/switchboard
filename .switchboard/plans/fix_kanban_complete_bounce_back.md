@@ -159,4 +159,57 @@ The set `_managedImportMirrorsForActiveFolder` tracks which mirrors should exist
 
 ---
 
+## Review Pass Results (2026-05-15)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|:---|:---------|:-------|
+| CRITICAL-1 | CRITICAL | `filterGhostPlans` (added alongside bounce-back fix but NOT in plan) filters completed plans by `fs.existsSync(planPath)`. After `_archiveCompletedSession` moves the plan file to archive, the original path ceases to exist and the completed plan **disappears from the COMPLETED column** immediately after the user clicks the tick button. This is a regression worse than the original bug. |
+| MAJOR-1 | MAJOR | Double `_syncFilesAndRefreshRunSheets` — immediate `_syncConfiguredPlanFolder` triggers internal refresh (line 8753), then final refresh at line 12387 runs again. Plan explicitly flagged this risk but did not mitigate. Mitigated in practice by KanbanProvider's DB-first update (column already `COMPLETED` before `_handleCompletePlan` runs), so no visual regression, but wasteful. |
+| NIT-1 | NIT | `_updatePlanRegistryStatus(pathHash, 'completed')` at line 12341 is a guaranteed no-op for managed imports (registry uses `sessionId` as key). Logs spurious warning on every managed-import completion. |
+| NIT-2 | NIT | Redundant `db.updateStatus(sessionId, 'completed')` at line 12377 — already done by `_updatePlanRegistryStatus` at line 12352 and by KanbanProvider's DB-first update at line 4795. |
+| NIT-3 | NIT | Legacy fallback regex `/^ingested_[0-9a-f]{64}\.md$/i` is hardcoded — must be manually kept in sync with `MANAGED_IMPORT_PREFIX` and SHA-256 hex length. |
+
+### Stage 2: Balanced Synthesis
+
+**Keep (core fix is sound):**
+- Registry update with `sessionId` — fixes root cause. Essential.
+- Mirror tracking cleanup — essential for race-condition prevention.
+- Immediate sync with try/catch — closes race window. Essential.
+- Legacy fallback regex — reasonable backward compatibility.
+
+**Fix Now:**
+- **CRITICAL-1**: `filterGhostPlans` must NOT filter completed plans. Completed plans may have been archived (file moved) and should still appear in the COMPLETED column; the DB is the source of truth for completed state. Fix: only apply `filterGhostPlans` to active (non-completed) rows. Completed rows pass through unfiltered.
+
+**Defer:**
+- **MAJOR-1**: Double refresh optimization — skip final `_syncFilesAndRefreshRunSheets` when immediate sync already ran. Low priority; DB-first guard prevents visual issues.
+- **NIT-1**: Gate `pathHash` registry update on `!isManagedImport` to avoid spurious warning.
+- **NIT-2**: Remove redundant `db.updateStatus` at line 12377.
+- **NIT-3**: Add comment linking regex to `MANAGED_IMPORT_PREFIX` constant.
+
+### Code Fixes Applied
+
+1. **`src/services/KanbanProvider.ts`** (3 locations):
+   - Line ~879 (refreshWithData): Changed `completedRowsFiltered = filterGhostPlans(completedRows)` → `completedRowsFiltered = completedRows`. Added comment explaining why completed plans bypass the ghost filter.
+   - Line ~1664 (separate refresh path): Replaced inline `fs.existsSync` filter on completed records with simple `rec.planFile` truthiness check. Added comment.
+   - Line ~1789 (second refreshWithData-like path): Same fix as line ~879.
+
+2. **`src/services/TaskViewerProvider.ts`** (2 locations):
+   - Line ~13040 (sidebar `_refreshRunSheets`): Changed `visibleCompletedRows` to use `completedRows` directly (with repoScope filter) instead of `filterGhostPlans(completedRows)`. Added comment.
+   - Line ~12347: Added comment linking legacy fallback regex to `MANAGED_IMPORT_PREFIX` and SHA-256 hex length (NIT-3 fix).
+
+### Validation Results
+
+- **TypeScript compilation**: 2 pre-existing errors (unrelated `TS2835` in ClickUpSyncService.ts and KanbanProvider.ts). No new errors introduced by fixes.
+- **No unit tests exist** for `_handleCompletePlan` or `filterGhostPlans`; the plan's automated test checklist items remain unchecked.
+
+### Remaining Risks
+
+1. **Ghost active plans**: The `filterGhostPlans` still correctly filters ACTIVE plans whose files don't exist. This is the intended behavior — prevents ghost cards in non-COMPLETED columns.
+2. **Completed plans with empty `planFile`**: Completed records with no `planFile` are still filtered out (by the `rec.planFile` truthiness check in KanbanProvider line ~1664, and by the `if (!planFile) return false` in `filterGhostPlans` for active rows). This is correct — a plan with no file reference is invalid.
+3. **Double refresh**: Still present but harmless. Can be optimized in a follow-up.
+
+---
+
 **Recommendation:** Send to Coder. Complexity is 5 — routine fixes with one moderate risk (nested sync ordering) that is well-scoped and documented.

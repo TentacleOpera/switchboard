@@ -314,3 +314,71 @@ const sortedItems = isPlanningColumn
 ---
 
 **Recommendation:** Complexity is 6. Send to Coder.
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| Fix | Severity | Finding |
+|-----|----------|---------|
+| Fix 1 | PASS | Path normalization, empty-string guard, `skipTimestampUpdate=true` — all correct |
+| Fix 2 | PASS | `skipTimestampUpdate` parameter, SQL branching, VERIFY block — all correct |
+| Fix 3 | PASS | `anyMirrorChanged` gate, `cleanupMissingManagedImports` edge case — all correct |
+| Fix 4a | PASS | `createdAt` in `KanbanCard` interface and both `refreshWithData` mappings — correct |
+| Fix 4b | **MAJOR** | Sort comparator had THREE deviations from spec: (1) `_ts` was primary key instead of `createdAt`, (2) `createdAt` sorted descending instead of ascending, (3) `isNaN` fallback returned `0` instead of `_ts`-only sort |
+| Fix 5 | PASS | `getPlanByBrainSourcePath`, `inheritedKanbanColumn`, `PlanRegistryEntry` fields, fallback chain — all correct |
+| NIT | NIT | CODED_AUTO synthetic column at line 3675 still uses `_ts`-only sort (`coderItems.sort((a, b) => b._ts - a._ts)`); same instability class but out of plan scope |
+
+### Stage 2 — Balanced Synthesis
+
+- **Keep as-is**: Fix 1, Fix 2, Fix 3, Fix 4a, Fix 5 — all verified correct against plan spec.
+- **Fix now (MAJOR)**: Fix 4b sort comparator in `kanban.html` — the centerpiece stability fix was implemented with inverted sort priority, wrong direction, and broken fallback. This would have allowed cards to continue reordering on every `_ts` change, defeating the entire purpose.
+- **Defer (NIT)**: CODED_AUTO `_ts`-only sort — same class of bug but in a synthetic collapsed column; not in plan scope.
+
+### Code Fixes Applied
+
+**File: `src/webview/kanban.html` (lines 3699–3708)**
+
+Replaced the incorrect sort comparator with the plan-specified version:
+
+```javascript
+// BEFORE (incorrect — _ts primary, createdAt descending, isNaN returns 0)
+: [...items].sort((a, b) => {
+    const tsA = a._ts || 0;
+    const tsB = b._ts || 0;
+    if (tsA !== tsB) {
+        return tsB - tsA; // newest activity first
+    }
+    const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (isNaN(createdA) || isNaN(createdB)) {
+        return 0;
+    }
+    return createdB - createdA; // tiebreak: newest plan first
+});
+
+// AFTER (correct — createdAt primary ascending, _ts tiebreak descending, isNaN falls back to _ts)
+: [...items].sort((a, b) => {
+    const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    if (isNaN(createdA) || isNaN(createdB)) {
+        // Malformed dates: fall back to _ts-only sort
+        return (b._ts || 0) - (a._ts || 0);
+    }
+    if (createdA !== createdB) return createdA - createdB;
+    return (b._ts || 0) - (a._ts || 0);
+});
+```
+
+### Validation Results
+
+- **Webpack compile**: ✅ `compiled successfully` (no errors)
+- **Test compile** (`tsc -p tsconfig.test.json --noEmit`): ✅ exit code 0 (no errors)
+- **Pre-existing TS errors**: 2 errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (relative import path issues) — unrelated to this plan, not introduced by these changes
+
+### Remaining Risks
+
+1. **CODED_AUTO sort instability (NIT)**: The synthetic collapsed coder column at line 3675 sorts by `_ts` only. If `_ts` changes for cards in this view, they will reorder. This is the same class of bug but was not in the plan scope. Can be addressed in a follow-up if the collapsed view exhibits visible reordering.
+2. **No automated test for kanban.html sort comparator**: The sort logic lives in inline JavaScript within an HTML template, making it difficult to unit-test. The existing `kanban-timestamp-preserve.test.ts` covers the DB-level timestamp preservation (Fix 2) but not the frontend sort. Manual verification per the plan's Manual Steps section is recommended.

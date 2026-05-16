@@ -10,7 +10,8 @@ const DEFAULT_VISIBLE_AGENTS = {
     gatherer: true,
     ticket_updater: false,
     researcher: false,
-    splitter: false
+    splitter: false,
+    research_planner: false
 };
 
 const DEFAULT_ROLE_CONFIG = {
@@ -26,7 +27,8 @@ const DEFAULT_ROLE_CONFIG = {
     analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true } },
     ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: false } },
     researcher: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, researchEnabled: false } },
-    splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false } }
+    splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false } },
+    research_planner: { prompt: '', enableDeepPlanning: false, researchDepth: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true } }
 };
 
 // Role key/label pairs for UI rendering
@@ -40,7 +42,10 @@ const BUILT_IN_AGENT_LABELS = [
     { key: 'analyst', label: 'Analyst' },
     { key: 'ticket_updater', label: 'Ticket Updater' },
     { key: 'researcher', label: 'Researcher' },
-    { key: 'splitter', label: 'Splitter' }
+    { key: 'splitter', label: 'Splitter' },
+    { key: 'research_planner', label: 'Research Planner' },
+    { key: 'gatherer', label: 'Context Gatherer' },
+    { key: 'jules', label: 'Jules' }
 ];
 
 // Derivable helper
@@ -48,7 +53,7 @@ const ROLE_KEYS = Object.keys(DEFAULT_ROLE_CONFIG);
 
 // Specialized roles that operate via skills/addons, not prompt overrides.
 // Used by setup.html to filter the prompt customization UI.
-const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater', 'researcher', 'splitter']);
+const PROMPT_OVERRIDE_EXCLUDED_KEYS = new Set(['ticket_updater', 'researcher', 'splitter', 'research_planner']);
 
 // Role addon UI metadata (moved from kanban.html)
 const ROLE_ADDONS = {
@@ -104,6 +109,10 @@ const ROLE_ADDONS = {
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
         { id: 'complexityScoringSkill', label: 'Complexity Scoring', tooltip: 'Invoke complexity scoring before split', default: false }
+    ],
+    research_planner: [
+        { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
+        { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true }
     ]
 };
 

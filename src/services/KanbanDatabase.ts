@@ -863,6 +863,7 @@ export class KanbanDatabase {
         // No timer to clear — writes are synchronous fire-and-forget
         // Optional: final flush on deactivation
         void this.exportStateToFile();
+        void this._writeKanbanStateBackup();
     }
 
     public get lastInitError(): string | null {
@@ -915,19 +916,18 @@ export class KanbanDatabase {
         }
 
         try {
-            // CRITICAL: Validate parent directory before creating
-            const parentDir = path.resolve(path.dirname(this._dbPath));
-            const switchboardDir = path.resolve(path.join(this._workspaceRoot, '.switchboard'));
-            const workspaceRoot = path.resolve(this._workspaceRoot);
-
-            // Only create .switchboard subdirectory or the root itself, not arbitrary paths
-            if (parentDir !== switchboardDir && parentDir !== workspaceRoot && !parentDir.startsWith(switchboardDir + path.sep)) {
-                console.error(`[KanbanDatabase] Refusing to create database outside .switchboard: ${this._dbPath}`);
+            // CRITICAL: Validate that we aren't in a mapped child workspace.
+            // Even though forWorkspace() redirects, an instance could theoretically be
+            // created directly or the configuration could have changed.
+            const resolvedRoot = path.resolve(this._workspaceRoot);
+            const redirectedRoot = KanbanDatabase._redirectToParentIfMapped(resolvedRoot);
+            if (redirectedRoot !== resolvedRoot) {
+                console.error(`[KanbanDatabase] Refusing to create database in mapped child workspace: ${resolvedRoot}. It should be redirected to ${redirectedRoot}`);
                 return false;
             }
 
             // Create parent directory
-            await fs.promises.mkdir(parentDir, { recursive: true });
+            await fs.promises.mkdir(path.resolve(path.dirname(this._dbPath)), { recursive: true });
 
             // Initialize SQL.js and create empty database
             const SQL = await KanbanDatabase._loadSqlJs();
@@ -3727,6 +3727,7 @@ FROM plans
 
         if (result) {
             void this.exportStateToFile(); // fire-and-forget, no debounce
+            void this._writeKanbanStateBackup(); // fire-and-forget backup JSON
         }
 
         return result;

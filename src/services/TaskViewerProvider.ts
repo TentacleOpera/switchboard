@@ -412,6 +412,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         // Start local API server for agent access
         void this._startLocalApiServer();
+        void this._validateNoSwitchboardPollution();
     }
 
     public getGlobalSettingsEnabled(): boolean {
@@ -552,8 +553,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         try {
             const port = await this._localApiServer.start();
-            // Write port file to ALL workspace roots so agents in any folder can discover it
-            const allRoots = this._getWorkspaceRoots();
+            // Write port file to ALL workspace roots (excluding mapped children) so agents in any folder can discover it
+            const allRoots = this._filterMappedRoots(this._getWorkspaceRoots());
             for (const root of allRoots) {
                 const portFilePath = path.join(root, '.switchboard', 'api-server-port.txt');
                 try {
@@ -580,6 +581,85 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _getWorkspaceRoots(): string[] {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
+    }
+
+    /**
+     * Filter out workspace roots that are mapped as children in workspaceDatabaseMappings.
+     * These child roots should not have their own .switchboard directories.
+     */
+    private _filterMappedRoots(allRoots: string[]): string[] {
+        try {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const cfg = config.get<any>('workspaceDatabaseMappings') as
+                { enabled?: boolean; mappings?: any[] } | undefined;
+
+            if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
+                return allRoots;
+            }
+
+            const mappedChildRoots = new Set<string>();
+            for (const m of cfg.mappings) {
+                if (Array.isArray(m.workspaceFolders)) {
+                    for (const f of m.workspaceFolders) {
+                        if (typeof f === 'string') {
+                            const trimmed = f.trim();
+                            const expanded = trimmed.startsWith('~')
+                                ? path.join(os.homedir(), trimmed.slice(1))
+                                : trimmed;
+                            mappedChildRoots.add(path.resolve(expanded));
+                        }
+                    }
+                }
+            }
+
+            return allRoots.filter(root => !mappedChildRoots.has(path.resolve(root)));
+        } catch {
+            return allRoots;
+        }
+    }
+
+    /**
+     * Check all workspace roots for existing .switchboard directories in mapped child folders
+     * and log warnings if found.
+     */
+    private async _validateNoSwitchboardPollution(): Promise<void> {
+        try {
+            const allRoots = this._getWorkspaceRoots();
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const cfg = config.get<any>('workspaceDatabaseMappings') as
+                { enabled?: boolean; mappings?: any[] } | undefined;
+
+            if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
+                return;
+            }
+
+            const mappedChildRoots = new Set<string>();
+            for (const m of cfg.mappings) {
+                if (Array.isArray(m.workspaceFolders)) {
+                    for (const f of m.workspaceFolders) {
+                        if (typeof f === 'string') {
+                            const trimmed = f.trim();
+                            const expanded = trimmed.startsWith('~')
+                                ? path.join(os.homedir(), trimmed.slice(1))
+                                : trimmed;
+                            mappedChildRoots.add(path.resolve(expanded));
+                        }
+                    }
+                }
+            }
+
+            for (const root of allRoots) {
+                const resolvedRoot = path.resolve(root);
+                if (mappedChildRoots.has(resolvedRoot)) {
+                    const switchboardDir = path.join(root, '.switchboard');
+                    if (fs.existsSync(switchboardDir)) {
+                        console.warn(`[TaskViewerProvider] Switchboard pollution detected: Mapped child workspace ${root} has a local .switchboard directory. This may cause split-state issues.`);
+                    }
+                }
+            }
+        } catch (err) {
+            console.warn('[TaskViewerProvider] Failed to validate switchboard pollution:', err);
+        }
     }
 
     private _getWorkspaceRoot(): string | null {
@@ -5757,7 +5837,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             personaContent: personaContent?.trim() || undefined,
             workspaceRoot,
             gitProhibitionEnabled,
-            switchboardSafeguardsEnabled
+            switchboardSafeguardsEnabled,
+            enableDeepPlanning: roleConfig?.enableDeepPlanning,
+            researchDepth: roleConfig?.researchDepth
         });
     }
 
@@ -7083,13 +7165,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
                             // Render markdown description to HTML using VS Code's built-in renderer
                             let renderedDescriptionHtml = '';
+                            const descriptionMd = (issue.description || '').trim() || 'No description provided.';
                             try {
-                                const descriptionMd = (issue.description || '').trim() || 'No description provided.';
                                 renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
-                                // Fallback: escape and wrap in <pre> if renderer unavailable
-                                const descriptionText = (issue.description || '').trim() || 'No description provided.';
-                                renderedDescriptionHtml = `<pre>${descriptionText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+                                // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
+                                renderedDescriptionHtml = '';
                             }
 
                             this._view?.webview.postMessage({
@@ -7472,12 +7553,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const details = await clickUp.getTaskDetails(data.taskId);
 
                             let renderedDescriptionHtml = '';
+                            const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
                             try {
-                                const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
                                 renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
                             } catch {
-                                const descriptionText = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
-                                renderedDescriptionHtml = `<pre>${descriptionText.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')}</pre>`;
+                                // Fallback handled natively by the frontend if renderedDescriptionHtml is empty
+                                renderedDescriptionHtml = '';
                             }
 
                             this._view?.webview.postMessage({
@@ -12345,6 +12426,8 @@ What would you like to find?`;
             }
 
             // Managed imports: fix registry key, clean active tracking, and immediately purge race-recreated mirrors
+            // Legacy fallback: match ingested_<sha256>.md pattern for managed imports created
+            // before the 'source' field was added. Keep in sync with MANAGED_IMPORT_PREFIX and SHA-256 hex length.
             const isManagedImport = sheet?.source === 'managed-import' ||
                 (sheet?.planFile && /^ingested_[0-9a-f]{64}\.md$/i.test(path.basename(sheet.planFile)));
             if (isManagedImport) {
@@ -13038,7 +13121,9 @@ What would you like to find?`;
             // Feed sidebar dropdown from the same kanban snapshot so both surfaces
             // reflect the same effective repo-scope snapshot.
             if (this._view) {
-                // Filter out ghost plans: plan files that don't exist in this workspace
+                // Filter out ghost plans: plan files that don't exist in this workspace.
+                // Only filter ACTIVE plans — completed plans may have been archived (file moved)
+                // and should still appear; the DB is the source of truth for completed state.
                 const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                     const planFile = row.planFile || '';
                     if (!planFile) return false;
@@ -13050,8 +13135,8 @@ What would you like to find?`;
                     ? filterGhostPlans(activeRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
                     : filterGhostPlans(activeRows);
                 const visibleCompletedRows = repoScope
-                    ? filterGhostPlans(completedRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(completedRows);
+                    ? completedRows.filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : completedRows;
                 const sheets = [...visibleActiveRows, ...visibleCompletedRows].map(row => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',
