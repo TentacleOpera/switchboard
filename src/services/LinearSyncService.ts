@@ -660,6 +660,7 @@ export class LinearSyncService {
   public async queryIssues(options: {
     search?: string;
     stateId?: string;
+    stateName?: string;
     assigneeId?: string;
     projectId?: string;
     limit?: number;
@@ -671,6 +672,7 @@ export class LinearSyncService {
 
     const normalizedSearch = String(options.search || '').trim().toLowerCase();
     const normalizedStateId = String(options.stateId || '').trim();
+    const normalizedStateName = String(options.stateName || '').trim().toLowerCase();
     const normalizedAssigneeId = String(options.assigneeId || '').trim();
     const normalizedProjectId = String(options.projectId || '').trim();
     const requestedLimit = Number(options.limit);
@@ -679,8 +681,8 @@ export class LinearSyncService {
       : 50;
 
     // Determine if this is a "simple" query that can use cache
-    // Simple: no search, stateId, or assigneeId filters (project comes from config)
-    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedAssigneeId;
+    // Simple: no search, stateId, stateName, or assigneeId filters (project comes from config)
+    const isSimpleQuery = !normalizedSearch && !normalizedStateId && !normalizedStateName && !normalizedAssigneeId;
     // Cache key MUST include the filter-config fingerprint so that include/
     // exclude project name changes invalidate the cache via key divergence.
     const configFingerprint = this._fingerprintLinearFilterConfig(config);
@@ -723,6 +725,9 @@ export class LinearSyncService {
       for (const node of nodes) {
         const issue = this._normalizeLinearIssue(node);
         if (normalizedStateId && issue.state?.id !== normalizedStateId) {
+          continue;
+        }
+        if (normalizedStateName && String(issue.state?.name || '').toLowerCase() !== normalizedStateName) {
           continue;
         }
         if (normalizedAssigneeId && issue.assignee?.id !== normalizedAssigneeId) {
@@ -804,6 +809,7 @@ export class LinearSyncService {
             assignee { id name email }
             project { id name }
             labels { nodes { id name } }
+            parent { id }
             createdAt
             updatedAt
             url

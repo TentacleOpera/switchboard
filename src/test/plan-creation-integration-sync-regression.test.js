@@ -20,7 +20,7 @@ function run() {
 
     assert.match(
         providerSource,
-        /private async _createInitiatedPlan\([\s\S]*await this\._logEvent\('plan_management',[\s\S]*await this\._kanbanProvider\?\.queueIntegrationSyncForSession\(\s*workspaceRoot,\s*sessionId,\s*'CREATED'/m,
+        /private async _createInitiatedPlan\([\s\S]*await this\._logEvent\('plan_management',[\s\S]*await this\._kanbanProvider\?\.queueIntegrationSyncForPlanFile\(\s*workspaceRoot,\s*planFileRelative\.replace\(\/\\\\\/g, '\/'\),\s*'CREATED'/m,
         'Expected initiated plan creation to queue integration sync once the local plan has been persisted.'
     );
 

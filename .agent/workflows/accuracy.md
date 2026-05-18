@@ -59,4 +59,4 @@ description: Implement with high accuracy and self-review (optimized for per-pro
 
 ## Final-Phase Recovery Rule
 - Phase 5 is terminal for `accuracy`. Do NOT proceed to phase 6.
-- If phase 5 succeeded but workflow state still appears active, use the Kanban UI to manually move the card to the appropriate column, or run: `sqlite3 <db_path> "UPDATE plans SET kanban_column = 'COMPLETED', updated_at = datetime('now') WHERE session_id = '<session_id>' AND workspace_id = '<workspace_id>';"`
+- If phase 5 succeeded but workflow state still appears active, use the Kanban UI to manually move the card to the appropriate column. Do NOT attempt to update kanban columns via SQL — transitions are system-managed.

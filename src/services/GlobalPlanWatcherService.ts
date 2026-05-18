@@ -210,6 +210,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             }
                         }
                     }
+                    if (Array.isArray(mapping.dropdownWorkspaces)) {
+                        for (const dw of mapping.dropdownWorkspaces) {
+                            const resolved = path.resolve(this._expandHome(dw));
+                            if (fs.existsSync(resolved) && !folders.includes(resolved)) {
+                                folders.push(resolved);
+                            }
+                        }
+                    }
                 }
             }
             

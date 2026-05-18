@@ -120,3 +120,51 @@ In the webview message handler, add cases for:
 - Bulk import may be rate-limited by ClickUp/Linear APIs. Consider adding a small delay between calls or batching.
 - The planner terminal must be registered for Refine to work. If no planner terminal is found, show a warning.
 - Selection state is in-memory only; it will reset on refresh or tab switch. This is acceptable for a quick import workflow.
+- ClickUp IMPORT ALL does not respect the active status/search filter in the webview — it fetches all non-closed tasks. Linear IMPORT ALL does respect active search/project/state filters. This is a known design gap acceptable for v1.
+
+---
+
+## Reviewer Pass
+
+### Reviewer: Inline (Antigravity)
+### Date: 2026-05-16
+
+### Stage 1 — Adversarial Findings
+
+| ID | Severity | Finding |
+|---|---|---|
+| C-1 | CRITICAL | `clickUpImportPending` set on IMPORT ALL/SELECTED click but never cleared — bulk methods returned `void` with no webview postMessage, permanently disabling detail buttons. |
+| C-2 | CRITICAL | `importAllButton` NOT disabled during in-flight bulk op — user could hammer it, queuing concurrent imports and creating duplicate-plan errors for all already-imported tasks. |
+| M-1 | MAJOR | No user feedback on bulk import success (no toast, no reload trigger from webview side) for either Linear or ClickUp paths. |
+| M-2 | MAJOR | ClickUp IMPORT ALL ignores active UI filters (fetches all non-closed tasks regardless of search/status filter). |
+| N-1 | NIT | `refineTask` prompt is thin (title + description only; no state, assignee, subtask, comment context). |
+| N-2 | NIT | `data-issue-description` attr on ClickUp cards stores potentially large markdown; prompt-injection risk if description contains backticks. |
+
+### Stage 2 — Balanced Synthesis
+
+- **Fix now (C-1, C-2, M-1):** Backend bulk methods must emit a `bulkImportResult` webview message. Frontend must handle it to clear flags and show feedback. IMPORT ALL/SELECTED must be disabled while in-flight.
+- **Defer (M-2):** ClickUp filter inconsistency is a design gap; documented as known risk above.
+- **Defer (N-1, N-2):** Functional; not blocking for v1.
+
+### Stage 3 — Fixes Applied
+
+**Files changed:**
+- `src/services/TaskViewerProvider.ts` — All four bulk methods (`linearImportAllTasks`, `linearImportSelectedTasks`, `clickupImportAllTasks`, `clickupImportSelectedTasks`) now track `imported`/`skipped` counts and post a `bulkImportResult` message on both success and failure. Error path no longer uses `vscode.window.showErrorMessage` (which wouldn't reach the webview); uses postMessage instead.
+- `src/webview/implementation.html` — Added `bulkImportInFlight` flag. Set to `true` on IMPORT ALL/SELECTED click (both providers). Cleared in new `case 'bulkImportResult'` handler. Buttons disabled and relabelled to `IMPORTING...` while in-flight. Success path shows info toast and reloads the project list. Error path shows warning toast.
+
+### Stage 4 — Verification
+
+```
+TypeScript: npx tsc --noEmit
+Result: 2 pre-existing unrelated errors only (ClickUpSyncService.ts:2309, KanbanProvider.ts:4107 — module resolution file extensions). Zero new errors introduced.
+
+Integration check (grep):
+- bulkImportResult: emitted in 8 locations in TaskViewerProvider.ts (2 per method × 4 methods), handled in 1 case in implementation.html ✅
+- bulkImportInFlight: declared, set in 4 click paths, read in 4 button disable checks, cleared in handler ✅
+```
+
+### Remaining Risks
+
+- **Rate limiting**: Bulk import of 50+ tasks may hit ClickUp/Linear API rate limits. No backoff/delay implemented. Acceptable for v1; user will see individual import errors in skipped count.
+- **ClickUp filter gap**: IMPORT ALL fetches all non-closed tasks, ignoring active UI filter. User may import more than expected.
+- **Thin refine prompt**: `refineTask` prompt only passes title/description; planner agent receives minimal context vs. the richer detail available in the full `buildLinearAskAgentText` format.

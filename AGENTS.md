@@ -62,7 +62,7 @@ All file writes to .switchboard/ MUST use IsArtifact: false.
 Plans are executed via Kanban board workflow, not delegation.
 ```
 
-Conversational routing: when the intent is to advance a kanban card or send a plan to the next agent/stage, prefer the `query_switchboard_kanban` skill (use SQL: `UPDATE plans SET kanban_column = '<target>' WHERE session_id = '<session_id>'`) over raw `send_message`. The `target` may be a kanban column label, a built-in role, or a kanban-enabled custom agent name; generic conversational `coded` / `team` targets are smart-routed by plan complexity.
+Kanban column transitions are handled automatically by the system/host. Execution agents must NEVER attempt to update kanban columns directly via SQL or any other method. The `query_switchboard_kanban` skill is for QUERYING kanban state only (e.g., identifying plans in specific columns). To advance a plan to the next stage, simply complete your assigned work — the system will move the card automatically.
 
 ### 📚 Available Skills
 
@@ -79,7 +79,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
 | `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
 | `review` | User asks to review code changes, a PR, or specific files |
-| `query_switchboard_kanban` | Query kanban state or move cards via direct SQL access to kanban.db |
+| `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |
 | `complexity_scoring` | Assess and assign numeric complexity scores (1-10) to plans and tasks |
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
@@ -92,15 +92,18 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 ### 📂 Workspace Detection for Plan Creation
 
-When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/` directory to target:
+**MANDATORY**: Before writing any plan file, you MUST verify where to write it using this algorithm:
 
-1. **Primary signal: Active IDE workspace** — If the user's active editor or focused workspace folder is within a specific workspace root, write plans to that workspace's `.switchboard/plans/` directory. This is the most reliable signal.
+**Step 1 — Discover the Switchboard workspace**
+Check each open workspace root for the existence of `.switchboard/plans/`. Not every repo in a multi-root setup has this — only Switchboard-managed workspaces do. Run: `ls {workspaceRoot}/.switchboard/plans/` for each root.
 
-2. **Secondary signal: Task content keywords** — If the active workspace signal is ambiguous (e.g., the user is in a generic file), look for project-specific keywords in the task description. This is a hint, not a rule.
+**Step 2 — If exactly one workspace has `.switchboard/plans/`**
+Write the plan there. Period. Do not write it to the repo the task is *about* — that repo may not be Switchboard-managed. The plan content describes the work; the file location is always the Switchboard workspace.
 
-3. **Tertiary signal: `.switchboard/` existence** — Confirm the selected workspace has a `.switchboard/plans/` directory before writing. If it doesn't exist, the workspace may not be a Switchboard-managed project.
+**Step 3 — If multiple workspaces have `.switchboard/plans/`**
+Use the active editor's workspace root as the tiebreaker. Write to the `.switchboard/plans/` directory in whichever Switchboard-managed workspace contains the currently active file. If the active file is not in any Switchboard-managed workspace, ask the user which workspace to use.
 
-4. **Fallback: Ask the user** — If detection is ambiguous (multiple signals conflict or no signal matches), ask the user which workspace to use. Do NOT silently default to any workspace.
+**Step 4 — If no workspace has `.switchboard/plans/`**
+Ask the user where to write the plan. Never create `.switchboard/plans/` yourself.
 
-**Edge case**: If the user has multiple workspace folders open in VS Code, the active editor's containing workspace folder is the strongest signal.
-
+**NEVER** skip the filesystem check and assume a workspace is Switchboard-managed based on file context alone.

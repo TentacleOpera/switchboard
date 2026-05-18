@@ -658,188 +658,130 @@
             color: var(--text-secondary);
         }
 
-        #markdown-preview {
-            flex: 1;
-            overflow-y: auto;
-            padding: 24px;
-            max-width: 900px;
+        /* Custom Scrollbars for Dark Mode Immersion */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+        ::-webkit-scrollbar-track {
+            background: var(--panel-bg);
+        }
+        ::-webkit-scrollbar-thumb {
+            background: #333333;
+            border-radius: 5px;
+            border: 2px solid var(--panel-bg);
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555555;
         }
 
-        #markdown-preview h1,
-        #markdown-preview h2,
-        #markdown-preview h3,
-        #markdown-preview h4,
-        #markdown-preview h5,
-        #markdown-preview h6 {
-            margin-top: 16px;
-            margin-bottom: 12px;
+        /* Sidebar Hierarchy Fix */
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary); /* Subdued from accent-teal */
             font-weight: 600;
-            line-height: 1.25;
+            margin-bottom: 8px;
         }
 
-        #markdown-preview h1 {
-            font-size: 2em;
-            color: var(--accent-teal);
-            padding-bottom: 8px;
-        }
-
-        #markdown-preview h2 {
-            font-size: 1.5em;
-            color: var(--accent-teal);
-            padding-bottom: 8px;
-        }
-
-        #markdown-preview h3 {
-            font-size: 1.25em;
-            color: var(--text-primary);
-        }
-
-        #markdown-preview h4,
-        #markdown-preview h5,
-        #markdown-preview h6 {
-            color: var(--text-primary);
-        }
-
-        #markdown-preview p {
-            margin-bottom: 12px;
-            line-height: 1.6;
-            color: var(--text-primary);
-        }
-
-
-        #markdown-preview pre {
-            background: var(--card-bg);
-            padding: 12px;
-            border: 1px solid var(--accent-teal-dim);
-            border-radius: 4px;
-            overflow-x: auto;
-            margin: 12px 0;
-        }
-
-        #markdown-preview pre code {
-            background: none;
-            padding: 0;
-            border: none;
-        }
-
-        #markdown-preview blockquote {
-            border-left: 4px solid var(--accent-teal-dim);
-            background: var(--card-bg);
-            padding: 8px 0 8px 12px;
-            margin: 12px 0;
-            color: var(--text-primary);
-        }
-
-        #markdown-preview ul,
-        #markdown-preview ol {
-            margin-bottom: 12px;
-            padding-left: 24px;
-        }
-
-        #markdown-preview li {
-            margin-bottom: 4px;
-        }
-
-        #markdown-preview a {
-            color: var(--accent-teal);
-            text-decoration: underline;
-        }
-
-        #markdown-preview a:hover {
-            color: var(--accent-teal-bright);
-            text-decoration: none;
-        }
-
-        /* Online sources preview - same branded colors */
+        /* Unified Markdown Preview Styling (Local & Online) */
+        #markdown-preview,
         #markdown-preview-online {
             flex: 1;
             overflow-y: auto;
-            padding: 24px;
-            max-width: 900px;
+            padding: 40px; /* Increased breathing room */
+            max-width: 800px; /* Tighter line length for readability */
+            margin: 0 auto; /* Centered layout */
         }
 
-        #markdown-preview-online h1,
-        #markdown-preview-online h2,
-        #markdown-preview-online h3,
-        #markdown-preview-online h4,
-        #markdown-preview-online h5,
-        #markdown-preview-online h6 {
-            margin-top: 16px;
-            margin-bottom: 12px;
+        #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6 {
+            margin-top: 24px;
+            margin-bottom: 16px;
             font-weight: 600;
             line-height: 1.25;
         }
 
+        #markdown-preview h1,
         #markdown-preview-online h1 {
-            font-size: 2em;
-            color: var(--accent-teal);
+            font-size: 1.8em;
+            color: #f0f0f0; /* Crisp white/gray */
             padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color); /* Grounding line */
+            letter-spacing: -0.5px;
         }
 
+        #markdown-preview h2,
         #markdown-preview-online h2 {
-            font-size: 1.5em;
-            color: var(--accent-teal);
-            padding-bottom: 8px;
+            font-size: 1.4em;
+            color: #e0e0e0;
         }
 
+        #markdown-preview h3,
         #markdown-preview-online h3 {
             font-size: 1.25em;
             color: var(--text-primary);
         }
 
-        #markdown-preview-online h4,
-        #markdown-preview-online h5,
-        #markdown-preview-online h6 {
+        #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6 {
             color: var(--text-primary);
         }
 
-        #markdown-preview-online p {
+        #markdown-preview p, #markdown-preview li,
+        #markdown-preview-online p, #markdown-preview-online li {
             margin-bottom: 12px;
-            line-height: 1.6;
-            color: var(--text-primary);
+            line-height: 1.7; /* Better readability */
+            color: #a0a0a0; /* Softer contrast against black */
+            font-size: 13px;
         }
 
+        #markdown-preview pre,
         #markdown-preview-online pre {
-            background: var(--card-bg);
-            padding: 12px;
-            border: 1px solid var(--accent-teal-dim);
-            border-radius: 4px;
+            background: var(--panel-bg2);
+            padding: 16px;
+            border: 1px solid var(--border-color); /* Removed heavy teal border */
+            border-radius: 6px;
             overflow-x: auto;
-            margin: 12px 0;
+            margin: 16px 0;
         }
 
+        #markdown-preview pre code,
         #markdown-preview-online pre code {
             background: none;
             padding: 0;
             border: none;
         }
 
+        #markdown-preview blockquote,
         #markdown-preview-online blockquote {
-            border-left: 4px solid var(--accent-teal-dim);
+            border-left: 4px solid var(--border-color); /* Subtle quote block */
             background: var(--card-bg);
-            padding: 8px 0 8px 12px;
-            margin: 12px 0;
-            color: var(--text-primary);
+            padding: 8px 16px;
+            margin: 16px 0;
+            color: #a0a0a0;
         }
 
-        #markdown-preview-online ul,
-        #markdown-preview-online ol {
-            margin-bottom: 12px;
+        #markdown-preview ul, #markdown-preview ol,
+        #markdown-preview-online ul, #markdown-preview-online ol {
+            margin-bottom: 16px;
             padding-left: 24px;
         }
 
-        #markdown-preview-online li {
-            margin-bottom: 4px;
-        }
-
+        /* Subtle, Interactive Links */
+        #markdown-preview a,
         #markdown-preview-online a {
             color: var(--accent-teal);
-            text-decoration: underline;
+            text-decoration: none;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            transition: all 0.2s ease;
         }
 
+        #markdown-preview a:hover,
         #markdown-preview-online a:hover {
-            color: var(--accent-teal-bright);
-            text-decoration: none;
+            border-bottom-color: var(--accent-teal);
+            text-shadow: var(--glow-teal);
         }
 
         .empty-state {
@@ -922,7 +864,7 @@
             font-size: 10px;
             text-transform: uppercase;
             letter-spacing: 1px;
-            color: var(--accent-teal);
+            color: var(--text-secondary);
             font-weight: 600;
             margin-bottom: 8px;
         }
@@ -1163,6 +1105,26 @@
         .toggle-label {
             font-size: 13px;
             color: var(--text-primary);
+        }
+
+        /* Custom Scrollbar */
+        ::-webkit-scrollbar {
+            width: 10px;
+            height: 10px;
+        }
+
+        ::-webkit-scrollbar-track {
+            background: var(--panel-bg);
+        }
+
+        ::-webkit-scrollbar-thumb {
+            background: #333333;
+            border-radius: 5px;
+            border: 2px solid var(--panel-bg);
+        }
+
+        ::-webkit-scrollbar-thumb:hover {
+            background: #555555;
         }
     </style>
 </head>

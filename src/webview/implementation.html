@@ -88,6 +88,13 @@
         }
 
         /* Header / Plan Select Section */
+        .quick-actions-section {
+            padding: 12px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.4);
+        }
+
         .header-section {
             padding: 12px;
             background: var(--panel-bg);
@@ -181,6 +188,24 @@
             color: var(--accent-red) !important;
             border-color: color-mix(in srgb, var(--accent-red) 60%, transparent) !important;
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-red) 30%, transparent) !important;
+        }
+
+        /* Mode toggle button */
+        .icon-btn.mode-active {
+            color: var(--accent-teal);
+            border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+        .icon-btn.mode-active:hover {
+            border-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .icon-btn.mode-completed {
+            color: var(--accent-purple, #a78bfa);
+            border-color: color-mix(in srgb, var(--accent-purple, #a78bfa) 40%, transparent);
+        }
+        .icon-btn.mode-completed:hover {
+            border-color: var(--accent-purple, #a78bfa);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-purple, #a78bfa) 30%, transparent);
         }
 
         .dropdown-container {
@@ -392,15 +417,21 @@
             position: relative;
         }
 
-        .project-issue-card {
-            cursor: pointer;
+        .project-issue-card,
+        .project-detail-item {
         }
 
-        .project-issue-card:hover,
-        .project-detail-item:hover {
+        .project-issue-card:hover:not(.loading),
+        .project-detail-item:hover:not(.loading) {
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+            cursor: pointer;
+        }
+
+        .project-issue-card.selected {
+            border-left-color: var(--accent-teal);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 20%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg)) 100%);
         }
 
         .project-issue-title,
@@ -488,16 +519,16 @@
             text-align: left;
             transition: all 0.15s;
             position: relative;
-            cursor: pointer;
             margin-bottom: 8px;
             max-height: 250px;
             overflow-y: auto;
         }
 
-        .project-card:hover {
+        .project-card:hover:not(.loading) {
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+            cursor: pointer;
         }
 
         .project-card.selected {
@@ -597,6 +628,17 @@
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+        }
+
+        .project-back-btn-group {
+            display: flex;
+            gap: 8px;
+            margin-bottom: 12px;
+            width: 100%;
+        }
+
+        .project-back-btn-group .project-back-btn {
+            flex: 1;
         }
 
         .project-back-btn {
@@ -1719,6 +1761,18 @@
 
     <!-- MAIN CONTAINER (normal sidebar) -->
     <div id="main-container" class="container">
+        <!-- QUICK ACTIONS SECTION -->
+        <div class="quick-actions-section">
+            <div class="section-header">
+                <div class="section-label">QUICK ACTIONS</div>
+            </div>
+            <div style="display:flex; gap:6px;">
+                <button id="btn-quick-kanban" class="secondary-btn is-teal" style="flex:1">OPEN AUTOBAN</button>
+                <button id="btn-quick-planning" class="secondary-btn is-cyan" style="flex:1">PLANNING</button>
+                <button id="btn-quick-setup" class="secondary-btn is-teal" style="flex:1">OPEN SETUP</button>
+            </div>
+        </div>
+
         <!-- HEADER: PLAN SELECTION -->
         <div class="header-section">
             <div class="section-header">
@@ -1726,6 +1780,8 @@
                         title="If the plan select dropdown does not appear correct, use the Recover menu or ask an agent to run the Fix Plans Dropdown skill.">ⓘ</span>
                 </div>
                 <div class="flex gap-2" style="align-items: center;">
+                    <button id="btn-mode-toggle" class="icon-btn mode-active" title="Toggle between active and completed plans"
+                        aria-label="Toggle plan mode">ACTIVE</button>
                     <button id="btn-recover-plans" class="icon-btn recover" title="Recover archived or orphaned plans"
                         aria-label="Recover plans">RECOVER</button>
                     <button id="btn-delete-plan" class="icon-btn delete" title="Delete active plan"
@@ -1740,13 +1796,10 @@
             </div>
             <div class="flex gap-2" style="margin-top: 6px;">
                 <button id="btn-complete-plan" class="secondary-btn w-full">COMPLETE</button>
+                <button id="btn-recover-plan" class="secondary-btn w-full hidden">RECOVER</button>
                 <button id="btn-copy-plan-link" class="secondary-btn w-full" title="Copy Markdown link for active plan"
                     aria-label="Copy plan link">COPY</button>
                 <button id="btn-create-plan" class="secondary-btn w-full">CREATE</button>
-            </div>
-            <div style="margin-top: 6px; display:flex; gap:6px;">
-                <button id="btn-open-kanban" class="secondary-btn is-teal" style="flex:1">OPEN AUTOBAN</button>
-                <button id="btn-open-planning" class="secondary-btn is-cyan" style="flex:1">PLANNING</button>
             </div>
         </div>
 
@@ -1862,6 +1915,7 @@
         let pendingLinearDetailIssueId = '';
         let loadingLinearCardId = '';
         let linearImportPending = false;
+        let bulkImportInFlight = false;
         let linearProjectSearchValue = '';
         let linearProjectStateFilterValue = '';
         let linearTaskDetailsTimeoutId = null;
@@ -2087,10 +2141,13 @@
         }
         const btnDeregister = document.getElementById('btn-deregister-all');
         if (btnDeregister) btnDeregister.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
-        const btnKanban = document.getElementById('btn-open-kanban');
-        if (btnKanban) btnKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
-        const btnPlanning = document.getElementById('btn-open-planning');
-        if (btnPlanning) btnPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
+        const btnQuickKanban = document.getElementById('btn-quick-kanban');
+        if (btnQuickKanban) btnQuickKanban.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
+        const btnQuickPlanning = document.getElementById('btn-quick-planning');
+        if (btnQuickPlanning) btnQuickPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
+        const btnQuickSetup = document.getElementById('btn-quick-setup');
+        if (btnQuickSetup) btnQuickSetup.addEventListener('click', () => vscode.postMessage({ type: 'openSetupPanel' }));
+        // Keep existing btn-open-central-setup listener for backwards compat (Terminals tab button)
         const btnOpenCentralSetup = document.getElementById('btn-open-central-setup');
         if (btnOpenCentralSetup) {
             btnOpenCentralSetup.addEventListener('click', () => {
@@ -2192,8 +2249,40 @@
             });
         }
 
+        const btnModeToggle = document.getElementById('btn-mode-toggle');
+        const btnCompletePlan = document.getElementById('btn-complete-plan');
+        const btnRecoverPlan = document.getElementById('btn-recover-plan');  // new singular
+
+        if (btnModeToggle) {
+            btnModeToggle.addEventListener('click', () => {
+                currentPlanMode = currentPlanMode === 'active' ? 'completed' : 'active';
+                // Update toggle button label and style
+                btnModeToggle.textContent = currentPlanMode === 'active' ? 'ACTIVE' : 'COMPLETED';
+                btnModeToggle.classList.toggle('mode-active', currentPlanMode === 'active');
+                btnModeToggle.classList.toggle('mode-completed', currentPlanMode === 'completed');
+                // Show/hide action buttons
+                if (btnCompletePlan) btnCompletePlan.classList.toggle('hidden', currentPlanMode === 'completed');
+                if (btnRecoverPlan) btnRecoverPlan.classList.toggle('hidden', currentPlanMode === 'active');
+                // Re-render dropdown for new mode
+                renderRunSheetDropdown();
+            });
+        }
+
+        // RECOVER (singular) — identical behavior to the per-card Recover button in the kanban Completed column.
+        // Sends recoverPlanFromSidebar → TaskViewerProvider.handleKanbanRestorePlan(sessionId)
+        if (btnRecoverPlan) {
+            btnRecoverPlan.addEventListener('click', () => {
+                const sessionId = runSheetSelect ? runSheetSelect.value : null;
+                if (!sessionId) return;
+                vscode.postMessage({ type: 'recoverPlanFromSidebar', sessionId });
+            });
+        }
+
         // State
-        let currentRunSheets = [];
+        let currentRunSheets = [];         // merged — kept for backward compat with dispatch consumers
+        let currentActiveSheets = [];
+        let currentCompletedSheets = [];
+        let currentPlanMode = 'active';    // 'active' | 'completed'
         let lastTerminals = {};
         let lastAllOpenTerminals = [];
         let lastTeamReady = false;
@@ -2204,6 +2293,8 @@
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
+        let selectedLinearIssueIds = new Set();
+        let selectedClickUpTaskIds = new Set();
         // Autoban engine state (received from backend)
         let autobanState = {
             enabled: false,
@@ -2552,8 +2643,18 @@
                     renderAgentList();
                     break;
                 case 'runSheets':
-                    currentRunSheets = message.sheets || [];
-                    renderRunSheetDropdown(currentRunSheets);
+                    // Backward-compat: handle both old flat format and new split format
+                    if (message.activeSheets !== undefined || message.completedSheets !== undefined) {
+                        currentActiveSheets = message.activeSheets || [];
+                        currentCompletedSheets = message.completedSheets || [];
+                        currentRunSheets = [...currentActiveSheets, ...currentCompletedSheets];
+                    } else {
+                        // Legacy flat format
+                        currentRunSheets = message.sheets || [];
+                        currentActiveSheets = currentRunSheets;
+                        currentCompletedSheets = [];
+                    }
+                    renderRunSheetDropdown();
                     break;
                 case 'selectSession':
                     if (message.sessionId && runSheetSelect) {
@@ -2683,6 +2784,22 @@
                     }
                     renderSidebarClickUpProjectPanel();
                     renderSidebarClickUpTaskDetail();
+                    break;
+                case 'bulkImportResult':
+                    bulkImportInFlight = false;
+                    clickUpImportPending = false;
+                    if (message.success === false) {
+                        vscode.postMessage({ type: 'showWarning', message: message.message || 'Bulk import failed.' });
+                    } else {
+                        vscode.postMessage({ type: 'showInfo', message: message.message || 'Bulk import complete.' });
+                        if (message.provider === 'clickup') {
+                            loadClickUpProject(true);
+                        } else {
+                            loadLinearProject(true);
+                        }
+                    }
+                    renderSidebarLinearProjectPanel();
+                    renderSidebarClickUpProjectPanel();
                     break;
                 case 'linearTaskImportedToPlanner':
                     linearImportPending = false;
@@ -2954,9 +3071,6 @@
                 }
                 case 'customAgents':
                     if (Array.isArray(message.customAgents)) {
-                        if (message.workspaceRoot) {
-                            currentWorkspaceRoot = message.workspaceRoot;
-                        }
                         lastCustomAgents = message.customAgents;
                         renderAgentList();
                     }
@@ -3132,22 +3246,37 @@
 
         // --- Rendering ---
 
-        function renderRunSheetDropdown(sheets) {
+        function renderRunSheetDropdown() {
+            const sheets = currentPlanMode === 'active' ? currentActiveSheets : currentCompletedSheets;
             const lastSelected = runSheetSelect.value;
             runSheetSelect.innerHTML = '';
 
             if (!sheets || sheets.length === 0) {
                 const opt = document.createElement('option');
                 opt.value = '';
-                opt.text = 'NO ACTIVE PLANS';
+                opt.text = currentPlanMode === 'active' ? 'NO ACTIVE PLANS' : 'NO COMPLETED PLANS';
                 runSheetSelect.appendChild(opt);
                 updatePlanActionStates();
                 return;
             }
 
+            // Sort: by kanbanColumn alpha, then by createdAt descending (newest first)
+            const sorted = [...sheets].sort((a, b) => {
+                const colCmp = (a.kanbanColumn || '').localeCompare(b.kanbanColumn || '');
+                if (colCmp !== 0) return colCmp;
+                return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
+            });
+
+            // Group by kanbanColumn
+            const groups = new Map();
+            for (const sheet of sorted) {
+                const col = sheet.kanbanColumn || 'CREATED';
+                if (!groups.has(col)) groups.set(col, []);
+                groups.get(col).push(sheet);
+            }
+
             const collisionTotals = new Map();
             const collisionSeen = new Map();
-
             const getDayKey = (value) => {
                 const date = new Date(value);
                 if (isNaN(date.getTime())) return 'UNKNOWN';
@@ -3160,24 +3289,27 @@
             };
             const toTopic = (value) => (value || 'UNTITLED').toUpperCase().trim();
             const toCollisionKey = (sheet) => `${toTopic(sheet.topic)}|${getDayKey(sheet.createdAt)}`;
-
-            sheets.forEach(sheet => {
+            sorted.forEach(sheet => {
                 const key = toCollisionKey(sheet);
                 collisionTotals.set(key, (collisionTotals.get(key) || 0) + 1);
             });
 
-            sheets.forEach(sheet => {
-                const opt = document.createElement('option');
-                opt.value = sheet.sessionId;
-                const key = toCollisionKey(sheet);
-                const seen = (collisionSeen.get(key) || 0) + 1;
-                collisionSeen.set(key, seen);
-                const total = collisionTotals.get(key) || 0;
-                const counterSuffix = total > 1 ? ` (${seen})` : '';
-                const dateLabel = getDisplayDate(sheet.createdAt);
-                opt.text = `${toTopic(sheet.topic)}${counterSuffix} (${dateLabel})`;
-                runSheetSelect.appendChild(opt);
-            });
+            for (const [colName, colSheets] of groups) {
+                const group = document.createElement('optgroup');
+                group.label = colName;
+                for (const sheet of colSheets) {
+                    const opt = document.createElement('option');
+                    opt.value = sheet.sessionId;
+                    const key = toCollisionKey(sheet);
+                    const seen = (collisionSeen.get(key) || 0) + 1;
+                    collisionSeen.set(key, seen);
+                    const total = collisionTotals.get(key) || 0;
+                    const counterSuffix = total > 1 ? ` (${seen})` : '';
+                    opt.text = `${toTopic(sheet.topic)}${counterSuffix} (${getDisplayDate(sheet.createdAt)})`;
+                    group.appendChild(opt);
+                }
+                runSheetSelect.appendChild(group);
+            }
 
             if (lastSelected && sheets.find(s => s.sessionId === lastSelected)) {
                 runSheetSelect.value = lastSelected;
@@ -3245,6 +3377,8 @@
                 projectPicker: document.getElementById('sidebar-linear-project-picker'),
                 stateFilter: document.getElementById('sidebar-linear-state-filter'),
                 clickUpStatusFilter: document.getElementById('sidebar-clickup-status-filter'),
+                importAllButton: document.getElementById('sidebar-linear-project-import-all'),
+                importSelectedButton: document.getElementById('sidebar-linear-project-import-selected'),
                 refreshButton: document.getElementById('sidebar-linear-project-refresh'),
                 emptyState: document.getElementById('sidebar-linear-project-empty'),
                 openSetupButton: document.getElementById('sidebar-linear-project-open-setup'),
@@ -3252,6 +3386,7 @@
                 listView: document.getElementById('sidebar-project-list-view'),
                 taskView: document.getElementById('sidebar-project-task-view'),
                 backButton: document.getElementById('sidebar-task-back-button'),
+                backToParentButton: document.getElementById('sidebar-task-back-to-parent-button'),
                 detailTitle: document.getElementById('sidebar-detail-task-title'),
                 detailIdentifier: document.getElementById('sidebar-detail-task-identifier'),
                 detailState: document.getElementById('sidebar-detail-task-state'),
@@ -3391,17 +3526,22 @@
             emptyState.classList.add('hidden');
 
             // Build the new HTML string first, then compare before mutating the DOM.
-            const newHtml = filteredIssues.map((issue) => `
-                <div class="project-issue-card" data-linear-issue-id="${escapeAttr(issue.id)}">
+            const newHtml = filteredIssues.map((issue) => {
+                const isSelected = selectedLinearIssueIds.has(issue.id);
+                return `
+                <div class="project-issue-card ${isSelected ? 'selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
                     <div class="project-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
                     <div class="project-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                     <div class="project-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                     <div class="project-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                     <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                        <button type="button" class="project-issue-import-btn" data-view-issue-id="${escapeAttr(issue.id)}" aria-label="View ${escapeAttr(issue.identifier || issue.id)}">VIEW TASK</button>
+                        <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}" aria-label="Refine ${escapeAttr(issue.identifier || issue.id)}">REFINE</button>
                         <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}" aria-label="Import ${escapeAttr(issue.identifier || issue.id)}">IMPORT</button>
                     </div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
 
             // Only mutate the DOM if the rendered output has actually changed.
             if (_lastIssuesContainerHtml !== newHtml) {
@@ -3421,7 +3561,8 @@
                 detailCommentsList,
                 detailAttachmentsList,
                 detailAskAgentButton,
-                detailImportTaskButton
+                detailImportTaskButton,
+                backToParentButton
             } = getProjectTabElements();
             if (!detailTitle || !detailIdentifier || !detailState || !detailAssignee || !detailDescription) {
                 return;
@@ -3441,6 +3582,10 @@
                 if (detailAttachmentsList && _lastDetailAttachmentsHtml !== '') { detailAttachmentsList.innerHTML = ''; _lastDetailAttachmentsHtml = ''; }
                 if (detailAskAgentButton) detailAskAgentButton.disabled = true;
                 if (detailImportTaskButton) detailImportTaskButton.disabled = true;
+                if (backToParentButton) {
+                    backToParentButton.classList.add('hidden');
+                    delete backToParentButton.dataset.parentId;
+                }
                 return;
             }
 
@@ -3449,6 +3594,17 @@
             detailIdentifier.textContent = issue.identifier || issue.id;
             detailState.textContent = issue.state?.name ? `State: ${issue.state.name}` : 'State: Unknown';
             detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
+
+            if (backToParentButton) {
+                const parentId = issue.parentId;
+                if (parentId) {
+                    backToParentButton.classList.remove('hidden');
+                    backToParentButton.dataset.parentId = parentId;
+                } else {
+                    backToParentButton.classList.add('hidden');
+                    delete backToParentButton.dataset.parentId;
+                }
+            }
 
             if (selectedLinearIssue.renderedDescriptionHtml) {
                 if (_lastDetailDescriptionHtml !== selectedLinearIssue.renderedDescriptionHtml) {
@@ -3533,6 +3689,16 @@
             if (searchInput) searchInput.classList.remove('hidden');
             if (projectPicker) projectPicker.classList.remove('hidden');
             if (stateFilter) stateFilter.classList.remove('hidden');
+            const { importAllButton, importSelectedButton } = getProjectTabElements();
+            if (importAllButton) {
+                importAllButton.classList.remove('hidden');
+                importAllButton.disabled = linearProjectStatus === 'loading' || bulkImportInFlight;
+                importAllButton.textContent = bulkImportInFlight ? 'IMPORTING...' : 'IMPORT ALL';
+            }
+            if (importSelectedButton) {
+                importSelectedButton.classList.remove('hidden');
+                importSelectedButton.disabled = linearProjectStatus === 'loading' || selectedLinearIssueIds.size === 0 || bulkImportInFlight;
+            }
             if (clickUpStatusFilter) clickUpStatusFilter.classList.add('hidden');
             if (refreshButton) refreshButton.classList.remove('hidden');
             if (hierarchyNav) hierarchyNav.classList.add('hidden');
@@ -3703,6 +3869,16 @@
             if (stateFilter) stateFilter.classList.add('hidden');
             if (clickUpStatusFilter) {
                 clickUpStatusFilter.classList.toggle('hidden', !clickUpSelectedListId);
+            }
+            const { importAllButton, importSelectedButton } = getProjectTabElements();
+            if (importAllButton) {
+                importAllButton.classList.toggle('hidden', !clickUpSelectedListId);
+                importAllButton.disabled = clickUpProjectStatus === 'loading' || bulkImportInFlight;
+                importAllButton.textContent = bulkImportInFlight ? 'IMPORTING...' : 'IMPORT ALL';
+            }
+            if (importSelectedButton) {
+                importSelectedButton.classList.toggle('hidden', !clickUpSelectedListId);
+                importSelectedButton.disabled = clickUpProjectStatus === 'loading' || selectedClickUpTaskIds.size === 0 || bulkImportInFlight;
             }
             // Keep refresh button visible for ClickUp to allow manual refresh
             if (refreshButton) {
@@ -4007,7 +4183,7 @@
                 ? `<div class="project-empty-state">No tasks found.</div>`
                 : tasks.map(task => {
                     const isLoading = loadingClickUpCardId === task.id;
-                    const isSelected = selectedClickUpIssue?.task?.id === task.id;
+                    const isSelected = selectedClickUpTaskIds.has(task.id);
                     const statusColor = getStatusColor(task.status);
                     return `
                         <div class="project-card ${isSelected ? 'selected' : ''} ${isLoading ? 'loading' : ''}"
@@ -4021,6 +4197,8 @@
                                 ${task.assignees?.length ? `<span class="project-card-assignees">${escapeHtml(task.assignees.map(a => a.username || a.email).join(', '))}</span>` : ''}
                             </div>
                             <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                                <button type="button" class="project-issue-import-btn" data-view-issue-id="${escapeAttr(task.id)}" aria-label="View ${escapeAttr(task.id)}">VIEW TASK</button>
+                                <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}" aria-label="Refine ${escapeAttr(task.id)}">REFINE</button>
                                 <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(task.id)}" aria-label="Import ${escapeAttr(task.identifier || task.id)}">IMPORT</button>
                             </div>
                         </div>
@@ -4036,7 +4214,7 @@
         function renderSidebarClickUpTaskDetail() {
             const { detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
                     detailSubtasksList, detailCommentsList, detailAttachmentsList,
-                    detailAskAgentButton, detailImportTaskButton } = getProjectTabElements();
+                    detailAskAgentButton, detailImportTaskButton, backToParentButton } = getProjectTabElements();
 
             if (!selectedClickUpIssue) {
                 [detailTitle, detailIdentifier, detailState, detailAssignee, detailDescription,
@@ -4053,6 +4231,10 @@
                 _lastClickUpDetailSubtasksHtml = '';
                 _lastClickUpDetailCommentsHtml = '';
                 _lastClickUpDetailAttachmentsHtml = '';
+                if (backToParentButton) {
+                    backToParentButton.classList.add('hidden');
+                    delete backToParentButton.dataset.parentId;
+                }
                 return;
             }
 
@@ -4064,6 +4246,17 @@
             if (detailAssignee) detailAssignee.textContent = task.assignees?.length
                 ? task.assignees.map(a => a.username || a.email).join(', ')
                 : 'Unassigned';
+
+            if (backToParentButton) {
+                const parentId = task.parentId;
+                if (parentId) {
+                    backToParentButton.classList.remove('hidden');
+                    backToParentButton.dataset.parentId = parentId;
+                } else {
+                    backToParentButton.classList.add('hidden');
+                    delete backToParentButton.dataset.parentId;
+                }
+            }
 
             let descHtml;
             if (selectedClickUpIssue.renderedDescriptionHtml) {
@@ -4235,6 +4428,8 @@
                         <select id="sidebar-clickup-status-filter" class="project-select hidden">
                             <option value="">All statuses</option>
                         </select>
+                        <button id="sidebar-linear-project-import-all" class="secondary-btn" type="button">IMPORT ALL</button>
+                        <button id="sidebar-linear-project-import-selected" class="secondary-btn" type="button">IMPORT SELECTED</button>
                         <button id="sidebar-linear-project-refresh" class="secondary-btn" type="button">REFRESH</button>
                     </div>
                     <div id="sidebar-linear-project-empty" class="project-empty-state">Select a Space, Folder, and List to view tasks.</div>
@@ -4243,7 +4438,10 @@
                     <div id="sidebar-linear-issues-container" class="project-issues-list"></div>
                 </div>
                 <div id="sidebar-project-task-view" class="project-view-shell hidden">
-                    <button id="sidebar-task-back-button" class="secondary-btn project-back-btn" type="button">BACK TO LIST</button>
+                    <div class="project-back-btn-group">
+                        <button id="sidebar-task-back-button" class="secondary-btn project-back-btn" type="button">BACK TO LIST</button>
+                        <button id="sidebar-task-back-to-parent-button" class="secondary-btn project-back-btn hidden" type="button">← BACK TO PARENT</button>
+                    </div>
                     <div class="project-task-header">
                         <div class="project-task-title" id="sidebar-detail-task-title">Select a Linear task</div>
                         <div class="project-task-meta" id="sidebar-detail-task-identifier"></div>
@@ -4274,6 +4472,8 @@
             const projectPicker = container.querySelector('#sidebar-linear-project-picker');
             const stateFilter = container.querySelector('#sidebar-linear-state-filter');
             const refreshButton = container.querySelector('#sidebar-linear-project-refresh');
+            const importAllButton = container.querySelector('#sidebar-linear-project-import-all');
+            const importSelectedButton = container.querySelector('#sidebar-linear-project-import-selected');
             const openSetupButton = container.querySelector('#sidebar-linear-project-open-setup');
             const issuesContainer = container.querySelector('#sidebar-linear-issues-container');
             const detailSubtasksList = container.querySelector('#sidebar-detail-subtasks-list');
@@ -4318,13 +4518,103 @@
                     loadLinearProject(true);
                 }
             });
+
+            importAllButton?.addEventListener('click', () => {
+                if (bulkImportInFlight) return;
+                if (lastIntegrationProvider === 'clickup') {
+                    if (!clickUpSelectedListId) return;
+                    bulkImportInFlight = true;
+                    clickUpImportPending = true;
+                    renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'clickupImportAllTasks',
+                        listId: clickUpSelectedListId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                } else {
+                    bulkImportInFlight = true;
+                    renderSidebarLinearProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportAllTasks',
+                        search: linearProjectSearchValue,
+                        projectFilter: linearProjectPickerValue,
+                        stateFilter: linearProjectStateFilterValue,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            });
+
+            importSelectedButton?.addEventListener('click', () => {
+                if (bulkImportInFlight) return;
+                if (lastIntegrationProvider === 'clickup') {
+                    if (selectedClickUpTaskIds.size === 0) return;
+                    bulkImportInFlight = true;
+                    clickUpImportPending = true;
+                    renderSidebarClickUpProjectPanel();
+                    vscode.postMessage({
+                        type: 'clickupImportSelectedTasks',
+                        taskIds: Array.from(selectedClickUpTaskIds),
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                } else {
+                    if (selectedLinearIssueIds.size === 0) return;
+                    bulkImportInFlight = true;
+                    renderSidebarLinearProjectPanel();
+                    vscode.postMessage({
+                        type: 'linearImportSelectedTasks',
+                        issueIds: Array.from(selectedLinearIssueIds),
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            });
             openSetupButton?.addEventListener('click', () => {
                 vscode.postMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
             });
             issuesContainer?.addEventListener('click', (event) => {
-                // Handle import button click first (before card navigation)
-                const importBtn = event.target.closest('.project-issue-import-btn');
+                // 1. Handle "VIEW TASK" button click
+                const viewBtn = event.target.closest('[data-view-issue-id]');
+                if (viewBtn) {
+                    event.stopPropagation();
+                    const issueId = viewBtn.getAttribute('data-view-issue-id');
+                    if (lastIntegrationProvider === 'clickup') {
+                        loadClickUpTaskDetails(issueId);
+                    } else {
+                        loadLinearTaskDetails(issueId);
+                    }
+                    return;
+                }
+
+                // 2. Handle "REFINE" button click
+                const refineBtn = event.target.closest('[data-refine-issue-id]');
+                if (refineBtn) {
+                    event.stopPropagation();
+                    const id = refineBtn.getAttribute('data-refine-issue-id');
+                    const title = refineBtn.getAttribute('data-issue-title');
+                    const description = refineBtn.getAttribute('data-issue-description');
+                    if (lastIntegrationProvider === 'clickup') {
+                        vscode.postMessage({
+                            type: 'clickupRefineTask',
+                            taskId: id,
+                            title,
+                            description,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'linearRefineTask',
+                            issueId: id,
+                            title,
+                            description,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    }
+                    return;
+                }
+
+                // 3. Handle "IMPORT" button click
+                const importBtn = event.target.closest('[data-import-issue-id]');
                 if (importBtn && importBtn.dataset.importIssueId) {
+                    event.stopPropagation();
                     importBtn.disabled = true;
                     importBtn.dataset.importing = '';
                     // Route to the correct import handler based on provider
@@ -4346,15 +4636,28 @@
                     }
                     return;
                 }
-                const card = event.target.closest('[data-linear-issue-id]');
-                if (card) {
-                    loadLinearTaskDetails(card.dataset.linearIssueId);
+
+                // 4. Handle card click (selection toggle)
+                const linearCard = event.target.closest('[data-linear-issue-id]');
+                if (linearCard && lastIntegrationProvider === 'linear') {
+                    const id = linearCard.dataset.linearIssueId;
+                    if (selectedLinearIssueIds.has(id)) {
+                        selectedLinearIssueIds.delete(id);
+                    } else {
+                        selectedLinearIssueIds.add(id);
+                    }
+                    renderSidebarLinearProjectPanel();
                     return;
                 }
                 const clickUpCard = event.target.closest('[data-clickup-task-id]');
-                if (clickUpCard) {
-                    const taskId = clickUpCard.getAttribute('data-clickup-task-id');
-                    if (taskId) loadClickUpTaskDetails(taskId);
+                if (clickUpCard && lastIntegrationProvider === 'clickup') {
+                    const id = clickUpCard.getAttribute('data-clickup-task-id');
+                    if (selectedClickUpTaskIds.has(id)) {
+                        selectedClickUpTaskIds.delete(id);
+                    } else {
+                        selectedClickUpTaskIds.add(id);
+                    }
+                    renderSidebarClickUpProjectPanel();
                     return;
                 }
             });
@@ -4371,6 +4674,16 @@
                     return;
                 }
                 loadClickUpTaskDetails(button.dataset.clickupSubtaskId);
+            });
+            const backToParentButton = container.querySelector('#sidebar-task-back-to-parent-button');
+            backToParentButton?.addEventListener('click', () => {
+                const parentId = backToParentButton.dataset.parentId;
+                if (!parentId) return;
+                if (lastIntegrationProvider === 'clickup') {
+                    loadClickUpTaskDetails(parentId);
+                } else {
+                    loadLinearTaskDetails(parentId);
+                }
             });
             backButton?.addEventListener('click', () => {
                 if (lastIntegrationProvider === 'clickup') {

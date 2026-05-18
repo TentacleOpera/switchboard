@@ -7,6 +7,7 @@ import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase } from './KanbanDatabase';
+import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import type { KanbanProvider } from './KanbanProvider';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
@@ -717,19 +718,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                     const incoming = message.payload as { enabled?: boolean; mappings?: any[] };
                     const errors: string[] = [];
                     const seenFolders = new Set<string>();
-
+ 
                     const expandHome = (p: string): string => {
                         const trimmed = p.trim();
                         return trimmed.startsWith('~')
                             ? path.join(os.homedir(), trimmed.slice(1))
                             : trimmed;
                     };
-
+ 
                     for (const m of incoming.mappings ?? []) {
                         if (!m.id || !m.name?.trim()) errors.push(`Mapping is missing id/name`);
                         const mode = m.mode || 'connect';
                         const parentFolder = m.parentFolder ? path.resolve(expandHome(m.parentFolder)) : '';
-
+ 
                         if (mode === 'create') {
                             if (!m.dbPath?.trim()) {
                                 errors.push(`Mapping "${m.name}": You must click "Initialize Database" before saving.`);
@@ -738,8 +739,17 @@ export class SetupPanelProvider implements vscode.Disposable {
                             if (childFolders.includes(parentFolder)) {
                                 errors.push(`Mapping "${m.name}": parent folder cannot also be a child workspace folder`);
                             }
+                            const dropdownFolders = (m.dropdownWorkspaces ?? []).map((f: string) => path.resolve(expandHome(f)));
+                            if (dropdownFolders.includes(parentFolder)) {
+                                errors.push(`Mapping "${m.name}": parent folder cannot also be a dropdown workspace folder`);
+                            }
+                            for (const df of dropdownFolders) {
+                                if (childFolders.includes(df)) {
+                                    errors.push(`Mapping "${m.name}": folder "${df}" cannot be both a child workspace folder and a dropdown workspace folder`);
+                                }
+                            }
                         }
-
+ 
                         if (mode === 'connect') {
                             if (!m.dbPath?.trim()) {
                                 errors.push(`Mapping "${m.name}": database path is required in connect mode`);
@@ -752,25 +762,50 @@ export class SetupPanelProvider implements vscode.Disposable {
                                 }
                             }
                         }
-
+ 
                         for (const f of m.workspaceFolders ?? []) {
                             const norm = path.resolve(expandHome(f));
                             if (seenFolders.has(norm)) errors.push(`Folder ${norm} listed in multiple mappings`);
                             seenFolders.add(norm);
                         }
-                    }
 
+                        for (const f of m.dropdownWorkspaces ?? []) {
+                            const norm = path.resolve(expandHome(f));
+                            if (seenFolders.has(norm)) errors.push(`Folder ${norm} listed in multiple mappings`);
+                            seenFolders.add(norm);
+                        }
+                    }
+ 
                     if (errors.length) {
                         this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: false, error: errors.join('\n') });
                         break;
                     }
-
+ 
                     const config = vscode.workspace.getConfiguration('switchboard');
                     await config.update(
                         'workspaceDatabaseMappings',
                         incoming,
                         vscode.ConfigurationTarget.Workspace
                     );
+
+                    // Provision workspace identity files for dropdown workspaces immediately after saving
+                    if (Array.isArray(incoming.mappings)) {
+                        for (const m of incoming.mappings) {
+                            if (Array.isArray(m.dropdownWorkspaces)) {
+                                for (const dw of m.dropdownWorkspaces) {
+                                    try {
+                                        const resolvedPath = path.resolve(expandHome(dw));
+                                        if (fs.existsSync(resolvedPath)) {
+                                            await ensureWorkspaceIdentity(resolvedPath);
+                                        }
+                                    } catch (err) {
+                                        console.error(`[SetupPanelProvider] Failed to ensure identity for dropdown workspace "${dw}":`, err);
+                                    }
+                                }
+                            }
+                        }
+                    }
+ 
                     this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: true });
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
@@ -795,14 +830,20 @@ export class SetupPanelProvider implements vscode.Disposable {
                         break;
                     }
                     const derivedDbPath = path.join(resolvedParent, '.switchboard', 'kanban.db');
-
+ 
                     const workspaceFolders = Array.isArray(message.workspaceFolders) ? message.workspaceFolders : [];
                     const childFolders = workspaceFolders.map((f: string) => path.resolve(expandHome(f)));
                     if (childFolders.includes(resolvedParent)) {
                         this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a child workspace folder.' });
                         break;
                     }
-
+                    const dropdownWorkspaces = Array.isArray(message.dropdownWorkspaces) ? message.dropdownWorkspaces : [];
+                    const dropdownFolders = dropdownWorkspaces.map((f: string) => path.resolve(expandHome(f)));
+                    if (dropdownFolders.includes(resolvedParent)) {
+                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a dropdown workspace folder.' });
+                        break;
+                    }
+ 
                     try {
                         // Direct construction to bypass mapping resolution during config setup
                         const db = new (KanbanDatabase as any)(resolvedParent, derivedDbPath);
@@ -820,6 +861,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             dbPath: derivedDbPath,
                             parentFolder: resolvedParent,
                             workspaceFolders,
+                            dropdownWorkspaces,
                             mode: 'create'
                         };
                         const existingIndex = (current.mappings || []).findIndex((m: any) => m.id === newMapping.id);
@@ -831,6 +873,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                             { ...current, mappings: updatedMappings },
                             vscode.ConfigurationTarget.Workspace
                         );
+
+                        // Provision workspace identity files for dropdown workspaces immediately
+                        for (const dw of dropdownWorkspaces) {
+                            try {
+                                const resolvedPath = path.resolve(expandHome(dw));
+                                if (fs.existsSync(resolvedPath)) {
+                                    await ensureWorkspaceIdentity(resolvedPath);
+                                }
+                            } catch (err) {
+                                console.error(`[SetupPanelProvider] Failed to ensure identity for dropdown workspace "${dw}":`, err);
+                            }
+                        }
+
                         this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: true, dbPath: derivedDbPath });
                         await vscode.commands.executeCommand('switchboard.refreshUI');
                     } catch (error) {
@@ -866,6 +921,22 @@ export class SetupPanelProvider implements vscode.Disposable {
                     if (folderUri?.[0]) {
                         this._panel?.webview.postMessage({
                             type: 'workspaceMappingFolderSelected',
+                            path: folderUri[0].fsPath,
+                            mappingId: message.mappingId
+                        });
+                    }
+                    break;
+                }
+                case 'browseWorkspaceMappingDropdownFolder': {
+                    const folderUri = await vscode.window.showOpenDialog({
+                        canSelectFiles: false,
+                        canSelectFolders: true,
+                        canSelectMany: false,
+                        title: 'Select dropdown workspace folder'
+                    });
+                    if (folderUri?.[0]) {
+                        this._panel?.webview.postMessage({
+                            type: 'workspaceMappingDropdownFolderSelected',
                             path: folderUri[0].fsPath,
                             mappingId: message.mappingId
                         });

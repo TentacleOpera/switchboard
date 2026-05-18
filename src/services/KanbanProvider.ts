@@ -494,8 +494,14 @@ export class KanbanProvider implements vscode.Disposable {
                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
-                    // KanbanProvider uses workspaceFolders (child folders sharing a DB),
-                    // not parentWorkspaceFolder (used by TaskViewerProvider for .switchboard/ location)
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const p = parent.trim();
+                        const expanded = p.startsWith('~')
+                            ? path.join(os.homedir(), p.slice(1))
+                            : p;
+                        allowedRoots.add(path.resolve(expanded));
+                    }
                     for (const wf of m.workspaceFolders ?? []) {
                         const expanded = wf.startsWith('~')
                             ? path.join(os.homedir(), wf.slice(1))
@@ -649,29 +655,84 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _getWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
-        const folders = vscode.workspace.workspaceFolders || [];
+        let mappings: WorkspaceDatabaseMapping[] = [];
+        let enabled = false;
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-            if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-                const expandHome = (p: string): string => {
-                    const trimmed = p.trim();
-                    return trimmed.startsWith('~')
-                        ? path.join(require('os').homedir(), trimmed.slice(1))
-                        : trimmed;
-                };
-                const items = cfg.mappings
-                    .map(m => ({
-                        label: m.name,
-                        workspaceRoot: path.resolve(expandHome((m.parentFolder) || (m.workspaceFolders?.[0]) || folders[0]?.uri.fsPath || ''))
-                    }))
-                    .filter(item => item.workspaceRoot && item.workspaceRoot !== path.resolve(''));
-                if (items.length > 0) return items;
-                // Mappings exist but are all invalid - fall back to raw folders
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                mappings = cfg.mappings;
+                enabled = true;
             }
-        } catch { /* fall through */ }
-        return folders.map(folder => ({ label: folder.name, workspaceRoot: folder.uri.fsPath }));
+        } catch { /* ignore */ }
+
+        const items: Array<{ label: string; workspaceRoot: string }> = [];
+        const openRoots = this._getWorkspaceRoots();
+
+        // Check if ANY of the currently open workspace folders is mapped
+        let anyOpenFolderIsMapped = false;
+        if (enabled && mappings.length > 0) {
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                for (const m of mappings) {
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (m.workspaceFolders && m.workspaceFolders[0]);
+                    if (parent) {
+                        const expandedParent = parent.startsWith('~')
+                            ? path.join(os.homedir(), parent.slice(1))
+                            : parent;
+                        if (path.resolve(expandedParent) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    for (const wf of m.workspaceFolders || []) {
+                        const expandedWf = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        if (path.resolve(expandedWf) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    if (anyOpenFolderIsMapped) break;
+                }
+                if (anyOpenFolderIsMapped) break;
+            }
+        }
+
+        if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
+            // Multi-root/mapped context: strictly display the custom configured parent mapping names
+            const addedParents = new Set<string>();
+            for (const m of mappings) {
+                const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (m.workspaceFolders && m.workspaceFolders[0]);
+                if (parent) {
+                    const expanded = parent.startsWith('~')
+                        ? path.join(os.homedir(), parent.slice(1))
+                        : parent;
+                    const resolvedParent = path.resolve(expanded);
+                    if (!addedParents.has(resolvedParent)) {
+                        addedParents.add(resolvedParent);
+                        items.push({
+                            label: m.name || path.basename(resolvedParent),
+                            workspaceRoot: resolvedParent
+                        });
+                    }
+                }
+            }
+        } else {
+            // Independent context or mappings disabled: display the standard open workspace folders
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                const folder = (vscode.workspace.workspaceFolders || []).find(f => path.resolve(f.uri.fsPath) === resolvedRoot);
+                items.push({
+                    label: folder ? folder.name : path.basename(resolvedRoot),
+                    workspaceRoot: resolvedRoot
+                });
+            }
+        }
+
+        return items;
     }
 
     dispose() {
@@ -886,7 +947,8 @@ export class KanbanProvider implements vscode.Disposable {
                 return fs.existsSync(planPath);
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
-            const completedRowsFiltered = filterGhostPlans(completedRows);
+            // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
+            const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
             // Build cards directly from DB rows — no _resolveWorkspaceRoot that could return null
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
@@ -948,38 +1010,10 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
-            let selectionRoot = resolvedWorkspaceRoot;
-            try {
-                const cfg = vscode.workspace.getConfiguration('switchboard')
-                                 .get('workspaceDatabaseMappings') as
-                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-                    const expandHome = (p: string): string => {
-                        const trimmed = p.trim();
-                        return trimmed.startsWith('~')
-                            ? path.join(require('os').homedir(), p.slice(1))
-                            : trimmed;
-                    };
-                    // Find which mapping contains the resolvedWorkspaceRoot and use its workspaceRoot
-                    for (const m of cfg.mappings) {
-                        // Check if this is the parent folder
-                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
-                        // Check if this is in the child folders list
-                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
-                        if (isParent || isChild) {
-                            const mappedItem = workspaceItems.find(item => item.label === m.name);
-                            if (mappedItem) {
-                                selectionRoot = mappedItem.workspaceRoot;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch { /* fall through */ }
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: selectionRoot,
+                workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems
             });
 
@@ -1696,37 +1730,10 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
-            let selectionRoot = resolvedWorkspaceRoot;
-            try {
-                const cfg = vscode.workspace.getConfiguration('switchboard')
-                                 .get('workspaceDatabaseMappings') as
-                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-                    const expandHome = (p: string): string => {
-                        const trimmed = p.trim();
-                        return trimmed.startsWith('~')
-                            ? path.join(require('os').homedir(), trimmed.slice(1))
-                            : trimmed;
-                    };
-                    for (const m of cfg.mappings) {
-                        // Check if this is the parent folder
-                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
-                        // Check if this is in the child folders list
-                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
-                        if (isParent || isChild) {
-                            const mappedItem = workspaceItems.find(item => item.label === m.name);
-                            if (mappedItem) {
-                                selectionRoot = mappedItem.workspaceRoot;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch { /* fall through */ }
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: selectionRoot,
+                workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems
             });
             this._lastCards = cards;
@@ -1792,7 +1799,8 @@ export class KanbanProvider implements vscode.Disposable {
                 return fs.existsSync(planPath);
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
-            const completedRowsFiltered = filterGhostPlans(completedRows);
+            // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
+            const completedRowsFiltered = completedRows.filter(row => !!row.planFile);
 
             const cards: KanbanCard[] = activeRowsFiltered.map(row => {
                 const deps = (typeof row.dependencies === 'string')
@@ -1841,37 +1849,10 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
-            let selectionRoot = resolvedWorkspaceRoot;
-            try {
-                const cfg = vscode.workspace.getConfiguration('switchboard')
-                                 .get('workspaceDatabaseMappings') as
-                                 { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-                if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-                    const expandHome = (p: string): string => {
-                        const trimmed = p.trim();
-                        return trimmed.startsWith('~')
-                            ? path.join(require('os').homedir(), trimmed.slice(1))
-                            : trimmed;
-                    };
-                    for (const m of cfg.mappings) {
-                        // Check if this is the parent folder
-                        const isParent = m.parentFolder && path.resolve(expandHome(m.parentFolder)) === resolvedWorkspaceRoot;
-                        // Check if this is in the child folders list
-                        const isChild = m.workspaceFolders?.some((wf: string) => path.resolve(expandHome(wf)) === resolvedWorkspaceRoot);
-                        if (isParent || isChild) {
-                            const mappedItem = workspaceItems.find(item => item.label === m.name);
-                            if (mappedItem) {
-                                selectionRoot = mappedItem.workspaceRoot;
-                                break;
-                            }
-                        }
-                    }
-                }
-            } catch { /* fall through */ }
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
-                workspaceRoot: selectionRoot,
+                workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems
             });
             this._lastCards = cards;
@@ -2773,8 +2754,8 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _getAgentNames(workspaceRoot: string): Promise<Record<string, string>> {
+        const configuredNames: Record<string, string> = {};
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-        const result: Record<string, string> = {};
         const builtInRoles = buildKanbanColumns([])
             .map(column => column.role)
             .filter((role): role is string => Boolean(role));
@@ -2796,23 +2777,33 @@ export class KanbanProvider implements vscode.Disposable {
                     if (cmd) {
                         const binary = cmd.split(/\s+/)[0];
                         const name = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase();
-                        result[role] = `${name} CLI`;
+                        configuredNames[role] = `${name} CLI`;
                     } else {
-                        result[role] = 'No agent assigned';
+                        configuredNames[role] = 'No agent assigned';
                     }
                 }
             } else {
                 for (const role of fallbackRoles) {
-                    result[role] = 'No agent assigned';
+                    configuredNames[role] = 'No agent assigned';
                 }
             }
         } catch (e) {
             console.error('[KanbanProvider] Failed to read agent names from state:', e);
             for (const role of fallbackRoles) {
-                result[role] = 'No agent assigned';
+                configuredNames[role] = 'No agent assigned';
             }
         }
-        return result;
+
+        // 2. Fetch actual running terminal agent names from the task viewer provider (workspace-agnostic cache)
+        const terminalAgentNames = this._taskViewerProvider?.getActualTerminalAgentNames() || {};
+
+        // 3. Merge: prioritize alive terminal names (locked to the active processes), fall back to configured names
+        const merged: Record<string, string> = { ...configuredNames };
+        for (const [role, terminalName] of Object.entries(terminalAgentNames)) {
+            merged[role] = terminalName;
+        }
+
+        return merged;
     }
 
     private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
@@ -3656,6 +3647,53 @@ export class KanbanProvider implements vscode.Disposable {
                 // "Sync Board" button: same full sync path.
                 await vscode.commands.executeCommand('switchboard.fullSync');
                 break;
+            case 'reassignPlansWorkspace': {
+                const sessionIds: string[] = msg.sessionIds;
+                const targetWorkspaceRoot: string = msg.targetWorkspaceRoot;
+                
+                if (!targetWorkspaceRoot || !Array.isArray(sessionIds) || sessionIds.length === 0) {
+                    break;
+                }
+
+                const db = this._getKanbanDb(targetWorkspaceRoot);
+                if (await db.ensureReady()) {
+                    const targetWorkspaceId = await this._readWorkspaceId(targetWorkspaceRoot) 
+                        || await db.getWorkspaceId() 
+                        || await db.getDominantWorkspaceId();
+
+                    if (targetWorkspaceId) {
+                        let successCount = 0;
+                        for (const sessionId of sessionIds) {
+                            const plan = await db.getPlanBySessionId(sessionId);
+                            if (plan) {
+                                const ok = await db.reassignWorkspaceByPlanFile(
+                                    plan.planFile, 
+                                    plan.workspaceId, 
+                                    targetWorkspaceId
+                                );
+                                if (ok) successCount++;
+                            }
+                        }
+
+                        await this._refreshBoard(this._currentWorkspaceRoot || undefined);
+                        const totalCount = sessionIds.length;
+                        if (successCount === 0) {
+                            vscode.window.showWarningMessage(
+                                `No plans were reassigned (0 of ${totalCount}). The plans may not exist in the target workspace database.`
+                            );
+                        } else if (successCount < totalCount) {
+                            vscode.window.showWarningMessage(
+                                `Reassigned ${successCount} of ${totalCount} plans. ${totalCount - successCount} plan(s) could not be reassigned — they may already exist in the target workspace.`
+                            );
+                        } else {
+                            vscode.window.showInformationMessage(
+                                `Successfully reassigned ${successCount} plan${successCount === 1 ? '' : 's'} to the target workspace.`
+                            );
+                        }
+                    }
+                }
+                break;
+            }
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);

@@ -278,7 +278,7 @@ suite('KanbanProvider', () => {
     });
 
     suite('refreshWithData', () => {
-        test('filters out ghost plans whose files do not exist', async () => {
+        test('filters out active ghost plans but preserves all completed plans', async () => {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
             const activeRows: any[] = [
                 { planId: 'active-1', sessionId: 's1', planFile: 'exists.md', kanbanColumn: 'CREATED' },
@@ -322,11 +322,11 @@ suite('KanbanProvider', () => {
             assert.ok(updateBoardCall, 'Should have sent updateBoard message');
             const cards = updateBoardCall.args[0].cards;
             
-            assert.strictEqual(cards.length, 2, 'Should only have 2 cards after filtering');
+            assert.strictEqual(cards.length, 3, 'Should have 3 cards (active-1, comp-1, and comp-2)');
             assert.ok(cards.find((c: any) => c.planId === 'active-1'), 'Should contain active-1');
             assert.ok(cards.find((c: any) => c.planId === 'comp-1'), 'Should contain comp-1');
+            assert.ok(cards.find((c: any) => c.planId === 'comp-2'), 'Should contain comp-2 (even though file does not exist)');
             assert.ok(!cards.find((c: any) => c.planId === 'active-2'), 'Should NOT contain active-2');
-            assert.ok(!cards.find((c: any) => c.planId === 'missing-comp'), 'Should NOT contain missing-comp');
         });
     });
 });

@@ -570,11 +570,10 @@ The MCP tools `get_kanban_state`, `move_kanban_card`, `query_plan_archive`, and 
 
 ### `query_switchboard_kanban` skill
 
-Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries and card movements.
+Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL access to `kanban.db` for state queries only (read-only). Kanban column transitions are system-managed.
 
 - Agents read the database path from `.switchboard/workspace-id` (line 2).
 - Example read: `sqlite3 <db_path> "SELECT session_id, topic, kanban_column FROM plans WHERE kanban_column = 'CREATED';"`
-- Example update: `sqlite3 <db_path> "UPDATE plans SET kanban_column = 'CODED' WHERE session_id = '<session_id>';"`
 
 ### `query_archive` skill
 

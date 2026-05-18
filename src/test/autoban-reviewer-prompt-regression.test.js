@@ -30,8 +30,8 @@ async function run() {
     );
 
     assert.ok(
-        builderSource.includes('When you output the adversarial critique (Grumpy and Balanced sections)'),
-        'Expected reviewer prompt to include chat critique directive.'
+        builderSource.includes('Stage 1 (Grumpy): adversarial findings'),
+        'Expected reviewer prompt to include Grumpy adversarial critique instructions.'
     );
 
     console.log('autoban reviewer prompt regression test passed');

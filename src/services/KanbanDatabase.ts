@@ -10,6 +10,7 @@ export interface WorkspaceDatabaseMapping {
     dbPath: string;
     parentFolder?: string;
     workspaceFolders: string[];
+    dropdownWorkspaces?: string[];
     mode?: 'create' | 'connect';
 }
 
@@ -427,9 +428,15 @@ export class KanbanDatabase {
      */
     private static _expandHome(p: string): string {
         const trimmed = p.trim();
-        return trimmed.startsWith('~')
+        const expanded = trimmed.startsWith('~')
             ? path.join(os.homedir(), trimmed.slice(1))
             : trimmed;
+            
+        if (!path.isAbsolute(expanded)) {
+            console.warn(`[KanbanDatabase] Warning: Relative path "${p}" used in mapping. It will resolve unpredictably against process.cwd(). Please use absolute paths or ~.`);
+        }
+        
+        return expanded;
     }
 
     /**
@@ -450,14 +457,17 @@ export class KanbanDatabase {
                     const isChild = mapping.workspaceFolders.some(
                         (f: string) => path.resolve(KanbanDatabase._expandHome(f)) === resolvedRoot
                     );
-                    if (isChild) {
+                    const isDropdown = Array.isArray(mapping.dropdownWorkspaces) && mapping.dropdownWorkspaces.some(
+                        (f: string) => path.resolve(KanbanDatabase._expandHome(f)) === resolvedRoot
+                    );
+                    if (isChild || isDropdown) {
                         // Use explicit parentFolder if set; otherwise fall back to first
                         // workspaceFolders entry (same logic as resolveEffectiveWorkspaceRoot)
                         const parentEntry = mapping.parentFolder || mapping.workspaceFolders[0];
                         if (parentEntry) {
                             const parentResolved = path.resolve(KanbanDatabase._expandHome(parentEntry));
                             if (parentResolved !== resolvedRoot) {
-                                console.log(`[KanbanDatabase] Redirecting child workspace ${resolvedRoot} -> parent ${parentResolved}`);
+                                console.log(`[KanbanDatabase] Redirecting child/dropdown workspace ${resolvedRoot} -> parent ${parentResolved}`);
                                 return parentResolved;
                             }
                         }
@@ -490,15 +500,16 @@ export class KanbanDatabase {
                              { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 const mapping = cfg.mappings.find(m => {
-                    if (!Array.isArray(m.workspaceFolders)) return false;
-
                     // Check if this is the parent folder
                     const isParent = m.parentFolder && path.resolve(KanbanDatabase._expandHome(m.parentFolder)) === stable;
 
                     // Check if this is in the child folders list
-                    const isChild = m.workspaceFolders.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
+                    const isChild = Array.isArray(m.workspaceFolders) && m.workspaceFolders.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
 
-                    return isParent || isChild;
+                    // Check if this is in the dropdown folders list
+                    const isDropdown = Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
+
+                    return isParent || isChild || isDropdown;
                 });
                 if (mapping?.dbPath) {
                     resolvedDbPath = path.resolve(KanbanDatabase._expandHome(mapping.dbPath));
@@ -1060,6 +1071,19 @@ export class KanbanDatabase {
         } finally {
             stmt.free();
         }
+    }
+
+    public async reassignWorkspaceByPlanFile(
+        planFile: string, 
+        oldWorkspaceId: string, 
+        newWorkspaceId: string
+    ): Promise<boolean> {
+        const normalized = this._ensureRelativePlanFile(planFile);
+        console.log(`[KanbanDatabase] reassignWorkspaceByPlanFile: planFile=${normalized}, oldWorkspaceId=${oldWorkspaceId}, newWorkspaceId=${newWorkspaceId}`);
+        return this._persistedUpdate(
+            'UPDATE plans SET workspace_id = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
+            [newWorkspaceId, new Date().toISOString(), normalized, oldWorkspaceId]
+        );
     }
 
     public async updateColumnByPlanFile(planFile: string, workspaceId: string, newColumn: string): Promise<boolean> {
@@ -1856,9 +1880,14 @@ export class KanbanDatabase {
 
     public async getPlansByColumn(workspaceId: string, column: string): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
+        // For COMPLETED column, show status='completed' plans
+        // For other columns, show status='active' plans
+        const statusFilter = column === 'COMPLETED'
+            ? `status = 'completed'`
+            : `status = 'active'`;
         const stmt = this._db.prepare(
             `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND kanban_column = ?
+             WHERE workspace_id = ? AND ${statusFilter} AND kanban_column = ?
              ORDER BY updated_at DESC`,
             [workspaceId, column]
         );

@@ -3062,6 +3062,11 @@
                     <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
                     <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
                 </div>
+                <div style="margin-bottom:8px;">
+                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Dropdown Workspaces: <span style="font-weight:normal;">Folders that appear as independent board identities but share this database (one per line).</span></label>
+                    <textarea data-field="dropdownWorkspaces" placeholder="Dropdown folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.dropdownWorkspaces || []).join('\n')}</textarea>
+                    <button data-action="browseDropdownFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
+                </div>
                 <input type="hidden" data-field="id" value="${mapping.id || ''}">
                 <input type="hidden" data-field="mode" value="${mode}">
             `;
@@ -3093,12 +3098,18 @@
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 vscode.postMessage({ type: 'browseWorkspaceMappingFolder', mappingId });
             });
+            div.querySelector('button[data-action="browseDropdownFolders"]')?.addEventListener('click', () => {
+                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
+                vscode.postMessage({ type: 'browseWorkspaceMappingDropdownFolder', mappingId });
+            });
             div.querySelector('button[data-action="initDb"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value || '';
                 const name = div.querySelector('[data-field="name"]')?.value || '';
                 const workspaceFoldersText = div.querySelector('[data-field="workspaceFolders"]')?.value || '';
                 const workspaceFolders = workspaceFoldersText.split('\n').map(f => f.trim()).filter(Boolean);
+                const dropdownWorkspacesText = div.querySelector('[data-field="dropdownWorkspaces"]')?.value || '';
+                const dropdownWorkspaces = dropdownWorkspacesText.split('\n').map(f => f.trim()).filter(Boolean);
                 const initBtn = div.querySelector('button[data-action="initDb"]');
                 const statusDiv = div.querySelector('[data-field="initStatus"]');
                 if (initBtn) initBtn.disabled = true;
@@ -3112,7 +3123,8 @@
                     mappingId,
                     parentFolder,
                     name,
-                    workspaceFolders
+                    workspaceFolders,
+                    dropdownWorkspaces
                 });
             });
             div.querySelector('button[data-action="switchToConnect"]')?.addEventListener('click', () => {
@@ -3123,30 +3135,30 @@
                 }
             });
         }
-
+ 
         function renderWorkspaceMappings() {
             const container = document.getElementById('workspace-mappings-container');
             if (!container) return;
             container.innerHTML = '';
             workspaceMappings.forEach((mapping, index) => renderWorkspaceMappingItem(mapping, index));
         }
-
+ 
         document.getElementById('global-settings-toggle')?.addEventListener('change', (e) => {
             const enabled = e.target.checked;
             vscode.postMessage({ type: 'setGlobalSettingsEnabled', enabled });
         });
-
+ 
         document.getElementById('prevent-agent-file-opening-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
         });
-
+ 
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
             vscode.postMessage({
                 type: 'setWorkspaceMappingEnabled',
                 enabled: e.target.checked
             });
         });
-
+ 
         function captureMappingsFromDom() {
             const container = document.getElementById('workspace-mappings-container');
             if (!container) return;
@@ -3158,14 +3170,16 @@
                 const dbPath = div.querySelector('[data-field="dbPath"]')?.value.trim() || '';
                 const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value.trim() || '';
                 const foldersText = div.querySelector('[data-field="workspaceFolders"]')?.value.trim() || '';
+                const dropdownText = div.querySelector('[data-field="dropdownWorkspaces"]')?.value.trim() || '';
                 const id = div.querySelector('[data-field="id"]')?.value || ('mapping-' + Date.now() + '-' + i);
                 const mode = div.querySelector('[data-field="mode"]')?.value || 'connect';
                 const workspaceFolders = foldersText.split('\n').map(f => f.trim()).filter(Boolean);
-                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders, mode });
+                const dropdownWorkspaces = dropdownText.split('\n').map(f => f.trim()).filter(Boolean);
+                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders, dropdownWorkspaces, mode });
             }
             workspaceMappings = updatedMappings;
         }
-
+ 
         document.getElementById('btn-add-mapping')?.addEventListener('click', () => {
             workspaceMappings.push({
                 id: 'mapping-' + Date.now(),
@@ -3173,11 +3187,12 @@
                 dbPath: '',
                 parentFolder: '',
                 workspaceFolders: [],
+                dropdownWorkspaces: [],
                 mode: 'connect'
             });
             renderWorkspaceMappings();
         });
-
+ 
         document.getElementById('btn-save-mappings')?.addEventListener('click', () => {
             captureMappingsFromDom();
             vscode.postMessage({
@@ -3188,7 +3203,7 @@
                 }
             });
         });
-
+ 
         const providerSelector = document.getElementById('integration-provider-selector');
         if (providerSelector) {
             providerSelector.addEventListener('change', (e) => {
@@ -3202,12 +3217,12 @@
             });
         }
         setControlPlaneSetupMode(controlPlaneSetupMode);
-
-
+ 
+ 
         // Planning Panel sync mode selection
         const syncModeRadios = document.querySelectorAll('input[name="planning-sync-mode"]');
         const selectedContainersDiv = document.getElementById('planning-sync-selected-containers');
-
+ 
         syncModeRadios.forEach(radio => {
             radio.addEventListener('change', () => {
                 const mode = radio.value;
@@ -3227,8 +3242,8 @@
                 }
             });
         });
-
-
+ 
+ 
         window.addEventListener('message', (event) => {
             const message = event.data;
             switch (message.type) {
@@ -3257,7 +3272,7 @@
                             const linearCheckbox = document.getElementById('planning-source-linear');
                             const notionCheckbox = document.getElementById('planning-source-notion');
                             const localFolderCheckbox = document.getElementById('planning-source-local-folder');
-
+ 
                             if (clickupCheckbox) clickupCheckbox.checked = message.sources.clickup !== false;
                             if (linearCheckbox) linearCheckbox.checked = message.sources.linear !== false;
                             if (notionCheckbox) notionCheckbox.checked = message.sources.notion !== false;
@@ -3292,11 +3307,11 @@
                     const statusEl = document.getElementById('workspace-mapping-status');
                     if (statusEl) {
                         if (message.ok) {
-                            statusEl.textContent = 'Mappings saved.';
-                            statusEl.style.color = 'var(--accent-teal, #4fd1c5)';
+                             statusEl.textContent = 'Mappings saved.';
+                             statusEl.style.color = 'var(--accent-teal, #4fd1c5)';
                         } else {
-                            statusEl.textContent = String(message.error || 'Failed to save mappings.');
-                            statusEl.style.color = 'var(--accent-red, #ff5c5c)';
+                             statusEl.textContent = String(message.error || 'Failed to save mappings.');
+                             statusEl.style.color = 'var(--accent-red, #ff5c5c)';
                         }
                     }
                     break;
@@ -3317,6 +3332,19 @@
                         const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
                         const mappingDiv = idInput?.parentElement;
                         const ta = mappingDiv?.querySelector('[data-field="workspaceFolders"]');
+                        if (ta) {
+                            const current = ta.value.trim();
+                            ta.value = current ? current + '\n' + message.path : message.path;
+                        }
+                    }
+                    break;
+                }
+                case 'workspaceMappingDropdownFolderSelected': {
+                    const container = document.getElementById('workspace-mappings-container');
+                    if (container && message.mappingId) {
+                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
+                        const mappingDiv = idInput?.parentElement;
+                        const ta = mappingDiv?.querySelector('[data-field="dropdownWorkspaces"]');
                         if (ta) {
                             const current = ta.value.trim();
                             ta.value = current ? current + '\n' + message.path : message.path;

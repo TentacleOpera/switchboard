@@ -62,7 +62,7 @@ import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
 import { RelayPromptService, RelayConfig } from './RelayPromptService';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
-import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
+import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { parsePlanDependencies } from './planDependencyParser';
 import { inferTopicFromPath } from './planMetadataUtils';
 import {
@@ -249,6 +249,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _fsStateWatcher?: fs.FSWatcher;
     private _fsPlansWatchers: fs.FSWatcher[] = [];
     private _brainWatcher?: vscode.FileSystemWatcher;
+    private _brainFsWatcher?: fs.FSWatcher;
     private _configuredPlanWatcher?: vscode.FileSystemWatcher;
     private _stagingWatcher?: fs.FSWatcher;
     private _configuredPlanFsWatcher?: fs.FSWatcher;
@@ -284,6 +285,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _mcpToolReachable: boolean = false;
     private _mcpDiagnostic: string = 'MCP: Checking...';
     private _registeredTerminals?: Map<string, vscode.Terminal>;
+    // Cache: suffixed terminal name -> { role, displayName }
+    // Populated at terminal creation time with the binary-derived display name.
+    // This survives workspace switches because it's derived from the actual
+    // running terminal, not from the currently-selected workspace's state.json.
+    private _terminalAgentInfo = new Map<string, { role: string; displayName: string }>();
     private _pipeline: PipelineOrchestrator;
     private _tombstones: Set<string> = new Set();
     private _tombstonesReady: Promise<void> | null = null;
@@ -415,6 +421,48 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         void this._validateNoSwitchboardPollution();
     }
 
+    public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
+        this._terminalAgentInfo.set(suffixedName, { role, displayName });
+    }
+
+    public clearTerminalAgentInfo(suffixedName: string): void {
+        this._terminalAgentInfo.delete(suffixedName);
+    }
+
+    public clearAllTerminalAgentInfo(): void {
+        this._terminalAgentInfo.clear();
+    }
+
+    /**
+     * Returns a mapping of role -> agent display name for all alive terminals
+     * that have cached agent info. This is workspace-agnostic - it reads from
+     * the in-memory cache, not from any workspace's state.json.
+     */
+    public getActualTerminalAgentNames(): Record<string, string> {
+        const result: Record<string, string> = {};
+
+        if (!this._registeredTerminals) return result;
+
+        for (const [name, terminal] of this._registeredTerminals.entries()) {
+            // Skip exited terminals
+            if (terminal.exitStatus !== undefined) {
+                // Prune stale cache entry
+                this._terminalAgentInfo.delete(name);
+                continue;
+            }
+
+            const info = this._terminalAgentInfo.get(name);
+            if (!info) continue;
+
+            // First alive terminal per role wins (deterministic: Map iteration order)
+            if (!(info.role in result)) {
+                result[info.role] = info.displayName;
+            }
+        }
+
+        return result;
+    }
+
     public getGlobalSettingsEnabled(): boolean {
         return this._globalSettingsEnabled;
     }
@@ -537,14 +585,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return;
         }
 
-        const cacheService = this._getCacheService(workspaceRoot);
+        const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+        const cacheService = this._getCacheService(effectiveRoot);
 
         this._localApiServer = new LocalApiServer({
-            workspaceRoot: workspaceRoot,
+            workspaceRoot: effectiveRoot,
             clickupMetadataPath: cacheService['_clickupMetadataPath'],
             linearMetadataPath: cacheService['_linearMetadataPath'],
-            getClickUpService: () => this._getClickUpService(workspaceRoot),
-            getLinearService: () => this._getLinearService(workspaceRoot),
+            getClickUpService: () => this._getClickUpService(effectiveRoot),
+            getLinearService: () => this._getLinearService(effectiveRoot),
             getAuthToken: async () => {
                 // Retrieve from VS Code SecretStorage - returns empty string if not set
                 return await this._context.secrets.get('switchboard.apiToken') || '';
@@ -606,6 +655,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const expanded = trimmed.startsWith('~')
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
+                            
+                            if (!path.isAbsolute(expanded)) {
+                                console.warn(`[TaskViewerProvider] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
+                            }
+                            
                             mappedChildRoots.add(path.resolve(expanded));
                         }
                     }
@@ -642,6 +696,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const expanded = trimmed.startsWith('~')
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
+                            
+                            if (!path.isAbsolute(expanded)) {
+                                console.warn(`[TaskViewerProvider] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
+                            }
+                            
                             mappedChildRoots.add(path.resolve(expanded));
                         }
                     }
@@ -650,12 +709,57 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             for (const root of allRoots) {
                 const resolvedRoot = path.resolve(root);
-                if (mappedChildRoots.has(resolvedRoot)) {
-                    const switchboardDir = path.join(root, '.switchboard');
-                    if (fs.existsSync(switchboardDir)) {
-                        console.warn(`[TaskViewerProvider] Switchboard pollution detected: Mapped child workspace ${root} has a local .switchboard directory. This may cause split-state issues.`);
+                if (!mappedChildRoots.has(resolvedRoot)) continue;
+
+                const switchboardDir = path.join(resolvedRoot, '.switchboard');
+                if (!fs.existsSync(switchboardDir)) continue;
+
+                // Delete safe auto-generated files
+                const safeFiles = ['api-server-port.txt', 'workspace-id'];
+                for (const file of safeFiles) {
+                    try {
+                        const filePath = path.join(switchboardDir, file);
+                        if (fs.existsSync(filePath)) {
+                            await fs.promises.unlink(filePath);
+                        }
+                    } catch { /* ignore ENOENT */ }
+                }
+
+                // Handle kanban.db
+                const dbPath = path.join(switchboardDir, 'kanban.db');
+                if (fs.existsSync(dbPath)) {
+                    const hasPlans = await KanbanDatabase.dbFileHasPlans(dbPath);
+                    if (!hasPlans) {
+                        try {
+                            await fs.promises.unlink(dbPath);
+                        } catch { /* ignore */ }
+                    } else {
+                        const consentKey = `switchboard.pollutionCleanupConsent.${resolvedRoot}`;
+                        const alreadyConsented = this._context.globalState.get<boolean>(consentKey, false);
+                        if (!alreadyConsented) {
+                            const answer = await vscode.window.showWarningMessage(
+                                `Switchboard: Child workspace "${root}" has a stray .switchboard/kanban.db with active plans. Remove it?`,
+                                'Remove', 'Keep'
+                            );
+                            if (answer === 'Remove') {
+                                try {
+                                    await fs.promises.unlink(dbPath);
+                                    await this._context.globalState.update(consentKey, true);
+                                } catch (err) {
+                                    console.error(`[TaskViewerProvider] Failed to delete polluted DB at ${dbPath}:`, err);
+                                }
+                            }
+                        }
                     }
                 }
+
+                // Remove empty .switchboard dir
+                try {
+                    const remaining = await fs.promises.readdir(switchboardDir);
+                    if (remaining.length === 0) {
+                        await fs.promises.rmdir(switchboardDir);
+                    }
+                } catch { /* ignore */ }
             }
         } catch (err) {
             console.warn('[TaskViewerProvider] Failed to validate switchboard pollution:', err);
@@ -708,12 +812,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 { enabled?: boolean; mappings?: any[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
-                    if (typeof m.parentWorkspaceFolder === 'string') {
-                        const p = m.parentWorkspaceFolder.trim();
+                    const parent = m.parentFolder || m.parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const p = parent.trim();
                         const expanded = p.startsWith('~')
                             ? path.join(os.homedir(), p.slice(1))
                             : p;
                         allowedRoots.add(path.resolve(expanded));
+                    }
+                    if (Array.isArray(m.workspaceFolders)) {
+                        for (const wf of m.workspaceFolders) {
+                            if (typeof wf === 'string') {
+                                const p = wf.trim();
+                                const expanded = p.startsWith('~')
+                                    ? path.join(os.homedir(), p.slice(1))
+                                    : p;
+                                allowedRoots.add(path.resolve(expanded));
+                            }
+                        }
                     }
                 }
             }
@@ -2886,6 +3002,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public reinitializePlanWatcher(workspaceRoot: string): void {
         this._resolveWorkspaceRoot(workspaceRoot);
         this._setupPlanWatcher();
+        this.reinitializeBrainWatcher();
     }
 
     public async handleGetDefaultPromptOverrides(
@@ -2963,9 +3080,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 let parentFolder: string | undefined;
                 if (mappings.enabled && Array.isArray(mappings.mappings)) {
                     const mapping = mappings.mappings.find((m: any) => {
-                        if (!m.workspaceFolders || !Array.isArray(m.workspaceFolders)) return false;
-                        const mappedFolders = m.workspaceFolders.map((f: string) => path.resolve(f));
-                        return mappedFolders.includes(path.resolve(root));
+                        const childFolders = Array.isArray(m.workspaceFolders) ? m.workspaceFolders.map((f: string) => path.resolve(f)) : [];
+                        const dropdownFolders = Array.isArray(m.dropdownWorkspaces) ? m.dropdownWorkspaces.map((f: string) => path.resolve(f)) : [];
+                        return childFolders.includes(path.resolve(root)) || dropdownFolders.includes(path.resolve(root));
                     });
                     if (mapping) {
                         isMapped = true;
@@ -3899,7 +4016,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async importLinearTask(
         workspaceRoot: string,
         issueId: string,
-        includeSubtasks: boolean = true
+        includeSubtasks: boolean = true,
+        skipSync: boolean = false
     ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
@@ -3945,8 +4063,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         for (const planFile of importedPlanFiles) {
             await this._kanbanProvider?.queueIntegrationSyncForPlanFile(effectiveRoot, planFile, 'CREATED');
         }
-        await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-        this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFile });
+        if (!skipSync) {
+            await this._syncFilesAndRefreshRunSheets(effectiveRoot);
+            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFile });
+        }
 
         return {
             success: true,
@@ -3961,7 +4081,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public async importClickUpTask(
         workspaceRoot: string,
         taskId: string,
-        includeSubtasks: boolean = true
+        includeSubtasks: boolean = true,
+        skipSync: boolean = false
     ): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
         const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedRoot) {
@@ -4027,8 +4148,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 importedPlanFiles.push(subtaskPlanFileRelative);
             }
 
-            await this._syncFilesAndRefreshRunSheets(effectiveRoot);
-            this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFileRelative });
+            if (!skipSync) {
+                await this._syncFilesAndRefreshRunSheets(effectiveRoot);
+                this._view?.webview.postMessage({ type: 'selectPlanFile', planFile: rootPlanFileRelative });
+            }
 
             const taskName = task.name || task.id;
             return {
@@ -4046,6 +4169,171 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 error: error instanceof Error ? error.message : 'Failed to import ClickUp task.'
             };
         }
+    }
+
+    public async linearImportAllTasks(workspaceRoot: string, filters: { search?: string; projectFilter?: string; stateFilter?: string }): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return;
+        const linear = this._getLinearService(resolvedRoot);
+        try {
+            const issues = await linear.queryIssues({
+                search: filters.search,
+                stateName: filters.stateFilter,
+                limit: 100
+            });
+            const projectFilter = filters.projectFilter;
+            const targetIssues = projectFilter
+                ? issues.filter(i => String(i.project?.name || '') === projectFilter)
+                : issues;
+
+            let imported = 0;
+            let skipped = 0;
+            for (const issue of targetIssues) {
+                const result = await this.importLinearTask(resolvedRoot, issue.id, true, true);
+                if (result.success) { imported++; } else { skipped++; }
+            }
+            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+            this.refresh();
+            await this._kanbanProvider?.refresh();
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'linear',
+                success: true,
+                imported,
+                skipped,
+                message: `Imported ${imported} Linear task${imported !== 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — already imported)` : ''}.`
+            });
+        } catch (error) {
+            console.error('Failed bulk Linear import:', error);
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'linear',
+                success: false,
+                imported: 0,
+                skipped: 0,
+                message: `Bulk Linear import failed: ${errMsg}`
+            });
+        }
+    }
+
+    public async linearImportSelectedTasks(workspaceRoot: string, issueIds: string[]): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot || !issueIds.length) return;
+        try {
+            let imported = 0;
+            let skipped = 0;
+            for (const id of issueIds) {
+                const result = await this.importLinearTask(resolvedRoot, id, true, true);
+                if (result.success) { imported++; } else { skipped++; }
+            }
+            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+            this.refresh();
+            await this._kanbanProvider?.refresh();
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'linear',
+                success: true,
+                imported,
+                skipped,
+                message: `Imported ${imported} Linear task${imported !== 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — already imported)` : ''}.`
+            });
+        } catch (error) {
+            console.error('Failed selected Linear import:', error);
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'linear',
+                success: false,
+                imported: 0,
+                skipped: 0,
+                message: `Selected Linear import failed: ${errMsg}`
+            });
+        }
+    }
+
+    public async clickupImportAllTasks(workspaceRoot: string, listId: string): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot || !listId) return;
+        const clickUp = this._getClickUpService(resolvedRoot);
+        try {
+            const tasks = await clickUp.getListTasks(listId, { includeClosed: false, archived: false });
+            let imported = 0;
+            let skipped = 0;
+            for (const task of tasks) {
+                const result = await this.importClickUpTask(resolvedRoot, task.id, true, true);
+                if (result.success) { imported++; } else { skipped++; }
+            }
+            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+            this.refresh();
+            await this._kanbanProvider?.refresh();
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'clickup',
+                success: true,
+                imported,
+                skipped,
+                message: `Imported ${imported} ClickUp task${imported !== 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — already imported)` : ''}.`
+            });
+        } catch (error) {
+            console.error('Failed bulk ClickUp import:', error);
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'clickup',
+                success: false,
+                imported: 0,
+                skipped: 0,
+                message: `Bulk ClickUp import failed: ${errMsg}`
+            });
+        }
+    }
+
+    public async clickupImportSelectedTasks(workspaceRoot: string, taskIds: string[]): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot || !taskIds.length) return;
+        try {
+            let imported = 0;
+            let skipped = 0;
+            for (const id of taskIds) {
+                const result = await this.importClickUpTask(resolvedRoot, id, true, true);
+                if (result.success) { imported++; } else { skipped++; }
+            }
+            await this._syncFilesAndRefreshRunSheets(resolvedRoot);
+            this.refresh();
+            await this._kanbanProvider?.refresh();
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'clickup',
+                success: true,
+                imported,
+                skipped,
+                message: `Imported ${imported} ClickUp task${imported !== 1 ? 's' : ''}${skipped > 0 ? ` (${skipped} skipped — already imported)` : ''}.`
+            });
+        } catch (error) {
+            console.error('Failed selected ClickUp import:', error);
+            const errMsg = error instanceof Error ? error.message : String(error);
+            this._view?.webview.postMessage({
+                type: 'bulkImportResult',
+                provider: 'clickup',
+                success: false,
+                imported: 0,
+                skipped: 0,
+                message: `Selected ClickUp import failed: ${errMsg}`
+            });
+        }
+    }
+
+    public async refineTask(workspaceRoot: string, data: { id: string; title: string; description: string; provider: 'linear' | 'clickup' }): Promise<void> {
+        const resolvedRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedRoot) return;
+        const agentName = await this._getAgentNameForRole('planner', resolvedRoot);
+        if (!agentName) {
+            vscode.window.showWarningMessage('No planner agent found. Set one up in the Setup panel.');
+            return;
+        }
+        const prompt = `Please refine the following ${data.provider} task:\n\nTitle: ${data.title}\nDescription: ${data.description}\n\nTask ID: ${data.id}`;
+        await this.dispatchCustomPromptToRole('planner', prompt, resolvedRoot);
     }
 
     private _buildClickUpImportPlanContent(
@@ -5455,6 +5743,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (startupCommand && startupCommand.trim()) {
             await new Promise(resolve => setTimeout(resolve, 1000));
             terminal.sendText(startupCommand.trim(), true);
+
+            // NEW: Cache the binary-derived agent display name
+            const binary = startupCommand.trim().split(/\s+/)[0];
+            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+            this._terminalAgentInfo.set(suffixedUniqueName, { role: normalizedRole, displayName });
         }
 
         this._refreshTerminalStatuses();
@@ -7579,6 +7872,38 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                         break;
                     }
+                    case 'linearImportAllTasks':
+                        await this.linearImportAllTasks(data.workspaceRoot, {
+                            search: data.search,
+                            projectFilter: data.projectFilter,
+                            stateFilter: data.stateFilter
+                        });
+                        break;
+                    case 'linearImportSelectedTasks':
+                        await this.linearImportSelectedTasks(data.workspaceRoot, data.issueIds);
+                        break;
+                    case 'clickupImportAllTasks':
+                        await this.clickupImportAllTasks(data.workspaceRoot, data.listId);
+                        break;
+                    case 'clickupImportSelectedTasks':
+                        await this.clickupImportSelectedTasks(data.workspaceRoot, data.taskIds);
+                        break;
+                    case 'linearRefineTask':
+                        await this.refineTask(data.workspaceRoot, {
+                            id: data.issueId,
+                            title: data.title,
+                            description: data.description,
+                            provider: 'linear'
+                        });
+                        break;
+                    case 'clickupRefineTask':
+                        await this.refineTask(data.workspaceRoot, {
+                            id: data.taskId,
+                            title: data.title,
+                            description: data.description,
+                            provider: 'clickup'
+                        });
+                        break;
                     case 'copyTextToClipboard': {
                         const text = String(data.text || '');
                         if (!text.trim()) {
@@ -7736,11 +8061,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             await this._handleReviewPlan(data.sessionId);
                         }
                         break;
-                    case 'copyPlanLink':
-                        if (data.sessionId) {
-                            await this._handleCopyPlanLink(data.sessionId);
+                    case 'copyPlanLink': {
+                        const effectiveId = data.sessionId || data.planId;
+                        if (effectiveId) {
+                            await this._handleCopyPlanLink(effectiveId, data.column, data.workspaceRoot, data.planId);
                         }
                         break;
+                    }
                     case 'deletePlan':
                         if (data.sessionId) {
                             await this._handleDeletePlan(data.sessionId);
@@ -7749,6 +8076,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'completePlan':
                         if (data.sessionId) {
                             await this._handleCompletePlan(data.sessionId);
+                        }
+                        break;
+                    case 'recoverPlanFromSidebar':
+                        if (data.sessionId) {
+                            await this.handleKanbanRestorePlan(data.sessionId);
                         }
                         break;
                     case 'claimPlan':
@@ -8405,6 +8737,19 @@ What would you like to find?`;
     }
 
     private _setupBrainWatcher() {
+        if (this._brainWatcher) {
+            try { this._brainWatcher.dispose(); } catch { }
+            this._brainWatcher = undefined;
+        }
+        if (this._brainFsWatcher) {
+            try { this._brainFsWatcher.close(); } catch { }
+            this._brainFsWatcher = undefined;
+        }
+        if (this._stagingWatcher) {
+            try { this._stagingWatcher.close(); } catch { }
+            this._stagingWatcher = undefined;
+        }
+
         const antigravityRoot = this._getAntigravityRoot();
         if (!fs.existsSync(antigravityRoot)) return;
         if (!this._getAntigravityPlanRoots().some(root => fs.existsSync(root))) return;
@@ -8495,17 +8840,15 @@ What would you like to find?`;
                     }
                 }
             });
-            // Tie the fs.watcher lifecycle to the extension context so it's closed on deactivate
-            this._context.subscriptions.push({ dispose: () => { try { brainFsWatcher.close(); } catch { } } });
+            // Tie the fs.watcher lifecycle to class field
+            this._brainFsWatcher = brainFsWatcher;
             console.log('[TaskViewerProvider] Brain fs.watch fallback active');
         } catch (e) {
             console.error('[TaskViewerProvider] Brain fs.watch fallback failed (non-fatal):', e);
         }
 
         // Mirror → Brain: debounced watcher so edits in VS Code sync back
-        if (this._stagingWatcher) {
-            try { this._stagingWatcher.close(); } catch { }
-        }
+        // (staging watcher already disposed by idempotency guard at top of method)
         // Debounce timers keyed by staging filename
         const mirrorDebounceTimers = new Map<string, NodeJS.Timeout>();
         try {
@@ -8611,6 +8954,24 @@ What would you like to find?`;
         } catch (e) {
             console.error('[TaskViewerProvider] Staging watcher failed:', e);
         }
+    }
+
+    private reinitializeBrainWatcher(): void {
+        // Flush in-flight debounce timers first — they close over the old workspaceRoot.
+        // Clearing before dispose prevents stale callbacks from firing post-switch.
+        this._brainDebounceTimers.forEach(t => clearTimeout(t));
+        this._brainDebounceTimers.clear();
+        // Dispose VS Code FileSystemWatcher
+        try { this._brainWatcher?.dispose(); } catch { }
+        this._brainWatcher = undefined;
+        // Close native fs.watch (brain dir)
+        try { this._brainFsWatcher?.close(); } catch { }
+        this._brainFsWatcher = undefined;
+        // Close staging watcher (mirror → brain direction)
+        try { this._stagingWatcher?.close(); } catch { }
+        this._stagingWatcher = undefined;
+        // Re-setup with the current workspace root
+        this._setupBrainWatcher();
     }
 
     private _normalizeConfiguredPlanFolder(folder: unknown, workspaceRoot?: string): string {
@@ -12228,16 +12589,35 @@ What would you like to find?`;
         return await this._handleCopyPlanLink(sessionId, column, workspaceRoot);
     }
 
-    private async _handleCopyPlanLink(sessionId: string, column?: string, workspaceRoot?: string): Promise<boolean> {
+    private async _handleCopyPlanLink(sessionId: string, column?: string, workspaceRoot?: string, planId?: string): Promise<boolean> {
         try {
-            const { planFileAbsolute, topic, workspaceRoot: resolvedWorkspaceRoot } = await this._resolvePlanContextForSession(sessionId, workspaceRoot);
+            let planFileAbsolute: string;
+            let topic: string;
+            let resolvedWorkspaceRoot: string;
+            try {
+                ({ planFileAbsolute, topic, workspaceRoot: resolvedWorkspaceRoot } = await this._resolvePlanContextForSession(sessionId, workspaceRoot));
+            } catch (err) {
+                if (!planId) throw new Error('No plan file associated with this session.');
+                // Fallback: resolve via planId (relative plan file path)
+                const resolvedRoot = workspaceRoot ? this._resolveWorkspaceRoot(workspaceRoot) : (sessionId ? await this._resolveWorkspaceRootForSession(sessionId) : this._getWorkspaceRoot());
+                if (!resolvedRoot) throw new Error('No workspace folder found.');
+                const db = await this._getKanbanDb(resolvedRoot);
+                const record = planId && db ? await db.getPlanByPlanFile(planId, await this._getWorkspaceIdForRoot(resolvedRoot)) : null;
+                if (!record) throw new Error('No plan file associated with this session.');
+                planFileAbsolute = path.isAbsolute(record.planFile) ? path.resolve(record.planFile) : path.resolve(resolvedRoot, record.planFile);
+                topic = record.topic || '';
+                resolvedWorkspaceRoot = resolvedRoot;
+            }
 
             // Resolve kanban column: explicit param > DB record > default
             let effectiveColumn = column || '';
             let planRecord: KanbanPlanRecord | null = null;
             const db = await this._getKanbanDb(resolvedWorkspaceRoot);
             if (db) {
-                planRecord = await db.getPlanBySessionId(sessionId);
+                planRecord = sessionId ? await db.getPlanBySessionId(sessionId) : null;
+                if (!planRecord && planId) {
+                    planRecord = await db.getPlanByPlanFile(planId, await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot));
+                }
                 if (!effectiveColumn && planRecord?.kanbanColumn) {
                     effectiveColumn = planRecord.kanbanColumn;
                 }
@@ -12290,69 +12670,102 @@ What would you like to find?`;
 
             await vscode.env.clipboard.writeText(textToCopy);
 
-            // Defer the copyPlanLinkResult message until after the column-advance
-            // attempt so that only ONE message is sent — either pure success or
-            // success-with-warning. Sending it immediately here caused a double
-            // toast when the column advance subsequently failed.
-            let advanceWarning: string | undefined;
-
-            const isTesterEligible = effectiveColumn === 'CODE REVIEWED' && role === 'tester'
-                && await this._isAcceptanceTesterActive(resolvedWorkspaceRoot);
-            const workflowName = effectiveColumn === 'CREATED'
-                ? 'improve-plan'
-                : effectiveColumn === 'PLAN REVIEWED'
-                    ? (role === 'lead' ? 'handoff-lead' : 'handoff')
-                    : this._isCompletedCodingColumn(effectiveColumn)
-                        ? 'reviewer-pass'
-                        : isTesterEligible
-                            ? 'tester-pass'
-                        : undefined;
-            if (workflowName) {
-                try {
-                    const targetColumn = this._targetColumnForRole(role);
-                    if (targetColumn) {
-                        const advanced = await this._applyManualKanbanColumnChange(
-                            sessionId,
-                            targetColumn,
-                            workflowName,
-                            `Auto-advanced after copying ${role} prompt`,
-                            resolvedWorkspaceRoot
-                        );
-                        if (advanced) {
-                            await this._kanbanProvider?.queueIntegrationSyncForSession(
-                                resolvedWorkspaceRoot,
-                                sessionId,
-                                targetColumn
-                            );
-                            // Record IDE dispatch identity after copy-prompt
-                            await this._kanbanProvider?._recordDispatchIdentity(
-                                resolvedWorkspaceRoot, sessionId, targetColumn, undefined, true
-                            );
-                            this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // debounced board refresh (avoids stale-data flash)
-                            console.log(`[TaskViewerProvider] _handleCopyPlanLink: card advanced to ${targetColumn} for ${sessionId} via workflow '${workflowName}'`);
-                        } else {
-                            console.warn(`[TaskViewerProvider] _handleCopyPlanLink: column advance failed for ${sessionId} — copy succeeded but card remains in place`);
-                            advanceWarning = 'Prompt copied but card could not be advanced. Try refreshing the board.';
-                        }
-                    } else {
-                        await this._updateSessionRunSheet(sessionId, workflowName);
-                    }
-                } catch (updateError) {
-                    console.error(`[TaskViewerProvider] Failed to auto-advance card after copy for ${sessionId}:`, updateError);
-                    advanceWarning = 'Prompt copied but card advance errored. Try refreshing the board.';
-                }
-            }
-
-            // Send single copyPlanLinkResult — with warning if column advance failed/errored
+            // Send copyPlanLinkResult IMMEDIATELY — include both planId and sessionId
+            // so the frontend can reliably find the button via data-plan-id (primary) or data-session (fallback)
             this._view?.webview.postMessage({
                 type: 'copyPlanLinkResult',
                 success: true,
-                ...(advanceWarning ? { warning: advanceWarning } : {})
+                planId: planId || '',
+                sessionId: sessionId || '',
             });
+
+            // Fire-and-forget: column advance, integration sync, sidebar refresh
+            // All failures are logged to console; non-blocking warning shown if advance fails
+            void (async () => {
+                try {
+                    let effectiveColumnBg = column || '';
+                    let planRecordBg: KanbanPlanRecord | null = null;
+                    const dbBg = await this._getKanbanDb(resolvedWorkspaceRoot);
+                    if (dbBg) {
+                        planRecordBg = sessionId ? await dbBg.getPlanBySessionId(sessionId) : null;
+                        if (!planRecordBg && planId) {
+                            planRecordBg = await dbBg.getPlanByPlanFile(planId, await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot));
+                        }
+                        if (!effectiveColumnBg && planRecordBg?.kanbanColumn) {
+                            effectiveColumnBg = planRecordBg.kanbanColumn;
+                        }
+                    }
+                    effectiveColumnBg = this._normalizeLegacyKanbanColumn(effectiveColumnBg || 'CREATED');
+
+                    const customAgentsBg = await this.getCustomAgents(resolvedWorkspaceRoot);
+                    let roleBg: string;
+                    if (effectiveColumnBg === 'PLAN REVIEWED' && this._kanbanProvider) {
+                        const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, planFileAbsolute);
+                        roleBg = this._kanbanProvider.resolveRoutedRole(parseComplexityScore(complexity));
+                    } else {
+                        roleBg = columnToPromptRole(effectiveColumnBg) || 'coder';
+                    }
+
+                    const isTesterEligible = effectiveColumnBg === 'CODE REVIEWED' && roleBg === 'tester'
+                        && await this._isAcceptanceTesterActive(resolvedWorkspaceRoot);
+                    const workflowName = effectiveColumnBg === 'CREATED'
+                        ? 'improve-plan'
+                        : effectiveColumnBg === 'PLAN REVIEWED'
+                            ? (roleBg === 'lead' ? 'handoff-lead' : 'handoff')
+                            : this._isCompletedCodingColumn(effectiveColumnBg)
+                                ? 'reviewer-pass'
+                                : isTesterEligible
+                                    ? 'tester-pass'
+                                : undefined;
+                    if (workflowName) {
+                        try {
+                            const targetColumn = this._targetColumnForRole(roleBg);
+                            if (targetColumn) {
+                                const advanced = await this._applyManualKanbanColumnChange(
+                                    sessionId,
+                                    targetColumn,
+                                    workflowName,
+                                    `Auto-advanced after copying ${roleBg} prompt`,
+                                    resolvedWorkspaceRoot
+                                );
+                                if (advanced) {
+                                    await this._kanbanProvider?.queueIntegrationSyncForSession(
+                                        resolvedWorkspaceRoot,
+                                        sessionId,
+                                        targetColumn
+                                    );
+                                    await this._kanbanProvider?._recordDispatchIdentity(
+                                        resolvedWorkspaceRoot, sessionId, targetColumn, undefined, true
+                                    );
+                                    this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+                                    console.log(`[TaskViewerProvider] _handleCopyPlanLink: card advanced to ${targetColumn} for ${sessionId} via workflow '${workflowName}'`);
+                                } else {
+                                    console.warn(`[TaskViewerProvider] _handleCopyPlanLink: column advance failed for ${sessionId} — copy succeeded but card remains in place`);
+                                    vscode.window.showWarningMessage('Prompt copied but card could not be advanced. Try refreshing the board.');
+                                }
+                            } else {
+                                await this._updateSessionRunSheet(sessionId, workflowName);
+                            }
+                        } catch (updateError) {
+                            console.error(`[TaskViewerProvider] Failed to auto-advance card after copy for ${sessionId}:`, updateError);
+                            vscode.window.showWarningMessage('Prompt copied but card advance errored. Try refreshing the board.');
+                        }
+                    }
+                } catch (bgError) {
+                    console.error(`[TaskViewerProvider] Background post-copy error for ${sessionId}:`, bgError);
+                }
+            })();
+
             return true;
         } catch (e: any) {
             const errorMessage = e?.message || String(e);
-            this._view?.webview.postMessage({ type: 'copyPlanLinkResult', success: false, error: errorMessage });
+            this._view?.webview.postMessage({
+                type: 'copyPlanLinkResult',
+                success: false,
+                error: errorMessage,
+                planId: planId || '',
+                sessionId: sessionId || '',
+            });
             vscode.window.showErrorMessage(`Failed to copy plan link: ${errorMessage}`);
             return false;
         }
@@ -13137,17 +13550,20 @@ What would you like to find?`;
                 const visibleCompletedRows = repoScope
                     ? completedRows.filter((row) => !row.repoScope || row.repoScope === repoScope)
                     : completedRows;
-                const sheets = [...visibleActiveRows, ...visibleCompletedRows].map(row => ({
+                const toSheet = (row: import('./KanbanDatabase').KanbanPlanRecord) => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',
                     planFile: row.planFile || '',
                     createdAt: row.createdAt || '',
-                }));
-                this._view.webview.postMessage({ type: 'runSheets', sheets });
+                    kanbanColumn: row.kanbanColumn || 'CREATED',
+                });
+                const activeSheets = visibleActiveRows.map(toSheet);
+                const completedSheets = visibleCompletedRows.map(toSheet);
+                this._view.webview.postMessage({ type: 'runSheets', activeSheets, completedSheets });
             }
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh Run Sheets from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', sheets: [] });
+            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
         }
     }
 
@@ -13166,7 +13582,7 @@ What would you like to find?`;
             await this._refreshRunSheets(resolvedWorkspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh from DB:', e);
-            this._view?.webview.postMessage({ type: 'runSheets', sheets: [] });
+            this._view?.webview.postMessage({ type: 'runSheets', activeSheets: [], completedSheets: [] });
         }
     }
 
@@ -13398,6 +13814,18 @@ What would you like to find?`;
                         state.terminals[existingName].role = autoRole;
                     }
 
+                    // NEW: Cache the agent display name if we can derive it
+                    const currentRole = state.terminals[existingName].role;
+                    if (currentRole && currentRole !== 'none') {
+                        const startupCommands = await this.getStartupCommands();
+                        const cmd = startupCommands[currentRole];
+                        if (cmd && cmd.trim()) {
+                            const binary = cmd.trim().split(/\s+/)[0];
+                            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                            this._terminalAgentInfo.set(existingName, { role: currentRole, displayName });
+                        }
+                    }
+
                     if (this._registeredTerminals) {
                         this._registeredTerminals.set(existingName, terminal);
                     }
@@ -13455,6 +13883,17 @@ What would you like to find?`;
                 if (this._registeredTerminals) {
                     this._registeredTerminals.set(suffixedKey, terminal);
                 }
+
+                // NEW: Cache the agent display name if we can derive it
+                if (autoRole !== 'none') {
+                    const startupCommands = await this.getStartupCommands();
+                    const cmd = startupCommands[autoRole];
+                    if (cmd && cmd.trim()) {
+                        const binary = cmd.trim().split(/\s+/)[0];
+                        const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                        this._terminalAgentInfo.set(suffixedKey, { role: autoRole, displayName });
+                    }
+                }
             }
         });
 
@@ -13499,6 +13938,10 @@ What would you like to find?`;
                     console.log(`[TaskViewerProvider] Auto-cleaned state for closed terminal: ${terminalName}`);
                 }
             });
+
+            if (cleanedTerminalName) {
+                this.clearTerminalAgentInfo(cleanedTerminalName);
+            }
 
             await this._removeAutobanTerminalReferences(cleanedTerminalName || terminal.name);
 
@@ -13552,6 +13995,7 @@ What would you like to find?`;
 
             state.terminals = {};
             this._registeredTerminals?.clear();
+            this._terminalAgentInfo.clear();
         });
 
         // 2. Orphan Sweep: close unregistered terminals matching Switchboard-created patterns.
@@ -14249,15 +14693,18 @@ What would you like to find?`;
             // Append dispatch-specific strict/light mode delivery extensions
             const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
             const balancedReviewPath = `.switchboard/reviews/balanced_review_${sessionId}.md`;
+            // NOTE: The Step 3 and Step 4 references here are coupled with the step numbering in improve-plan.md.
+            // If the workflow step numbering changes, these references must be updated in lockstep.
             if (strictPlannerPrompts) {
-                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
-- Write adversarial critique to ${grumpyReviewPath}
-- Write balanced synthesis to ${balancedReviewPath}
-- Post both in chat first, then update the original plan. Keep file outputs as archival artifacts.`;
+                messagePayload += `\n\nDispatch delivery (strict mode — INTEGRATE WITH WORKFLOW STEPS):
+- For workflow Step 3: Write the adversarial critique to ${grumpyReviewPath} and the balanced synthesis to ${balancedReviewPath} as files, and also post both directly in chat as instructed.
+- For workflow Step 4: Write the updated plan to the plan file.
+Do NOT output the critiques or plan twice in your response; integrate this file writing with your single step-by-step workflow execution.`;
             } else {
-                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
-- Do NOT write plan/review artifact files for this pass.
-- Post adversarial critique and balanced synthesis directly in chat, then update the original plan.`;
+                messagePayload += `\n\nDispatch delivery (light mode — INTEGRATE WITH WORKFLOW STEPS):
+- For workflow Step 3: Post the adversarial critique and balanced synthesis directly in chat (do NOT write them to files).
+- For workflow Step 4: Write the updated plan to the plan file.
+Do NOT output the critiques or plan twice in your response; integrate this with your single step-by-step workflow execution.`;
             }
         } else if (role === 'reviewer') {
             messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
@@ -16384,6 +16831,7 @@ Create this file exactly as specified, then continue your work.`);
         }
         try { this._brainWatcher?.dispose(); } catch { }
         try { this._stagingWatcher?.close(); } catch { }
+        try { this._brainFsWatcher?.close(); } catch { }
         this._disposeConfiguredPlanWatcher();
         this._gitCommitDisposable?.dispose();
         if (this._julesStatusPollTimer) {

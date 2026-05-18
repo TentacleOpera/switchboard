@@ -36,6 +36,7 @@ let mcpServerProcess: ChildProcess | null = null;
 let mcpOutputChannel: vscode.OutputChannel | null = null;
 let mcpHealthCheckInterval: ReturnType<typeof setInterval> | null = null;
 let kanbanProvider: KanbanProvider | null = null;
+let activeTaskViewerProvider: TaskViewerProvider | null = null;
 const DISPATCH_SIGNING_KEY_SECRET = 'switchboard.dispatchSigningKey.v1';
 const MCP_PID_FILENAME = '.switchboard/.mcp_server.pid';
 
@@ -1277,6 +1278,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // 1. REGISTER SIDEBAR (Task Viewer)
     const taskViewerProvider = new TaskViewerProvider(context.extensionUri, context);
+    activeTaskViewerProvider = taskViewerProvider;
     taskViewerProvider.setRegisteredTerminals(registeredTerminals);
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
@@ -3048,6 +3050,11 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (terminal) {
                             terminal.sendText(cmd.trim(), true);
                             mcpOutputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
+
+                            // NEW: Cache the binary-derived agent display name
+                            const binary = cmd.trim().split(/\s+/)[0];
+                            const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
+                            taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
                         }
                     }
                 }
@@ -4565,6 +4572,7 @@ export function deactivate() {
     }
 
     // Dispose ALL Switchboard-managed terminals so they don't persist as orphans
+    activeTaskViewerProvider?.clearAllTerminalAgentInfo();
     for (const [name, terminal] of registeredTerminals) {
         try {
             terminal.dispose();

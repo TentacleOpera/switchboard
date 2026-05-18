@@ -1832,6 +1832,7 @@
         <div class="controls-strip">
             <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
             <select id="workspace-select" class="workspace-select" data-tooltip="Select workspace" style="min-width:180px;"></select>
+            <button class="strip-btn is-teal" id="btn-reassign-workspace" data-tooltip="Assign selected plan(s) to this workspace" style="display:none; margin-left:6px;">ASSIGN TO WORKSPACE</button>
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
             <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
             <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
@@ -2981,9 +2982,13 @@
             return baseLabel;
         }
 
-        function updateWorkspaceSelector() {
+        function updateWorkspaceSelector(explicitRoot = null) {
             const select = document.getElementById('workspace-select');
             if (!select) return;
+
+            // Save the current selection BEFORE rebuilding options
+            const savedSelection = select.value;
+
             const options = workspaceItems.map(item => `
                 <option
                     value="${escapeAttr(item.workspaceRoot)}"
@@ -2991,20 +2996,27 @@
                 >${escapeHtml(buildWorkspaceOptionLabel(item))}</option>
             `).join('');
             select.innerHTML = options;
-            // Only update the selection if it's different from current selection (don't override user's manual selection)
-            const currentValue = select.value;
-            let selectedValue = activeWorkspaceFilter
-                ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
-                : currentWorkspaceRoot;
-            // If currentWorkspaceRoot doesn't match any option, select the first available
-            if (selectedValue && !workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
-                selectedValue = workspaceItems[0]?.workspaceRoot || '';
+
+            // If the backend explicitly changed workspace, honor that over savedSelection
+            if (explicitRoot && workspaceItems.some(item => item.workspaceRoot === explicitRoot)) {
+                select.value = explicitRoot;
+                return;
             }
-            // Only set the value if it's different from what's currently selected (preserve user selection)
-            if (selectedValue && selectedValue !== currentValue && workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
-                select.value = selectedValue;
-            } else if (!currentValue && workspaceItems.length > 0) {
-                select.value = workspaceItems[0].workspaceRoot;
+
+            // Restore the saved selection if it still exists in the new options
+            if (savedSelection && workspaceItems.some(item => item.workspaceRoot === savedSelection)) {
+                select.value = savedSelection;
+            } else {
+                // Only fall back to currentWorkspaceRoot or first option if saved selection is invalid
+                let selectedValue = activeWorkspaceFilter
+                    ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
+                    : currentWorkspaceRoot;
+                if (selectedValue && !workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
+                    selectedValue = workspaceItems[0]?.workspaceRoot || '';
+                }
+                if (selectedValue) {
+                    select.value = selectedValue;
+                }
             }
         }
 
@@ -3732,6 +3744,7 @@
                             postKanbanMessage({ type: 'selectPlan', sessionId: el.dataset.session || '', planId: pid });
                         }
                     }
+                    updateReassignButtonVisibility();
                 });
 
                 // Re-apply selection state after re-render
@@ -3764,9 +3777,25 @@
 
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
+                    // Save original state for reversion
+                    btn.dataset.originalText = btn.textContent;
+                    btn.dataset.originalBg = btn.style.backgroundColor;
+                    btn.dataset.originalColor = btn.style.color;
+
+                    // Optimistic UI state updates
                     btn.disabled = true;
+                    btn.textContent = 'Copied!';
+                    btn.style.backgroundColor = 'var(--vscode-testing-iconPassed, #73c991)';
+                    btn.style.color = '#ffffff';
+
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                    postKanbanMessage({ type: 'copyPlanLink', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', column, workspaceRoot: btn.dataset.workspaceRoot });
+                    postKanbanMessage({
+                        type: 'copyPlanLink',
+                        sessionId: btn.dataset.session || '',
+                        planId: btn.dataset.planId || '',
+                        column,
+                        workspaceRoot: btn.dataset.workspaceRoot
+                    });
                 });
             });
 
@@ -3816,6 +3845,7 @@
             });
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
+            updateReassignButtonVisibility();
         }
         function scoreToCategory(scoreStr) {
             if (scoreStr === 'High') return 'High';
@@ -4191,6 +4221,7 @@
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
+                updateReassignButtonVisibility();
                 const targetBody = document.getElementById('col-CODED_AUTO');
                 const dispatchGroups = new Map();
 
@@ -4429,6 +4460,7 @@
             if (validIds.length > 0) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
+                updateReassignButtonVisibility();
                 setTimeout(() => {
                     if (forwardIds.length > 0) {
                         if (dropMode === 'prompt') {
@@ -4463,15 +4495,21 @@
         window.addEventListener('message', (event) => {
             const msg = event.data;
             switch (msg.type) {
-                case 'updateWorkspaceSelection':
+                case 'updateWorkspaceSelection': {
+                    const previousRoot = currentWorkspaceRoot;
                     currentWorkspaceRoot = msg.workspaceRoot || '';
                     activeWorkspaceFilter = msg.activeFilter || null;
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
                     currentControlPlaneRoot = msg.controlPlaneRoot || msg.effectiveControlPlaneRoot || '';
-                    updateWorkspaceSelector();
+                    
+                    // On cold start previousRoot is '', so explicitChange is false — safe because
+                    // there's no savedSelection to conflict with; the fallback path handles it.
+                    const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
+                    updateWorkspaceSelector(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
                     break;
+                }
                 case 'moveCards': {
                     const idsToMove = new Set(Array.isArray(msg.sessionIds) ? msg.sessionIds : []);
                     const targetCol = msg.targetColumn;
@@ -4703,27 +4741,49 @@
                         updateJulesButtonVisibility();
                     }
                     break;
-                case 'copyPlanLinkResult':
-                    const btn = document.querySelector(`.card-btn.copy[data-session="${msg.sessionId}"]`);
+                case 'copyPlanLinkResult': {
+                    let btn = null;
+                    if (msg.planId) {
+                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${msg.planId}"]`);
+                    }
+                    if (!btn && msg.sessionId) {
+                        btn = document.querySelector(`.card-btn.copy[data-session="${msg.sessionId}"]`);
+                    }
                     if (btn) {
+                        // Clear any pending timeout on this button
+                        if (btn.copyTimeoutId) {
+                            clearTimeout(btn.copyTimeoutId);
+                            btn.copyTimeoutId = null;
+                        }
+
+                        const originalText = btn.dataset.originalText || btn.textContent || 'Copy Prompt';
+                        const originalBg = btn.dataset.originalBg || '';
+                        const originalColor = btn.dataset.originalColor || '';
+
                         if (msg.success) {
-                            const originalText = btn.textContent;
+                            // Ensure success style is set (if not already set optimistically)
                             btn.textContent = 'Copied!';
-                            const originalBg = btn.style.backgroundColor;
-                            const originalColor = btn.style.color;
                             btn.style.backgroundColor = 'var(--vscode-testing-iconPassed, #73c991)';
-                            btn.style.color = 'var(--vscode-editor-background, #1e1e1e)';
-                            setTimeout(() => {
+                            btn.style.color = '#ffffff';
+                            btn.disabled = true;
+
+                            btn.copyTimeoutId = setTimeout(() => {
                                 btn.textContent = originalText;
                                 btn.style.backgroundColor = originalBg;
                                 btn.style.color = originalColor;
                                 btn.disabled = false;
+                                btn.copyTimeoutId = null;
                             }, 1500);
                         } else {
+                            // Instant revert on error
+                            btn.textContent = originalText;
+                            btn.style.backgroundColor = originalBg;
+                            btn.style.color = originalColor;
                             btn.disabled = false;
                         }
                     }
                     break;
+                }
                 case 'updateAutobanConfig':
                     autobanConfig = msg.state || null;
                     updateAutobanIndicators(true);
@@ -4805,9 +4865,6 @@
                 case 'customAgents': {
                   agentsTabCustomAgents = msg.customAgents || [];
                   lastCustomAgents = agentsTabCustomAgents;
-                  if (msg.workspaceRoot) {
-                    currentWorkspaceRoot = msg.workspaceRoot;
-                  }
                   agentsTabRenderCustomAgentList();
                   updateCustomAgentsDropdown();
                   break;
@@ -4903,6 +4960,53 @@
             }
             updateAutobanButtonState();
         }
+
+        function updateReassignButtonVisibility() {
+            const btn = document.getElementById('btn-reassign-workspace');
+            if (!btn) return;
+            const count = selectedCards.size;
+            if (count > 0) {
+                btn.style.display = 'inline-block';
+                btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
+            } else {
+                btn.style.display = 'none';
+            }
+        }
+
+        document.getElementById('btn-reassign-workspace')?.addEventListener('click', () => {
+            const sessionIds = Array.from(selectedCards).map(pid => {
+                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${pid}"], .kanban-card[data-session="${pid}"]`);
+                return cardEl ? (cardEl.dataset.session || cardEl.dataset.planId || pid) : pid;
+            });
+            
+            const select = document.getElementById('workspace-select');
+            const targetWorkspaceRoot = select ? select.value : '';
+
+            if (sessionIds.length === 0 || !targetWorkspaceRoot) {
+                return;
+            }
+
+            // Confirm before reassigning — plans will disappear from the current view
+            const targetLabel = select.selectedOptions?.[0]?.textContent || targetWorkspaceRoot;
+            if (!confirm(`Reassign ${sessionIds.length} plan${sessionIds.length === 1 ? '' : 's'} to workspace "${targetLabel}"?\n\nThese plans will disappear from the current board and appear under the target workspace.`)) {
+                return;
+            }
+
+            postKanbanMessage({
+                type: 'reassignPlansWorkspace',
+                sessionIds: sessionIds,
+                targetWorkspaceRoot: targetWorkspaceRoot
+            });
+
+            // Optimistically clear the selection
+            selectedCards.clear();
+            updateReassignButtonVisibility();
+            
+            // Un-select visually on screen
+            document.querySelectorAll('.kanban-card.selected').forEach(el => {
+                el.classList.remove('selected');
+            });
+        });
 
         document.getElementById('workspace-select')?.addEventListener('change', (event) => {
             const selectedWorkspaceRoot = event.target.value || '';

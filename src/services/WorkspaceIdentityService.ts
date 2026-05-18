@@ -2,7 +2,7 @@ import * as crypto from 'crypto';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
-import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanDatabase, WorkspaceDatabaseMapping } from './KanbanDatabase';
 
 // Module-level cache for mapping lookups
 let _mappingCache: Map<string, string> | null = null;
@@ -26,11 +26,43 @@ export function clearMappingCache(): void {
 }
 
 /**
+ * Helper to determine if a workspace root is configured as a dropdown workspace.
+ */
+export function isDropdownWorkspace(workspaceRoot: string): boolean {
+    try {
+        const vscode = require('vscode');
+        const cfg = vscode.workspace.getConfiguration('switchboard')
+                         .get('workspaceDatabaseMappings') as
+            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+
+        if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
+            return false;
+        }
+
+        const resolvedRoot = path.resolve(workspaceRoot);
+        for (const mapping of cfg.mappings) {
+            if (!Array.isArray(mapping.dropdownWorkspaces)) continue;
+            for (const f of mapping.dropdownWorkspaces) {
+                const expanded = f.startsWith('~')
+                    ? path.join(os.homedir(), f.slice(1))
+                    : f;
+                if (path.resolve(expanded) === resolvedRoot) {
+                    return true;
+                }
+            }
+        }
+    } catch {
+        // Outside extension host
+    }
+    return false;
+}
+
+/**
  * Resolves the effective workspace root based on workspaceDatabaseMappings configuration.
  * If this workspace is part of a shared database mapping, returns the parent workspace root.
  * Uses memoization to avoid repeated VS Code config API calls.
  */
-function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): string {
+export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): string {
     // Check cache first
     const cached = getCachedMapping(workspaceRoot);
     if (cached !== undefined) {
@@ -41,7 +73,7 @@ function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): strin
         const vscode = require('vscode');
         const cfg = vscode.workspace.getConfiguration('switchboard')
                          .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string }> } | undefined;
+            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
         if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
             setCachedMapping(workspaceRoot, workspaceRoot);
@@ -50,7 +82,7 @@ function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): strin
 
         // workspaceRoot is already resolved by caller
 
-        // Check if this workspace root is in any mapping (as child OR as parent)
+        // Check if this workspace root is in any mapping (as child OR as parent OR as dropdown)
         for (const mapping of cfg.mappings) {
             if (!Array.isArray(mapping.workspaceFolders)) continue;
 
@@ -60,6 +92,11 @@ function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): strin
                 const expandedParent = mapping.parentFolder.startsWith('~')
                     ? path.join(os.homedir(), mapping.parentFolder.slice(1))
                     : mapping.parentFolder;
+                    
+                if (!path.isAbsolute(expandedParent)) {
+                    console.warn(`[WorkspaceIdentityService] Warning: Relative parentFolder "${mapping.parentFolder}" used in mapping. Please use absolute paths or ~.`);
+                }
+                
                 isParent = path.resolve(expandedParent) === workspaceRoot;
             }
 
@@ -68,10 +105,25 @@ function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): strin
                 const expanded = f.startsWith('~')
                     ? path.join(os.homedir(), f.slice(1))
                     : f;
+                    
+                if (!path.isAbsolute(expanded)) {
+                    console.warn(`[WorkspaceIdentityService] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
+                }
+                
                 return path.resolve(expanded) === workspaceRoot;
             });
 
-            if (isParent || matchingIndex !== -1) {
+            // Find if this root is listed as a dropdown workspace in the mapping
+            const dropdownIndex = Array.isArray(mapping.dropdownWorkspaces)
+                ? mapping.dropdownWorkspaces.findIndex((f: string) => {
+                    const expanded = f.startsWith('~')
+                        ? path.join(os.homedir(), f.slice(1))
+                        : f;
+                    return path.resolve(expanded) === workspaceRoot;
+                })
+                : -1;
+
+            if (isParent || matchingIndex !== -1 || dropdownIndex !== -1) {
                 // This root is part of this mapping - return the parent folder
                 let parentEntry: string | undefined;
                 if (mapping.parentFolder) {
@@ -157,16 +209,20 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
     const db = KanbanDatabase.forWorkspace(resolvedRoot);
     const dbReady = await db.ensureReady();
 
-    // PRIORITY 0: Check workspaceDatabaseMappings - use parent identity if mapped
-    const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
-    if (effectiveRoot !== resolvedRoot) {
-        console.log(`[WorkspaceIdentityService] ${resolvedRoot} maps to parent ${effectiveRoot} - using parent's identity`);
-        // Return parent's ID without creating local file in child folder
-        return ensureWorkspaceIdentity(effectiveRoot);
+    const isDropdown = isDropdownWorkspace(resolvedRoot);
+
+    // PRIORITY 0: Check workspaceDatabaseMappings - use parent identity if mapped (skip if dropdown)
+    if (!isDropdown) {
+        const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+        if (effectiveRoot !== resolvedRoot) {
+            console.log(`[WorkspaceIdentityService] ${resolvedRoot} maps to parent ${effectiveRoot} - using parent's identity`);
+            // Return parent's ID without creating local file in child folder
+            return ensureWorkspaceIdentity(effectiveRoot);
+        }
     }
 
-    // PRIORITY 1: Use workspace_id from DB config (supports shared databases)
-    if (dbReady) {
+    // PRIORITY 1: Use workspace_id from DB config (supports shared databases) (skip if dropdown)
+    if (!isDropdown && dbReady) {
         const stored = await db.getWorkspaceId();
         if (stored) {
             await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, stored);
@@ -180,17 +236,18 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
         const lines = fileContent.split('\n');
         const trimmed = (lines[0] ?? '').trim();
         if (isValidWorkspaceId(trimmed)) {
-            if (dbReady) {
+            if (!isDropdown && dbReady) {
                 await db.setWorkspaceId(trimmed);
             }
+            await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, trimmed);
             return trimmed;
         }
     } catch {
         // File does not exist or is unreadable - continue to fallback
     }
 
-    // PRIORITY 3: Use dominant workspace_id from existing plans (migration support)
-    if (dbReady) {
+    // PRIORITY 3: Use dominant workspace_id from existing plans (migration support) (skip if dropdown)
+    if (!isDropdown && dbReady) {
         const dominant = await db.getDominantWorkspaceId();
         if (dominant) {
             await db.setWorkspaceId(dominant);
@@ -199,26 +256,28 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
         }
     }
 
-    // PRIORITY 4: Legacy workspace_identity.json file
-    try {
-        if (fs.existsSync(legacyPath)) {
-            const data = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
-            const legacyWorkspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId.trim() : '';
-            if (isValidWorkspaceId(legacyWorkspaceId)) {
-                if (dbReady) {
-                    await db.setWorkspaceId(legacyWorkspaceId);
+    // PRIORITY 4: Legacy workspace_identity.json file (skip if dropdown)
+    if (!isDropdown) {
+        try {
+            if (fs.existsSync(legacyPath)) {
+                const data = JSON.parse(await fs.promises.readFile(legacyPath, 'utf8'));
+                const legacyWorkspaceId = typeof data?.workspaceId === 'string' ? data.workspaceId.trim() : '';
+                if (isValidWorkspaceId(legacyWorkspaceId)) {
+                    if (dbReady) {
+                        await db.setWorkspaceId(legacyWorkspaceId);
+                    }
+                    await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, legacyWorkspaceId);
+                    return legacyWorkspaceId;
                 }
-                await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, legacyWorkspaceId);
-                return legacyWorkspaceId;
             }
+        } catch (error) {
+            console.error('[WorkspaceIdentityService] Failed to read legacy workspace identity:', error);
         }
-    } catch (error) {
-        console.error('[WorkspaceIdentityService] Failed to read legacy workspace identity:', error);
     }
 
     // PRIORITY 5: Generate new ID from workspace root hash
     const hashId = crypto.createHash('sha256').update(resolvedRoot).digest('hex').slice(0, 12);
-    if (dbReady) {
+    if (!isDropdown && dbReady) {
         await db.setWorkspaceId(hashId);
     }
     await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, hashId);
