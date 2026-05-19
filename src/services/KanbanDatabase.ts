@@ -3,6 +3,7 @@ import * as crypto from 'crypto';
 import { createRequire } from 'module';
 import * as os from 'os';
 import * as path from 'path';
+import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 
 export interface WorkspaceDatabaseMapping {
     id: string;
@@ -514,6 +515,8 @@ export class KanbanDatabase {
                 if (mapping?.dbPath) {
                     resolvedDbPath = path.resolve(KanbanDatabase._expandHome(mapping.dbPath));
                     console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);
+                } else if (mapping) {
+                    console.log(`[KanbanDatabase] Workspace '${stable}' found in mapping '${mapping.name}' but no dbPath configured; using default database location`);
                 } else {
                     console.log(`[KanbanDatabase] Workspace '${stable}' not in any mapping; using default database location`);
                 }
@@ -679,11 +682,16 @@ export class KanbanDatabase {
                 }
             }
 
-            // NOTE: This mkdir is unguarded (no .switchboard boundary check).
-            // migrateIfNeeded() is called from controlled contexts (TaskViewerProvider,
-            // ControlPlaneMigrationService) with validated workspace-root-derived paths.
-            // If called with arbitrary targetPath values, this could create directories
-            // outside the workspace. A future refactor should add boundary validation here.
+            // Guard: validate that the target location is allowed to contain .switchboard
+            const targetDir = path.dirname(targetPath); // e.g. /path/to/workspace/.switchboard
+            const switchboardParent = path.dirname(targetDir); // e.g. /path/to/workspace
+            // Derive workspaceRoot from the source path for the guard check
+            const sourceDir = path.dirname(sourcePath);
+            const sourceWorkspaceRoot = path.dirname(sourceDir);
+            if (!isAllowedSwitchboardLocation(switchboardParent, sourceWorkspaceRoot)) {
+                console.warn(`[KanbanDatabase] Blocked migration to ${targetPath} — not an allowed .switchboard location`);
+                return { migrated: false, skipped: 'invalid_target_location' };
+            }
             await fs.promises.mkdir(path.dirname(targetPath), { recursive: true });
             await fs.promises.copyFile(sourcePath, targetPath);
             console.log(`[KanbanDatabase] Migrated DB from ${sourcePath} to ${targetPath}`);
@@ -1428,6 +1436,15 @@ export class KanbanDatabase {
         }
         return result;
     }
+
+    public async updateSessionId(oldSessionId: string, newSessionId: string): Promise<boolean> {
+        console.log(`[KanbanDatabase] updateSessionId: oldSessionId=${oldSessionId}, newSessionId=${newSessionId}`);
+        const sql = 'UPDATE plans SET session_id = ?, updated_at = ? WHERE session_id = ?';
+        const params = [newSessionId, new Date().toISOString(), oldSessionId];
+        const result = this._persistedUpdate(sql, params);
+        return result;
+    }
+
 
     public async updateLinearIssueIdByPlanFile(planFile: string, workspaceId: string, linearIssueId: string): Promise<boolean> {
         const normalizedIssueId = String(linearIssueId || '').trim();

@@ -28,6 +28,13 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _scanIntervalMs = 10000; // 10 seconds default
     private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
     private _scanInProgress = false; // Guard against overlapping scans
+    private _recentRenames = new Set<string>();
+
+    public registerRename(oldRelativePath: string): void {
+        const normalized = oldRelativePath.replace(/\\/g, '/');
+        this._recentRenames.add(normalized);
+        setTimeout(() => this._recentRenames.delete(normalized), 2000);
+    }
 
     constructor(
         private readonly _getClickUpService: (workspaceRoot: string) => ClickUpSyncService,
@@ -491,6 +498,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             const workspaceId = await db.getWorkspaceId();
             
             if (workspaceId) {
+                if (this._recentRenames.has(relativePath)) {
+                    this._outputChannel?.appendLine(`[GlobalPlanWatcher] Skipping delete for recently-renamed plan: ${relativePath}`);
+                    return;
+                }
                 const plan = await db.getPlanByPlanFile(relativePath, workspaceId);
                 if (plan) {
                     // Don't delete completed plans — they were archived, not deleted

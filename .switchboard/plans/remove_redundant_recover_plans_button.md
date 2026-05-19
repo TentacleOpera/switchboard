@@ -50,3 +50,22 @@ Key risks: Leaving dead code or accidentally affecting the bottom RECOVER button
 - Toggle the plan mode to `COMPLETED` and verify the singular `RECOVER` (`#btn-recover-plan`) button appears at the bottom and functions correctly.
 
 **Recommendation:** Send to Coder
+
+## Implementation Details & Post-Review Updates
+### Files Changed
+1. **`src/webview/implementation.html`**:
+   - Removed redundant header `#btn-recover-plans` button.
+   - Removed associated `#recover-plans-modal` markup, styles, cache variables, search input event listeners, modal opening/closing logic (`openRecoverPlansModal`/`closeRecoverPlansModal`), logic to infer names from path, and result handling message switch cases (`recoverablePlans` / `restorePlanResult`).
+   - Cleaned up intro panel text to guide users to create tickets.
+2. **`src/test/plan-recovery-regression.test.js`**:
+   - Removed obsolete UI test cases asserting the header `RECOVER` button and modal markup.
+   - Updated structural regression matches to reflect that `_getRecoverablePlans` is `async` and has custom return types.
+   - Adjusted `_handleRestorePlan` assertion to target `allowedRestoreStatuses` validation.
+   - Replaced registry-based `dropdown still restricts to owned active entries` checks with a database-backed board query verification.
+
+### Verification Results
+- Run command: `node -e "const Mocha = require('mocha'); const mocha = new Mocha(); mocha.addFile('src/test/plan-recovery-regression.test.js'); mocha.run(failures => process.exit(failures ? 1 : 0));"`
+- Result: **11/11 tests passing successfully.**
+
+### Remaining Risks
+- **None.** The header recovery UI and associated modal HTML, styles, and event handling logic have been cleanly eliminated. The backend recovery functions are completely intact and continue to be leveraged correctly by the AUTOBAN (Kanban board) sidebar integration via `handleKanbanRestorePlan`.

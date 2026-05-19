@@ -16,6 +16,7 @@ import { importPlanFiles } from './services/PlanFileImporter';
 import { ClickUpSyncService } from './services/ClickUpSyncService';
 import { LinearSyncService } from './services/LinearSyncService';
 import { NotionFetchService } from './services/NotionFetchService';
+import { NotionBrowseService } from './services/NotionBrowseService';
 import { LocalFolderService } from './services/LocalFolderService';
 import { ControlPlaneMigrationService } from './services/ControlPlaneMigrationService';
 import { WorkspaceExcludeService } from './services/WorkspaceExcludeService';
@@ -24,6 +25,7 @@ import { PlanningPanelProvider } from './services/PlanningPanelProvider';
 import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
+import { isAllowedSwitchboardLocation } from './utils/switchboardLocationGuard';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -1406,7 +1408,7 @@ export async function activate(context: vscode.ExtensionContext) {
         },
         {
             getNotionService: (root) => (kanbanProvider as any)._getNotionService(root),
-            getNotionBrowseService: (root) => (kanbanProvider as any)._getNotionBrowseService(root),
+            getNotionBrowseService: (root) => new NotionBrowseService(root, (kanbanProvider as any)._getNotionService(root)),
             getLinearDocsAdapter: (root) => (kanbanProvider as any)._getLinearDocsAdapter(root),
             getClickUpDocsAdapter: (root) => (kanbanProvider as any)._getClickUpDocsAdapter(root),
             getCacheService
@@ -2085,7 +2087,14 @@ export async function activate(context: vscode.ExtensionContext) {
             const switchboardDir = path.join(runtimeStateRoot, '.switchboard');
             try {
                 if (!fs.existsSync(switchboardDir)) {
-                    fs.mkdirSync(switchboardDir, { recursive: true });
+                    // VALIDATION: Only create .switchboard in allowed locations
+                    // Blocks creation in mapped child workspace folders
+                    if (!isAllowedSwitchboardLocation(runtimeStateRoot, workspaceRoot)) {
+                        mcpOutputChannel?.appendLine(`[Extension] Skipping .switchboard creation in ${runtimeStateRoot} — mapped child workspace`);
+                        console.warn(`[Extension] Blocked .switchboard creation in child workspace: ${runtimeStateRoot}`);
+                    } else {
+                        fs.mkdirSync(switchboardDir, { recursive: true });
+                    }
                 }
                 const fsStateWatcher = fs.watch(switchboardDir, (_eventType, filename) => {
                     if (filename && filename.toString() === 'state.json') {

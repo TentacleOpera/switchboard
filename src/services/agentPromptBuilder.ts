@@ -102,9 +102,13 @@ export interface PromptBuilderOptions {
     enableDeepPlanning?: boolean;
     /** The research depth to use for the deep research protocol (e.g. 'quick', 'standard', 'deep', 'academic'). */
     researchDepth?: string;
+    /** The user's custom routing map configuration for agent complexities. */
+    routingMapConfig?: { lead: number[]; coder: number[]; intern: number[] } | null;
+    /** When true, instructs agents to ignore previous checkpoint summaries. */
+    clearAntigravityContext?: boolean;
 }
 
-function resolveBaseInstructions(
+export function resolveBaseInstructions(
     role: string,
     defaultBase: string,
     options?: PromptBuilderOptions
@@ -246,6 +250,7 @@ export function buildKanbanBatchPrompt(
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
     const sourceColumnLabel = options?.sourceColumnLabel;
+    const clearAntigravityContext = options?.clearAntigravityContext ?? false;
 
     const parallelInstruction = plans.length > 1
         ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
@@ -257,6 +262,9 @@ export function buildKanbanBatchPrompt(
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
     const inlineChallengeDirective = INLINE_CHALLENGE_DIRECTIVE;
     const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
+    const antigravityBlock = clearAntigravityContext
+        ? `\n\nIgnore any previous checkpoint summaries or context carried over from prior agent sessions. Do NOT ignore workspace-level context such as AGENTS.md, existing code conventions, or project configuration.\n`
+        : '';
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
@@ -298,6 +306,10 @@ export function buildKanbanBatchPrompt(
         // Build default base instructions
         let plannerBase = `Read ${workflowPath} and follow it step-by-step.\n\n`;
 
+        if (options?.routingMapConfig) {
+            plannerBase += `ROUTING MAP CONFIGURATION:\nThe user has configured the following custom routing map for complexity scores. When recommending an agent at the end of the plan, you MUST use these exact thresholds instead of any default thresholds:\n- Intern: Complexity ${options.routingMapConfig.intern.join(', ')}\n- Coder: Complexity ${options.routingMapConfig.coder.join(', ')}\n- Lead Coder: Complexity ${options.routingMapConfig.lead.join(', ')}\n\n`;
+        }
+
         // Include batch execution rules for multi-plan dispatches
         if (plans.length > 1 && switchboardSafeguardsEnabled) {
             plannerBase += `${batchExecutionRules}\n\n`;
@@ -333,7 +345,7 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += GIT_PROHIBITION_DIRECTIVE;
         }
 
-        plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
+        plannerPrompt += `${antigravityBlock}\n\nPLANS TO PROCESS:\n${planList}`;
 
         // Append design doc content (pre-fetched Notion)
         const designDocContent = options?.designDocContent?.trim();
@@ -371,7 +383,7 @@ ${safeguardsBlock}${reviewerExecutionMode}${advancedReviewerBlock}
 
 ${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -408,7 +420,7 @@ ${executionDirective}
 
 ${safeguardsBlock}${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -428,7 +440,7 @@ ${planList}`;
             : challengeBlock.trim();
         const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
 
-        let leadBase = '';
+        let leadBase = options?.personaContent?.trim() || '';
         if (pairProgrammingEnabled) {
             leadBase += `\n\nNote: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
             if (aggressivePairProgramming) {
@@ -446,7 +458,7 @@ ${safeguardsBlock}
 
 ${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -464,7 +476,7 @@ ${planList}`;
             ? `${batchExecutionRules}${challengeBlock}`
             : challengeBlock.trim();
 
-        let coderBase = '';
+        let coderBase = options?.personaContent?.trim() || '';
         if (pairProgrammingEnabled) {
             coderBase += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
         }
@@ -479,7 +491,7 @@ ${safeguardsBlock}
 
 ${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`, accurateCodingEnabled);
@@ -495,7 +507,7 @@ ${planList}`, accurateCodingEnabled);
 
 ${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -508,7 +520,7 @@ ${planList}`;
 
 ${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -546,7 +558,7 @@ Format the analysis as:
 
         return `${baseInstructions}
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -561,7 +573,7 @@ ${DEEP_RESEARCH_DIRECTIVE}`;
 
         return `${baseInstructions}
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -594,7 +606,7 @@ ${planList}`;
 
         return `${baseInstructions}
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;
@@ -628,7 +640,7 @@ Create both files in the same directory as the original plan.`;
 
         return `${baseInstructions}
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}
+${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
 
 PLANS TO PROCESS:
 ${planList}`;

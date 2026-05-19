@@ -1252,20 +1252,12 @@
                 <div class="planning-card-header">RESEARCH MODE</div>
                 <div class="planning-card-description">Select research mode and configure options. The generated prompt will guide the AI through the selected research protocol.</div>
 
-                <!-- Mode Switch -->
-                <div class="segmented-control" role="tablist" aria-label="Research mode selection">
-                    <button class="segmented-btn active" data-mode="web" role="tab" aria-selected="true" aria-controls="research-mode-description">WEB RESEARCH</button>
-                </div>
-
-                <!-- Mode Description -->
-                <div id="research-mode-description" class="mode-description" aria-live="polite">
-                    Comprehensive web research on any topic using iterative search strategies.
-                </div>
+                <textarea id="research-prompt-input" class="planning-input" rows="4" placeholder="Enter research prompt..." style="margin-top: 12px;"></textarea>
 
                 <!-- Action Buttons -->
                 <div class="prompt-buttons-container">
-                    <button id="btn-copy-research-prompt" class="planning-button" aria-describedby="research-mode-description">COPY PROMPT</button>
-                    <button id="btn-send-to-analyst" class="planning-button secondary" style="display: none;" title="Send prompt to analyst terminal">SEND TO ANALYST</button>
+                    <button id="btn-copy-research-prompt" class="planning-button">COPY PROMPT</button>
+                    <button id="btn-send-to-analyst" class="planning-button" title="Send prompt to analyst terminal">SEND ANALYST REQUEST</button>
                 </div>
             </div>
 

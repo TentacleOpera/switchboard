@@ -1,7 +1,7 @@
 'use strict';
 
 const assert = require('assert');
-const { buildKanbanBatchPrompt } = require('../../out/services/agentPromptBuilder');
+const { buildKanbanBatchPrompt, resolveBaseInstructions } = require('../../out/services/agentPromptBuilder');
 
 const plans1 = [
     { topic: 'plan-1', absolutePath: '/abs/path/to/1.md' }
@@ -296,6 +296,55 @@ function testResearchPlannerPrompt() {
     console.log('  PASS: research_planner prompt templates correctly implemented');
 }
 
+function testResolveBaseInstructions() {
+    console.log('Testing resolveBaseInstructions precedence & fallback...');
+
+    // 1. When defaultBase is non-empty and personaContent is non-empty, defaultBase is used (not personaContent)
+    const result1 = resolveBaseInstructions('planner', 'default-base', { personaContent: 'persona-essay' });
+    assert.strictEqual(result1, 'default-base', 'Should prioritize defaultBase over personaContent');
+
+    // 2. When defaultBase is empty/falsy and personaContent is non-empty, personaContent is used
+    const result2 = resolveBaseInstructions('intern', '', { personaContent: 'persona-essay' });
+    assert.strictEqual(result2, 'persona-essay', 'Should fallback to personaContent when defaultBase is empty');
+
+    // 3. When both are empty, empty string is returned
+    const result3 = resolveBaseInstructions('intern', '', { personaContent: '' });
+    assert.strictEqual(result3, '', 'Should return empty string when both are empty');
+    
+    const result3b = resolveBaseInstructions('intern', '');
+    assert.strictEqual(result3b, '', 'Should return empty string when personaContent is undefined');
+
+    // 4. Override modes (replace/prepend/append) still work correctly with the new precedence
+    // Replace: override.text is returned
+    const resultReplace = resolveBaseInstructions('planner', 'default-base', {
+        personaContent: 'persona-essay',
+        defaultPromptOverrides: {
+            planner: { mode: 'replace', text: 'overridden-replace' }
+        }
+    });
+    assert.strictEqual(resultReplace, 'overridden-replace', 'Replace override should discard base');
+
+    // Prepend: override.text + base
+    const resultPrepend = resolveBaseInstructions('planner', 'default-base', {
+        personaContent: 'persona-essay',
+        defaultPromptOverrides: {
+            planner: { mode: 'prepend', text: 'overridden-prepend' }
+        }
+    });
+    assert.strictEqual(resultPrepend, 'overridden-prepend\n\ndefault-base', 'Prepend override should prepend to correct base');
+
+    // Append: base + override.text
+    const resultAppend = resolveBaseInstructions('planner', 'default-base', {
+        personaContent: 'persona-essay',
+        defaultPromptOverrides: {
+            planner: { mode: 'append', text: 'overridden-append' }
+        }
+    });
+    assert.strictEqual(resultAppend, 'default-base\n\noverridden-append', 'Append override should append to correct base');
+
+    console.log('  PASS: resolveBaseInstructions precedence & fallback correct');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
@@ -318,6 +367,7 @@ try {
     testSplitPlanWithAggressivePairProgramming();
     testInternAnalystPrompts();
     testResearchPlannerPrompt();
+    testResolveBaseInstructions();
     testUnknownRoleThrows();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {

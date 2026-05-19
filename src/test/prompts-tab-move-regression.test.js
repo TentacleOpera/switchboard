@@ -7,6 +7,7 @@ const path = require('path');
 const kanbanSource = fs.readFileSync(path.join(process.cwd(), 'src', 'webview', 'kanban.html'), 'utf8');
 const taskViewerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
 const setupPanelSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts'), 'utf8');
+const kanbanProviderSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
 
 function expectRegex(source, regex, message) {
     assert.match(source, regex, message);
@@ -45,10 +46,8 @@ function run() {
         'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',
         'plannerAddonSplitPlan',
-        'rolePromptTextarea',
         'roleAddonsDesc',
         'roleAddonsGroup',
-        'refreshPreview',
         'promptPreview'
     ];
 
@@ -60,8 +59,8 @@ function run() {
         );
     });
 
-    // Verify old agents-tab-* prompt element IDs NO LONGER EXIST
-    const oldAgentsTabElements = [
+    // Verify old agents-tab-* and removed prompts tab elements NO LONGER EXIST
+    const removedElements = [
         'agents-tab-design-doc-toggle',
         'agents-tab-design-doc-input',
         'agents-tab-accurate-coding-toggle',
@@ -74,14 +73,16 @@ function run() {
         'agents-tab-prompt-text',
         'agents-tab-btn-clear-override',
         'agents-tab-prompt-override-summary',
-        'agents-tab-btn-save-overrides'
+        'agents-tab-btn-save-overrides',
+        'rolePromptTextarea',
+        'refreshPreview'
     ];
 
-    oldAgentsTabElements.forEach(elementId => {
+    removedElements.forEach(elementId => {
         expectNoRegex(
             kanbanSource,
             new RegExp(`id="${elementId}"`),
-            `Expected old element id="${elementId}" to NOT exist`
+            `Expected old/removed element id="${elementId}" to NOT exist`
         );
     });
 
@@ -256,6 +257,13 @@ function run() {
         taskViewerSource,
         /handleGetAccurateCodingSetting/,
         'Expected TaskViewerProvider.handleGetAccurateCodingSetting to exist'
+    );
+    
+    // Verify accurateCodingEnabled is passed in KanbanProvider.ts prompt preview paths
+    expectRegex(
+        kanbanProviderSource,
+        /accurateCodingEnabled:\s*role\s*(?:===\s*'coder'|as\s*any\s*===\s*'coder')\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined/,
+        'Expected accurateCodingEnabled to be passed to buildKanbanBatchPrompt in KanbanProvider.ts'
     );
 
     console.log('✓ Test 5 passed\n');
@@ -480,6 +488,14 @@ function run() {
     );
 
     console.log('✓ Test 9 passed\n');
+
+    console.log('Test 10: Accurate Coding Preview Regression');
+    expectRegex(
+        kanbanProviderSource,
+        /case\s+'getPromptPreview':[\s\S]*?accurateCodingEnabled:\s*role\s*===\s*'coder'\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined[\s\S]*?break;/m,
+        'Expected KanbanProvider getPromptPreview to pass accurateCodingEnabled'
+    );
+    console.log('✓ Test 10 passed\n');
 
     console.log('All tests passed! ✓');
 }

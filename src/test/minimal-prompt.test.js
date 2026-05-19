@@ -131,6 +131,29 @@ function testBatchExecutionRulesExcludedForSinglePlan() {
     console.log('  PASS: Batch execution rules are excluded for single-plan dispatches');
 }
 
+function testClearAntigravityContextEnabled() {
+    console.log('Testing clear antigravity context is included when enabled...');
+    const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        clearAntigravityContext: true
+    });
+
+    assert.ok(prompt.includes('Ignore any previous checkpoint summaries or context carried over from prior agent sessions.'), 'Prompt should include clear antigravity context directive when enabled');
+    assert.ok(prompt.includes('Do NOT ignore workspace-level context such as AGENTS.md'), 'Prompt should not exclude workspace context');
+    console.log('  PASS: Clear antigravity context is included when enabled');
+}
+
+function testClearAntigravityContextDisabled() {
+    console.log('Testing clear antigravity context is excluded when disabled...');
+    const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        clearAntigravityContext: false
+    });
+
+    assert.ok(!prompt.includes('Ignore any previous checkpoint summaries'), 'Prompt should not include clear antigravity context directive when disabled');
+    console.log('  PASS: Clear antigravity context is excluded when disabled');
+}
+
 try {
     testDefaultPromptIsMinimal();
     testNoAddOnsByDefault();
@@ -142,6 +165,8 @@ try {
     testWorkspaceTypeBlockIncludedForSingleRepo();
     testBatchExecutionRulesIncludedForMultiPlan();
     testBatchExecutionRulesExcludedForSinglePlan();
+    testClearAntigravityContextEnabled();
+    testClearAntigravityContextDisabled();
     console.log('\nAll tests passed!');
 } catch (err) {
     console.error('\nTest failed:', err.message);

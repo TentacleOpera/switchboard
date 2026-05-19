@@ -71,44 +71,7 @@
         });
     });
 
-    // Segmented Control for Research Mode
-    const segmentedBtns = document.querySelectorAll('.segmented-btn');
-    const modeDescription = document.getElementById('research-mode-description');
 
-    const modeDescriptions = {
-        web: 'Comprehensive web research on any topic using iterative search strategies.',
-        deep: 'Deep architectural planning for complex code changes with dependency analysis.'
-    };
-
-    segmentedBtns.forEach(btn => {
-        btn.addEventListener('click', () => {
-            const parent = btn.closest('.segmented-control');
-            const mode = btn.dataset.mode;
-
-            // Update visual state
-            parent.querySelectorAll('.segmented-btn').forEach(b => {
-                b.classList.remove('active');
-                b.setAttribute('aria-selected', 'false');
-            });
-            btn.classList.add('active');
-            btn.setAttribute('aria-selected', 'true');
-
-            // Update state and persist
-            state.researchMode = mode;
-            vscode.setState({ ...vscode.getState(), researchMode: mode });
-
-            // Update description
-            if (modeDescription) {
-                modeDescription.textContent = modeDescriptions[mode] || modeDescriptions.web;
-            }
-        });
-    });
-
-    // Initialize mode from state
-    const initialModeBtn = document.querySelector(`.segmented-btn[data-mode="${state.researchMode}"]`);
-    if (initialModeBtn && modeDescription) {
-        initialModeBtn.click(); // Trigger state synchronization
-    }
 
     // Clipboard Import logic
     const copyAgentPromptBtn = document.getElementById('btn-copy-agent-prompt');
@@ -176,7 +139,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             });
             sendToAnalystBtn.innerText = 'SENT';
             setTimeout(() => {
-                if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+                if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
             }, 2000);
         });
     }
@@ -1541,9 +1504,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'analystAvailabilityResult':
                 const analystBtn = document.getElementById('btn-send-to-analyst');
                 if (analystBtn) {
-                    analystBtn.style.display = msg.available ? 'inline-block' : 'none';
+                    analystBtn.disabled = !msg.available;
                     if (!msg.available) {
                         analystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
+                    } else {
+                        analystBtn.removeAttribute('title');
                     }
                 }
                 break;
@@ -1553,13 +1518,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (msg.success) {
                         sendToAnalystBtn.innerText = 'SENT';
                         setTimeout(() => {
-                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
                         }, 2000);
                     } else {
                         sendToAnalystBtn.innerText = 'FAILED';
                         console.error('[Research] Failed to send to analyst:', msg.error);
                         setTimeout(() => {
-                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND TO ANALYST';
+                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
                         }, 2000);
                     }
                 }
@@ -1713,9 +1678,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function generateResearchPrompt() {
         const complexityInput = document.querySelector('input[name="complexity"]:checked');
         const importToggle = document.getElementById('import-toggle');
+        const promptInput = document.getElementById('research-prompt-input');
 
         const complexity = complexityInput ? complexityInput.value : 'quick';
         const importEnabled = importToggle ? importToggle.checked : false;
+        const customPrompt = promptInput ? promptInput.value.trim() : '';
 
         const complexityLabels = {
             quick: 'Quick (5-10 sources)',
@@ -1734,7 +1701,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const saveAction = 'save the results';
         const protocolAction = 'proposing a research plan';
 
-        let prompt = `Use the ${skillName} skill to ${taskType}.\n\n`;
+        let prompt = `Use the ${skillName} skill to ${taskType}`;
+        if (customPrompt) {
+            prompt += `:\n\n${customPrompt}\n\n`;
+        } else {
+            prompt += `.\n\n`;
+        }
+
         prompt += `${depthLabel}: ${complexityLabels[complexity] || complexity}\n\n`;
 
         if (importEnabled) {

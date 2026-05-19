@@ -994,7 +994,7 @@ function getComplexityFromContent(content) {
         return 'Unknown';
     }
     const afterAudit = content.slice(auditMatch.index + auditMatch[0].length);
-    const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex)\b/im);
+    const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex\s*(?:\/\s*Risky)?|Complex)\b/im);
     if (!bandBMatch) return '3';
     const bandBStart = bandBMatch.index + bandBMatch[0].length;
     const afterBandB = afterAudit.slice(bandBStart);

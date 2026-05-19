@@ -762,6 +762,21 @@ export class SetupPanelProvider implements vscode.Disposable {
                                 }
                             }
                         }
+
+                        // Ensure dropdown workspaces have a valid dbPath (defense-in-depth)
+                        if (Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.length > 0) {
+                            if (!m.dbPath?.trim()) {
+                                errors.push(`Mapping "${m.name}": database path is required when dropdown workspaces are configured`);
+                            } else if (mode !== 'create') {
+                                // For connect mode (default), verify the database file exists
+                                const resolvedDbPath = path.resolve(expandHome(m.dbPath.trim()));
+                                if (!fs.existsSync(resolvedDbPath)) {
+                                    errors.push(`Mapping "${m.name}": database file does not exist for dropdown workspaces: ${resolvedDbPath}`);
+                                } else if (!resolvedDbPath.endsWith('.db')) {
+                                    errors.push(`Mapping "${m.name}": database path must end with .db`);
+                                }
+                            }
+                        }
  
                         for (const f of m.workspaceFolders ?? []) {
                             const norm = path.resolve(expandHome(f));

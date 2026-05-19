@@ -3,6 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import * as vscode from 'vscode';
+import { isAllowedSwitchboardLocation } from '../utils/switchboardLocationGuard';
 import { importPlanFiles } from './PlanFileImporter';
 import { KanbanDatabase } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
@@ -653,6 +654,14 @@ export class ControlPlaneMigrationService {
     }
 
     private static async _bootstrapControlPlaneLayout(parentDir: string, extensionPath?: string): Promise<void> {
+        // Guard: validate that parentDir is allowed to contain .switchboard
+        // _bootstrapControlPlaneLayout is called from user-initiated migration flows
+        // where parentDir is already validated, but defense-in-depth prevents
+        // accidental pollution if called from an unexpected context.
+        if (!isAllowedSwitchboardLocation(parentDir, parentDir)) {
+            console.warn(`[ControlPlaneMigrationService] Blocked .switchboard bootstrap in ${parentDir} — not an allowed location`);
+            return;
+        }
         await Promise.all([
             fs.promises.mkdir(path.join(parentDir, '.agent'), { recursive: true }),
             fs.promises.mkdir(path.join(parentDir, '.switchboard', 'plans'), { recursive: true }),

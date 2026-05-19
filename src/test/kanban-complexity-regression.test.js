@@ -76,12 +76,91 @@ function run() {
         'Send it to the **Lead Coder**.'
     ].join('\n');
 
+    const noBlankLinesPlan = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        '- Simple localized change.',
+        '### Complex / Risky',
+        '- None'
+    ].join('\n');
+
+    const plainTextPlan = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        'Just some minor terminology update without bullets.',
+        '### Complex / Risky',
+        'None'
+    ].join('\n');
+
+    const mixedBulletsPlan = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        '* Bullet with asterisk',
+        '+ Bullet with plus',
+        '### Complex / Risky',
+        '- None'
+    ].join('\n');
+
+    const diffEmptyMarkersPlan1 = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        '- Done',
+        '### Complex / Risky',
+        'n/a'
+    ].join('\n');
+
+    const diffEmptyMarkersPlan2 = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        '- Done',
+        '### Complex / Risky',
+        '- None.'
+    ].join('\n');
+
+    const complexRiskySubstantivePlan = [
+        '# Test Plan',
+        '## Complexity Audit',
+        '### Routine',
+        '- Done',
+        '### Complex / Risky',
+        '- Rework database migration sequence'
+    ].join('\n');
+
     test('register-tools treats parenthesized Complex/Band B label with None as low complexity score', () => {
         assert.strictEqual(getComplexityFromContent(lowPlan), '3');
     });
 
     test('register-tools keeps substantive Complex items as high complexity score', () => {
         assert.strictEqual(getComplexityFromContent(highPlan), '8');
+    });
+
+    test('register-tools parses plan with no blank lines after headings correctly as 3', () => {
+        assert.strictEqual(getComplexityFromContent(noBlankLinesPlan), '3');
+    });
+
+    test('register-tools parses plain text correctly as 3', () => {
+        assert.strictEqual(getComplexityFromContent(plainTextPlan), '3');
+    });
+
+    test('register-tools parses mixed bullets correctly as 3', () => {
+        assert.strictEqual(getComplexityFromContent(mixedBulletsPlan), '3');
+    });
+
+    test('register-tools parses empty complex marker n/a as 3', () => {
+        assert.strictEqual(getComplexityFromContent(diffEmptyMarkersPlan1), '3');
+    });
+
+    test('register-tools parses empty complex marker - None. as 3', () => {
+        assert.strictEqual(getComplexityFromContent(diffEmptyMarkersPlan2), '3');
+    });
+
+    test('register-tools parses Complex / Risky substantive change as 8', () => {
+        assert.strictEqual(getComplexityFromContent(complexRiskySubstantivePlan), '8');
     });
 
     test('register-tools matches recommendation-only fallback routing scores', () => {

@@ -364,6 +364,10 @@
             gap: 12px;
         }
 
+        #sidebar-project-task-view {
+            /* overflow-y: auto; */
+        }
+
         .project-toolbar {
             display: flex;
             gap: 8px;
@@ -429,10 +433,6 @@
             cursor: pointer;
         }
 
-        .project-issue-card.selected {
-            border-left-color: var(--accent-teal);
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 20%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg)) 100%);
-        }
 
         .project-issue-title,
         .project-task-title,
@@ -531,10 +531,6 @@
             cursor: pointer;
         }
 
-        .project-card.selected {
-            border-left-color: var(--accent-teal);
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 20%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 8%, var(--panel-bg)) 100%);
-        }
 
         .project-card.loading {
             opacity: 0.7;
@@ -1118,6 +1114,17 @@
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
 
+        .secondary-btn.is-orange {
+            color: var(--accent-orange);
+            border-color: color-mix(in srgb, var(--accent-orange) 40%, transparent);
+        }
+
+        .secondary-btn.is-orange:hover:not(:disabled) {
+            border-color: var(--accent-orange);
+            background: color-mix(in srgb, var(--accent-orange) 10%, var(--panel-bg2));
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-orange) 30%, transparent);
+        }
+
         .secondary-btn.success {
             color: var(--accent-green);
             border-color: color-mix(in srgb, var(--accent-green) 40%, transparent);
@@ -1528,8 +1535,6 @@
             line-height: 1.5;
             font-size: 12px;
             padding: 8px;
-            overflow-y: auto;
-            max-height: 300px;
             background: #0b0d12;
             border: 1px solid var(--border-color);
             border-radius: 4px;
@@ -1782,8 +1787,6 @@
                 <div class="flex gap-2" style="align-items: center;">
                     <button id="btn-mode-toggle" class="icon-btn mode-active" title="Toggle between active and completed plans"
                         aria-label="Toggle plan mode">ACTIVE</button>
-                    <button id="btn-recover-plans" class="icon-btn recover" title="Recover archived or orphaned plans"
-                        aria-label="Recover plans">RECOVER</button>
                     <button id="btn-delete-plan" class="icon-btn delete" title="Delete active plan"
                         aria-label="Delete plan">DELETE</button>
                 </div>
@@ -1859,18 +1862,7 @@
         </div>
     </div>
 
-    <div id="recover-plans-modal" class="modal-overlay hidden">
-        <div class="modal-card" style="max-width: 480px;">
-            <div class="modal-title">RECOVER PLANS</div>
-            <input id="recover-search" class="modal-input" type="text" placeholder="Filter plans..."
-                style="margin-bottom: 8px;">
-            <div id="recover-plan-list" style="max-height: 260px; overflow-y: auto; margin-bottom: 10px;"></div>
-            <div id="recover-empty-msg" class="hidden"
-                style="text-align: center; padding: 16px; color: var(--text-secondary); font-size: 11px;">No recoverable
-                plans found.</div>
-            <button id="btn-close-recover" class="secondary-btn w-full">CLOSE</button>
-        </div>
-    </div>
+
 
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
@@ -1895,11 +1887,7 @@
         const mcpText = document.getElementById('mcp-text');
         const copyPlanLinkBtn = document.getElementById('btn-copy-plan-link');
 
-        const recoverPlansModal = document.getElementById('recover-plans-modal');
-        const recoverPlanList = document.getElementById('recover-plan-list');
-        const recoverEmptyMsg = document.getElementById('recover-empty-msg');
-        const recoverSearchInput = document.getElementById('recover-search');
-        let recoverablePlansCache = [];
+
         let copyPlanLinkTimer = null;
         let analystButtonFeedback = null; // { text, className, expiresAt }
         let analystButtonFeedbackTimer = null;
@@ -1915,7 +1903,6 @@
         let pendingLinearDetailIssueId = '';
         let loadingLinearCardId = '';
         let linearImportPending = false;
-        let bulkImportInFlight = false;
         let linearProjectSearchValue = '';
         let linearProjectStateFilterValue = '';
         let linearTaskDetailsTimeoutId = null;
@@ -2016,17 +2003,7 @@
             vscode.postMessage({ type: 'createDraftPlanTicket' });
         });
 
-        // Recovery Modal
-        function openRecoverPlansModal() {
-            recoverPlansModal.classList.remove('hidden');
-            recoverSearchInput.value = '';
-            recoverPlanList.innerHTML = '<div style="text-align:center;padding:12px;color:var(--text-secondary);font-size:11px;">Loading...</div>';
-            recoverEmptyMsg.classList.add('hidden');
-            vscode.postMessage({ type: 'getRecoverablePlans' });
-        }
-        function closeRecoverPlansModal() {
-            recoverPlansModal.classList.add('hidden');
-        }
+
         function escapeHtml(value) {
             return String(value || '')
                 .replace(/&/g, '&amp;')
@@ -2038,105 +2015,77 @@
         function escapeAttr(value) {
             return String(value || '').replace(/"/g, '&quot;');
         }
-        function inferTopicFromPath(filePath) {
-            if (!filePath) return '(untitled)';
-            var name = filePath.split(/[/\\]/).pop().replace(/\.[^.]+$/, '');
-            name = name.replace(/^(brain_|feature_plan_|plan_)/, '');
-            name = name.replace(/^[0-9a-f]{32,}$/i, '').replace(/^[0-9a-f]{32,}_/i, '');
-            if (!name) return '(untitled)';
-            return name.replace(/[_-]+/g, ' ').replace(/\b\w/g, function (c) { return c.toUpperCase(); }).trim() || '(untitled)';
-        }
-        function renderRecoverablePlans(plans, filter) {
-            recoverablePlansCache = plans || [];
-            const q = (filter || '').toLowerCase();
-            const filtered = q ? recoverablePlansCache.filter(p => (p.topic || '').toLowerCase().includes(q)) : recoverablePlansCache;
-            recoverPlanList.innerHTML = '';
-            if (filtered.length === 0) {
-                recoverEmptyMsg.classList.remove('hidden');
-                return;
-            }
-            recoverEmptyMsg.classList.add('hidden');
-            for (const plan of filtered) {
-                const item = document.createElement('div');
-                item.className = 'recover-item';
-                const dateStr = plan.updatedAt ? new Date(plan.updatedAt).toLocaleDateString([], { month: 'short', day: 'numeric' }).toUpperCase() : '';
-                const btnLabel = plan.status === 'orphan' ? 'CLAIM' : 'RESTORE';
-                var displayTopic = plan.topic;
-                if (!displayTopic || displayTopic === '(untitled)') {
-                    displayTopic = inferTopicFromPath(plan.brainSourcePath || plan.localPlanPath);
-                }
-                item.innerHTML = '<div class="recover-item-info">'
-                    + '<div class="recover-item-topic">' + escapeHtml(displayTopic) + '</div>'
-                    + '<div class="recover-item-meta"><span class="recover-status-chip ' + escapeHtml(plan.status) + '">' + escapeHtml(plan.status) + '</span> · ' + escapeHtml(plan.sourceType) + ' · ' + escapeHtml(dateStr) + '</div>'
-                    + '</div>'
-                    + '<button class="recover-restore-btn" data-plan-id="' + escapeHtml(plan.planId) + '">' + escapeHtml(btnLabel) + '</button>';
-                recoverPlanList.appendChild(item);
-            }
-            recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    const planId = btn.getAttribute('data-plan-id');
-                    btn.disabled = true;
-                    btn.textContent = '...';
-                    vscode.postMessage({ type: 'restorePlan', planId });
-                });
-            });
-        }
 
-        document.getElementById('btn-recover-plans').addEventListener('click', openRecoverPlansModal);
-        document.getElementById('btn-close-recover').addEventListener('click', closeRecoverPlansModal);
+
         document.getElementById('mcp-recheck-btn')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'recheckMcpConnection' });
-        });
-        recoverPlansModal.addEventListener('click', (event) => {
-            if (event.target === recoverPlansModal) closeRecoverPlansModal();
-        });
-        document.addEventListener('keydown', (e) => {
-            if (e.key === 'Escape') {
-                closeRecoverPlansModal();
-            }
-        });
-        recoverSearchInput.addEventListener('input', () => {
-            renderRecoverablePlans(recoverablePlansCache, recoverSearchInput.value);
         });
 
         const btnGrid = document.getElementById('createAgentGrid');
         if (btnGrid) {
             btnGrid.addEventListener('click', () => {
-                btnGrid.innerText = 'SAVING & OPENING...';
-                btnGrid.classList.add('dispatching');
-                btnGrid.classList.remove('is-teal');
-                btnGrid.disabled = true;
+                if (btnGrid._isClearMode) {
+                    // CLEAR TERMINALS mode
+                    btnGrid.innerText = 'CLEARING...';
+                    btnGrid.classList.add('dispatching');
+                    btnGrid.disabled = true;
 
-                // Collect current CLI commands and custom agent state
-                const commands = {
-                    ...lastStartupCommands
-                };
-                const visibleAgents = {
-                    ...lastVisibleAgents
-                };
-                // Save config first, then launch on acknowledgement
-                btnGrid._pendingLaunch = true;
-                const payload = { type: 'saveStartupCommands', commands, visibleAgents };
-                if (typeof lastJulesAutoSyncEnabled === 'boolean') {
-                    payload.julesAutoSyncEnabled = lastJulesAutoSyncEnabled;
-                }
-                vscode.postMessage(payload);
-                // Safety fallback: launch anyway if save ack doesn't arrive
-                btnGrid._saveTimeout = setTimeout(() => {
-                    if (btnGrid._pendingLaunch) {
-                        btnGrid._pendingLaunch = false;
-                        vscode.postMessage({ type: 'createAgentGrid' });
+                    // Send /clear to each agent terminal
+                    Object.entries(lastTerminals).forEach(([name, term]) => {
+                        if (term.role && term.alive) {
+                            vscode.postMessage({
+                                type: 'sendToTerminal',
+                                name: name,
+                                input: '/clear',
+                                paced: false,
+                                source: { actor: 'switchboard-ui', tool: 'clear-terminals', allowBroadcast: true }
+                            });
+                        }
+                    });
+
+                    // Re-enable button after short delay; let terminalStatuses push set correct state
+                    setTimeout(() => {
+                        btnGrid.classList.remove('dispatching');
+                        btnGrid.disabled = false;
+                        updateTerminalButtonState(); // Sets correct label + color based on current terminal state
+                    }, 1000);
+                } else {
+                    // OPEN AGENT TERMINALS mode (existing logic unchanged)
+                    btnGrid.innerText = 'SAVING & OPENING...';
+                    btnGrid.classList.add('dispatching');
+                    btnGrid.classList.remove('is-teal');
+                    btnGrid.disabled = true;
+
+                    // Collect current CLI commands and custom agent state
+                    const commands = {
+                        ...lastStartupCommands
+                    };
+                    const visibleAgents = {
+                        ...lastVisibleAgents
+                    };
+                    // Save config first, then launch on acknowledgement
+                    btnGrid._pendingLaunch = true;
+                    const payload = { type: 'saveStartupCommands', commands, visibleAgents };
+                    if (typeof lastJulesAutoSyncEnabled === 'boolean') {
+                        payload.julesAutoSyncEnabled = lastJulesAutoSyncEnabled;
                     }
-                }, 3000);
-                if (btnGrid._gridResultTimeout) clearTimeout(btnGrid._gridResultTimeout);
-                btnGrid._gridResultTimeout = setTimeout(() => {
-                    // Safety reset if backend never responds
-                    btnGrid.innerText = 'OPEN AGENT TERMINALS';
-                    btnGrid.classList.remove('dispatching', 'success', 'error', 'feedback');
-                    btnGrid.classList.add('is-teal');
-                    btnGrid.disabled = false;
-                    btnGrid._gridResultTimeout = null;
-                }, 30000);
+                    vscode.postMessage(payload);
+                    // Safety fallback: launch anyway if save ack doesn't arrive
+                    btnGrid._saveTimeout = setTimeout(() => {
+                        if (btnGrid._pendingLaunch) {
+                            btnGrid._pendingLaunch = false;
+                            vscode.postMessage({ type: 'createAgentGrid' });
+                        }
+                    }, 3000);
+                    if (btnGrid._gridResultTimeout) clearTimeout(btnGrid._gridResultTimeout);
+                    btnGrid._gridResultTimeout = setTimeout(() => {
+                        // Safety reset if backend never responds
+                        btnGrid.classList.remove('dispatching', 'success', 'error', 'feedback');
+                        btnGrid.disabled = false;
+                        btnGrid._gridResultTimeout = null;
+                        updateTerminalButtonState(); // Will show correct state based on terminal status
+                    }, 30000);
+                }
             });
         }
         const btnDeregister = document.getElementById('btn-deregister-all');
@@ -2282,6 +2231,7 @@
         let currentRunSheets = [];         // merged — kept for backward compat with dispatch consumers
         let currentActiveSheets = [];
         let currentCompletedSheets = [];
+        let currentKanbanColumns = [];
         let currentPlanMode = 'active';    // 'active' | 'completed'
         let lastTerminals = {};
         let lastAllOpenTerminals = [];
@@ -2293,8 +2243,6 @@
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
-        let selectedLinearIssueIds = new Set();
-        let selectedClickUpTaskIds = new Set();
         // Autoban engine state (received from backend)
         let autobanState = {
             enabled: false,
@@ -2576,6 +2524,7 @@
                     if (message.teamReady !== undefined) { lastTeamReady = message.teamReady; }
                     if (message.dispatchReadiness !== undefined) { lastDispatchReadiness = message.dispatchReadiness || {}; }
                     renderAgentList();
+                    updateTerminalButtonState(); // NEW
                     break;
                 case 'saveStartupCommandsResult': {
                     const gridBtn = document.getElementById('createAgentGrid');
@@ -2610,30 +2559,11 @@
                             gridBtn.innerText = 'FAILED';
                         }
                         setTimeout(() => {
-                            gridBtn.innerText = 'OPEN AGENT TERMINALS';
                             gridBtn.classList.remove('success', 'error', 'feedback');
-                            gridBtn.classList.add('is-teal');
                             gridBtn.disabled = false;
+                            updateTerminalButtonState(); // Will show "CLEAR TERMINALS" if terminals are now alive
                         }, 2000);
 
-                    }
-                    // Reset onboarding button if it exists (outside gridBtn guard — button may persist even if original is absent)
-                    const onboardBtn = document.getElementById('createAgentGrid-onboarding');
-                    if (onboardBtn) {
-                        onboardBtn.classList.remove('dispatching');
-                        if (message.success) {
-                            onboardBtn.classList.add('success', 'feedback');
-                            onboardBtn.innerText = 'TERMINALS OPENED';
-                        } else {
-                            onboardBtn.classList.add('error', 'feedback');
-                            onboardBtn.innerText = 'FAILED';
-                        }
-                        setTimeout(() => {
-                            onboardBtn.innerText = 'OPEN AGENT TERMINALS';
-                            onboardBtn.classList.remove('success', 'error', 'feedback');
-                            onboardBtn.classList.add('is-teal');
-                            onboardBtn.disabled = false;
-                        }, 2000);
                     }
                     break;
                 }
@@ -2654,6 +2584,7 @@
                         currentActiveSheets = currentRunSheets;
                         currentCompletedSheets = [];
                     }
+                    currentKanbanColumns = message.kanbanColumns || [];
                     renderRunSheetDropdown();
                     break;
                 case 'selectSession':
@@ -2786,7 +2717,6 @@
                     renderSidebarClickUpTaskDetail();
                     break;
                 case 'bulkImportResult':
-                    bulkImportInFlight = false;
                     clickUpImportPending = false;
                     if (message.success === false) {
                         vscode.postMessage({ type: 'showWarning', message: message.message || 'Bulk import failed.' });
@@ -3015,21 +2945,7 @@
                 case 'copyPlanLinkResult':
                     showCopyPlanLinkFeedback(message.success === true);
                     break;
-                case 'recoverablePlans':
-                    renderRecoverablePlans(message.plans || [], recoverSearchInput.value);
-                    break;
-                case 'restorePlanResult':
-                    if (message.success) {
-                        closeRecoverPlansModal();
-                    } else {
-                        recoverPlanList.querySelectorAll('.recover-restore-btn').forEach(btn => {
-                            if (btn.getAttribute('data-plan-id') === message.planId) {
-                                btn.disabled = false;
-                                btn.textContent = btn.closest('.recover-item')?.querySelector('.recover-status-chip.orphan') ? 'CLAIM' : 'RESTORE';
-                            }
-                        });
-                    }
-                    break;
+
                 case 'startupCommands':
                     if (message.commands) {
                         lastStartupCommands = message.commands;
@@ -3260,14 +3176,45 @@
                 return;
             }
 
-            // Sort: by kanbanColumn alpha, then by createdAt descending (newest first)
+            // Use active columns from the Kanban board configuration, fallback to defaults
+            const activeCols = (currentKanbanColumns && currentKanbanColumns.length > 0)
+                ? currentKanbanColumns
+                : [
+                    { id: 'CREATED', label: 'New' },
+                    { id: 'PLAN REVIEWED', label: 'Planned' },
+                    { id: 'CONTEXT GATHERER', label: 'Gather' },
+                    { id: 'INTERN CODED', label: 'Intern' },
+                    { id: 'LEAD CODED', label: 'Lead Coder' },
+                    { id: 'CODER CODED', label: 'Coder' },
+                    { id: 'CODED', label: 'Coded' },
+                    { id: 'CODE REVIEWED', label: 'Reviewed' },
+                    { id: 'ACCEPTANCE TESTED', label: 'Acceptance Tested' },
+                    { id: 'COMPLETED', label: 'Completed' }
+                ];
+
+            const colIdMap = new Map();
+            activeCols.forEach((col, index) => {
+                const normId = (col.id || '').trim().toUpperCase();
+                colIdMap.set(normId, { index, label: col.label || col.id });
+            });
+
+            // Sort: by kanbanColumn natural Kanban order, then by createdAt descending (newest first)
             const sorted = [...sheets].sort((a, b) => {
-                const colCmp = (a.kanbanColumn || '').localeCompare(b.kanbanColumn || '');
-                if (colCmp !== 0) return colCmp;
+                const colA = (a.kanbanColumn || 'CREATED').trim().toUpperCase();
+                const colB = (b.kanbanColumn || 'CREATED').trim().toUpperCase();
+                const infoA = colIdMap.get(colA);
+                const infoB = colIdMap.get(colB);
+                const valA = infoA ? infoA.index : 999;
+                const valB = infoB ? infoB.index : 999;
+                if (valA !== valB) return valA - valB;
+                if (valA === 999) {
+                    const nameCmp = colA.localeCompare(colB);
+                    if (nameCmp !== 0) return nameCmp;
+                }
                 return new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime();
             });
 
-            // Group by kanbanColumn
+            // Group by kanbanColumn ID
             const groups = new Map();
             for (const sheet of sorted) {
                 const col = sheet.kanbanColumn || 'CREATED';
@@ -3294,9 +3241,11 @@
                 collisionTotals.set(key, (collisionTotals.get(key) || 0) + 1);
             });
 
-            for (const [colName, colSheets] of groups) {
+            for (const [colId, colSheets] of groups) {
                 const group = document.createElement('optgroup');
-                group.label = colName;
+                const info = colIdMap.get(colId.trim().toUpperCase());
+                const displayLabel = info ? info.label : colId;
+                group.label = displayLabel.toUpperCase();
                 for (const sheet of colSheets) {
                     const opt = document.createElement('option');
                     opt.value = sheet.sessionId;
@@ -3360,6 +3309,26 @@
             });
         }
 
+        function updateTerminalButtonState() {
+            const btnGrid = document.getElementById('createAgentGrid');
+            if (!btnGrid) return;
+
+            // Check if any agent terminals are open (terminals with roles assigned)
+            const hasAgentTerminals = Object.values(lastTerminals).some(term => term.role && term.alive);
+
+            if (hasAgentTerminals) {
+                btnGrid.innerText = 'CLEAR TERMINALS';
+                btnGrid.classList.remove('is-teal');
+                btnGrid.classList.add('is-orange');
+                btnGrid._isClearMode = true;
+            } else {
+                btnGrid.innerText = 'OPEN AGENT TERMINALS';
+                btnGrid.classList.remove('is-orange');
+                btnGrid.classList.add('is-teal');
+                btnGrid._isClearMode = false;
+            }
+        }
+
         function updateIntegrationTabLabel(provider) {
             const tabBtn = document.getElementById('integration-tab-btn');
             if (tabBtn) {
@@ -3377,8 +3346,6 @@
                 projectPicker: document.getElementById('sidebar-linear-project-picker'),
                 stateFilter: document.getElementById('sidebar-linear-state-filter'),
                 clickUpStatusFilter: document.getElementById('sidebar-clickup-status-filter'),
-                importAllButton: document.getElementById('sidebar-linear-project-import-all'),
-                importSelectedButton: document.getElementById('sidebar-linear-project-import-selected'),
                 refreshButton: document.getElementById('sidebar-linear-project-refresh'),
                 emptyState: document.getElementById('sidebar-linear-project-empty'),
                 openSetupButton: document.getElementById('sidebar-linear-project-open-setup'),
@@ -3527,15 +3494,13 @@
 
             // Build the new HTML string first, then compare before mutating the DOM.
             const newHtml = filteredIssues.map((issue) => {
-                const isSelected = selectedLinearIssueIds.has(issue.id);
                 return `
-                <div class="project-issue-card ${isSelected ? 'selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
+                <div class="project-issue-card" data-linear-issue-id="${escapeAttr(issue.id)}">
                     <div class="project-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
                     <div class="project-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                     <div class="project-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
                     <div class="project-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
                     <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                        <button type="button" class="project-issue-import-btn" data-view-issue-id="${escapeAttr(issue.id)}" aria-label="View ${escapeAttr(issue.identifier || issue.id)}">VIEW TASK</button>
                         <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}" aria-label="Refine ${escapeAttr(issue.identifier || issue.id)}">REFINE</button>
                         <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}" aria-label="Import ${escapeAttr(issue.identifier || issue.id)}">IMPORT</button>
                     </div>
@@ -3689,16 +3654,6 @@
             if (searchInput) searchInput.classList.remove('hidden');
             if (projectPicker) projectPicker.classList.remove('hidden');
             if (stateFilter) stateFilter.classList.remove('hidden');
-            const { importAllButton, importSelectedButton } = getProjectTabElements();
-            if (importAllButton) {
-                importAllButton.classList.remove('hidden');
-                importAllButton.disabled = linearProjectStatus === 'loading' || bulkImportInFlight;
-                importAllButton.textContent = bulkImportInFlight ? 'IMPORTING...' : 'IMPORT ALL';
-            }
-            if (importSelectedButton) {
-                importSelectedButton.classList.remove('hidden');
-                importSelectedButton.disabled = linearProjectStatus === 'loading' || selectedLinearIssueIds.size === 0 || bulkImportInFlight;
-            }
             if (clickUpStatusFilter) clickUpStatusFilter.classList.add('hidden');
             if (refreshButton) refreshButton.classList.remove('hidden');
             if (hierarchyNav) hierarchyNav.classList.add('hidden');
@@ -3869,16 +3824,6 @@
             if (stateFilter) stateFilter.classList.add('hidden');
             if (clickUpStatusFilter) {
                 clickUpStatusFilter.classList.toggle('hidden', !clickUpSelectedListId);
-            }
-            const { importAllButton, importSelectedButton } = getProjectTabElements();
-            if (importAllButton) {
-                importAllButton.classList.toggle('hidden', !clickUpSelectedListId);
-                importAllButton.disabled = clickUpProjectStatus === 'loading' || bulkImportInFlight;
-                importAllButton.textContent = bulkImportInFlight ? 'IMPORTING...' : 'IMPORT ALL';
-            }
-            if (importSelectedButton) {
-                importSelectedButton.classList.toggle('hidden', !clickUpSelectedListId);
-                importSelectedButton.disabled = clickUpProjectStatus === 'loading' || selectedClickUpTaskIds.size === 0 || bulkImportInFlight;
             }
             // Keep refresh button visible for ClickUp to allow manual refresh
             if (refreshButton) {
@@ -4183,10 +4128,9 @@
                 ? `<div class="project-empty-state">No tasks found.</div>`
                 : tasks.map(task => {
                     const isLoading = loadingClickUpCardId === task.id;
-                    const isSelected = selectedClickUpTaskIds.has(task.id);
                     const statusColor = getStatusColor(task.status);
                     return `
-                        <div class="project-card ${isSelected ? 'selected' : ''} ${isLoading ? 'loading' : ''}"
+                        <div class="project-card ${isLoading ? 'loading' : ''}"
                              data-clickup-task-id="${escapeAttr(task.id)}"
                              data-clickup-task-url="${escapeAttr(task.url || '')}">
                             <div class="project-card-header">
@@ -4197,7 +4141,6 @@
                                 ${task.assignees?.length ? `<span class="project-card-assignees">${escapeHtml(task.assignees.map(a => a.username || a.email).join(', '))}</span>` : ''}
                             </div>
                             <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                                <button type="button" class="project-issue-import-btn" data-view-issue-id="${escapeAttr(task.id)}" aria-label="View ${escapeAttr(task.id)}">VIEW TASK</button>
                                 <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}" aria-label="Refine ${escapeAttr(task.id)}">REFINE</button>
                                 <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(task.id)}" aria-label="Import ${escapeAttr(task.identifier || task.id)}">IMPORT</button>
                             </div>
@@ -4428,8 +4371,6 @@
                         <select id="sidebar-clickup-status-filter" class="project-select hidden">
                             <option value="">All statuses</option>
                         </select>
-                        <button id="sidebar-linear-project-import-all" class="secondary-btn" type="button">IMPORT ALL</button>
-                        <button id="sidebar-linear-project-import-selected" class="secondary-btn" type="button">IMPORT SELECTED</button>
                         <button id="sidebar-linear-project-refresh" class="secondary-btn" type="button">REFRESH</button>
                     </div>
                     <div id="sidebar-linear-project-empty" class="project-empty-state">Select a Space, Folder, and List to view tasks.</div>
@@ -4472,8 +4413,6 @@
             const projectPicker = container.querySelector('#sidebar-linear-project-picker');
             const stateFilter = container.querySelector('#sidebar-linear-state-filter');
             const refreshButton = container.querySelector('#sidebar-linear-project-refresh');
-            const importAllButton = container.querySelector('#sidebar-linear-project-import-all');
-            const importSelectedButton = container.querySelector('#sidebar-linear-project-import-selected');
             const openSetupButton = container.querySelector('#sidebar-linear-project-open-setup');
             const issuesContainer = container.querySelector('#sidebar-linear-issues-container');
             const detailSubtasksList = container.querySelector('#sidebar-detail-subtasks-list');
@@ -4518,73 +4457,11 @@
                     loadLinearProject(true);
                 }
             });
-
-            importAllButton?.addEventListener('click', () => {
-                if (bulkImportInFlight) return;
-                if (lastIntegrationProvider === 'clickup') {
-                    if (!clickUpSelectedListId) return;
-                    bulkImportInFlight = true;
-                    clickUpImportPending = true;
-                    renderSidebarClickUpProjectPanel();
-                    vscode.postMessage({
-                        type: 'clickupImportAllTasks',
-                        listId: clickUpSelectedListId,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                } else {
-                    bulkImportInFlight = true;
-                    renderSidebarLinearProjectPanel();
-                    vscode.postMessage({
-                        type: 'linearImportAllTasks',
-                        search: linearProjectSearchValue,
-                        projectFilter: linearProjectPickerValue,
-                        stateFilter: linearProjectStateFilterValue,
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                }
-            });
-
-            importSelectedButton?.addEventListener('click', () => {
-                if (bulkImportInFlight) return;
-                if (lastIntegrationProvider === 'clickup') {
-                    if (selectedClickUpTaskIds.size === 0) return;
-                    bulkImportInFlight = true;
-                    clickUpImportPending = true;
-                    renderSidebarClickUpProjectPanel();
-                    vscode.postMessage({
-                        type: 'clickupImportSelectedTasks',
-                        taskIds: Array.from(selectedClickUpTaskIds),
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                } else {
-                    if (selectedLinearIssueIds.size === 0) return;
-                    bulkImportInFlight = true;
-                    renderSidebarLinearProjectPanel();
-                    vscode.postMessage({
-                        type: 'linearImportSelectedTasks',
-                        issueIds: Array.from(selectedLinearIssueIds),
-                        workspaceRoot: currentWorkspaceRoot || undefined
-                    });
-                }
-            });
             openSetupButton?.addEventListener('click', () => {
                 vscode.postMessage({ type: 'openSetupPanel', section: 'project-mgmt' });
             });
             issuesContainer?.addEventListener('click', (event) => {
-                // 1. Handle "VIEW TASK" button click
-                const viewBtn = event.target.closest('[data-view-issue-id]');
-                if (viewBtn) {
-                    event.stopPropagation();
-                    const issueId = viewBtn.getAttribute('data-view-issue-id');
-                    if (lastIntegrationProvider === 'clickup') {
-                        loadClickUpTaskDetails(issueId);
-                    } else {
-                        loadLinearTaskDetails(issueId);
-                    }
-                    return;
-                }
-
-                // 2. Handle "REFINE" button click
+                // 1. Handle "REFINE" button click
                 const refineBtn = event.target.closest('[data-refine-issue-id]');
                 if (refineBtn) {
                     event.stopPropagation();
@@ -4611,13 +4488,12 @@
                     return;
                 }
 
-                // 3. Handle "IMPORT" button click
+                // 2. Handle "IMPORT" button click
                 const importBtn = event.target.closest('[data-import-issue-id]');
                 if (importBtn && importBtn.dataset.importIssueId) {
                     event.stopPropagation();
                     importBtn.disabled = true;
                     importBtn.dataset.importing = '';
-                    // Route to the correct import handler based on provider
                     if (lastIntegrationProvider === 'clickup') {
                         clickUpImportPending = true;
                         vscode.postMessage({
@@ -4637,27 +4513,18 @@
                     return;
                 }
 
-                // 4. Handle card click (selection toggle)
+                // 3. Handle task card click (view task details)
                 const linearCard = event.target.closest('[data-linear-issue-id]');
-                if (linearCard && lastIntegrationProvider === 'linear') {
-                    const id = linearCard.dataset.linearIssueId;
-                    if (selectedLinearIssueIds.has(id)) {
-                        selectedLinearIssueIds.delete(id);
-                    } else {
-                        selectedLinearIssueIds.add(id);
-                    }
-                    renderSidebarLinearProjectPanel();
+                if (linearCard) {
+                    const issueId = linearCard.getAttribute('data-linear-issue-id');
+                    loadLinearTaskDetails(issueId);
                     return;
                 }
-                const clickUpCard = event.target.closest('[data-clickup-task-id]');
-                if (clickUpCard && lastIntegrationProvider === 'clickup') {
-                    const id = clickUpCard.getAttribute('data-clickup-task-id');
-                    if (selectedClickUpTaskIds.has(id)) {
-                        selectedClickUpTaskIds.delete(id);
-                    } else {
-                        selectedClickUpTaskIds.add(id);
-                    }
-                    renderSidebarClickUpProjectPanel();
+
+                const clickupCard = event.target.closest('[data-clickup-task-id]');
+                if (clickupCard) {
+                    const taskId = clickupCard.getAttribute('data-clickup-task-id');
+                    loadClickUpTaskDetails(taskId);
                     return;
                 }
             });
@@ -5009,27 +4876,6 @@
                         onboardMsg.textContent = 'Agents not connected. Click the Terminals tab to open agent terminals.';
                         agentListStandard.appendChild(onboardMsg);
 
-                        // Add duplicate OPEN AGENT TERMINALS button below the onboarding message
-                        const onboardBtn = document.createElement('button');
-                        onboardBtn.id = 'createAgentGrid-onboarding';
-                        onboardBtn.className = 'secondary-btn is-teal w-full';
-                        onboardBtn.style.marginTop = '12px';
-                        onboardBtn.textContent = 'OPEN AGENT TERMINALS';
-                        onboardBtn.addEventListener('click', () => {
-                            // Visual feedback on the onboarding button before delegating
-                            onboardBtn.innerText = 'SAVING & OPENING...';
-                            onboardBtn.classList.add('dispatching');
-                            onboardBtn.classList.remove('is-teal');
-                            onboardBtn.disabled = true;
-
-                            // Delegate to the existing button handler
-                            const originalBtn = document.getElementById('createAgentGrid');
-                            if (originalBtn) {
-                                originalBtn.click();
-                            }
-                        });
-                        agentListStandard.appendChild(onboardBtn);
-
                         // Add duplicate OPEN SETUP button below the onboarding message
                         const setupOnboardBtn = document.createElement('button');
                         setupOnboardBtn.id = 'btn-open-setup-onboarding';
@@ -5048,7 +4894,9 @@
                             agentListProject.appendChild(createProjectPanel());
                         }
                         renderSidebarLinearProjectPanel();
-                        switchAgentTab(currentAgentTab);
+                        // FIX: Default to 'terminals' tab when no agent terminals are alive
+                        const hasAgentTerminalsAlive = Object.values(lastTerminals).some(term => term.role && term.alive);
+                        switchAgentTab(hasAgentTerminalsAlive ? currentAgentTab : 'terminals');
                         return; // skip the rest of normal renderAgentList
                     }
                 }
@@ -5343,7 +5191,7 @@
             // Intro
             const intro = document.createElement('div');
             intro.style.cssText = 'padding:6px 8px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono); line-height:1.5;';
-            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs.';
+            intro.innerText = 'The Airlock allows you to upload all your code into NotebookLM to access unlimited Gemini quota for planning features and diagnosing bugs. Alternatively, use CREATE to open a new ticket in edit mode.';
             container.appendChild(intro);
 
             // Status line (used for bundle export feedback)

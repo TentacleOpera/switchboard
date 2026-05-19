@@ -373,3 +373,20 @@ However, this approach is less clean and introduces additional state management 
 - Unit test: `_getAgentNames()` prioritizes terminal-derived names over workspace config
 - Unit test: `_getAgentNames()` falls back to workspace config for roles without running terminals
 - Integration test: Workspace switch does not change agent names for running terminals
+
+## Review & Execution Results
+**Stage 1: Grumpy Review**
+- [CRITICAL] The terminal close event in `handleTerminalClosed` did not prune `_terminalAgentInfo`, causing stale cache entries.
+- [MAJOR] The plan was missing a call to `clearTerminalAgentInfo()` during specific terminal closes, though it cleared on `deregisterAllTerminals()`.
+- [NIT] No additional issues identified in the core cache approach.
+
+**Stage 2: Balanced Synthesis**
+- We must add cleanup for `_terminalAgentInfo` inside `handleTerminalClosed()` using the cleaned terminal name to prevent unbound memory growth and stale lookups.
+
+**Fixes Applied:**
+- Added `clearTerminalAgentInfo(cleanedTerminalName)` in `src/services/TaskViewerProvider.ts` -> `handleTerminalClosed()`.
+- Verified compilation and types.
+
+**Validation Results:**
+- `npm run compile` completes with 0 errors.
+- Cache cleanup handles lifecycle correctly.

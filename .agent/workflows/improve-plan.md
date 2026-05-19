@@ -30,8 +30,21 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
       - **Repo:** Bare sub-repo folder name if applicable
    3. **## User Review Required**
    4. **## Complexity Audit**
-      - ### Routine
-      - ### Complex / Risky (if empty, write "- None" explicitly)
+      - **### Routine** — bullet points or plain text listing routine aspects
+      - **### Complex / Risky** — bullet points or plain text listing complex/risky aspects (or "- None" if empty)
+      
+      **Recommended format** (parser is flexible):
+      ```markdown
+      ## Complexity Audit
+
+      ### Routine
+      - [routine aspect 1]
+      - [routine aspect 2]
+
+      ### Complex / Risky
+      - [complex aspect 1]
+      - [or "- None" if no complex aspects]
+      ```
    5. **## Edge-Case & Dependency Audit**
       - **Race Conditions**, **Security**, **Side Effects**, **Dependencies & Conflicts**
    6. **## Dependencies**
@@ -67,4 +80,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    - Write the improvement findings back into the same feature plan file.
    - Preserve all existing implementation steps, code blocks, and goal statements.
    - Mark completed checklist items when appropriate.
-   - End with a recommendation: if complexity ≤ 6, say "Send to Coder". If complexity ≥ 7, say "Send to Lead Coder".
+   - End with a recommendation based on complexity:
+     - If complexity is 1-3 → "Send to Intern"
+     - If complexity is 4-6 → "Send to Coder"
+     - If complexity is 7-10 → "Send to Lead Coder"

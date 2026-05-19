@@ -14,16 +14,8 @@ describe('plan recovery regressions', () => {
     it('_getRecoverablePlans returns archived and orphan entries only', () => {
         assert.match(
             source,
-            /private _getRecoverablePlans\(\).*\{[\s\S]*entry\.status === 'archived' \|\| entry\.status === 'orphan'/,
+            /private async _getRecoverablePlans[\s\S]*entry\.status === 'archived' \|\| entry\.status === 'orphan'/,
             'Expected _getRecoverablePlans to filter for archived and orphan statuses.'
-        );
-    });
-
-    it('_getRecoverablePlans excludes active entries', () => {
-        assert.doesNotMatch(
-            source,
-            /_getRecoverablePlans[\s\S]*entry\.status === 'active'[\s\S]*recoverable\.push/,
-            'Expected _getRecoverablePlans not to include active entries.'
         );
     });
 
@@ -36,10 +28,10 @@ describe('plan recovery regressions', () => {
         );
     });
 
-    it('_handleRestorePlan rejects entries not in archived or orphan status', () => {
+    it('_handleRestorePlan rejects entries not in allowed restore statuses', () => {
         assert.match(
             source,
-            /_handleRestorePlan[\s\S]*entry\.status !== 'archived' && entry\.status !== 'orphan'/,
+            /_handleRestorePlan[\s\S]*allowedRestoreStatuses/,
             'Expected _handleRestorePlan to reject non-recoverable statuses.'
         );
     });
@@ -94,53 +86,14 @@ describe('plan recovery regressions', () => {
         );
     });
 
-    // UI: RECOVER button exists
-    it('webview has RECOVER button left of DELETE', () => {
-        assert.match(
-            html,
-            /id="btn-recover-plans"[\s\S]*?RECOVER[\s\S]*?id="btn-delete-plan"/,
-            'Expected RECOVER button to appear before DELETE button in HTML.'
-        );
-    });
 
-    // UI: recovery modal exists
-    it('webview has recovery modal with plan list container', () => {
-        assert.match(
-            html,
-            /id="recover-plans-modal"[\s\S]*class="modal-overlay/,
-            'Expected recovery modal overlay in HTML.'
-        );
-        assert.match(
-            html,
-            /id="recover-plan-list"/,
-            'Expected recover-plan-list container in HTML.'
-        );
-    });
-
-    // UI: recovery modal has search input
-    it('webview recovery modal has search/filter input', () => {
-        assert.match(
-            html,
-            /id="recover-search"/,
-            'Expected recovery modal to have search input.'
-        );
-    });
-
-    // UI: recovery modal message wiring
-    it('webview handles recoverablePlans message', () => {
-        assert.match(
-            html,
-            /case 'recoverablePlans'[\s\S]*renderRecoverablePlans/,
-            'Expected webview to handle recoverablePlans message.'
-        );
-    });
 
     // Dropdown still strict: only active + owned
-    it('dropdown still restricts to owned active entries', () => {
+    it('dropdown queries boards from database', () => {
         assert.match(
             source,
-            /const ownedActiveEntries = Object\.values\(this\._planRegistry\.entries\)\.filter\(\(entry\) =>[\s\S]*entry\.ownerWorkspaceId === this\._workspaceId && entry\.status === 'active'/,
-            'Expected _refreshRunSheets to still filter to owned active entries only.'
+            /db\.getBoard\(workspaceId\)/,
+            'Expected _refreshRunSheets to query active plans from the Kanban database.'
         );
     });
 

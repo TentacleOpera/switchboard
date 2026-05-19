@@ -34,6 +34,7 @@ export class PlanningPanelProvider {
     private _syncCancellationSource: AbortController | undefined;
     private _importInProgress = false;
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
+    private _localFolderWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _lastPanelWriteTimestamp: number = 0;
@@ -276,6 +277,7 @@ export class PlanningPanelProvider {
 
         // Watch the docs directory for changes and refresh imported docs list
         this._setupDocsFolderWatcher(workspaceRoot);
+        this._setupLocalFolderWatcher(workspaceRoot);
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
@@ -304,6 +306,39 @@ export class PlanningPanelProvider {
         this._docsFolderWatcher.onDidChange(refreshImportedDocs);
 
         this._disposables.push(this._docsFolderWatcher);
+    }
+
+    private _setupLocalFolderWatcher(workspaceRoot: string | undefined): void {
+        // Dispose existing watcher if present
+        if (this._localFolderWatcher) {
+            this._localFolderWatcher.dispose();
+            this._localFolderWatcher = undefined;
+        }
+
+        if (!workspaceRoot) return;
+
+        const localFolderService = this._getLocalFolderService(workspaceRoot);
+        const folderPath = localFolderService.getFolderPath();
+        
+        if (!folderPath) return;
+
+        const folderUri = vscode.Uri.file(folderPath);
+
+        // Create watcher for the local docs folder — recursive, all supported text extensions
+        this._localFolderWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(folderUri, '**/*.{md,txt,markdown,rst,adoc}')
+        );
+
+        // Refresh local docs when files are created, deleted, or changed
+        const refreshLocalDocs = () => {
+            this._sendLocalDocsReady();
+        };
+
+        this._localFolderWatcher.onDidCreate(refreshLocalDocs);
+        this._localFolderWatcher.onDidDelete(refreshLocalDocs);
+        this._localFolderWatcher.onDidChange(refreshLocalDocs);
+
+        this._disposables.push(this._localFolderWatcher);
     }
 
     private _setupActiveDocWatcher(filePath: string | null): void {
@@ -532,6 +567,8 @@ export class PlanningPanelProvider {
                         folderPath,
                         nodes
                     });
+                    // Recreate watcher for new folder path
+                    this._setupLocalFolderWatcher(workspaceRoot);
                 }
                 break;
             }
@@ -545,6 +582,8 @@ export class PlanningPanelProvider {
                     folderPath,
                     nodes
                 });
+                // Recreate watcher for new folder path
+                this._setupLocalFolderWatcher(workspaceRoot);
                 break;
             }
             case 'refreshSource': {
@@ -885,7 +924,8 @@ export class PlanningPanelProvider {
 
             if (sourceId === 'local-folder') {
                 // For local-folder: resolve the file path directly
-                const folderPath = vscode.workspace.getConfiguration('switchboard').get<string>('planning.localFolderPath');
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const folderPath = localFolderService.getFolderPath();
                 if (folderPath) {
                     docPath = path.join(folderPath, docId);
                     try {
@@ -1043,6 +1083,7 @@ export class PlanningPanelProvider {
             const allRoots = this._getWorkspaceRoots();
             const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }> = [];
             const scannedPaths = new Set<string>();
+            let configuredFolderPath: string | null = null; // Track the configured local folder path
 
             for (const root of allRoots) {
                 try {
@@ -1054,6 +1095,10 @@ export class PlanningPanelProvider {
                     }
                     if (folderPath) {
                         scannedPaths.add(folderPath);
+                        // Capture the first configured folder path to send to webview
+                        if (!configuredFolderPath) {
+                            configuredFolderPath = folderPath;
+                        }
                     }
 
                     const files = await localFolderService.listFiles();
@@ -1073,7 +1118,7 @@ export class PlanningPanelProvider {
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPath: allRoots[0] || '', // Clarification: Use first root as display path
+                folderPath: configuredFolderPath || '', // Send actual configured folder path, not workspace root
                 nodes: this._mapLocalFilesToTreeNodes(allFiles)
             });
         } catch (err) {
@@ -2017,6 +2062,10 @@ export class PlanningPanelProvider {
         if (this._activeDocWatcher) {
             try { this._activeDocWatcher.dispose(); } catch (e) {}
             this._activeDocWatcher = undefined;
+        }
+        if (this._localFolderWatcher) {
+            try { this._localFolderWatcher.dispose(); } catch (e) {}
+            this._localFolderWatcher = undefined;
         }
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];

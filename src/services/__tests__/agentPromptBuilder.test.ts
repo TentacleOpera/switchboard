@@ -8,7 +8,22 @@ suite('agentPromptBuilder', () => {
             absolutePath: `/workspace/plan_${i + 1}.md`
         }));
 
-    describe('buildKanbanBatchPrompt — coder role', () => {
+    suite('buildKanbanBatchPrompt — coder role', () => {
+        test('accurateCodingEnabled: true injects Accuracy Mode instructions', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                accurateCodingEnabled: true
+            });
+            assert.ok(prompt.includes('Accuracy Mode'), 'Should include Accuracy Mode header');
+            assert.ok(prompt.includes('.agent/workflows/accuracy.md'), 'Should include reference to accuracy workflow');
+        });
+
+        test('accurateCodingEnabled: false omits Accuracy Mode instructions', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                accurateCodingEnabled: false
+            });
+            assert.ok(!prompt.includes('Accuracy Mode'), 'Should not include Accuracy Mode header');
+        });
+
         test('includes source column label when provided', () => {
             const prompt = buildKanbanBatchPrompt('coder', makePlans(2), {
                 sourceColumnLabel: 'Planned'
@@ -33,7 +48,7 @@ suite('agentPromptBuilder', () => {
         });
     });
 
-    describe('buildKanbanBatchPrompt — lead role', () => {
+    suite('buildKanbanBatchPrompt — lead role', () => {
         test('includes source column label when provided', () => {
             const prompt = buildKanbanBatchPrompt('lead', makePlans(2), {
                 sourceColumnLabel: 'Planned'
@@ -48,7 +63,27 @@ suite('agentPromptBuilder', () => {
         });
     });
 
-    describe('buildKanbanBatchPrompt — personaContent & overrides', () => {
+    suite('buildKanbanBatchPrompt — personaContent & overrides', () => {
+        test('clearAntigravityContext: true injects antigravity block', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                clearAntigravityContext: true
+            });
+            assert.ok(prompt.includes('Ignore any previous checkpoint summaries'), 'Should include checkpoint summaries instruction');
+            assert.ok(!prompt.includes('no historical context'), 'Should not include overly broad language');
+        });
+
+        test('clearAntigravityContext: false omits antigravity block', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                clearAntigravityContext: false
+            });
+            assert.ok(!prompt.includes('Ignore any previous checkpoint summaries'), 'Should omit checkpoint summaries instruction');
+        });
+
+        test('clearAntigravityContext: undefined omits antigravity block', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {});
+            assert.ok(!prompt.includes('Ignore any previous checkpoint summaries'), 'Should omit checkpoint summaries instruction');
+        });
+
         test('uses personaContent as base instructions when no override exists', () => {
             const persona = 'You are a specialized security reviewer. Focus on OWASP and injection risks.';
             const prompt = buildKanbanBatchPrompt('reviewer', makePlans(1), {
@@ -150,7 +185,7 @@ suite('agentPromptBuilder', () => {
         });
     });
 
-    describe('columnToPromptRole', () => {
+    suite('columnToPromptRole', () => {
         test('maps CREATED to planner', () => {
             assert.strictEqual(columnToPromptRole('CREATED'), 'planner');
         });

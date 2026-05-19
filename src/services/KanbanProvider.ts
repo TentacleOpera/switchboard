@@ -129,6 +129,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _allowUnknownComplexityAutoMove: boolean;
     private _clearTerminalBeforePrompt: boolean;
     private _clearTerminalBeforePromptDelay: number;
+    private _clearAntigravityContext: boolean;
     private _routingMapConfig: { lead: number[]; coder: number[]; intern: number[] } | null = null;
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
@@ -254,6 +255,7 @@ export class KanbanProvider implements vscode.Disposable {
             vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 1500),
             0
         ), 10000);
+        this._clearAntigravityContext = vscode.workspace.getConfiguration('switchboard').get<boolean>('prompt.clearAntigravityContext', false);
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
         );
@@ -366,6 +368,10 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         this._outputChannel?.appendLine(`[KanbanProvider] GlobalPlanWatcher wired up, scanned ${folders.length} folders`);
+    }
+
+    public getGlobalPlanWatcher(): import('./GlobalPlanWatcherService').GlobalPlanWatcherService | undefined {
+        return this._globalPlanWatcher;
     }
 
     /**
@@ -695,6 +701,15 @@ export class KanbanProvider implements vscode.Disposable {
                             break;
                         }
                     }
+                    for (const dw of m.dropdownWorkspaces || []) {
+                        const expandedDw = dw.startsWith('~')
+                            ? path.join(os.homedir(), dw.slice(1))
+                            : dw;
+                        if (path.resolve(expandedDw) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
                     if (anyOpenFolderIsMapped) break;
                 }
                 if (anyOpenFolderIsMapped) break;
@@ -703,7 +718,7 @@ export class KanbanProvider implements vscode.Disposable {
 
         if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
             // Multi-root/mapped context: strictly display the custom configured parent mapping names
-            const addedParents = new Set<string>();
+            const addedRoots = new Set<string>();
             for (const m of mappings) {
                 const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (m.workspaceFolders && m.workspaceFolders[0]);
                 if (parent) {
@@ -711,11 +726,24 @@ export class KanbanProvider implements vscode.Disposable {
                         ? path.join(os.homedir(), parent.slice(1))
                         : parent;
                     const resolvedParent = path.resolve(expanded);
-                    if (!addedParents.has(resolvedParent)) {
-                        addedParents.add(resolvedParent);
+                    if (!addedRoots.has(resolvedParent)) {
+                        addedRoots.add(resolvedParent);
                         items.push({
                             label: m.name || path.basename(resolvedParent),
                             workspaceRoot: resolvedParent
+                        });
+                    }
+                }
+                for (const dw of m.dropdownWorkspaces || []) {
+                    const expandedDw = dw.startsWith('~')
+                        ? path.join(os.homedir(), dw.slice(1))
+                        : dw;
+                    const resolvedDw = path.resolve(expandedDw);
+                    if (!addedRoots.has(resolvedDw)) {
+                        addedRoots.add(resolvedDw);
+                        items.push({
+                            label: path.basename(resolvedDw),
+                            workspaceRoot: resolvedDw
                         });
                     }
                 }
@@ -1035,6 +1063,10 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'clearTerminalBeforePromptState',
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay
+            });
+            this._panel.webview.postMessage({
+                type: 'clearAntigravityContextState',
+                enabled: this._clearAntigravityContext
             });
 
             let agentNames: Record<string, string> = {};
@@ -1748,6 +1780,10 @@ export class KanbanProvider implements vscode.Disposable {
                 enabled: this._clearTerminalBeforePrompt,
                 delay: this._clearTerminalBeforePromptDelay
             });
+            this._panel.webview.postMessage({
+                type: 'clearAntigravityContextState',
+                enabled: this._clearAntigravityContext
+            });
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
@@ -2042,12 +2078,21 @@ export class KanbanProvider implements vscode.Disposable {
                 const personaContent = await this._taskViewerProvider?.getPersonaForRole(role);
                 const preview = buildKanbanBatchPrompt(role as any, [], {
                     workspaceRoot,
+                    clearAntigravityContext: this._clearAntigravityContext,
                     personaContent: personaContent?.trim() || undefined,
                     defaultPromptOverrides,
                     gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role as any] ?? true,
                     switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role as any] ?? true,
                     enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
-                    researchDepth: promptsConfig.researchPlanner?.researchDepth
+                    researchDepth: promptsConfig.researchPlanner?.researchDepth,
+                    // Planner-specific options (matching _generateBatchPlannerPrompt pattern)
+                    plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
+                    dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
+                    aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
+                    splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                    // Reviewer-specific options (matching _generateBatchReviewerPrompt pattern)
+                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
+                    accurateCodingEnabled: role === 'coder' ? promptsConfig.accurateCodingEnabled : undefined
                 });
                 previews[role] = preview;
             } catch {
@@ -2212,6 +2257,7 @@ export class KanbanProvider implements vscode.Disposable {
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const personaContent = await this._taskViewerProvider?.getPersonaForRole('planner');
         return buildKanbanBatchPrompt('planner', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            clearAntigravityContext: this._clearAntigravityContext,
             aggressivePairProgramming,
             dependencyCheckEnabled: promptsConfig.dependencyCheckEnabled,
             plannerWorkflowPath: promptsConfig.plannerWorkflowPath,
@@ -2223,7 +2269,8 @@ export class KanbanProvider implements vscode.Disposable {
             defaultPromptOverrides,
             personaContent: personaContent?.trim() || undefined,
             workspaceRoot,
-            sourceColumnLabel
+            sourceColumnLabel,
+            routingMapConfig: this._routingMapConfig
         });
     }
 
@@ -2261,6 +2308,7 @@ export class KanbanProvider implements vscode.Disposable {
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const personaContent = await this._taskViewerProvider?.getPersonaForRole(role);
         return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            clearAntigravityContext: this._clearAntigravityContext,
             instruction,
             pairProgrammingEnabled,
             aggressivePairProgramming,
@@ -2297,6 +2345,7 @@ export class KanbanProvider implements vscode.Disposable {
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const coderPersonaContent = await this._taskViewerProvider?.getPersonaForRole('coder');
         const coderPrompt = buildKanbanBatchPrompt('coder', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            clearAntigravityContext: this._clearAntigravityContext,
             pairProgrammingEnabled: true,
             accurateCodingEnabled,
             defaultPromptOverrides,
@@ -2491,6 +2540,7 @@ export class KanbanProvider implements vscode.Disposable {
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
             const personaContent = await this._taskViewerProvider?.getPersonaForRole('reviewer');
             return buildKanbanBatchPrompt('reviewer', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+                clearAntigravityContext: this._clearAntigravityContext,
                 advancedReviewerEnabled: promptsConfig.advancedReviewerEnabled,
                 defaultPromptOverrides,
                 personaContent: personaContent?.trim() || undefined,
@@ -2520,6 +2570,7 @@ export class KanbanProvider implements vscode.Disposable {
             const promptsConfig = await this._getPromptsConfig(workspaceRoot);
             const personaContent = await this._taskViewerProvider?.getPersonaForRole(role);
             return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+                clearAntigravityContext: this._clearAntigravityContext,
                 defaultPromptOverrides,
                 personaContent: personaContent?.trim() || undefined,
                 workspaceRoot,
@@ -2626,6 +2677,23 @@ export class KanbanProvider implements vscode.Disposable {
                 if (normalizedColumn) {
                     const db = this._getKanbanDb(resolvedWorkspaceRoot);
                     await db.updateColumn(sessionId, normalizedColumn);
+
+                    // Sync complexity from plan file to DB so the kanban label updates immediately
+                    try {
+                        const planFile = sheet.planFile || updatedSheet?.planFile;
+                        if (planFile) {
+                            const complexity = await this.getComplexityFromPlan(resolvedWorkspaceRoot, planFile);
+                            if (complexity && complexity !== 'Unknown') {
+                                const workspaceId = await db.getWorkspaceId() || await db.getDominantWorkspaceId() || '';
+                                if (workspaceId) {
+                                    await db.updateComplexityByPlanFile(planFile, workspaceId, complexity);
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.error('[KanbanProvider] Failed to sync complexity during column advance:', err);
+                    }
+
                     _schedulePlanStateWrite(db, resolvedWorkspaceRoot, sessionId, normalizedColumn,
                         normalizedColumn === 'COMPLETED' ? 'completed' : 'active').catch(() => { /* fire-and-forget */ });
                 }
@@ -2991,7 +3059,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             const auditStart = auditMatch.index! + auditMatch[0].length;
             const afterAudit = content.slice(auditStart);
-            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex)\b/im);
+            const bandBMatch = afterAudit.match(/^\s*(?:#{1,4}\s+|\*\*)?(?:Classification[\s:]*)?(?:\*\*)?\s*(?:Band\s+B|Complex\s*(?:\/\s*Risky)?|Complex)\b/im);
             if (!bandBMatch) return '3';
 
             const bandBStart = bandBMatch.index! + bandBMatch[0].length;
@@ -3101,7 +3169,7 @@ export class KanbanProvider implements vscode.Disposable {
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string }> } | undefined;
+                { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string; dropdownWorkspaces?: string[] }> } | undefined;
 
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const mapping of cfg.mappings) {
@@ -3114,7 +3182,16 @@ export class KanbanProvider implements vscode.Disposable {
                         return path.resolve(expanded) === resolvedRoot;
                     });
 
-                    if (matchingIndex !== -1) {
+                    const dropdownIndex = Array.isArray(mapping.dropdownWorkspaces)
+                        ? mapping.dropdownWorkspaces.findIndex((f: string) => {
+                            const expanded = f.startsWith('~')
+                                ? path.join(os.homedir(), f.slice(1))
+                                : f;
+                            return path.resolve(expanded) === resolvedRoot;
+                        })
+                        : -1;
+
+                    if (matchingIndex !== -1 || dropdownIndex !== -1) {
                         // This root is in a mapping - use explicit parentFolder if set,
                         // otherwise fall back to first entry for backward compatibility
                         let parentEntry: string | undefined;
@@ -4086,6 +4163,22 @@ export class KanbanProvider implements vscode.Disposable {
                     delay: this._clearTerminalBeforePromptDelay
                 });
                 break;
+            case 'toggleClearAntigravityContext':
+                this._clearAntigravityContext = !!msg.enabled;
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'prompt.clearAntigravityContext',
+                        this._clearAntigravityContext,
+                        true
+                    );
+                } catch (err) {
+                    console.error('[KanbanProvider] Failed to persist clearAntigravityContext:', err);
+                }
+                this._panel?.webview.postMessage({
+                    type: 'clearAntigravityContextState',
+                    enabled: this._clearAntigravityContext
+                });
+                break;
             case 'updateClearTerminalBeforePromptDelay':
                 const clampedDelay = Math.min(Math.max(msg.delay ?? 1500, 0), 10000);
                 this._clearTerminalBeforePromptDelay = clampedDelay;
@@ -5052,6 +5145,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 // Build lead (Complex) prompt — with pair programming note
                 const leadPrompt = buildKanbanBatchPrompt('lead', plans, {
+                    clearAntigravityContext: this._clearAntigravityContext,
                     pairProgrammingEnabled: true,
                     aggressivePairProgramming,
                     defaultPromptOverrides,
@@ -5062,6 +5156,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 // Build coder (Routine) prompt
                 const coderPrompt = buildKanbanBatchPrompt('coder', plans, {
+                    clearAntigravityContext: this._clearAntigravityContext,
                     pairProgrammingEnabled: true,
                     accurateCodingEnabled,
                     defaultPromptOverrides,
@@ -5389,6 +5484,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const personaContent = await this._taskViewerProvider?.getPersonaForRole(role);
                     const preview = buildKanbanBatchPrompt(role, [], {
                         workspaceRoot,
+                        clearAntigravityContext: this._clearAntigravityContext,
                         personaContent: personaContent?.trim() || undefined,
                         defaultPromptOverrides,
                         gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
@@ -5398,6 +5494,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgrammingEnabled : undefined,
                         splitPlan: role === 'planner' ? promptsConfig.splitPlanEnabled : undefined,
                         plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
+                        accurateCodingEnabled: role === 'coder' ? promptsConfig.accurateCodingEnabled : undefined
                     });
                     this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview });
                 } catch (err) {
@@ -5726,6 +5823,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const personaContent = await this._taskViewerProvider?.getPersonaForRole('tester');
         return buildKanbanBatchPrompt('tester', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            clearAntigravityContext: this._clearAntigravityContext,
             designDocLink,
             designDocContent,
             defaultPromptOverrides,
