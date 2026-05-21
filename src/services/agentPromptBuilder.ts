@@ -37,6 +37,14 @@ export function resolveWorkingDir(workspaceRoot: string, repoScope: string): str
 }
 
 /**
+ * Collapse 3+ consecutive newlines down to 2, preserving intentional
+ * paragraph breaks while eliminating excessive blank lines.
+ */
+export function normalizeNewlines(text: string): string {
+    return text.replace(/\n{3,}/g, '\n\n');
+}
+
+/**
  * Detect if a workspace is single-repo or multi-repo based on the presence
  * of project markers in subdirectories.
  */
@@ -96,8 +104,6 @@ export interface PromptBuilderOptions {
     switchboardSafeguardsEnabled?: boolean;
     /** Optional display label of the column where the plans originated. */
     sourceColumnLabel?: string;
-    /** Persona file content for the role, used as base instructions when no override exists. */
-    personaContent?: string;
     /** When true, the research_planner role triggers the full deep research protocol. */
     enableDeepPlanning?: boolean;
     /** The research depth to use for the deep research protocol (e.g. 'quick', 'standard', 'deep', 'academic'). */
@@ -114,7 +120,7 @@ export function resolveBaseInstructions(
     options?: PromptBuilderOptions
 ): string {
     const override = options?.defaultPromptOverrides?.[role];
-    const base = options?.personaContent?.trim() || defaultBase;
+    const base = defaultBase;
     if (override?.text) {
         switch (override.mode) {
             case 'replace': return override.text;
@@ -189,7 +195,7 @@ ${perPlanDirectories}`
     };
 }
 
-export const GIT_PROHIBITION_DIRECTIVE = `\nGIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
+export const GIT_PROHIBITION_DIRECTIVE = `GIT POLICY: Do NOT execute state-mutating git commands (commit, push, pull, fetch, merge, rebase, reset, checkout, branch, stash, cherry-pick, revert). Read-only commands (status, log, diff) are permitted. Return completed work to the parent agent or user for committing.`;
 export const FOCUS_DIRECTIVE = `FOCUS DIRECTIVE: Each plan file path below is the single source of truth for that plan. Ignore any complexity regarding directory mirroring, 'brain' vs 'source' directories, or path hashing.`;
 
 export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
@@ -198,13 +204,11 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - then execute using those corrections,
 - do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
 
-export const SPLIT_PLAN_DIRECTIVE = `\n\nSPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
+export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 
-export const DEPENDENCY_CHECK_DIRECTIVE = `\n\n[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.\n`;
+export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
 
-export const ADVANCED_REVIEWER_DIRECTIVE = `
-
-ADVANCED REGRESSION ANALYSIS (enabled):
+export const ADVANCED_REVIEWER_DIRECTIVE = `ADVANCED REGRESSION ANALYSIS (enabled):
 1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
 2. Check for double-trigger bugs: if you add a UI refresh, verify no caller already triggers one.
 3. Check for race conditions: if the change involves async state (DB writes, file watchers, mtime checks), verify it doesn't conflict with concurrent systems (autoban polling, cross-IDE sync, write serialization chains).
@@ -212,7 +216,7 @@ ADVANCED REGRESSION ANALYSIS (enabled):
 5. Audit the full execution path from UI entry point to final state change, not just the changed lines.
 This analysis is token-intensive but catches regressions that plan-compliance-only reviews miss.`;
 
-export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `\n\nPAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.\n`;
+export const AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE = `PAIR PROGRAMMING OPTIMISATION: Aggressive mode is enabled. Assume the Coder agent is highly competent and can handle most implementation tasks independently, including multi-file changes, test updates, and straightforward refactors. Only classify tasks as Complex / Risky if they involve: (a) new architectural patterns or framework integrations the codebase hasn't used before, (b) security-sensitive logic (auth, crypto, permissions), (c) complex state machines or concurrency, or (d) changes that could silently break existing behaviour without obvious test failures. Everything else — even if it touches multiple files or requires careful reading — should be Routine.`;
 
 export const DEEP_RESEARCH_DIRECTIVE =
     `DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research ` +
@@ -261,9 +265,9 @@ export function buildKanbanBatchPrompt(
 2. Execute each plan fully before moving to the next (if sequential).
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
     const inlineChallengeDirective = INLINE_CHALLENGE_DIRECTIVE;
-    const challengeBlock = includeInlineChallenge ? `\n\n${inlineChallengeDirective}` : '';
+    const challengeBlock = includeInlineChallenge ? inlineChallengeDirective : '';
     const antigravityBlock = clearAntigravityContext
-        ? `\n\nIgnore any previous checkpoint summaries or context carried over from prior agent sessions. Do NOT ignore workspace-level context such as AGENTS.md, existing code conventions, or project configuration.\n`
+        ? 'Ignore any previous checkpoint summaries or context carried over from prior agent sessions. Do NOT ignore workspace-level context such as AGENTS.md, existing code conventions, or project configuration.'
         : '';
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
@@ -297,9 +301,9 @@ export function buildKanbanBatchPrompt(
         if (options?.workspaceRoot) {
             const { isMultiRepo, subRepoNames } = detectWorkspaceType(options.workspaceRoot);
             if (isMultiRepo) {
-                workspaceTypeBlock = `\nWORKSPACE TYPE: This workspace is multi-repo. Valid sub-repo folder names are: ${subRepoNames.join(', ')}. Set **Repo:** to the appropriate sub-repo folder name.`;
+                workspaceTypeBlock = `WORKSPACE TYPE: This workspace is multi-repo. Valid sub-repo folder names are: ${subRepoNames.join(', ')}. Set **Repo:** to the appropriate sub-repo folder name.`;
             } else {
-                workspaceTypeBlock = `\nWORKSPACE TYPE: This workspace is single-repo. Do NOT include a **Repo:** line in the plan metadata.`;
+                workspaceTypeBlock = `WORKSPACE TYPE: This workspace is single-repo. Do NOT include a **Repo:** line in the plan metadata.`;
             }
         }
 
@@ -315,22 +319,22 @@ export function buildKanbanBatchPrompt(
             plannerBase += `${batchExecutionRules}\n\n`;
         }
 
-        // Append add-on instructions if enabled
-        const aggressiveDirective = aggressivePairProgramming ? AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE : '';
-
-        const dependencyCheckInstruction = dependencyCheckEnabled ? DEPENDENCY_CHECK_DIRECTIVE : '';
-
         const designDocLink = options?.designDocLink?.trim();
         if (designDocLink) {
             plannerBase += `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as foundational context for all planning decisions:\n${designDocLink}\n\n`;
         }
 
-        plannerBase += aggressiveDirective + dependencyCheckInstruction;
+        if (aggressivePairProgramming) {
+            plannerBase += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
+        }
+        if (dependencyCheckEnabled) {
+            plannerBase += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
+        }
         if (splitPlan) {
-            plannerBase += SPLIT_PLAN_DIRECTIVE;
+            plannerBase += '\n\n' + SPLIT_PLAN_DIRECTIVE;
         }
         if (workspaceTypeBlock) {
-            plannerBase += workspaceTypeBlock + '\n';
+            plannerBase += '\n\n' + workspaceTypeBlock;
         }
 
         const baseInstructions = resolveBaseInstructions('planner', plannerBase, options);
@@ -338,14 +342,17 @@ export function buildKanbanBatchPrompt(
         let plannerPrompt = baseInstructions;
 
         // Add dispatch context and plan list
-        plannerPrompt += `${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}`;
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-        // Append git prohibition if enabled (add-on, default true)
-        if (gitProhibitionEnabled) {
-            plannerPrompt += GIT_PROHIBITION_DIRECTIVE;
+        if (suffixBlock) {
+            plannerPrompt += '\n\n' + suffixBlock;
         }
 
-        plannerPrompt += `${antigravityBlock}\n\nPLANS TO PROCESS:\n${planList}`;
+        plannerPrompt += `\n\nPLANS TO PROCESS:\n${planList}`;
 
         // Append design doc content (pre-fetched Notion)
         const designDocContent = options?.designDocContent?.trim();
@@ -353,7 +360,7 @@ export function buildKanbanBatchPrompt(
             plannerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as foundational context for all planning decisions:\n\n${designDocContent}`;
         }
 
-        return plannerPrompt;
+        return normalizeNewlines(plannerPrompt);
     }
 
     if (role === 'reviewer') {
@@ -372,21 +379,28 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         const reviewerExecutionMode = buildReviewerExecutionModeLine(`For ${planTarget}, assess the actual code changes against the plan requirements, fix valid material issues in code when needed, then verify.`);
         const advancedReviewerBlock = advancedReviewerEnabled ? ADVANCED_REVIEWER_DIRECTIVE : '';
         const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}\n\n`
+            ? `${batchExecutionRules}`
             : '';
 
         const baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
 
-        return `${reviewerExecutionIntro}
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${safeguardsBlock}${reviewerExecutionMode}${advancedReviewerBlock}
+        const promptParts = [
+            reviewerExecutionIntro,
+            safeguardsBlock,
+            reviewerExecutionMode,
+            advancedReviewerBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-${baseInstructions}
-
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'tester') {
@@ -394,7 +408,7 @@ ${planList}`;
         const designDocContent = options?.designDocContent?.trim();
         const designDocLink = options?.designDocLink?.trim();
         const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}\n\n`
+            ? `${batchExecutionRules}`
             : '';
 
         const testerBase = `Mode:
@@ -412,59 +426,69 @@ For each plan:
 
         const baseInstructions = resolveBaseInstructions('tester', testerBase, options);
 
-        let testerPrompt = `${plans.length <= 1
+        const intro = plans.length <= 1
             ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
-            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`}
+            : `The implementation for each of the following ${plans.length} plans passed code review. Execute a direct acceptance test against the product requirements document in-place for each plan.`;
 
-${executionDirective}
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${safeguardsBlock}${baseInstructions}
-
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`;
-
+        let designDocBlock = '';
         if (designDocContent) {
-            testerPrompt += `\n\nDESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
+            designDocBlock = `DESIGN DOC REFERENCE (pre-fetched from Notion):\nThe following is the full content of the project's design document / PRD. Use it as the authoritative requirements baseline for acceptance testing:\n\n${designDocContent}`;
         } else if (designDocLink) {
-            testerPrompt += `\n\nDESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
+            designDocBlock = `DESIGN DOC REFERENCE:\nThe following design document provides the project's product requirements and specifications. Use it as the authoritative requirements baseline for acceptance testing:\n${designDocLink}`;
         }
 
-        return testerPrompt;
+        const promptParts = [
+            intro,
+            executionDirective,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`,
+            designDocBlock
+        ].filter(Boolean).join('\n\n');
+
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'lead') {
         const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}${challengeBlock}`
+            ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
         const sourceSuffix = sourceColumnLabel ? ` from the ${sourceColumnLabel} column` : '';
 
-        let leadBase = options?.personaContent?.trim() || '';
+        let leadBase = '';
         if (pairProgrammingEnabled) {
-            leadBase += `\n\nNote: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
+            leadBase += `Note: A Coder agent is concurrently handling the Routine tasks for these plans. You only need to do Complex (Band B) work. IMPORTANT: The Coder has JUST started and will NOT be finished yet — do NOT attempt to check or read their work at the start. Begin your Complex implementation immediately. Only check and integrate the Coder's Routine work as a final step before declaring completion, by which time they will have finished.`;
             if (aggressivePairProgramming) {
-                leadBase += ` Routine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
+                leadBase += `\n\nRoutine scope has been expanded in aggressive pair programming mode. During your final integration check, pay extra attention to any Routine changes that touch files you also modified.`;
             }
         }
 
         const baseInstructions = resolveBaseInstructions('lead', leadBase, options);
 
-        let leadPrompt = `Please execute the following ${plans.length} plans${sourceSuffix}.
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${executionDirective}
+        const promptParts = [
+            `Please execute the following ${plans.length} plans${sourceSuffix}.`,
+            executionDirective,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`,
+            depSection.trim()
+        ].filter(Boolean).join('\n\n');
 
-${safeguardsBlock}
-
-${baseInstructions}
-
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`;
-        leadPrompt += depSection;
-
-        return leadPrompt;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'coder') {
@@ -473,57 +497,76 @@ ${planList}`;
             ? `Please execute the following ${plans.length} low-complexity plans${sourceSuffix}.`
             : `Please execute the following ${plans.length} plans${sourceSuffix}.`;
         const safeguardsBlock = switchboardSafeguardsEnabled
-            ? `${batchExecutionRules}${challengeBlock}`
+            ? `${batchExecutionRules}\n\n${challengeBlock}`.trim()
             : challengeBlock.trim();
 
-        let coderBase = options?.personaContent?.trim() || '';
+        let coderBase = '';
         if (pairProgrammingEnabled) {
-            coderBase += `\n\nAdditional Instructions: only do Routine (Band A) work.`;
+            coderBase += `Additional Instructions: only do Routine (Band A) work.`;
         }
 
         const baseInstructions = resolveBaseInstructions('coder', coderBase, options);
 
-        let coderPrompt = withCoderAccuracyInstruction(`${intro}
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${executionDirective}
+        const promptParts = [
+            intro,
+            executionDirective,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`,
+            depSection.trim()
+        ].filter(Boolean).join('\n\n');
 
-${safeguardsBlock}
-
-${baseInstructions}
-
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`, accurateCodingEnabled);
-        coderPrompt += depSection;
-
-        return coderPrompt;
+        const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+        return normalizeNewlines(coderPrompt);
     }
 
     if (role === 'intern') {
         const baseInstructions = resolveBaseInstructions('intern', '', options);
 
-        return `Please process the following ${plans.length} plans.
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
+        const promptParts = [
+            `Please process the following ${plans.length} plans.`,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'analyst') {
         const baseInstructions = resolveBaseInstructions('analyst', '', options);
 
-        return `Please process the following ${plans.length} plans.
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${baseInstructions}
+        const promptParts = [
+            `Please process the following ${plans.length} plans.`,
+            safeguardsBlock,
+            baseInstructions,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
-
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'ticket_updater') {
@@ -556,12 +599,21 @@ Format the analysis as:
 
         const baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
 
-        return `${baseInstructions}
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
+        const promptParts = [
+            baseInstructions,
+            safeguardsBlock,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'researcher') {
@@ -571,12 +623,21 @@ ${DEEP_RESEARCH_DIRECTIVE}`;
 
         const baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
 
-        return `${baseInstructions}
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
+        const promptParts = [
+            baseInstructions,
+            safeguardsBlock,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'research_planner') {
@@ -604,12 +665,21 @@ ${planList}`;
 
         const baseInstructions = resolveBaseInstructions('research_planner', rpBase, options);
 
-        return `${baseInstructions}
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
+        const promptParts = [
+            baseInstructions,
+            safeguardsBlock,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     if (role === 'splitter') {
@@ -627,7 +697,7 @@ ${complexityScoringDirective}
 
 STEP 2: Apply Split Plan Directive
 After ensuring the plan has a Complexity Audit, apply the following directive:
-${SPLIT_PLAN_DIRECTIVE}
+\n\n${SPLIT_PLAN_DIRECTIVE}
 
 STEP 3: Dispatch Instructions (for the USER, not automated)
 After creating both files:
@@ -638,12 +708,21 @@ Create both files in the same directory as the original plan.`;
 
         const baseInstructions = resolveBaseInstructions('splitter', splitterBase, options);
 
-        return `${baseInstructions}
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
 
-${switchboardSafeguardsEnabled ? `${batchExecutionRules}\n\n` : ''}${dispatchContextPrefix}${switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : ''}${gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : ''}${antigravityBlock}
+        const promptParts = [
+            baseInstructions,
+            safeguardsBlock,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
 
-PLANS TO PROCESS:
-${planList}`;
+        return normalizeNewlines(promptParts);
     }
 
     // No fallback — every built-in role must have an explicit template.

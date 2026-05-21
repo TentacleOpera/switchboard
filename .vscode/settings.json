@@ -38,7 +38,7 @@
 	"switchboard.research.localFolderPath": "/Users/patrickvuleta/Documents/Claude/Projects",
 	"switchboard.planner.designDocLink": "/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/docs/technical_documentation_gaps_c3c1aa74.md",
 	"switchboard.workspaceDatabaseMappings": {
-		"enabled": false,
+		"enabled": true,
 		"mappings": [
 			{
 				"id": "mapping-1777423607490",

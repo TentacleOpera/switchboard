@@ -690,7 +690,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getWorkspaceMappings': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
+                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappings',
@@ -699,13 +700,14 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'setWorkspaceMappingEnabled': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
+                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                     const enabled = typeof message.enabled === 'boolean' ? message.enabled : false;
                     await config.update(
                         'workspaceDatabaseMappings',
                         { ...current, enabled },
-                        vscode.ConfigurationTarget.Workspace
+                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
                     );
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappingEnabled',
@@ -764,11 +766,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                         }
 
                         // Ensure dropdown workspaces have a valid dbPath (defense-in-depth)
+                        // Skip checks already covered by mode-specific validation above to avoid
+                        // duplicate error messages. Only adds dropdown-specific errors for modes
+                        // that don't already validate dbPath (unexpected/unknown modes).
                         if (Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.length > 0) {
                             if (!m.dbPath?.trim()) {
-                                errors.push(`Mapping "${m.name}": database path is required when dropdown workspaces are configured`);
-                            } else if (mode !== 'create') {
-                                // For connect mode (default), verify the database file exists
+                                // mode='connect' and mode='create' already validate dbPath above;
+                                // only add dropdown-specific message for unexpected modes
+                                if (mode !== 'connect' && mode !== 'create') {
+                                    errors.push(`Mapping "${m.name}": database path is required when dropdown workspaces are configured`);
+                                }
+                            } else if (mode !== 'create' && mode !== 'connect') {
+                                // mode='connect' already checks existence and .db extension above;
+                                // only add dropdown-specific checks for unexpected modes
                                 const resolvedDbPath = path.resolve(expandHome(m.dbPath.trim()));
                                 if (!fs.existsSync(resolvedDbPath)) {
                                     errors.push(`Mapping "${m.name}": database file does not exist for dropdown workspaces: ${resolvedDbPath}`);
@@ -796,11 +806,12 @@ export class SetupPanelProvider implements vscode.Disposable {
                         break;
                     }
  
-                    const config = vscode.workspace.getConfiguration('switchboard');
+                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
+                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     await config.update(
                         'workspaceDatabaseMappings',
                         incoming,
-                        vscode.ConfigurationTarget.Workspace
+                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
                     );
 
                     // Provision workspace identity files for dropdown workspaces immediately after saving
@@ -868,7 +879,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                             break;
                         }
                         // Save the mapping config with dbPath pre-filled
-                        const config = vscode.workspace.getConfiguration('switchboard');
+                        const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
+                        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                         const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                         const newMapping = {
                             id: message.mappingId || ('mapping-' + Date.now()),
@@ -885,8 +897,8 @@ export class SetupPanelProvider implements vscode.Disposable {
                             : [...(current.mappings || []), newMapping];
                         await config.update(
                             'workspaceDatabaseMappings',
-                            { ...current, mappings: updatedMappings },
-                            vscode.ConfigurationTarget.Workspace
+                            { ...current, enabled: true, mappings: updatedMappings },
+                            folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
                         );
 
                         // Provision workspace identity files for dropdown workspaces immediately

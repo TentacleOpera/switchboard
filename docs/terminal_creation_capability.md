@@ -3,7 +3,7 @@
 ## Overview
 This specification documents the architectural capability for CLI agents (via the `switchboard` MCP server) to programmatically create new visible terminal tabs within the VS Code UI.
 
-While this capability is currently **disabled** in the default `mcp-server.js` configuration (to favor headless automation), the underlying plumbing remains fully implemented in the extension. This document serves as a reference for re-enabling or modifying this feature.
+While this capability is currently **disabled** in the default `mcp-server.js` configuration (to favor headless automation), the underlying plumbing remains fully implemented in the extension. In the dual-path architecture, this capability belongs to the MCP server's workflow and workspace orchestration path, rather than the skill-based LocalApiServer integration path. This document serves as a reference for re-enabling or modifying this feature.
 
 ## Architecture: The "Bridge" Pattern
 
@@ -37,7 +37,7 @@ mcpServerProcess.on('message', async (message: any) => {
 ```
 
 ### 2. MCP Server Side (`src/mcp-server/mcp-server.js`)
-The server exposes a tool that triggers the IPC message. 
+In the dual-path architecture, the MCP server is the primary vehicle for this capability since terminal management and IPC are part of workflow and workspace orchestration (which remains on the MCP path). The server exposes a tool that triggers the IPC message. 
 
 *Status*: **Currently Disabled/Commented Out** in `mcp-server.js`.
 *Reason*: To enforce a "Headless Automation" workflow where agents spawn background processes (invisible to the user) instead of cluttering the UI with tabs.

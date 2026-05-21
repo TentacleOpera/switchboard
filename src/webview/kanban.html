@@ -764,9 +764,12 @@
             padding: 8px 16px 0;
             background: var(--panel-bg);
             border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
         }
 
         .kanban-tab-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
             background: transparent;
             border: 1px solid transparent;
             border-bottom: none;
@@ -1990,20 +1993,7 @@
                     </div>
                 </div>
             </div>
-            <div class="db-subsection">
-                <div class="subsection-header"><span>Antigravity Context</span></div>
-                <div class="setup-section">
-                    <div class="setup-field">
-                        <label class="cli-toggle-inline" id="clear-antigravity-context-label" data-tooltip="Instruct agents to ignore previous checkpoint summaries when enabled">
-                            <label class="toggle-switch">
-                                <input type="checkbox" id="clear-antigravity-context-toggle">
-                                <span class="toggle-slider"></span>
-                            </label>
-                            <span class="toggle-label">Clear Antigravity Context</span>
-                        </label>
-                    </div>
-                </div>
-            </div>
+
             <div class="db-subsection">
                 <div class="subsection-header"><span>Kanban Structure</span></div>
                 <div class="setup-section">
@@ -2029,25 +2019,25 @@
         <!-- Agent Visibility & CLI Commands -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Agent Visibility &amp; CLI Commands</span></div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
           <div class="agent-description">Implements high-complexity files, complex refactors, and core architecture changes.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Implements low-complexity boilerplate, routine functions, and minor enhancements.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="intern" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Intern</label><input type="text" data-role="intern" id="agents-tab-cmd-intern" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
           <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
           <div class="agent-description">Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. gemini" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="agent-description">Conducts semantic code searches and web research to discover necessary implementation context.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="research_planner" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Research Planner</label><input type="text" data-role="research_planner" id="agents-tab-cmd-research-planner" placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="research_planner" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Research Planner</label><input type="text" data-role="research_planner" id="agents-tab-cmd-research-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Scopes complex multi-part plans by gathering extensive context using deep research.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="agent-description">Segregates planned files into distinct routine and complex task batches.</div>
@@ -2224,6 +2214,12 @@
                   <span>Split Plan</span>
                   <span class="tooltip">Produce separate Routine and Complex plan files</span>
                 </label>
+
+                <label class="checkbox-item" title="Instruct agent to ignore previous checkpoint summaries from prior sessions">
+                  <input type="checkbox" id="plannerAddonClearAntigravityContext">
+                  <span>Clear Antigravity Context</span>
+                  <span class="tooltip">Instruct agent to ignore previous checkpoint summaries from prior sessions</span>
+                </label>
               </div>
             </div>
           </div>
@@ -2273,10 +2269,17 @@
         
         <!-- Preview section (shown for all roles) -->
         <div class="db-subsection">
-          <div class="subsection-header"><span>Preview</span></div>
+          <div class="subsection-header">
+            <span>Preview</span>
+            <span id="previewPlanIndicator" style="margin-left: 8px; font-size: 10px; font-weight: normal; text-transform: none; letter-spacing: 0;"></span>
+          </div>
           <div class="config-section preview-section">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
               <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent (editable):</span>
+              <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary); cursor:pointer;">
+                <input type="checkbox" id="useSelectedInPreview">
+                <span>Use selected plans in preview</span>
+              </label>
             </div>
             <textarea id="promptPreview"></textarea>
           </div>
@@ -2438,7 +2441,7 @@
 
             plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
             researchPlannerConfig.style.display = currentRole === 'research_planner' ? 'block' : 'none';
-            promptCustomization.style.display = (currentRole === 'planner' || currentRole === 'research_planner') ? 'none' : 'block';
+            promptCustomization.style.display = (currentRole === 'planner') ? 'none' : 'block';
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
@@ -2449,6 +2452,7 @@
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
+                document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
             } else if (currentRole === 'research_planner') {
                 const config = roleConfigs.research_planner;
                 document.getElementById('rp-enable-deep-planning').checked = !!config.enableDeepPlanning;
@@ -2511,7 +2515,15 @@
         async function refreshPreview() {
             const preview = document.getElementById('promptPreview');
             if (!preview) return;
-            postKanbanMessage({ type: 'getPromptPreview', role: currentRole });
+            
+            const useSelected = document.getElementById('useSelectedInPreview')?.checked;
+            const sessionIds = useSelected && selectedCards.size > 0 ? Array.from(selectedCards) : undefined;
+            
+            const msg = { type: 'getPromptPreview', role: currentRole };
+            if (sessionIds) {
+                msg.sessionIds = sessionIds;
+            }
+            postKanbanMessage(msg);
             preview.value = 'Loading preview...';
         }
 
@@ -2808,7 +2820,7 @@
         let allowUnknownComplexityAutoMove = false;
         let clearTerminalBeforePrompt = false;
         let clearTerminalBeforePromptDelay = 1500;
-        let clearAntigravityContext = false;
+
         let collapseCodersEnabled = true;
         // Restore collapse toggle from webview state if available
         try {
@@ -2967,6 +2979,12 @@
                     saveRoleConfig(currentRole);
                 });
             }
+            const useSelectedInPreview = document.getElementById('useSelectedInPreview');
+            if (useSelectedInPreview) {
+                useSelectedInPreview.addEventListener('change', () => {
+                    refreshPreview();
+                });
+            }
 
             // Research Planner specific listeners
             const rpEnableDeepPlanning = document.getElementById('rp-enable-deep-planning');
@@ -2990,7 +3008,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -3140,16 +3158,6 @@
             }
         }
 
-        function updateClearAntigravityContextUi() {
-            const toggle = document.getElementById('clear-antigravity-context-toggle');
-            const toggleLabel = document.getElementById('clear-antigravity-context-label');
-            if (toggle) {
-                toggle.checked = !!clearAntigravityContext;
-            }
-            if (toggleLabel) {
-                toggleLabel.classList.toggle('is-off', !clearAntigravityContext);
-            }
-        }
 
         /** Get the next column in the pipeline (returns null for last column). */
         function getNextColumn(col) {
@@ -3172,7 +3180,7 @@
             if (!container) return [];
             const ids = [];
             container.querySelectorAll('.kanban-card.selected').forEach(el => {
-                ids.push(el.dataset.planId || el.dataset.session || '');
+                ids.push(el.dataset.session || el.dataset.planId || '');
             });
             return ids.filter(Boolean);
         }
@@ -3182,7 +3190,7 @@
             const container = cardEl ? cardEl.closest('.column-body') : null;
             if (!container) return [];
             return Array.from(container.querySelectorAll('.kanban-card.selected'))
-                .map(el => el.dataset.planId || el.dataset.session || '')
+                .map(el => el.dataset.session || el.dataset.planId || '')
                 .filter(Boolean);
         }
 
@@ -3190,9 +3198,9 @@
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.planId || c.sessionId || '').filter(Boolean);
+                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.sessionId || c.planId || '').filter(Boolean);
             }
-            return currentCards.filter(c => c.column === col).map(c => c.planId || c.sessionId || '').filter(Boolean);
+            return currentCards.filter(c => c.column === col).map(c => c.sessionId || c.planId || '').filter(Boolean);
         }
 
         function escapeAttr(value) {
@@ -3787,7 +3795,7 @@
                 // Card selection toggle (click on card body, not on buttons)
                 el.addEventListener('click', (e) => {
                     if (e.target.closest('.card-btn') || e.target.closest('button')) return;
-                    const pid = el.dataset.planId || el.dataset.session || '';
+                    const pid = el.dataset.session || el.dataset.planId || '';
                     if (!pid) return; // Skip if no valid ID — also prevents empty selectPlan message
                     if (selectedCards.has(pid)) {
                         selectedCards.delete(pid);
@@ -3801,10 +3809,13 @@
                         }
                     }
                     updateReassignButtonVisibility();
+                    if (document.getElementById('useSelectedInPreview')?.checked) {
+                        refreshPreview();
+                    }
                 });
 
                 // Re-apply selection state after re-render
-                const pid = el.dataset.planId || el.dataset.session || '';
+                const pid = el.dataset.session || el.dataset.planId || '';
                 if (pid && selectedCards.has(pid)) {
                     el.classList.add('selected');
                 }
@@ -4176,7 +4187,7 @@
                 (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
                     ? e.currentTarget
                     : e.target.closest('.kanban-card');
-            const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session;
+            const draggedId = draggedCardEl?.dataset.session || draggedCardEl?.dataset.planId;
             if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
             draggedCardEl.classList.add('dragging');
@@ -4619,11 +4630,48 @@
                     }
                     break;
                 }
+                case 'antigravityPrompt': {
+                    const copyPromptBtn = document.getElementById('antigravity-copy-prompt-btn');
+                    if (copyPromptBtn && msg.prompt) {
+                        navigator.clipboard.writeText(msg.prompt).then(() => {
+                            copyPromptBtn.textContent = 'COPIED!';
+                            setTimeout(() => {
+                                copyPromptBtn.textContent = 'COPY PROMPT';
+                                copyPromptBtn.disabled = false;
+                            }, 2000);
+                        }).catch(err => {
+                            console.error('Failed to copy prompt:', err);
+                            copyPromptBtn.textContent = 'ERROR';
+                            setTimeout(() => {
+                                copyPromptBtn.textContent = 'COPY PROMPT';
+                                copyPromptBtn.disabled = false;
+                            }, 2000);
+                        });
+                    } else if (copyPromptBtn) {
+                        copyPromptBtn.textContent = msg.error ? 'NO PLANS' : 'ERROR';
+                        setTimeout(() => {
+                            copyPromptBtn.textContent = 'COPY PROMPT';
+                            copyPromptBtn.disabled = false;
+                        }, 2000);
+                    }
+                    break;
+                }
                 case 'promptPreviewResult': {
-                    const { role, preview } = msg;
+                    const { role, preview, planCount } = msg;
                     if (role !== currentRole) break;
                     const previewEl = document.getElementById('promptPreview');
                     if (previewEl) previewEl.value = preview || '(No prompt content)';
+                    
+                    const indicator = document.getElementById('previewPlanIndicator');
+                    if (indicator) {
+                        if (planCount > 0) {
+                            indicator.textContent = `(with ${planCount} plan${planCount !== 1 ? 's' : ''})`;
+                            indicator.style.color = 'var(--accent-teal)';
+                        } else {
+                            indicator.textContent = '(template only)';
+                            indicator.style.color = 'var(--text-secondary)';
+                        }
+                    }
                     break;
                 }
                 case 'fileExistsResult': {
@@ -4707,10 +4755,7 @@
                     }
                     updateClearTerminalBeforePromptUi();
                     break;
-                case 'clearAntigravityContextState':
-                    clearAntigravityContext = msg.enabled !== false;
-                    updateClearAntigravityContextUi();
-                    break;
+
                 case 'clearTerminalBeforePromptDelayState':
                     if (msg.delay !== undefined) {
                         clearTerminalBeforePromptDelay = msg.delay;
@@ -4809,13 +4854,23 @@
                             btn.classList.add('copied');
                             btn.disabled = true;
 
-                            const onAnimationEnd = () => {
+                            let fallbackTimer = null;
+                            const resetBtn = () => {
                                 btn.textContent = btn.dataset.copyLabel || 'Copy Prompt';
                                 btn.classList.remove('copied');
                                 btn.disabled = false;
                                 btn.removeEventListener('animationend', onAnimationEnd);
+                                if (fallbackTimer) { clearTimeout(fallbackTimer); fallbackTimer = null; }
+                            };
+                            const onAnimationEnd = () => {
+                                fallbackTimer = null;
+                                resetBtn();
                             };
                             btn.addEventListener('animationend', onAnimationEnd);
+                            // Fallback: if animationend never fires (prefers-reduced-motion,
+                            // or animation already completed before listener was attached),
+                            // reset the button after 2s to prevent it getting stuck disabled.
+                            fallbackTimer = setTimeout(resetBtn, 2000);
                         } else {
                             btn.textContent = btn.dataset.copyLabel || 'Copy Prompt';
                             btn.classList.remove('copied');
@@ -4899,8 +4954,12 @@
                   document.querySelectorAll('#agents-tab-content .agents-tab-visible-toggle').forEach(cb => {
                     if (cb.dataset.role) cb.checked = vis[cb.dataset.role] !== false;
                   });
-                  document.getElementById('agents-tab-jules-auto-sync').checked = !!msg.julesAutoSyncEnabled;
-                  // Sync lastVisibleAgents and column/Jules visibility (mirrors visibleAgents handler)
+                  const julesSyncCb = document.getElementById('agents-tab-jules-auto-sync');
+                  if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
+                  // Sync lastVisibleAgents and column/Jules visibility.
+                  // Unlike the visibleAgents handler (which receives defaults-merged data
+                  // and uses a truthiness guard), startupCommands sends raw state.visibleAgents
+                  // which may be {}, so we guard on key count to avoid a no-op merge.
                   if (Object.keys(vis).length > 0) {
                     lastVisibleAgents = { ...lastVisibleAgents, ...vis };
                     updateAllColumnAgents();
@@ -5021,10 +5080,7 @@
         }
 
         document.getElementById('btn-reassign-workspace')?.addEventListener('click', () => {
-            const sessionIds = Array.from(selectedCards).map(pid => {
-                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${pid}"], .kanban-card[data-session="${pid}"]`);
-                return cardEl ? (cardEl.dataset.session || cardEl.dataset.planId || pid) : pid;
-            });
+            const sessionIds = Array.from(selectedCards);
             
             const select = document.getElementById('workspace-select');
             const targetWorkspaceRoot = select ? select.value : '';
@@ -5104,12 +5160,7 @@
                 postKanbanMessage({ type: 'updateClearTerminalBeforePromptDelay', delay: clamped });
             }
         });
-        document.getElementById('clear-antigravity-context-toggle')?.addEventListener('change', (event) => {
-            const checked = !!event.target?.checked;
-            clearAntigravityContext = checked;
-            updateClearAntigravityContextUi();
-            postKanbanMessage({ type: 'toggleClearAntigravityContext', enabled: checked });
-        });
+
         document.getElementById('pairProgrammingModeSelect')?.addEventListener('change', (e) => {
             const select = e.target;
             select.classList.toggle('is-off', select.value === 'off');
@@ -5439,6 +5490,73 @@
                 });
             };
 
+            const antigravitySection = document.createElement('div');
+            antigravitySection.className = 'db-subsection';
+            container.appendChild(antigravitySection);
+
+            const antigravityHeader = document.createElement('div');
+            antigravityHeader.className = 'subsection-header';
+            const antigravitySpan = document.createElement('span');
+            antigravitySpan.textContent = 'ANTIGRAVITY AUTOMATION';
+            antigravityHeader.appendChild(antigravitySpan);
+            antigravitySection.appendChild(antigravityHeader);
+
+            const antigravityDesc = document.createElement('div');
+            antigravityDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
+            antigravityDesc.textContent = 'Select an agent and copy a prompt (using prompts tab configuration) for the oldest plan in the CREATED column.';
+            antigravitySection.appendChild(antigravityDesc);
+
+            const antigravityActions = document.createElement('div');
+            antigravityActions.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center;';
+            antigravitySection.appendChild(antigravityActions);
+
+            const agentSelect = document.createElement('select');
+            agentSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; flex:1;';
+            guardInteraction(agentSelect);
+
+            // Populate with enabled agents from lastVisibleAgents
+            const enabledAgents = Object.keys(lastVisibleAgents || {}).filter(name => lastVisibleAgents[name] !== false);
+            enabledAgents.forEach(agentName => {
+                const opt = document.createElement('option');
+                opt.value = agentName;
+                opt.textContent = agentName;
+                agentSelect.appendChild(opt);
+            });
+
+            antigravityActions.appendChild(agentSelect);
+
+            const copyPromptBtn = document.createElement('button');
+            copyPromptBtn.className = 'strip-btn';
+            copyPromptBtn.id = 'antigravity-copy-prompt-btn';  // Unique ID for reliable selection
+            copyPromptBtn.textContent = 'COPY PROMPT';
+            copyPromptBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px;';
+            copyPromptBtn.addEventListener('click', async () => {
+                try {
+                    const selectedAgent = agentSelect.value;
+                    if (!selectedAgent) {
+                        console.error('No agent selected');
+                        return;
+                    }
+
+                    copyPromptBtn.textContent = 'LOADING...';
+                    copyPromptBtn.disabled = true;
+
+                    // Request the prompt for the selected agent using prompts tab configuration
+                    postKanbanMessage({
+                        type: 'generateAntigravityPrompt',
+                        agent: selectedAgent,
+                        workspaceRoot: getActiveWorkspaceRoot()
+                    });
+
+                    // The response will be handled via a new message listener case
+                } catch (err) {
+                    console.error('Failed to generate prompt:', err);
+                    copyPromptBtn.textContent = 'COPY PROMPT';
+                    copyPromptBtn.disabled = false;
+                }
+            });
+            antigravityActions.appendChild(copyPromptBtn);
+
             const automationRulesSection = document.createElement('div');
             automationRulesSection.className = 'db-subsection';
             container.appendChild(automationRulesSection);
@@ -5446,7 +5564,7 @@
             const automationRulesHeader = document.createElement('div');
             automationRulesHeader.className = 'subsection-header';
             const automationRulesSpan = document.createElement('span');
-            automationRulesSpan.textContent = 'AUTOMATION RULES';
+            automationRulesSpan.textContent = 'KANBAN AUTOMATION RULES';
             automationRulesHeader.appendChild(automationRulesSpan);
             automationRulesSection.appendChild(automationRulesHeader);
 

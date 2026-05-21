@@ -264,10 +264,13 @@
             padding: 8px 10px 0 10px;
             background: var(--panel-bg);
             border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
         }
 
         .tab-btn {
             flex: 1;
+            flex-shrink: 0;
+            white-space: nowrap;
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -298,10 +301,13 @@
             padding: 6px 10px 4px 10px;
             background: var(--panel-bg);
             border-bottom: 1px solid var(--border-color);
+            overflow-x: auto;
         }
 
         .sub-tab-btn {
             flex: 1;
+            flex-shrink: 0;
+            white-space: nowrap;
             background: transparent;
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
@@ -620,10 +626,33 @@
             gap: 6px;
         }
 
+        .project-task-meta-row {
+            display: flex;
+            flex-wrap: wrap;
+            gap: 8px;
+            align-items: center;
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .project-task-meta-row span {
+            min-width: 0;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .project-task-meta-row #sidebar-detail-task-state {
+            font-weight: 700;
+        }
+
         .project-detail-actions {
             display: flex;
             gap: 8px;
             flex-wrap: wrap;
+            margin: 8px 0;
         }
 
         .project-back-btn-group {
@@ -1112,6 +1141,15 @@
             border-color: var(--accent-teal);
             background: color-mix(in srgb, var(--accent-teal) 10%, var(--panel-bg2));
             box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        .secondary-btn.is-teal:disabled {
+            opacity: 0.3;
+            color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
+            border-color: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            background: transparent;
+            cursor: not-allowed;
+            box-shadow: none;
         }
 
         .secondary-btn.is-orange {
@@ -1700,7 +1738,7 @@
                     <input type="checkbox" class="onboard-agent-toggle" data-role="planner" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Planner</label><input type="text" id="onboard-cli-planner"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                        placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="lead" checked
@@ -1712,7 +1750,7 @@
                     <input type="checkbox" class="onboard-agent-toggle" data-role="coder" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Coder</label><input type="text" id="onboard-cli-coder"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                        placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="intern" checked
@@ -1724,7 +1762,7 @@
                     <input type="checkbox" class="onboard-agent-toggle" data-role="reviewer" checked
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Reviewer</label><input type="text" id="onboard-cli-reviewer"
-                        placeholder="e.g. gemini --approval-mode auto_edit" style="flex:1;">
+                        placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
                     <input type="checkbox" class="onboard-agent-toggle" data-role="tester"
@@ -2023,6 +2061,7 @@
 
         const btnGrid = document.getElementById('createAgentGrid');
         if (btnGrid) {
+            btnGrid._isClearMode = false;
             btnGrid.addEventListener('click', () => {
                 if (btnGrid._isClearMode) {
                     // CLEAR TERMINALS mode
@@ -3557,7 +3596,7 @@
             const issue = selectedLinearIssue.issue;
             detailTitle.textContent = issue.title || issue.identifier || issue.id;
             detailIdentifier.textContent = issue.identifier || issue.id;
-            detailState.textContent = issue.state?.name ? `State: ${issue.state.name}` : 'State: Unknown';
+            detailState.textContent = issue.state?.name || 'Unknown status';
             detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
 
             if (backToParentButton) {
@@ -4185,7 +4224,7 @@
 
             if (detailTitle) detailTitle.textContent = task.title || task.identifier;
             if (detailIdentifier) detailIdentifier.textContent = task.identifier;
-            if (detailState) detailState.textContent = task.status;
+            if (detailState) detailState.textContent = task.status || 'Unknown status';
             if (detailAssignee) detailAssignee.textContent = task.assignees?.length
                 ? task.assignees.map(a => a.username || a.email).join(', ')
                 : 'Unassigned';
@@ -4385,15 +4424,17 @@
                     </div>
                     <div class="project-task-header">
                         <div class="project-task-title" id="sidebar-detail-task-title">Select a Linear task</div>
-                        <div class="project-task-meta" id="sidebar-detail-task-identifier"></div>
-                        <div class="project-task-meta" id="sidebar-detail-task-state"></div>
+                        <div class="project-task-meta-row">
+                            <span id="sidebar-detail-task-identifier"></span>
+                            <span id="sidebar-detail-task-state"></span>
+                        </div>
                         <div class="project-task-meta" id="sidebar-detail-task-assignee"></div>
                     </div>
-                    <div id="sidebar-detail-task-description" class="project-task-description"></div>
                     <div class="project-detail-actions">
-                        <button id="sidebar-detail-ask-agent" class="secondary-btn" type="button">ASK AGENT</button>
-                        <button id="sidebar-detail-import-task" class="secondary-btn" type="button">IMPORT TASK + SUBTASKS</button>
+                        <button id="sidebar-detail-ask-agent" class="secondary-btn is-teal" type="button">ASK AGENT</button>
+                        <button id="sidebar-detail-import-task" class="secondary-btn is-teal" type="button">IMPORT TASK + SUBTASKS</button>
                     </div>
+                    <div id="sidebar-detail-task-description" class="project-task-description"></div>
                     <div class="project-detail-section">
                         <div class="project-detail-heading">Subtasks</div>
                         <div id="sidebar-detail-subtasks-list" class="project-detail-list"></div>

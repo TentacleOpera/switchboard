@@ -2317,16 +2317,8 @@ export class ClickUpSyncService {
       }
       const planIdCustomFieldId = config.customFields.planId;
 
-      // Build lookup maps from the flat task list
+      // Build lookup map from the flat task list
       const taskNameById = new Map<string, string>(tasks.map((t: any) => [t.id, t.name]));
-      const subtasksByParentId = new Map<string, any[]>();
-      for (const task of tasks) {
-        if (task.parent) {
-          const siblings = subtasksByParentId.get(task.parent) || [];
-          siblings.push(task);
-          subtasksByParentId.set(task.parent, siblings);
-        }
-      }
 
       let imported = 0;
       let skipped = 0;
@@ -2390,7 +2382,6 @@ export class ClickUpSyncService {
         }
 
         const planFile = path.join(plansDir, `clickup_import_${task.id}.md`);
-        const kanbanColumn = statusName === 'backlog' ? 'BACKLOG' : 'CREATED';
 
         // Core fields
         const priority = task.priority?.priority || '';
@@ -2415,57 +2406,12 @@ export class ClickUpSyncService {
           tags       ? `> **Tags:** ${tags}`                          : '',
         ].filter(Boolean).join('\n');
 
-        // ClickUp Ticket Notes — all remaining fields, no mapping, just raw info
-        const startDate = task.start_date ? new Date(Number(task.start_date)).toLocaleDateString() : '';
-        const timeEstimate = task.time_estimate ? `${Math.round(task.time_estimate / 60000)}m` : '';
-        const creator = task.creator ? (task.creator.username || task.creator.email || task.creator.id) : '';
-        const linkedTasks = (task.linked_tasks || []).map((l: any) => l.task_id || l.id).join(', ');
-        const dependencies = (task.dependencies || []).map((d: any) => d.task_id || d.id).join(', ');
-
-        const checklistLines = (task.checklists || []).flatMap((cl: any) =>
-          (cl.items || []).map((item: any) => `- [${item.resolved ? 'x' : ' '}] ${item.name}`)
-        );
-
-        const customFieldLines = (task.custom_fields || [])
-          .filter((f: any) => f.value !== null && f.value !== undefined && f.value !== '')
-          .map((f: any) => `- **${f.name}:** ${JSON.stringify(f.value)}`);
-
-        // List subtasks on parent tasks (each subtask gets its own plan file)
-        const subtasks = subtasksByParentId.get(task.id) || [];
-        const subtaskLines = subtasks.map((s: any) => `- ${s.name} (\`${s.id}\`) — see \`clickup_import_${s.id}.md\``);
-
-        const notesLines = [
-          '## ClickUp Ticket Notes',
-          '',
-          `**Status:** ${task.status?.status || ''}`,
-          startDate      ? `**Start Date:** ${startDate}`        : '',
-          timeEstimate   ? `**Time Estimate:** ${timeEstimate}`  : '',
-          creator        ? `**Creator:** ${creator}`             : '',
-          linkedTasks    ? `**Linked Tasks:** ${linkedTasks}`    : '',
-          dependencies   ? `**Dependencies:** ${dependencies}`   : '',
-          ...(subtaskLines.length > 0 ? ['', '**Subtasks (each imported as a separate plan):**', ...subtaskLines] : []),
-          ...(checklistLines.length > 0 ? ['', '**Checklists:**', ...checklistLines] : []),
-          ...(customFieldLines.length > 0 ? ['', '**Custom Fields:**', ...customFieldLines] : []),
-        ].filter(s => s !== '').join('\n');
-
-        // Embedded kanban column for PlanFileImporter is NO LONGER REQUIRED.
-        // We rely on the database default (CREATED) during discovery.
-
         const stub = [
           `# ${task.name || `ClickUp Task ${task.id}`}`,
           '',
           metaLines,
           '',
-          '## Goal',
-          '',
-          description || 'TODO',
-          '',
-          '## Proposed Changes',
-          '',
-          'TODO',
-          '',
-          notesLines,
-          '' // Removed switchboardState inclusion here
+          description || '',
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

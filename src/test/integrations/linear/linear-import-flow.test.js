@@ -44,7 +44,8 @@ async function run() {
             setupComplete: true,
             lastSync: null,
             autoPullEnabled: false,
-            pullIntervalMinutes: 60
+            pullIntervalMinutes: 60,
+            excludeBacklog: false
         });
         const normalizedConfig = await service.loadConfig();
         assert.deepStrictEqual(normalizedConfig.automationRules, []);
@@ -134,15 +135,18 @@ async function run() {
             const childContent = readText(path.join(plansDir, 'linear_import_issue-child.md'));
             const backlogContent = readText(path.join(plansDir, 'linear_import_issue-backlog.md'));
 
-            assert.ok(parentContent.includes('## Linear Issue Notes'));
-            assert.ok(parentContent.includes('**Sub-issues (each imported as a separate plan):**'));
-            assert.ok(parentContent.includes('**Comments:**'));
-            assert.ok(parentContent.includes('**Attachments:**'));
-            assert.ok(parentContent.includes('**Kanban Column:** CREATED'));
+            assert.ok(!parentContent.includes('## Linear Issue Notes'));
+            assert.ok(!parentContent.includes('**Sub-issues (each imported as a separate plan):**'));
+            assert.ok(!parentContent.includes('**Comments:**'));
+            assert.ok(!parentContent.includes('**Attachments:**'));
+            assert.ok(!parentContent.includes('## Goal'));
+            assert.ok(!parentContent.includes('## Proposed Changes'));
+            assert.ok(!parentContent.includes('TODO'));
 
             assert.ok(childContent.includes('> **Parent Issue:** Parent Issue (ENG-101)'));
-            assert.ok(childContent.includes('## Goal'));
-            assert.ok(backlogContent.includes('**Kanban Column:** BACKLOG'));
+            assert.ok(!childContent.includes('## Goal'));
+            assert.ok(!childContent.includes('## Proposed Changes'));
+            assert.ok(!childContent.includes('TODO'));
         } finally {
             http.restore();
         }
@@ -155,7 +159,7 @@ async function run() {
         await service.saveConfig({
             teamId: 'team-1',
             teamName: 'Engineering',
-            projectId: 'project-1',
+            includeProjectNames: ['Acme Project'],
             columnToStateId: {
                 CREATED: 'state-created',
                 BACKLOG: 'state-backlog',
@@ -183,6 +187,19 @@ async function run() {
         const http = installHttpsMock();
         try {
             service.delay = async () => {};
+            // Queue projects list resolution first
+            http.queueJson(200, {
+                data: {
+                    team: {
+                        projects: {
+                            nodes: [
+                                { id: 'project-1', name: 'Acme Project' }
+                            ]
+                        }
+                    }
+                }
+            });
+            // Queue issues response second
             http.queueJson(200, {
                 data: {
                     issues: {
@@ -228,22 +245,22 @@ async function run() {
     );
     assert.match(
         providerSource,
-        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;\s*\} = \{\}\s*\)/s,
+        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;[\s\S]*?\} = \{\}\s*\)/s,
         'Expected _createInitiatedPlan() to support suppressIntegrationSync for imported Linear tasks.'
     );
     assert.match(
         providerSource,
-        /await this\._createInitiatedPlan\(\s*node\.issue\.title \|\| this\._describeLinearIssue\(node\.issue\),[\s\S]*suppressIntegrationSync: true[\s\S]*await linearService\.setIssueIdForPlan\(sessionId, node\.issue\.id\);[\s\S]*await db\.updateLinearIssueId\(sessionId, node\.issue\.id\);/s,
+        /await this\._createInitiatedPlan\([\s\S]*?suppressIntegrationSync: true[\s\S]*?await linearService\.setIssueIdForPlan\(planFileRelative, node\.issue\.id\);[\s\S]*?await db\.updateLinearIssueIdByPlanFile\(planFileAbsolute, workspaceId, node\.issue\.id\);/s,
         'Expected imported Linear plans to link both the sync map and DB before follow-up sync runs.'
     );
     assert.match(
         providerSource,
-        /if \(parentSessionId\) \{[\s\S]*await db\.updateDependencies\(sessionId, parentSessionId\);[\s\S]*\}/s,
+        /await db\.updateDependenciesByPlanFile\(planFileAbsolute, workspaceId, parentPlan\.planFile\);/s,
         'Expected imported Linear subtasks to link back to their parent session through existing dependency metadata.'
     );
     assert.match(
         providerSource,
-        /for \(const sessionId of importedSessionIds\) \{[\s\S]*queueIntegrationSyncForSession\(effectiveRoot, sessionId, 'CREATED'\);[\s\S]*\}/s,
+        /await this\._kanbanProvider\?\.queueIntegrationSyncForPlanFile\(effectiveRoot, planFile, 'CREATED'\);/s,
         'Expected Linear imports to defer outbound sync until every imported session is linked locally.'
     );
 

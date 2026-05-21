@@ -1,0 +1,22 @@
+{
+  "teamId": "team-1",
+  "teamName": "Engineering",
+  "projectId": "project-1",
+  "columnToStateId": {
+    "CREATED": "state-created",
+    "BACKLOG": "state-backlog",
+    "PLAN REVIEWED": "",
+    "LEAD CODED": "",
+    "CODER CODED": "",
+    "CODE REVIEWED": "",
+    "CODED": "",
+    "COMPLETED": ""
+  },
+  "switchboardLabelId": "label-switchboard",
+  "setupComplete": true,
+  "lastSync": null,
+  "realTimeSyncEnabled": false,
+  "autoPullEnabled": false,
+  "pullIntervalMinutes": 60,
+  "automationRules": []
+}

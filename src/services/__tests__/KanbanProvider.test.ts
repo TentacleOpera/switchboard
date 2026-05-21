@@ -275,6 +275,123 @@ suite('KanbanProvider', () => {
             const steps = (provider as any)._parseVerificationSteps(content);
             assert.deepStrictEqual(steps, []);
         });
+
+        test('parses "Manual Verification Steps" section (Pattern 1 with Steps suffix)', () => {
+            const content = `
+### Manual Verification Steps
+1. Verify steps suffix works
+2. Another step
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Verify steps suffix works', 'Another step']);
+        });
+
+        test('parses "Manual Checklist" section with checkboxes (Pattern 1 with Checklist and checkboxes)', () => {
+            const content = `
+### Manual Checklist
+- [ ] First checklist item
+- [x] Second checklist item
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['First checklist item', 'Second checklist item']);
+        });
+
+        test('parses "## Verification Plan" with manual-specific subheading and blank lines (Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Automated Tests
+- No automated tests.
+
+Manual verification steps:
+
+1. Click button
+2. Verify animation plays
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Click button', 'Verify animation plays']);
+        });
+
+        test('ignores non-manual sections in "## Verification Plan" (Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Automated Tests
+1. This is automated
+2. Also automated
+
+### Manual Verification
+1. This is manual
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            // Since "### Manual Verification" matches Pattern 1, it will be parsed by Pattern 1,
+            // and Pattern 3 won't run due to the dedup guard.
+            assert.deepStrictEqual(steps, ['This is manual']);
+        });
+
+        test('applies dedup guard and does not duplicate steps (Pattern 1 vs Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Manual Verification Steps
+1. Perform action
+
+## Another Section
+Manual verification steps:
+1. Perform action again
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            // Pattern 1 parses 'Perform action'. Pattern 3 is skipped because steps.length > 0.
+            assert.deepStrictEqual(steps, ['Perform action']);
+        });
+
+        test('parses "Manual Testing Steps" section (Pattern 1 with Testing + Steps suffix)', () => {
+            const content = `
+### Manual Testing Steps
+1. Run the test suite
+2. Verify no regressions
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Run the test suite', 'Verify no regressions']);
+        });
+
+        test('returns empty for "## Verification Plan" with no manual subheading (Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Automated Tests
+1. Run unit tests
+2. Check integration tests
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, []);
+        });
+
+        test('parses "Manual verification:" without "step/steps" under "## Verification Plan" (Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Automated Tests
+- No automated tests exist. Manual verification:
+  1. Open the sidebar
+  2. Verify status appears
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Open the sidebar', 'Verify status appears']);
+        });
+
+        test('parses checkbox items under "Manual verification steps:" in "## Verification Plan" (Pattern 3)', () => {
+            const content = `
+## Verification Plan
+
+### Automated Tests
+- No automated tests exist. Manual verification steps:
+  - [ ] Toggle on/off still works
+  - [x] Setting value persists
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Toggle on/off still works', 'Setting value persists']);
+        });
     });
 
     suite('refreshWithData', () => {

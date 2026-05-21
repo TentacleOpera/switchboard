@@ -2,12 +2,39 @@
 
 const assert = require('assert');
 const fs = require('fs');
+const Module = require('module');
 const os = require('os');
 const path = require('path');
 const initSqlJs = require('sql.js');
 
+function installVsCodeMock() {
+    const originalLoad = Module._load;
+    const mock = {
+        workspace: {
+            getConfiguration: () => ({
+                get: (_key, fallback) => fallback
+            })
+        }
+    };
+    Module._load = function patchedLoad(request, parent, isMain) {
+        if (request === 'vscode') {
+            return mock;
+        }
+        return originalLoad.call(this, request, parent, isMain);
+    };
+    return {
+        restore() {
+            Module._load = originalLoad;
+        }
+    };
+}
+
+const mockObj = installVsCodeMock();
+
 const { KanbanDatabase } = require(path.join(process.cwd(), 'out', 'services', 'KanbanDatabase.js'));
 const { extractRepoScope, sanitizeRepoScope } = require(path.join(process.cwd(), 'out', 'services', 'PlanFileImporter.js'));
+
+mockObj.restore();
 
 const providerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts'), 'utf8');
 const taskViewerSource = fs.readFileSync(path.join(process.cwd(), 'src', 'services', 'TaskViewerProvider.ts'), 'utf8');
@@ -67,7 +94,7 @@ async function run() {
 
     try {
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
-        const ready = await db.ensureReady();
+        const ready = await db.createIfMissing();
         assert.strictEqual(ready, true, `expected kanban DB to initialize, got: ${db.lastInitError}`);
 
         const sqlDb = await openSqlDb(db.dbPath);

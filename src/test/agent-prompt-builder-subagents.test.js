@@ -299,25 +299,20 @@ function testResearchPlannerPrompt() {
 function testResolveBaseInstructions() {
     console.log('Testing resolveBaseInstructions precedence & fallback...');
 
-    // 1. When defaultBase is non-empty and personaContent is non-empty, defaultBase is used (not personaContent)
-    const result1 = resolveBaseInstructions('planner', 'default-base', { personaContent: 'persona-essay' });
-    assert.strictEqual(result1, 'default-base', 'Should prioritize defaultBase over personaContent');
+    // 1. When defaultBase is non-empty, defaultBase is used
+    const result1 = resolveBaseInstructions('planner', 'default-base');
+    assert.strictEqual(result1, 'default-base', 'Should return defaultBase');
 
-    // 2. When defaultBase is empty/falsy and personaContent is non-empty, personaContent is used
-    const result2 = resolveBaseInstructions('intern', '', { personaContent: 'persona-essay' });
-    assert.strictEqual(result2, 'persona-essay', 'Should fallback to personaContent when defaultBase is empty');
-
-    // 3. When both are empty, empty string is returned
-    const result3 = resolveBaseInstructions('intern', '', { personaContent: '' });
-    assert.strictEqual(result3, '', 'Should return empty string when both are empty');
+    // 2. When defaultBase is empty, empty string is returned
+    const result3 = resolveBaseInstructions('intern', '');
+    assert.strictEqual(result3, '', 'Should return empty string when defaultBase is empty');
     
-    const result3b = resolveBaseInstructions('intern', '');
-    assert.strictEqual(result3b, '', 'Should return empty string when personaContent is undefined');
+    const result3b = resolveBaseInstructions('intern', undefined);
+    assert.strictEqual(result3b, undefined, 'Should return undefined when defaultBase is undefined');
 
-    // 4. Override modes (replace/prepend/append) still work correctly with the new precedence
+    // 3. Override modes (replace/prepend/append) still work correctly
     // Replace: override.text is returned
     const resultReplace = resolveBaseInstructions('planner', 'default-base', {
-        personaContent: 'persona-essay',
         defaultPromptOverrides: {
             planner: { mode: 'replace', text: 'overridden-replace' }
         }
@@ -326,7 +321,6 @@ function testResolveBaseInstructions() {
 
     // Prepend: override.text + base
     const resultPrepend = resolveBaseInstructions('planner', 'default-base', {
-        personaContent: 'persona-essay',
         defaultPromptOverrides: {
             planner: { mode: 'prepend', text: 'overridden-prepend' }
         }
@@ -335,7 +329,6 @@ function testResolveBaseInstructions() {
 
     // Append: base + override.text
     const resultAppend = resolveBaseInstructions('planner', 'default-base', {
-        personaContent: 'persona-essay',
         defaultPromptOverrides: {
             planner: { mode: 'append', text: 'overridden-append' }
         }

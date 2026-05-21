@@ -8,6 +8,9 @@ Switchboard supports two transport modes. Clients should attempt HTTP/SSE first,
 
 This is the default for IDE-integrated agents. No configuration needed — the VS Code extension manages the MCP server lifecycle automatically.
 
+> [!NOTE]
+> **API Proxy Tools Alternative**: While the MCP server exposes API proxy tools (e.g. `call_clickup_api`, `call_linear_api`), these operations are also available and preferred via skill-based LocalApiServer curl commands. The MCP server configuration below should be kept intact for workflow coordination tools (`send_message`, `check_inbox`, etc.).
+
 **MCP Config** (`.gemini/antigravity/mcp_config.json`):
 ```json
 {

@@ -26,6 +26,7 @@ import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
 import { isAllowedSwitchboardLocation } from './utils/switchboardLocationGuard';
+import { clearMappingCache } from './services/WorkspaceIdentityService';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -1183,6 +1184,8 @@ export async function activate(context: vscode.ExtensionContext) {
                             console.error(`[Switchboard] Failed to invalidate workspace ${folder.uri.fsPath}:`, err);
                         });
                     });
+                    // Clear the mapping resolution cache so subsequent lookups use fresh config
+                    clearMappingCache();
                     // Refresh the Kanban UI
                     kanbanProvider!._scheduleBoardRefresh();
                 }

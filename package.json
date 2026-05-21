@@ -258,11 +258,6 @@
           "maximum": 10000,
           "description": "Milliseconds to wait after sending /clear before dispatching the prompt. Only used when terminal.clearBeforePrompt is enabled. Non-paced (same-agent) dispatches use approximately 1/3 of this value."
         },
-        "switchboard.prompt.clearAntigravityContext": {
-          "type": "boolean",
-          "default": false,
-          "description": "When enabled, instructs agents to ignore previous checkpoint summaries from prior sessions."
-        },
         "switchboard.jules.autoSync": {
           "type": "boolean",
           "default": false,
@@ -321,6 +316,12 @@
           ],
           "default": "preview",
           "description": "Default mode for opening plans from the sidebar."
+        },
+        "switchboard.review.autoRefresh": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically refresh the Plan Review panel when the underlying plan file changes on disk",
+          "scope": "resource"
         },
         "switchboard.security.strictInboxAuth": {
           "type": "boolean",

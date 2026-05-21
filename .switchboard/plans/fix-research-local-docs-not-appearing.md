@@ -283,3 +283,70 @@ This ensures the method reads the same config key and applies the same path reso
 5. **Expected**: The file should appear in the Local Docs tab automatically (without manual refresh)
 
 **Recommendation:** Send to Coder
+
+---
+
+## Review Results (Reviewer Pass)
+
+**Reviewer:** Direct in-place review
+**Date:** 2026-05-21
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Description | Location |
+|---|----------|-------------|----------|
+| 1 | CRITICAL | Multi-root workspace bug: watcher only watches one root's folder while `_sendLocalDocsReady()` shows files from all roots. In multi-root with different `research.localFolderPath` per root (resource-scoped setting), files created in unwatched roots won't trigger auto-refresh — the exact bug this plan was supposed to fix. | `_setupLocalFolderWatcher()` vs `_sendLocalDocsReady()` |
+| 2 | MAJOR | Multi-root folder path sent to webview: `configuredFolderPath` only captures first root's folder path. Research prompt references wrong folder in multi-root setups. | `_sendLocalDocsReady()` line 1101 |
+| 3 | NIT | Disposed watchers accumulate in `_disposables` when folder path changes repeatedly — untidy but bounded by panel lifetime | `_setupLocalFolderWatcher()` line 314 |
+| 4 | NIT | Inconsistent disposal pattern: `_localFolderWatcher` gets explicit disposal + `_disposables`, while `_docsFolderWatcher` only gets `_disposables` | `dispose()` lines 2066-2068 vs 2070 |
+| 5 | NIT | Potential config staleness: `_setupLocalFolderWatcher` reads `getFolderPath()` via new `LocalFolderService` after `setFolderPath()` — registered setting should be fresh, but unregistered settings can be stale | `browseLocalFolder`/`setLocalFolderPath` handlers |
+
+**Correction:** Finding #4 (now #1-2) was initially dismissed as "existing limitation like `_docsFolderWatcher`" but this is incorrect. `_docsFolderWatcher` watches `.switchboard/docs` (a fixed relative path), while the local folder path is user-configurable and resource-scoped (can differ per root). The multi-root inconsistency between `_sendLocalDocsReady()` (scans all roots) and the watcher (only watches one) is a genuine bug.
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now**: Findings #1-2 (multi-root bugs) — change `_localFolderWatcher` to array, watch all roots; send active root's folder path to webview
+- **Fix now**: Finding #3 — remove old watcher from `_disposables` before pushing new one
+- **Keep (no action)**: Finding #4 (inconsistency is actually correct — runtime-recreatable watcher deserves belt-and-suspenders)
+- **Defer**: Finding #5 — theoretical edge case, registered setting should be fresh
+
+### Code Fixes Applied
+
+**File: `src/services/PlanningPanelProvider.ts`**
+
+**Fix #1: Multi-root watcher (Finding #1)**
+- Changed `_localFolderWatcher` from single `FileSystemWatcher | undefined` to array `FileSystemWatcher[]` (line 37)
+- Renamed `_setupLocalFolderWatcher()` to `_setupLocalFolderWatchers()` (line 311)
+- Rewrote method to iterate all roots and create one watcher per root's configured folder path, with path deduplication (lines 311-351)
+- Updated `dispose()` to iterate and dispose all watchers (lines 2075-2078)
+- Updated call sites: `open()` (line 280), `browseLocalFolder` (line 580), `setLocalFolderPath` (line 595)
+
+**Fix #2: Active root folder path (Finding #2)**
+- Modified `_sendLocalDocsReady()` to get active root and prioritize its folder path for webview (lines 1095, 1109-1111)
+- Changed logic from "first configured folder" to "active root's folder (or first if no active root)"
+
+**Fix #3: _disposables cleanup (Finding #3)**
+- Incorporated into Fix #1: watchers are removed from `_disposables` when disposed in `_setupLocalFolderWatchers()` (lines 315-316)
+
+### Verification Results
+
+- **TypeScript compilation**: `PlanningPanelProvider.ts` compiles cleanly (zero errors). Pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` are unrelated.
+- **Webpack build**: `npm run compile` succeeds — `webpack 5.105.4 compiled successfully in 4343 ms` (after multi-root fixes)
+- **Config key verification**: `planning.localFolderPath` (wrong key) is completely absent from codebase. Only `research.localFolderPath` (correct, registered key) is used.
+- **Webview data flow**: `handleLocalDocsReady` correctly reads `msg.folderPath` into `state.localFolderPath`; research prompt generator uses `state.localFolderPath || '[CONFIGURE LOCAL DOCS FOLDER]'` — end-to-end data flow verified.
+- **Multi-root verification**: Watcher now iterates all roots and creates one watcher per configured folder path; `_sendLocalDocsReady()` sends active root's folder path to webview.
+
+### Implementation Verification (Fix-by-Fix)
+
+| Fix | Plan Requirement | Implementation Status | Verified |
+|-----|-----------------|----------------------|----------|
+| Fix 1: Correct folder path | Send actual configured folder path instead of `allRoots[0]` | `configuredFolderPath` accumulator at line 1096, prioritizes active root at line 1109-1111, sent at line 1131 | Yes |
+| Fix 2: File watcher | `_localFolderWatcher` field, `_setupLocalFolderWatcher()` method, glob `**/*.{md,txt,markdown,rst,adoc}`, called from `open()`/`browseLocalFolder`/`setLocalFolderPath`, disposed in `dispose()` | Changed to array `_localFolderWatchers`, renamed to `_setupLocalFolderWatchers()`, iterates all roots with path deduplication | Yes |
+| Fix 3: Wrong config key | Use `localFolderService.getFolderPath()` instead of `planning.localFolderPath` | Lines 927-928 use `getFolderPath()`, wrong key absent from codebase | Yes |
+| **Additional**: Multi-root support | Watch all roots' folders, send active root's path to webview | `_localFolderWatchers[]` array, `_setupLocalFolderWatchers()` iterates all roots, `_sendLocalDocsReady()` prioritizes active root | Yes |
+
+### Remaining Risks
+
+- **Low**: Config staleness in `_setupLocalFolderWatchers` after `setFolderPath` — registered setting should be fresh, but if VS Code's config cache has unexpected behavior, watcher could target old folder. Mitigated by the fact that `research.localFolderPath` IS registered in `package.json`.
+- **None**: Multi-root workspaces now watch all roots' folders — fixed by array-based watcher implementation.
+- **None**: No debounce on watcher callbacks — consistent with existing `_docsFolderWatcher` pattern, acceptable for idempotent refresh.

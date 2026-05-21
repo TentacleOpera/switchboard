@@ -154,6 +154,129 @@ function testClearAntigravityContextDisabled() {
     console.log('  PASS: Clear antigravity context is excluded when disabled');
 }
 
+function testPromptLineBreaksAreNormalized() {
+    console.log('Testing prompt line breaks are normalized...');
+    const { normalizeNewlines } = require('../../out/services/agentPromptBuilder');
+    
+    // 1. Verify utility function
+    assert.strictEqual(normalizeNewlines('hello\n\n\nworld'), 'hello\n\nworld');
+    assert.strictEqual(normalizeNewlines('hello\n\n\n\nworld'), 'hello\n\nworld');
+    assert.strictEqual(normalizeNewlines('\n\n\nhello\n\n\n\nworld\n\n\n'), '\n\nhello\n\nworld\n\n');
+
+    // 2. Verify planner prompt does not contain 3+ consecutive newlines
+    const plannerPrompt = buildKanbanBatchPrompt('planner', mockPlan, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        aggressivePairProgramming: true,
+        dependencyCheckEnabled: true,
+        gitProhibitionEnabled: true,
+        splitPlan: true,
+        workspaceRoot: '/path/to/workspace'
+    });
+    assert.ok(!plannerPrompt.includes('\n\n\n'), 'Planner prompt should not contain 3+ consecutive newlines');
+
+    // 3. Verify non-planner prompt (e.g. reviewer) does not contain 3+ consecutive newlines
+    const reviewerPrompt = buildKanbanBatchPrompt('reviewer', mockPlan, {
+        gitProhibitionEnabled: true,
+        switchboardSafeguardsEnabled: true,
+        advancedReviewerEnabled: true
+    });
+    assert.ok(!reviewerPrompt.includes('\n\n\n'), 'Reviewer prompt should not contain 3+ consecutive newlines');
+    
+    console.log('  PASS: Prompt line breaks are normalized');
+}
+
+function testNoTripleNewlinesInAnyRole() {
+    console.log('Testing no triple newlines in any role across option combinations...');
+    const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'research_planner', 'splitter'];
+
+    const optionCombos = [
+        // All options disabled (minimal prompt)
+        { gitProhibitionEnabled: false, switchboardSafeguardsEnabled: false },
+        // All options enabled (maximal prompt)
+        { gitProhibitionEnabled: true, switchboardSafeguardsEnabled: true, clearAntigravityContext: true },
+        // With workspaceRoot (triggers workspaceTypeBlock for planner)
+        { gitProhibitionEnabled: true, switchboardSafeguardsEnabled: true, workspaceRoot: '/path/to/workspace' },
+        // With dispatchContextBlock (working directory set)
+        { gitProhibitionEnabled: true, switchboardSafeguardsEnabled: true },
+    ];
+
+    const plansWithWorkingDir = [
+        { topic: 'test-plan', absolutePath: '/abs/path/to/test.md', workingDir: '/workspace/project' }
+    ];
+
+    for (const role of roles) {
+        for (const opts of optionCombos) {
+            const plans = opts === optionCombos[3] ? plansWithWorkingDir : mockPlan;
+            const promptOpts = { ...opts };
+            // Add role-specific options
+            if (role === 'planner') {
+                promptOpts.plannerWorkflowPath = '.agent/workflows/improve-plan.md';
+                promptOpts.aggressivePairProgramming = true;
+                promptOpts.dependencyCheckEnabled = true;
+                promptOpts.splitPlan = true;
+            }
+            if (role === 'reviewer') {
+                promptOpts.advancedReviewerEnabled = true;
+            }
+            if (role === 'lead' || role === 'coder') {
+                promptOpts.pairProgrammingEnabled = true;
+                promptOpts.aggressivePairProgramming = true;
+                promptOpts.includeInlineChallenge = true;
+            }
+            if (role === 'coder') {
+                promptOpts.accurateCodingEnabled = true;
+            }
+            if (role === 'research_planner') {
+                promptOpts.enableDeepPlanning = true;
+                promptOpts.researchDepth = 'deep';
+            }
+
+            const prompt = buildKanbanBatchPrompt(role, plans, promptOpts);
+            assert.ok(!prompt.includes('\n\n\n'), `Role ${role} with opts ${JSON.stringify(opts)} should not contain 3+ consecutive newlines`);
+            assert.ok(prompt.includes('\n\n'), `Role ${role} with opts ${JSON.stringify(opts)} should contain at least one paragraph break (\\n\\n)`);
+        }
+    }
+    console.log('  PASS: No triple newlines in any role across option combinations');
+}
+
+function testConsistentSpacingBetweenDirectives() {
+    console.log('Testing consistent spacing between directives in planner prompt...');
+    const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
+        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
+        aggressivePairProgramming: true,
+        dependencyCheckEnabled: true,
+        splitPlan: true,
+        gitProhibitionEnabled: true,
+        switchboardSafeguardsEnabled: true,
+        workspaceRoot: '/path/to/workspace',
+        clearAntigravityContext: true
+    });
+
+    // Verify no single-newline transitions between major directive sections
+    // Each major section should be separated by exactly \n\n
+    const sections = [
+        'PAIR PROGRAMMING OPTIMISATION',
+        'DEPENDENCY CHECK ENABLED',
+        'SPLIT PLAN MODE',
+        'WORKSPACE TYPE',
+        'FOCUS DIRECTIVE',
+        'GIT POLICY',
+        'PLANS TO PROCESS'
+    ];
+
+    for (const section of sections) {
+        assert.ok(prompt.includes(section), `Planner prompt should include ${section}`);
+    }
+
+    // Verify no triple newlines exist (already covered by other tests, but explicit here)
+    assert.ok(!prompt.includes('\n\n\n'), 'Planner prompt with all options should not contain 3+ consecutive newlines');
+
+    // Verify paragraph breaks exist between sections
+    assert.ok(prompt.includes('\n\n'), 'Planner prompt should contain paragraph breaks between sections');
+
+    console.log('  PASS: Consistent spacing between directives in planner prompt');
+}
+
 try {
     testDefaultPromptIsMinimal();
     testNoAddOnsByDefault();
@@ -167,6 +290,9 @@ try {
     testBatchExecutionRulesExcludedForSinglePlan();
     testClearAntigravityContextEnabled();
     testClearAntigravityContextDisabled();
+    testPromptLineBreaksAreNormalized();
+    testNoTripleNewlinesInAnyRole();
+    testConsistentSpacingBetweenDirectives();
     console.log('\nAll tests passed!');
 } catch (err) {
     console.error('\nTest failed:', err.message);

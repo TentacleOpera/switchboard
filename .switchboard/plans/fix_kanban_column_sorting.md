@@ -101,3 +101,42 @@ This aligns with:
 
 ## Recommendation
 **Send to Intern** — Complexity 2: single-file, localized change with clear existing pattern to follow.
+
+---
+
+## Review Pass (Grumpy + Balanced)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+1. **MAJOR** — Test file `src/test/kanban-sorting-timestamp-regression.test.js` (lines 10-24) used divergent NaN handling from production code. The test used `if (isNaN(createdA) || isNaN(createdB)) { return 0; }` which treats both cards as equal when either date is NaN, while production individually resets NaN values to 0 and continues comparison. Case 3 only asserted length, not ordering, so the divergence went undetected. This test would not catch a regression in NaN handling.
+
+2. **MAJOR** — Plan's proposed code (lines 63-73) lacks NaN guards for `createdAt`. If `createdAt` is a truthy but unparseable string, `new Date(str).getTime()` returns `NaN`, and `createdB - NaN` = `NaN`, causing implementation-dependent sort behavior across JS engines. The actual implementation correctly added `isNaN` guards — an improvement over the plan — but the plan file was inaccurate.
+
+3. **NIT** — Redundant `|| 0` on pre-computed `_ts` at kanban.html line 3772. `_ts` is guaranteed to be a number by line 3734's `isNaN(t) ? 0 : t`. The collapsed coder column at line 3747 omits this guard. Harmless but inconsistent.
+
+4. **NIT** — No tertiary tiebreaker on `planId`/`sessionId`. Consistent with main DB `getBoard` query which also lacks one. Extremely unlikely edge case.
+
+5. **NIT** — `countEl.textContent = items.length` at line 3781 uses unsorted array reference. Functionally identical since sorting doesn't change length.
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now (MAJOR):** Updated `kanban-sorting-timestamp-regression.test.js` to match production NaN handling and strengthened Case 3 assertion
+- **Fix now (MAJOR):** Noted plan's proposed code section is now inaccurate vs implementation (implementation is correct, plan was under-specified)
+- **Defer (NIT):** Redundant `|| 0` — harmless defensive coding
+- **Defer (NIT):** No tertiary tiebreaker — consistent with DB, extremely unlikely
+- **Defer (NIT):** `items.length` vs `sortedItems.length` — functionally identical
+
+### Stage 3: Code Fixes Applied
+
+1. **`src/test/kanban-sorting-timestamp-regression.test.js`** — Updated `sortNonPlanningCards` function to match production NaN handling (individual `isNaN` guards with `let` reassignment instead of early `return 0`). Strengthened Case 3 to assert ordering: valid `createdAt` should sort above invalid (NaN→0).
+
+### Stage 4: Verification Results
+
+- `kanban-sorting-timestamp-regression.test.js`: passed ✅ (post-fix)
+- Production sort logic verified: primary `_ts` descending, secondary `createdAt` descending, NaN-safe
+- Grep confirmed no remnants of old ascending sort logic
+
+### Stage 5: Remaining Risks
+
+- No tertiary tiebreaker exists for cards with identical `_ts` AND `createdAt` — consistent with DB but technically non-deterministic in that edge case
+- The plan's proposed code section (lines 63-73) is now under-specified vs the actual implementation (missing NaN guards) — future readers should reference the actual production code

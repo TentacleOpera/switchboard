@@ -86,11 +86,14 @@ export class ReviewProvider implements vscode.Disposable {
     private _disposables: vscode.Disposable[] = [];
     private _currentPlan?: ReviewPlanContext;
     private _lastSelection: { selectedText: string; selectionRect?: { top: number; left: number; width: number; height: number } } | undefined;
+    private _planFileWatcher?: vscode.FileSystemWatcher;
+    private _planRefreshTimer?: NodeJS.Timeout;
 
     constructor(private readonly _extensionUri: vscode.Uri) { }
 
     public dispose(): void {
         this._panel?.dispose();
+        this._teardownPlanFileWatcher();
         this._disposables.forEach(disposable => disposable.dispose());
         this._disposables = [];
     }
@@ -106,6 +109,7 @@ export class ReviewProvider implements vscode.Disposable {
 
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
+            this._setupPlanFileWatcher(plan.planFileAbsolute);
             await this._renderCurrentPlan();
             return;
         }
@@ -133,9 +137,57 @@ export class ReviewProvider implements vscode.Disposable {
         this._panel.onDidDispose(() => {
             this._panel = undefined;
             this._lastSelection = undefined;
+            this._teardownPlanFileWatcher();
         }, null, this._disposables);
 
+        this._setupPlanFileWatcher(plan.planFileAbsolute);
         await this._renderCurrentPlan();
+    }
+
+    private _setupPlanFileWatcher(planFileAbsolute: string): void {
+        this._teardownPlanFileWatcher();
+
+        const autoRefresh = vscode.workspace.getConfiguration('switchboard.review')
+            .get<boolean>('autoRefresh', true);
+        if (!autoRefresh) return;
+
+        this._planFileWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(
+                path.dirname(planFileAbsolute),
+                path.basename(planFileAbsolute)
+            )
+        );
+
+        this._planFileWatcher.onDidChange(() => {
+            if (this._planRefreshTimer) clearTimeout(this._planRefreshTimer);
+            this._planRefreshTimer = setTimeout(() => {
+                this._planRefreshTimer = undefined;
+                this._autoRefreshPlan();
+            }, 300); // 300ms debounce matching TaskViewerProvider
+        });
+
+        this._planFileWatcher.onDidDelete(() => {
+            this._teardownPlanFileWatcher();
+            this._panel?.webview.postMessage({ type: 'planDeleted' });
+        });
+    }
+
+    private _teardownPlanFileWatcher(): void {
+        if (this._planRefreshTimer) {
+            clearTimeout(this._planRefreshTimer);
+            this._planRefreshTimer = undefined;
+        }
+        if (this._planFileWatcher) {
+            this._planFileWatcher.dispose();
+            this._planFileWatcher = undefined;
+        }
+    }
+
+    private _autoRefreshPlan(): void {
+        if (!this._panel || !this._currentPlan) return;
+
+        // Ask the webview if it's in edit mode with unsaved changes
+        this._panel.webview.postMessage({ type: 'checkEditMode' });
     }
 
     private async _handleMessage(msg: any): Promise<void> {
@@ -145,6 +197,21 @@ export class ReviewProvider implements vscode.Disposable {
             case 'ready':
                 await this._renderCurrentPlan();
                 break;
+            case 'editModeStatus': {
+                const { isEditing, hasUnsavedChanges } = msg;
+                if (isEditing && hasUnsavedChanges) {
+                    this._panel?.webview.postMessage({ type: 'fileChangedBanner', show: true });
+                } else {
+                    await this._renderCurrentPlan();
+                    this._panel?.webview.postMessage({ type: 'refreshFlash' });
+                }
+                break;
+            }
+            case 'reloadFromDisk': {
+                await this._renderCurrentPlan();
+                this._panel?.webview.postMessage({ type: 'refreshFlash' });
+                break;
+            }
             case 'planShown': {
                 // Sync the sidebar selection with the plan currently being viewed
                 const sessionId = typeof msg?.sessionId === 'string' ? msg.sessionId.trim() : '';

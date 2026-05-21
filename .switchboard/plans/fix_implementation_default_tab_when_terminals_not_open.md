@@ -100,3 +100,69 @@ This uses the same semantic check as `updateTerminalButtonState()` at line 3317,
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Adversarial Review
+
+| # | Finding | Severity | Verdict |
+|---|---------|----------|---------|
+| 1 | `hasDefaultedToTerminals` flag allowed stale 'agents' tab to persist — user could manually switch to Agents tab while in onboarding state, then stay on a dead tab showing "Click the Terminals tab" message on the wrong tab | **MAJOR** | Fix now |
+| 2 | Plan deviation: implementation added `hasDefaultedToTerminals` module-level variable and 5-line conditional instead of plan's simple ternary | NIT | Resolved by #1 |
+| 3 | Redundant `currentAgentTab = 'terminals'` mutation at line 4945 — `switchAgentTab('terminals')` already sets `currentAgentTab` internally | NIT | Resolved by #1 |
+| 4 | Undocumented `hasDefaultedToTerminals = false` reset at line 5080 — no comment explaining the invariant | NIT | Resolved by #1 |
+| 5 | Core semantic check `Object.values(lastTerminals).some(term => term.role && term.alive)` is correct and consistent with line 3357 | POSITIVE | Keep |
+| 6 | Dependency chain is solid — `terminalStatuses` handler sets `lastTerminals` before calling `renderAgentList()` | POSITIVE | Keep |
+| 7 | Build passes cleanly | POSITIVE | Keep |
+
+### Stage 2: Balanced Synthesis
+
+The `hasDefaultedToTerminals` flag was over-engineering. The plan's simpler ternary approach is strictly better because:
+1. It **always** forces 'terminals' when no agent terminals are alive — the entire point of the fix
+2. It has **zero** additional module-level state
+3. It's **two lines** instead of five
+4. It doesn't allow the user to get stuck on a dead 'agents' tab during onboarding
+
+The flag's intent (allowing user override) was well-meaning but wrong for this context. The onboarding guard exists specifically for when agents are NOT connected — there's nothing useful on the 'agents' tab in that state. Forcing 'terminals' is the correct behavior every time.
+
+### Code Fixes Applied
+
+**File: `src/webview/implementation.html`**
+
+1. **Removed `hasDefaultedToTerminals` variable declaration** (was at line 3311):
+   - Deleted: `let hasDefaultedToTerminals = false;`
+
+2. **Replaced 5-line conditional block with plan's simpler ternary** (was at lines 4939-4947):
+   - Before:
+     ```javascript
+     // FIX: Default to 'terminals' tab on startup/onboarding activation when no agent terminals are alive
+     const hasAgentTerminalsAlive = Object.values(lastTerminals).some(term => term.role && term.alive);
+     if (hasAgentTerminalsAlive) {
+         hasDefaultedToTerminals = false;
+     } else if (!hasDefaultedToTerminals) {
+         hasDefaultedToTerminals = true;
+         currentAgentTab = 'terminals';
+     }
+     switchAgentTab(currentAgentTab);
+     ```
+   - After:
+     ```javascript
+     // FIX: Default to 'terminals' tab when no agent terminals are alive
+     const hasAgentTerminalsAlive = Object.values(lastTerminals).some(term => term.role && term.alive);
+     switchAgentTab(hasAgentTerminalsAlive ? currentAgentTab : 'terminals');
+     ```
+
+3. **Removed flag reset in normal render path** (was at line 5080):
+   - Deleted: `hasDefaultedToTerminals = false;`
+
+### Verification
+
+- **Build:** webpack production build passes cleanly (exit code 0)
+- **Grep check:** No stale references to `hasDefaultedToTerminals` remain in the codebase
+- **Automated tests:** No automated test infrastructure exists for this webview UI component
+- **Manual verification:** Required — see Verification Plan steps above
+
+### Remaining Risks
+- None. The fix now matches the plan exactly and eliminates the MAJOR finding (stale agents tab during onboarding state).

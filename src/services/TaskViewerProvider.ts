@@ -40,7 +40,8 @@ import {
     ADVANCED_REVIEWER_DIRECTIVE,
     AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE,
     DEEP_RESEARCH_DIRECTIVE,
-    detectWorkspaceType
+    detectWorkspaceType,
+    normalizeNewlines
 } from './agentPromptBuilder';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
@@ -3922,28 +3923,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             assignee ? `> **Assignee:** ${assignee}` : '',
             labels ? `> **Labels:** ${labels}` : ''
         ].filter(Boolean).join('\n');
-        const subtaskLines = node.subtasks.map((child) =>
-            `- ${this._describeLinearIssue(child.issue)}`
-        );
-        const commentLines = node.comments.map((comment) => {
-            const author = comment.user?.name || comment.user?.email || 'Unknown';
-            const createdAt = comment.createdAt ? comment.createdAt.slice(0, 10) : '';
-            return `- **${author}${createdAt ? ` (${createdAt})` : ''}:** ${comment.body}`;
-        });
-        const attachmentLines = node.attachments.map((attachment) => {
-            const label = attachment.title || attachment.filename || attachment.url;
-            return attachment.url ? `- [${label}](${attachment.url})` : `- ${label}`;
-        });
-        const notesLines = [
-            '## Linear Issue Notes',
-            '',
-            `**Current State:** ${issue.state?.name || 'Unknown'}${stateType ? ` (${stateType})` : ''}`,
-            issue.project?.name ? `**Project:** ${issue.project.name}` : '',
-            issue.createdAt ? `**Created:** ${issue.createdAt.slice(0, 10)}` : '',
-            ...(subtaskLines.length > 0 ? ['', '**Imported subtasks:**', ...subtaskLines] : []),
-            ...(commentLines.length > 0 ? ['', '**Comments:**', ...commentLines] : []),
-            ...(attachmentLines.length > 0 ? ['', '**Attachments:**', ...attachmentLines] : [])
-        ].filter(Boolean).join('\n');
 
         return [
             yamlFrontmatter,
@@ -3951,16 +3930,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             '',
             metadataLines,
             '',
-            '## Goal',
-            '',
-            issue.description || 'Translate this Linear issue into an executable Switchboard plan.',
-            '',
-            '## Proposed Changes',
-            '',
-            '- Implement the requested Linear work in this workspace.',
-            '- Keep the resulting plan linked back to the original Linear issue.',
-            '',
-            notesLines
+            issue.description || '',
         ].join('\n');
     }
 
@@ -4118,7 +4088,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             // Build plan content for the parent task
             const createdAt = new Date().toISOString();
-            const planContent = this._buildClickUpImportPlanContent(task, subtasks, details.comments, details.attachments, createdAt);
+            const planContent = this._buildClickUpImportPlanContent(task, createdAt);
             const { planFileAbsolute: rootPlanFile } = await this._createInitiatedPlan(
                 task.name || `ClickUp Task ${task.id}`,
                 planContent,
@@ -4138,7 +4108,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             // Import subtasks as separate plans
             for (const subtask of subtasks) {
                 const subtaskCreatedAt = new Date().toISOString();
-                const subtaskContent = this._buildClickUpImportPlanContent(subtask, [], [], [], subtaskCreatedAt);
+                const subtaskContent = this._buildClickUpImportPlanContent(subtask, subtaskCreatedAt);
                 const { planFileAbsolute: subtaskPlanFile } = await this._createInitiatedPlan(
                     subtask.name || `ClickUp Subtask ${subtask.id}`,
                     subtaskContent,
@@ -4189,9 +4159,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _buildClickUpImportPlanContent(
         task: any,
-        subtasks: any[] = [],
-        comments: any[] = [],
-        attachments: any[] = [],
         createdAt?: string
     ): string {
         const statusName = task.status?.status || 'Unknown';
@@ -4205,9 +4172,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .filter((n: string) => n && !n.toLowerCase().startsWith('switchboard:'))
             .join(', ');
         const description = (task.markdown_description || task.description || '').trim();
-        const startDate = task.start_date ? new Date(Number(task.start_date)).toLocaleDateString() : '';
-        const timeEstimate = task.time_estimate ? `${Math.round(task.time_estimate / 60000)}m` : '';
-
         const yamlFrontmatter = createdAt ? [
             '---',
             `created: ${createdAt}`,
@@ -4226,39 +4190,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             tags ? `> **Tags:** ${tags}` : '',
         ].filter(Boolean).join('\n');
 
-        const subtaskLines = subtasks.map((s: any) => `- ${s.name || s.id} (\`${s.id}\`)`);
-        const commentLines = comments.map((c: any) => {
-            const author = c.user?.username || c.user?.email || 'Unknown';
-            return `- **${author}:** ${c.comment_text}`;
-        });
-        const attachmentLines = attachments.map((a: any) => `- ${a.title || a.filename || a.url}`);
-
-        const notesLines = [
-            '## ClickUp Ticket Notes',
-            '',
-            `**Status:** ${statusName}`,
-            startDate ? `**Start Date:** ${startDate}` : '',
-            timeEstimate ? `**Time Estimate:** ${timeEstimate}` : '',
-            ...(subtaskLines.length > 0 ? ['', '**Subtasks:**', ...subtaskLines] : []),
-            ...(commentLines.length > 0 ? ['', '**Comments:**', ...commentLines] : []),
-            ...(attachmentLines.length > 0 ? ['', '**Attachments:**', ...attachmentLines] : []),
-        ].filter(s => s !== '').join('\n');
-
         return [
             yamlFrontmatter,
             `# ${task.name || `ClickUp Task ${task.id}`}`,
             '',
             metaLines,
             '',
-            '## Goal',
-            '',
-            description || 'TODO',
-            '',
-            '## Proposed Changes',
-            '',
-            'TODO',
-            '',
-            notesLines
+            description || '',
         ].join('\n');
     }
 
@@ -5960,7 +5898,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const plannerWorkflowPath = plannerConfig?.workflowFilePath || vscode.workspace.getConfiguration('switchboard').get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md');
 
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        const personaContent = await this.getPersonaForRole(role);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
@@ -5978,7 +5915,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             designDocLink,
             designDocContent,
             defaultPromptOverrides,
-            personaContent: personaContent?.trim() || undefined,
             workspaceRoot,
             gitProhibitionEnabled,
             switchboardSafeguardsEnabled,
@@ -6033,26 +5969,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let prompt = `${dispatchContextPrefix}${safeguardsBlock}\n\nPLANS TO PROCESS:\n${planList}`;
 
         // Apply directives in defined order
-        if (addons?.gitProhibitionEnabled) prompt += GIT_PROHIBITION_DIRECTIVE;
+        if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;
         if (addons?.workspaceTypeDetection && workspaceRoot) {
             const { isMultiRepo, subRepoNames } = detectWorkspaceType(workspaceRoot);
             prompt += isMultiRepo
-                ? `\nWORKSPACE TYPE: multi-repo. Sub-repos: ${subRepoNames.join(', ')}.`
-                : `\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.`;
+                ? '\n\nWORKSPACE TYPE: multi-repo. Sub-repos: ' + subRepoNames.join(', ') + '.'
+                : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
         }
         if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
         if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agent/workflows/accuracy.md step-by-step.`;
         if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
-        if (addons?.aggressivePairProgramming) prompt += AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
-        if (addons?.advancedReviewerEnabled) prompt += `\n\n${ADVANCED_REVIEWER_DIRECTIVE}`;
-        if (addons?.dependencyCheckEnabled) prompt += DEPENDENCY_CHECK_DIRECTIVE;
+        if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
+        if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
+        if (addons?.dependencyCheckEnabled) prompt += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
         if (addons?.ticketUpdateEnabled) {
             prompt += `\n\n${TaskViewerProvider.TICKET_UPDATE_DIRECTIVE}`;
         }
         if (addons?.complexityScoringSkill) {
             prompt += `\n\n${TaskViewerProvider.COMPLEXITY_SCORING_DIRECTIVE}`;
         }
-        if (addons?.splitPlan) prompt += SPLIT_PLAN_DIRECTIVE;
+        if (addons?.splitPlan) prompt += '\n\n' + SPLIT_PLAN_DIRECTIVE;
 
         if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
 
@@ -6072,7 +6008,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             else if (mode === 'replace') prompt = `${text}\n\nPLANS TO PROCESS:\n${planList}`;
         }
 
-        return prompt;
+        return normalizeNewlines(prompt);
     }
 
     private async _getDefaultPromptOverrides(

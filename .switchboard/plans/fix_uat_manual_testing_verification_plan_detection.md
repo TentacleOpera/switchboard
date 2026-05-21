@@ -253,5 +253,57 @@ if (steps.length === 0) {
 - Plans that embed manual steps as prose under "### Automated Tests" (e.g., "1. Open Switchboard kanban panel...") without a manual-specific subheading — these require a different detection strategy (e.g., looking for numbered steps after "Manual verification required" prose) and should be addressed in a separate plan if needed.
 - "### Manual Checklist" with `- [ ]` checkbox items is now handled; however, plans using `## Testing Checklist` (Pattern 2) with checkboxes are also supported — no changes needed there.
 
+## Review Pass (2026-05-21)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Verdict |
+|---|---------|----------|---------|
+| 1 | Pattern 3 subheading regex `steps?` requires "step"/"steps" before colon — does NOT match "Manual verification:" (without "step/steps"). Real plan file `clickup-linear-detail-ui-compact.md` uses this format with numbered steps that would be silently missed. Plan's own comment claims it accepts "Manual verification:" but the regex doesn't. | **MAJOR** | Fix now |
+| 2 | Pattern 3 doesn't extract checkbox items (`- [ ]`), only numbered steps. `customisable_clear_delay_20260515.md` uses "Manual verification steps:" with checkbox items that would be missed. | NIT | Defer — out of plan scope |
+| 3 | Pattern 1 checkbox extraction applies to ALL headings (Verification, Testing, Checklist), not just "Checklist" as plan specifies. | NIT | Keep — behavior is more correct |
+| 4 | Heading reset regex `^#{1,3}\s` includes h1, plan says only h2/h3. | NIT | Keep — more defensive |
+| 5 | Missing test for "Manual Testing Steps" (Pattern 1 with Testing + Steps suffix). | NIT | Add test |
+| 6 | Missing test for "## Verification Plan" with no manual subheading returning empty. | NIT | Add test |
+| 7 | Pattern 3 subheading regex `(?:^|\s)` could match prose mid-line. | NIT | Accept — colon + numbered-step filter sufficient |
+
+### Stage 2: Balanced Synthesis — Fixes Applied
+
+**Fixed (MAJOR):**
+- Finding #1: Changed Pattern 3 subheading regex from `steps?` (requires "step"/"steps") to `(?:\s+steps?)?` (optional "step"/"steps"). Now matches both "Manual verification steps:" AND "Manual verification:".
+
+**Fixed (NITs):**
+- Finding #2: Added checkbox extraction (`- [ ]` items) to Pattern 3, matching Pattern 1's behavior. Now handles plans like `customisable_clear_delay_20260515.md` that use "Manual verification steps:" with checkbox items.
+- Finding #5: Added test for "Manual Testing Steps" (Pattern 1 with Testing + Steps suffix).
+- Finding #6: Added test for "## Verification Plan" with no manual subheading returning empty.
+- Added test for "Manual verification:" without "step/steps" under "## Verification Plan" (validates Finding #1 fix).
+- Added test for checkbox items under "Manual verification steps:" in "## Verification Plan" (validates Finding #2 fix).
+
+**Kept as-is:**
+- Finding #3: Broader checkbox extraction is better behavior.
+- Finding #4: h1 heading reset is more defensive.
+
+**Deferred:**
+- Finding #7: Prose-matching risk is theoretical and mitigated by numbered-step filter.
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/services/KanbanProvider.ts` line 6100 | Pattern 3 subheading regex: `steps?` → `(?:\s+steps?)?` to match "Manual verification:" without "step/steps" |
+| `src/services/KanbanProvider.ts` lines 6111-6124 | Pattern 3: added checkbox extraction (`- [ ]` items) alongside numbered steps |
+| `src/services/__tests__/KanbanProvider.test.ts` lines 348-394 | Added 4 new tests: "Manual Testing Steps", "## Verification Plan with no manual subheading returns empty", "Manual verification: without step/steps", "checkbox items under Manual verification steps: in ## Verification Plan" |
+
+### Validation Results
+
+- **Tests**: 13/13 passing (9 original + 4 new)
+  - `npx vscode-test --grep "_parseVerificationSteps"` → 13 passing (67ms)
+- **Build**: webpack compiled successfully (no errors)
+- **TypeScript**: Pre-existing TS2835 errors in unrelated files (ClickUpSyncService.ts, KanbanProvider.ts dynamic imports) — not introduced by this change
+
+### Remaining Risks
+
+1. **Prose subheading false positive**: The `(?:^|\s)` prefix in Pattern 3's subheading regex could match "Manual verification:" in prose mid-line (e.g., "For manual verification: see docs"). Mitigated by the colon requirement and the numbered-step extraction filter, but not eliminated.
+
 ## Recommendation
 Complexity 3 → **Send to Intern**

@@ -164,13 +164,11 @@ async function testSetupAndSyncFallback() {
             vscodeState.inputBoxResponses.push('lin_api_live_token');
             vscodeState.quickPickResponses.push(
                 (items) => items[0],
-                (items) => items[1],
                 ...CANONICAL_COLUMNS.map(() => (items) => items[1])
             );
 
             http.queueJson(200, { data: { viewer: { id: 'viewer-1' } } });
             http.queueJson(200, { data: { teams: { nodes: [{ id: 'team-1', name: 'Engineering' }] } } });
-            http.queueJson(200, { data: { team: { projects: { nodes: [{ id: 'project-1', name: 'Project One' }] } } } });
             http.queueJson(200, {
                 data: {
                     team: {
@@ -189,7 +187,7 @@ async function testSetupAndSyncFallback() {
             const result = await service.applyConfig({
                 mapColumns: true,
                 createLabel: true,
-                scopeProject: true,
+                includeProjectNames: ['Project One'],
                 enableRealtimeSync: true,
                 enableAutoPull: false
             });
@@ -197,7 +195,7 @@ async function testSetupAndSyncFallback() {
 
             const saved = readJson(service.configPath);
             assert.strictEqual(saved.teamId, 'team-1');
-            assert.strictEqual(saved.projectId, 'project-1');
+            assert.deepStrictEqual(saved.includeProjectNames, ['Project One']);
             assert.strictEqual(saved.switchboardLabelId, 'label-switchboard');
             assert.strictEqual(saved.realTimeSyncEnabled, true);
             assert.deepStrictEqual(saved.automationRules, []);
@@ -254,7 +252,7 @@ async function testSetupAndSyncFallback() {
 
             await service.saveConfig(baseConfig());
             const db = KanbanDatabase.forWorkspace(workspaceRoot);
-            await db.ensureReady();
+            await db.createIfMissing();
             await db.setWorkspaceId('workspace-1');
 
             await writeText(path.join(workspaceRoot, 'plan.md'), '# Create Linear issue\n\n## Goal\n- Sync actual markdown.\n');
@@ -271,7 +269,7 @@ async function testSetupAndSyncFallback() {
                 planFile: 'plan.md',
                 complexity: '9'
             }, 'CREATED');
-            assert.strictEqual(await service.getIssueIdForPlan('session-create'), 'issue-created');
+            assert.strictEqual(await service.getIssueIdForPlan('plan.md'), 'issue-created');
             const refreshedCreateDb = loadOutModule('services/KanbanDatabase.js').KanbanDatabase.forWorkspace(workspaceRoot);
             await refreshedCreateDb.ensureReady();
             assert.strictEqual((await refreshedCreateDb.getPlanBySessionId('session-create')).linearIssueId, 'issue-created');
@@ -285,7 +283,7 @@ async function testSetupAndSyncFallback() {
             assert.ok(createRequest, 'Expected the initial Linear issue create mutation to be sent.');
             assert.strictEqual(
                 createRequest.jsonBody?.variables?.input?.description,
-                '# Create Linear issue\n\n## Goal\n- Sync actual markdown.\n',
+                '## Goal\n- Sync actual markdown.\n',
                 'Expected new Linear issues to start with actual plan markdown.'
             );
 
@@ -323,12 +321,12 @@ async function testSetupAndSyncFallback() {
                 'Expected oversized Linear descriptions to end with the truncation suffix.'
             );
             assert.ok(
-                oversizedDescription.startsWith('# Oversized issue\n\n'),
+                oversizedDescription.startsWith('😀'),
                 'Expected truncation to preserve the beginning of the plan markdown.'
             );
 
             await writeText(path.join(workspaceRoot, 'recreate-plan.md'), '# Recreated issue\n\n## Proposed Changes\n- Preserve readable markdown on recreate.\n');
-            await service.setIssueIdForPlan('session-recreate', 'issue-existing-readable');
+            await service.setIssueIdForPlan('recreate-plan.md', 'issue-existing-readable');
             await db.upsertPlans([createPlanRecord({
                 sessionId: 'session-recreate',
                 topic: 'Recreated issue',
@@ -342,7 +340,7 @@ async function testSetupAndSyncFallback() {
                 planFile: 'recreate-plan.md',
                 complexity: '5'
             }, 'CREATED');
-            assert.strictEqual(await service.getIssueIdForPlan('session-recreate'), 'issue-recreated-readable');
+            assert.strictEqual(await service.getIssueIdForPlan('recreate-plan.md'), 'issue-recreated-readable');
             const recreateMarkdownRequest = http.requests.find((req) =>
                 req.method === 'POST'
                 && req.path === '/graphql'
@@ -352,11 +350,11 @@ async function testSetupAndSyncFallback() {
             assert.ok(recreateMarkdownRequest, 'Expected the recreate Linear issue mutation to be sent for readable plan content.');
             assert.strictEqual(
                 recreateMarkdownRequest.jsonBody?.variables?.input?.description,
-                '# Recreated issue\n\n## Proposed Changes\n- Preserve readable markdown on recreate.\n',
+                '## Proposed Changes\n- Preserve readable markdown on recreate.\n',
                 'Expected recreated Linear issues to preserve actual plan markdown when the file is readable.'
             );
 
-            await service.setIssueIdForPlan('session-update', 'issue-existing');
+            await service.setIssueIdForPlan('missing-plan.md', 'issue-existing');
             await db.upsertPlans([createPlanRecord({
                 sessionId: 'session-update',
                 topic: 'Fallback issue',
@@ -370,7 +368,7 @@ async function testSetupAndSyncFallback() {
                 planFile: 'missing-plan.md',
                 complexity: '5'
             }, 'CREATED');
-            assert.strictEqual(await service.getIssueIdForPlan('session-update'), 'issue-recreated');
+            assert.strictEqual(await service.getIssueIdForPlan('missing-plan.md'), 'issue-recreated');
             const refreshedUpdateDb = loadOutModule('services/KanbanDatabase.js').KanbanDatabase.forWorkspace(workspaceRoot);
             await refreshedUpdateDb.ensureReady();
             assert.strictEqual((await refreshedUpdateDb.getPlanBySessionId('session-update')).linearIssueId, 'issue-recreated');
@@ -387,6 +385,7 @@ async function testSetupAndSyncFallback() {
                 'Managed by Switchboard.\n\nPlan file: `missing-plan.md`\n\nDo not edit the title — it is synced from Switchboard.',
                 'Expected unreadable plan files to fall back to the stub Linear description.'
             );
+            await new Promise(resolve => setTimeout(resolve, 200));
         } finally {
             http.restore();
         }
@@ -525,10 +524,28 @@ async function testNativeQueryAndMutationHelpers() {
         const { service } = createContext(workspaceRoot, {
             'switchboard.linear.apiToken': 'lin_api_native'
         });
-        await service.saveConfig(baseConfig());
+        await service.saveConfig(baseConfig({
+            projectId: undefined,
+            includeProjectNames: ['Project One']
+        }));
 
         const http = installHttpsMock();
         try {
+            http.queueJson(200, {
+                data: {
+                    team: {
+                        projects: {
+                            nodes: [
+                                { id: 'project-1', name: 'Project One' }
+                            ]
+                        }
+                    }
+                }
+            }, (req) => req.method === 'POST'
+                && req.path === '/graphql'
+                && String(req.jsonBody?.query || '').includes('projects { nodes')
+            );
+
             http.queueJson(200, {
                 data: {
                     issues: {

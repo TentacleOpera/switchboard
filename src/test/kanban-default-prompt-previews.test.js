@@ -14,7 +14,7 @@ async function run() {
     const KanbanProvider = {
         // Properties used by the method
         _taskViewerProvider: {
-            getPersonaForRole: async (role) => `Mock persona for ${role}`
+            getPersonaForRole: async (role) => undefined
         },
 
         // Mocked method settings
@@ -24,6 +24,12 @@ async function run() {
             aggressivePairProgramming: true,
             splitPlan: true,
             advancedReviewerEnabled: true,
+            leadChallengeEnabled: true,
+            pairProgrammingEnabled: {
+                lead: true,
+                coder: true
+            },
+            accurateCodingEnabled: true,
             gitProhibitionByRole: {},
             switchboardSafeguardsByRole: {},
             researchPlanner: {
@@ -50,10 +56,8 @@ async function run() {
             for (const role of roles) {
                 try {
                     const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-                    const personaContent = await this._taskViewerProvider?.getPersonaForRole(role);
                     const preview = buildKanbanBatchPrompt(role, [], {
                         workspaceRoot,
-                        personaContent: personaContent?.trim() || undefined,
                         defaultPromptOverrides,
                         gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
                         switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
@@ -64,6 +68,11 @@ async function run() {
                         dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                         aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                         splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                        // Lead-specific options
+                        includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
+                        pairProgrammingEnabled: (role === 'lead' || role === 'coder') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
+                        // Coder/Lead-specific options
+                        accurateCodingEnabled: (role === 'coder' || role === 'lead') ? promptsConfig.accurateCodingEnabled : undefined,
                         // Reviewer-specific options (matching _generateBatchReviewerPrompt pattern)
                         advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined
                     });
@@ -83,6 +92,9 @@ async function run() {
     KanbanProvider.promptsConfig.aggressivePairProgramming = false;
     KanbanProvider.promptsConfig.splitPlan = false;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = false;
+    KanbanProvider.promptsConfig.leadChallengeEnabled = false;
+    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: false, coder: false };
+    KanbanProvider.promptsConfig.accurateCodingEnabled = false;
 
     let previews = await KanbanProvider._getDefaultPromptPreviews('/root');
     
@@ -92,6 +104,10 @@ async function run() {
     assert.ok(!previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should not include aggressive pair programming when disabled');
     assert.ok(!previews.planner.includes('SPLIT PLAN MODE'), 'Planner preview should not include split-plan mode when disabled');
     assert.ok(!previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should not include advanced regression block when disabled');
+    assert.ok(!previews.lead.includes('adversarial review'), 'Lead preview should not include inline challenge when disabled');
+    assert.ok(!previews.lead.includes('concurrently handling the Routine tasks'), 'Lead preview should not include pair programming instructions when disabled');
+    assert.ok(!previews.coder.includes('only do Routine (Band A) work'), 'Coder preview should not include pair programming instructions when disabled');
+    assert.ok(!previews.coder.includes('Accuracy Mode: Before coding, read and follow the workflow'), 'Coder preview should not include accuracy mode instructions when disabled');
 
     // TEST 2: Custom / Enabled options
     KanbanProvider.promptsConfig.plannerWorkflowPath = '.custom/workflows/my-planner.md';
@@ -99,6 +115,9 @@ async function run() {
     KanbanProvider.promptsConfig.aggressivePairProgramming = true;
     KanbanProvider.promptsConfig.splitPlan = true;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = true;
+    KanbanProvider.promptsConfig.leadChallengeEnabled = true;
+    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: true, coder: true };
+    KanbanProvider.promptsConfig.accurateCodingEnabled = true;
 
     previews = await KanbanProvider._getDefaultPromptPreviews('/root');
 
@@ -110,6 +129,12 @@ async function run() {
 
     // Check reviewer custom options are reflected
     assert.ok(previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should reflect advanced regression option');
+
+    // Check lead/coder custom options are reflected
+    assert.ok(previews.lead.includes('adversarial review'), 'Lead preview should include inline challenge when enabled');
+    assert.ok(previews.lead.includes('concurrently handling the Routine tasks'), 'Lead preview should include pair programming instructions when enabled');
+    assert.ok(previews.coder.includes('only do Routine (Band A) work'), 'Coder preview should include pair programming instructions when enabled');
+    assert.ok(previews.coder.includes('Accuracy Mode: Before coding, read and follow the workflow'), 'Coder preview should include accuracy mode instructions when enabled');
 
     // TEST 3: Non-planner / Non-reviewer roles should not receive role-specific options
     // For example, lead coder should not have planner workflow path or advanced reviewer enabled

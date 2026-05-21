@@ -236,5 +236,46 @@ Manual verification steps:
 4. Verify button text reverts to the correct column-specific label after animation (e.g., "Copy coder prompt" not "Copy Prompt")
 5. Test on a card in a non-default column (e.g., CODER CODED) to confirm label preservation
 
+## Reviewer Pass Results
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Status |
+|---|----------|---------|--------|
+| 1 | **MAJOR** | Animationend orphan: if `copyPlanLinkResult` arrives after the 1.5s CSS animation completes, the `animationend` listener is attached to a button whose animation is already done — it never fires, button stays disabled forever. Regression from old code which had a safety-net animationend listener in the optimistic click handler. | **Fixed** |
+| 2 | NIT | `prefers-reduced-motion: reduce` prevents animation from playing, `animationend` never fires, button stays disabled. Pre-existing but trivially fixed alongside #1. | **Fixed** (free with #1) |
+| 3 | **MAJOR** | KanbanProvider `copyPlanLinkResult` message (line 5300) missing `planId` — primary `data-plan-id` lookup always fails, falls back to `sessionId`. If `data-session` is removed (sessionId phase-out), the fallback breaks entirely and the flash bug returns. | **Fixed** |
+| 4 | POSITIVE | Implementation matches plan's "New code" sections exactly. All `dataset.originalText` and `_onCopyAnimationEnd` references removed. `data-copy-label` fallback correct. Unconditional `.copied` addition correct. | Kept |
+
+### Stage 2: Balanced Synthesis
+
+- **Keep**: Core fix (unconditional `.copied`, `data-copy-label` fallback, removal of `dataset.originalText`/`_onCopyAnimationEnd`)
+- **Fix Now**: Add `setTimeout` fallback (2s) in `copyPlanLinkResult` success path to prevent stuck button when `animationend` never fires
+- **Fix Now**: Add `planId: msg.planId || ''` to KanbanProvider `copyPlanLinkResult` message so `data-plan-id` lookup works (critical for sessionId phase-out)
+
+### Code Fix Applied
+
+**File**: `src/webview/kanban.html` — `copyPlanLinkResult` handler (lines ~4843-4881)
+
+Added a `setTimeout(resetBtn, 2000)` fallback alongside the `animationend` listener. If `animationend` fires first, it clears the timeout. If the timeout fires first (animation already done, or `prefers-reduced-motion`), it resets the button and removes the orphaned listener. The `resetBtn` function is idempotent — safe to call from either path.
+
+### Verification Results
+
+- **Webpack compile**: ✅ Success (no errors)
+- **TypeScript check**: Pre-existing errors only (import path extensions, unrelated to this change)
+- **kanban-card-prompt-labels-regression.test.js**: ✅ Passed
+- **kanban-batch-prompt-regression.test.js**: ✅ Passed
+- **kanban-default-prompt-previews.test.js**: ✅ Passed
+- **No automated tests exist for the copy button animation flow** — manual verification still required per original plan
+
+### Files Changed by Review
+
+- `src/webview/kanban.html`: Added `setTimeout` fallback in `copyPlanLinkResult` success path (lines ~4857-4873)
+- `src/services/KanbanProvider.ts`: Added `planId: msg.planId || ''` to `copyPlanLinkResult` message (line 5300) so `data-plan-id` lookup works without relying on `data-session` fallback
+
+### Remaining Risks
+
+1. **No automated test coverage** for the copy button animation lifecycle — the fix is defensive but untested by CI. Manual verification per the original plan's steps is still required.
+
 ## Recommendation
 Complexity 2 → **Send to Intern**

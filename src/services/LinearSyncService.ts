@@ -121,6 +121,7 @@ export class LinearSyncService {
 
   // Reverse map: issueId -> projectId for efficient cache invalidation
   private _issueProjectIndex: Map<string, string> = new Map();
+  private _cachedProjects: { id: string; name: string }[] | null = null;
 
   private static readonly _transientMarkers = [
     'socket hang up',
@@ -266,6 +267,7 @@ export class LinearSyncService {
     await fs.promises.mkdir(path.dirname(this._configPath), { recursive: true });
     await fs.promises.writeFile(this._configPath, JSON.stringify(normalized, null, 2));
     this._config = normalized;
+    this._cachedProjects = null;
   }
 
   async saveAutomationSettings(
@@ -507,6 +509,9 @@ export class LinearSyncService {
   // ── Project Filter Helpers ───────────────────────────────────────
 
   public async getAvailableProjects(): Promise<{ id: string; name: string }[]> {
+    if (this._cachedProjects) {
+      return this._cachedProjects;
+    }
     const config = await this.loadConfig();
     if (!config?.setupComplete || !config.teamId) {
       throw new Error('Linear not configured');
@@ -519,10 +524,12 @@ export class LinearSyncService {
     const projects = Array.isArray(result.data?.team?.projects?.nodes)
       ? result.data.team.projects.nodes
       : [];
-    return projects.map((project: any) => ({
+    const mapped = projects.map((project: any) => ({
       id: String(project?.id || '').trim(),
       name: String(project?.name || '').trim()
     })).filter((project: { id: string; name: string }) => project.id.length > 0 && project.name.length > 0);
+    this._cachedProjects = mapped;
+    return mapped;
   }
 
   public async resolveSingleIncludeProjectId(config?: LinearConfig): Promise<string | undefined> {
@@ -1881,46 +1888,12 @@ export class LinearSyncService {
           issue.state?.name ? `> **State:** ${issue.state.name}`    : '',
         ].filter(Boolean).join('\n');
 
-        const subIssuesList = subIssuesByParentId.get(issue.id) || [];
-        const subIssueLines = subIssuesList.map((s: any) =>
-          `- ${s.title} (\`${s.identifier}\`) — see \`linear_import_${s.id}.md\``
-        );
-
-        const commentLines = (issue.comments?.nodes || []).map((c: any) =>
-          `- **${c.user?.name || 'Unknown'} (${c.createdAt?.slice(0, 10) || ''}):** ${c.body}`
-        );
-
-        const attachmentLines = (issue.attachments?.nodes || []).map((a: any) =>
-          `- [${a.title}](${a.url})`
-        );
-
-        const notesLines = [
-          '## Linear Issue Notes',
-          '',
-          `**State:** ${issue.state?.name || ''} (${stateType})`,
-          issue.estimate !== null && issue.estimate !== undefined ? `**Estimate:** ${issue.estimate} points` : '',
-          issue.project?.name ? `**Project:** ${issue.project.name}` : '',
-          issue.cycle?.name   ? `**Cycle:** ${issue.cycle.name} (#${issue.cycle.number})` : '',
-          `**Created:** ${issue.createdAt?.slice(0, 10) || ''}`,
-          ...(subIssueLines.length > 0 ? ['', '**Sub-issues (each imported as a separate plan):**', ...subIssueLines] : []),
-          ...(commentLines.length > 0 ? ['', '**Comments:**', ...commentLines] : []),
-          ...(attachmentLines.length > 0 ? ['', '**Attachments:**', ...attachmentLines] : []),
-        ].filter(s => s !== '').join('\n');
-
         const stub = [
           `# ${issue.title || `Linear Issue ${issue.identifier}`}`,
           '',
           metaLines,
           '',
-          '## Goal',
-          '',
-          description || 'TODO',
-          '',
-          '## Proposed Changes',
-          '',
-          'TODO',
-          '',
-          notesLines
+          description || '',
         ].join('\n');
 
         await fs.promises.writeFile(planFile, stub, 'utf8');

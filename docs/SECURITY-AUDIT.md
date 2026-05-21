@@ -34,7 +34,7 @@ All previously resolved findings (F-01 through F-10) remain resolved. The core s
 ### Reviewed surfaces
 
 - `src/extension.ts` — main extension activation, key management, terminal registry, MCP lifecycle
-- `src/mcp-server/register-tools.js` — all MCP tool registrations, validation, dispatch signing, workflow enforcement
+- `src/mcp-server/register-tools.js` — all MCP tool registrations, validation, dispatch signing, workflow enforcement (note: skill-based operations bypass this tool layer, routing instead through the LocalApiServer in the extension host)
 - `src/mcp-server/mcp-server.js` — MCP server entry point, IPC handlers, lifecycle management
 - `src/services/InboxWatcher.ts` — inbox message processing, signature verification, replay protection, terminal execution
 - `src/services/TaskViewerProvider.ts` — sidebar webview, pipeline orchestration, autoban, session management, git/jules CLI integration
@@ -136,7 +136,7 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 
 ### N-F02: Cooldown fail-open on filesystem error (Low)
 
-- Location: `src/mcp-server/register-tools.js`, `checkDispatchCooldown()`, line ~1308
+- Location: `src/mcp-server/register-tools.js`, `checkDispatchCooldown()`, line ~1308 (Note: skill-based integrations bypass cooldown limits as they are intended for direct execution rather than async workflow dispatch)
 - Detail: If the cooldown directory is inaccessible or `fs.statSync` / `fs.writeFileSync` throws, the function returns `{ inCooldown: false }` — failing open.
 - Impact: An attacker who can cause filesystem errors (e.g., by making the cooldowns directory read-only) can bypass the cooldown rate limit.
 - Risk: Low — cooldowns are a convenience guardrail against accidental rapid-fire dispatches, not a security-critical gate. The real security enforcement is in dispatch signing and workflow gating.
@@ -151,7 +151,7 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 
 ### N-F04: Signing key propagated via process environment variable (Low)
 
-- Location: `src/extension.ts`, line ~678; `src/mcp-server/register-tools.js`, `getDispatchSigningKey()`
+- Location: `src/extension.ts`, line ~678; `src/mcp-server/register-tools.js`, `getDispatchSigningKey()` (Note: skills authenticate using the token configured in VS Code settings `switchboard.apiToken` via Bearer header, secured by token possession rather than dispatch signing)
 - Detail: The dispatch signing key is generated securely from `ExtensionContext.secrets` but then propagated to the MCP server child process via `process.env.SWITCHBOARD_DISPATCH_SIGNING_KEY`. Environment variables are visible to any process that can read `/proc/<pid>/environ` (Linux/macOS) or via process inspection tools (Windows).
 - Impact: A local attacker with access to the same user session could read the signing key from the MCP server's environment and forge dispatch messages.
 - Risk: Low — requires local user-session access, at which point the attacker already has significant capabilities. The signing key provides defense-in-depth against workspace file manipulation, not against a fully compromised user session.
@@ -159,7 +159,7 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 
 ### N-F05: Brain leakage detector extended to cover additional AI tool directories — REMEDIATED
 
-- Location: `src/mcp-server/register-tools.js`, `isBrainLeakage()`
+- Location: `src/mcp-server/register-tools.js`, `isBrainLeakage()` (Note: skill-based invocations do not run through the MCP leakage detector; agents must exercise care when passing file contents to skills)
 - Detail: The leakage detector previously only checked for `.gemini/antigravity/brain/` paths.
 - Fix: Extended the detector with an array of private path patterns covering `.cursor/rules/`, `.kiro/memories/`, and `.codeium/memories/` (both forward and backslash variants). Uses `Array.some()` for clean extensibility.
 - Status: **Resolved.**

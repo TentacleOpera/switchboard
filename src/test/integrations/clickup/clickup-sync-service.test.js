@@ -325,7 +325,7 @@ async function testSyncPlanCreateAndUpdateFlows() {
             assert.strictEqual(createRequest.jsonBody.priority, 2);
             assert.ok(createRequest.jsonBody.tags.includes('switchboard:plan-created'));
             assert.ok(createRequest.jsonBody.description.includes('Ship it.'));
-            assert.ok(createRequest.jsonBody.description.includes('[Switchboard] Session: session-created | Plan: plan-created'));
+            assert.ok(createRequest.jsonBody.description.includes('[Switchboard] PlanFile:') && createRequest.jsonBody.description.includes('| Plan: plan-created'));
             assert.strictEqual(createRequest.jsonBody.custom_fields.length, 3);
 
             http.queueJson(200, { tasks: [{ id: 'task-existing' }] }, (req) => req.method === 'GET' && req.path.includes('/task?custom_fields='));
@@ -512,7 +512,9 @@ async function testNativeTaskQueryAndMutationHelpers() {
                 && req.jsonBody?.name === 'Created task'
             );
             http.queueJson(503, {}, (req) => req.method === 'GET' && req.path === '/api/v2/task/task-created');
-            const createdTask = await service.createTask('list-created', 'Created task', {
+            const createdTask = await service.createTask({
+                listId: 'list-created',
+                name: 'Created task',
                 description: 'Created description',
                 status: 'to do'
             });

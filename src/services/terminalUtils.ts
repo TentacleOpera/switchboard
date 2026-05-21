@@ -70,7 +70,7 @@ export async function sendRobustText(
     const CHUNK_DELAY = 50; // ms between chunks
     const NEWLINE_DELAY = paced ? 1000 : 100; // adaptive delay before submission
     const CLI_CONFIRM_ENTER_DELAY = paced ? 350 : 150;
-    const isCliAgent = /\b(copilot|gemini|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
+    const isCliAgent = /\b(copilot|gemini|agy|claude|windsurf|cursor|cortex)\b/i.test(terminal.name);
     const _log = (msg: string) => { log?.(msg); console.log(`[sendRobustText] ${msg}`); };
 
     // For most payloads, use clipboard paste to bypass PTY line-buffer limits

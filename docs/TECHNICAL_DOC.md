@@ -97,10 +97,14 @@ Key safety behavior on `sendToTerminal`:
 
 ## 4.5) Agent Access to Integrations
 
-Agents can access Switchboard's Linear and ClickUp integrations through the `call_linear_api` and `call_clickup_api` MCP tools. These tools use direct HTTP API calls and work in all IDEs (VS Code, Antigravity, Windsurf, etc.) without requiring IPC bridging.
+Agents can access Switchboard's Linear and ClickUp integrations through two primary mechanisms:
+1. **Skill-based Invocations (Preferred)**: Run curl commands against the LocalApiServer.
+2. **MCP Tools (Alternative / Required for Uncovered Operations)**: Call the `call_linear_api` and `call_clickup_api` MCP tools directly.
+
+Both patterns are fully supported, but **skill-based invocations are preferred** for consistency across IDEs and agents without native MCP clients.
 
 ### Smart Output (Default: Compact)
-By default, both tools return **compact, AI-readable output**:
+By default, both tools/skills return **compact, AI-readable output**:
 - Issue/task lists are rendered as **markdown tables** with key fields only (no raw JSON dumps)
 - Descriptions are truncated to 500 chars
 - Custom fields and empty arrays are stripped
@@ -111,29 +115,62 @@ By default, both tools return **compact, AI-readable output**:
 - **Linear**: Use GraphQL to fetch issues with children (sub-issues) in a single query
 
 ### State Tracking
-The tools automatically cache frequently used IDs (team_id, space_id, list_id, project_id) in `api_state.json` under the Switchboard state root. This reduces the need to navigate the hierarchy on every call.
+The integrations automatically cache frequently used IDs (team_id, space_id, list_id, project_id) in `api_state.json` under the Switchboard state root. This reduces the need to navigate the hierarchy on every call.
 
 ### Security Model
-- Tools only work with Linear/ClickUp API tokens configured in VS Code settings
-- Tokens are passed to the MCP server via environment variables
-- No arbitrary VS Code command execution (unlike the removed execute_vscode_command tool)
+- Both skills and MCP tools only work with Linear/ClickUp API tokens configured in VS Code settings.
+- For MCP tools, tokens are passed via environment variables. For skills, the client passes the API auth token configured in VS Code settings (`switchboard.apiToken`) in the `Authorization: Bearer <token>` header.
+- To prevent credentials exposure, there is no HTTP endpoint to retrieve the token from the LocalApiServer.
+- If no `switchboard.apiToken` is configured, read-only requests (`GET` and `/resolve` endpoints) are allowed without authentication for development convenience, while write operations (POST/PUT/DELETE) are strictly denied.
 
-### Linear API Tool
-- `call_linear_api` — Call Linear GraphQL or REST API directly
-  - GraphQL: Provide `query` and optional `variables`
-  - REST: Provide `method`, `endpoint`, and optional `body`
-  - `format`: `"compact"` (default) or `"raw"`
-  - Example: `call_linear_api(query="query { issues(first: 10) { nodes { id title state { name } } } }")`
+### Linear Integration Examples
 
-### ClickUp API Tool
-- `call_clickup_api` — Call ClickUp REST API directly
-  - Provide `method`, `endpoint`, and optional `query`/`body`
-  - `subtasks=true`: Fetch task + subtasks in one call (composite query)
-  - `format`: `"compact"` (default) or `"raw"`
-  - Example: `call_clickup_api(method="GET", endpoint="/v2/list/123/task")`
-  - Example with subtasks: `call_clickup_api(method="GET", endpoint="/v2/task/abc123", subtasks=true)`
+#### Skill-based Invocations (Preferred)
+```bash
+# Get port and call API with authorization header
+PORT=$(cat .switchboard/api-server-port.txt)
+TOKEN="your_switchboard_api_token" # Retrieve from secure config
 
-These tools work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
+curl -s -X POST http://localhost:$PORT/api/linear \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "query": "query { issues(first: 10) { nodes { id title state { name } } } }",
+    "variables": {},
+    "format": "compact"
+  }'
+```
+
+#### MCP Tool Example
+- `call_linear_api(query="query { issues(first: 10) { nodes { id title state { name } } } }")`
+
+### ClickUp Integration Examples
+
+#### Skill-based Invocations (Preferred)
+```bash
+# Get port and call API with authorization header
+PORT=$(cat .switchboard/api-server-port.txt)
+TOKEN="your_switchboard_api_token"
+
+curl -s -X POST http://localhost:$PORT/api/clickup \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "method": "GET",
+    "endpoint": "/v2/task/abc123",
+    "query": {},
+    "body": null,
+    "subtasks": true,
+    "format": "compact"
+  }'
+```
+
+#### MCP Tool Examples
+- `call_clickup_api(method="GET", endpoint="/v2/list/123/task")`
+- `call_clickup_api(method="GET", endpoint="/v2/task/abc123", subtasks=true)`
+
+These tools and skills work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
+
 
 ## 5) MCP server runtime internals
 
@@ -681,3 +718,19 @@ Typical maintainer checks:
    - The `get_kanban_state` MCP tool (now removed) had its own DB read path separate from `KanbanProvider._refreshBoard()`. The `query_switchboard_kanban` skill now provides direct DB access for agents.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.
+
+## 24) Future Work: Uncovered MCP Tools Migration
+
+The following ClickUp and Linear MCP tools are not yet covered by the skill-based LocalApiServer integration. If agents require these operations, they must continue to use the MCP server directly until skill-based endpoints are implemented:
+
+### Priority Migration Candidates
+1. **`resolve_assignees`**: Resolves user names/emails to ClickUp numeric IDs. Necessary for assignment operations during task creation/updating.
+2. **`filter_tasks`**: Performs multi-criteria task filtering. Necessary for task discovery workflows.
+3. **`search`**: Universal workspace search across tasks and documents.
+
+### Other Uncovered MCP Tools
+- **Task Relations**: `add_task_dependency`, `remove_task_dependency`, `add_task_link`, `remove_task_link`.
+- **Time Tracking**: `get_task_time_entries`, `start_time_tracking`, `stop_time_tracking`, `add_time_entry`, `get_current_time_entry`, `get_time_entries`, `get_task_time_in_status`.
+- **Workspace Hierarchy**: `clickup_get_workspace_hierarchy`, `clickup_create_list`, `clickup_create_list_in_folder`, `clickup_create_folder`, `clickup_get_folder`, `clickup_update_folder`.
+- **Chat & Reminders**: `clickup_get_chat_channels`, `clickup_send_chat_message`, `clickup_get_chat_channel_messages`, `clickup_get_chat_message_replies`, `clickup_create_reminder`, `clickup_search_reminders`, `clickup_update_reminder`.
+

@@ -46,6 +46,7 @@ function run() {
         'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',
         'plannerAddonSplitPlan',
+        'plannerAddonClearAntigravityContext',
         'roleAddonsDesc',
         'roleAddonsGroup',
         'promptPreview'
@@ -262,7 +263,7 @@ function run() {
     // Verify accurateCodingEnabled is passed in KanbanProvider.ts prompt preview paths
     expectRegex(
         kanbanProviderSource,
-        /accurateCodingEnabled:\s*role\s*(?:===\s*'coder'|as\s*any\s*===\s*'coder')\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined/,
+        /accurateCodingEnabled:\s*\(role\s*===\s*'coder'\s*\|\|\s*role\s*===\s*'lead'\)\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined/,
         'Expected accurateCodingEnabled to be passed to buildKanbanBatchPrompt in KanbanProvider.ts'
     );
 
@@ -492,7 +493,7 @@ function run() {
     console.log('Test 10: Accurate Coding Preview Regression');
     expectRegex(
         kanbanProviderSource,
-        /case\s+'getPromptPreview':[\s\S]*?accurateCodingEnabled:\s*role\s*===\s*'coder'\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined[\s\S]*?break;/m,
+        /case\s+'getPromptPreview':[\s\S]*?accurateCodingEnabled:\s*\(role\s*===\s*'coder'\s*\|\|\s*role\s*===\s*'lead'\)\s*\?\s*promptsConfig\.accurateCodingEnabled\s*:\s*undefined[\s\S]*?break;/m,
         'Expected KanbanProvider getPromptPreview to pass accurateCodingEnabled'
     );
     console.log('✓ Test 10 passed\n');

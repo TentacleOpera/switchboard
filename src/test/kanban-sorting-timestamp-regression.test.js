@@ -9,17 +9,14 @@ const assert = require('assert');
  */
 function sortNonPlanningCards(items) {
     return [...items].sort((a, b) => {
-        const tsA = a._ts || 0;
-        const tsB = b._ts || 0;
-        if (tsA !== tsB) {
-            return tsB - tsA; // newest activity first
-        }
-        const createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-        const createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-        if (isNaN(createdA) || isNaN(createdB)) {
-            return 0;
-        }
-        return createdB - createdA; // tiebreak: newest plan first
+        const tsDiff = (b._ts || 0) - (a._ts || 0);
+        if (tsDiff !== 0) return tsDiff;
+        // Secondary tiebreaker: createdAt descending (for cards with no lastActivity/same lastActivity)
+        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+        if (isNaN(createdA)) createdA = 0;
+        if (isNaN(createdB)) createdB = 0;
+        return createdB - createdA;
     });
 }
 
@@ -42,13 +39,14 @@ async function testComparator() {
     const sorted2 = sortNonPlanningCards(items2);
     assert.strictEqual(sorted2[0].id, 'newer_plan', 'Should tiebreak with newest creation date first');
 
-    // Case 3: Same _ts, malformed createdAt
+    // Case 3: Same _ts, malformed createdAt — valid date should sort above invalid
     const items3 = [
         { id: 'plan1', _ts: 1000, createdAt: 'invalid' },
         { id: 'plan2', _ts: 1000, createdAt: '2026-05-01T10:00:00.000Z' }
     ];
     const sorted3 = sortNonPlanningCards(items3);
-    assert.strictEqual(sorted3.length, 2);
+    assert.strictEqual(sorted3[0].id, 'plan2', 'Valid createdAt should sort above invalid (NaN→0)');
+    assert.strictEqual(sorted3[1].id, 'plan1');
 
     // Case 4: Missing _ts (should be 0)
     const items4 = [

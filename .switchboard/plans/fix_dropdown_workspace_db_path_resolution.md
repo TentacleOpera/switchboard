@@ -245,5 +245,53 @@ if (Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.length > 0) {
 - [ ] Validation for dropdown workspaces respects mode='create' (doesn't require file to exist yet)
 - [ ] `resolveEffectiveWorkspaceRoot()` behavior is consistent with `WorkspaceIdentityService.resolveEffectiveWorkspaceRootFromMappings()`
 
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | File | Lines |
+|---|----------|---------|------|-------|
+| 1 | **MAJOR** | Duplicate validation errors — dropdown validation fires after mode-specific validation, producing two overlapping error messages for `mode='connect'` and `mode='create'` (e.g., "database path is required in connect mode" + "database path is required when dropdown workspaces are configured") | SetupPanelProvider.ts | 768-781 |
+| 2 | NIT | Implementation deviates from plan structure — `resolveEffectiveWorkspaceRoot()` merges `matchingIndex` and `dropdownIndex` into a single `if (matchingIndex !== -1 \|\| dropdownIndex !== -1)` condition instead of separate blocks. This is actually *better* than the plan (avoids code duplication of parent resolution logic) and is consistent with `WorkspaceIdentityService.resolveEffectiveWorkspaceRootFromMappings()` which uses the same combined approach (`if (isParent \|\| matchingIndex !== -1 \|\| dropdownIndex !== -1)`). | KanbanProvider.ts | 3414-3440 |
+| 3 | NIT | Mapping with only `dropdownWorkspaces` and no `workspaceFolders` is silently skipped due to `if (!Array.isArray(mapping.workspaceFolders)) continue;` guard. Consistent with `WorkspaceIdentityService` (line 87) and `_redirectToParentIfMapped` (line 457) — pre-existing pattern, not a regression. | KanbanProvider.ts | 3405 |
+| 4 | NIT | Overlap validation (parent/child/dropdown) only runs inside `mode === 'create'` block, not `mode === 'connect'`. Pre-existing gap, not introduced by this change. | SetupPanelProvider.ts | 736-753 |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| #1 (MAJOR): Duplicate validation errors | Valid — confusing UX for standard modes | **Fixed**: Gated dropdown validation to only fire for modes not already covered by mode-specific checks (`mode !== 'connect' && mode !== 'create'`). Preserves defense-in-depth for unexpected modes while eliminating duplicate messages. |
+| #2 (NIT): Implementation structure deviation | Positive deviation — cleaner, avoids duplication | No code change needed. Plan documentation updated to reflect actual implementation. |
+| #3 (NIT): Mapping with only dropdownWorkspaces | Pre-existing, consistent across services | Defer — would require changes across 3 files for an unlikely config scenario. |
+| #4 (NIT): Overlap validation only in create mode | Pre-existing gap | Defer — out of scope for this bugfix. |
+
+### Code Fixes Applied
+
+**Fix #1**: `src/services/SetupPanelProvider.ts` (lines 768-789) — Restructured dropdown validation to avoid duplicate error messages:
+
+- `dbPath` required check: only fires when `mode !== 'connect' && mode !== 'create'` (both modes already validate dbPath in their mode-specific blocks)
+- File existence / `.db` extension checks: only fire when `mode !== 'create' && mode !== 'connect'` (connect mode already checks these)
+- Defense-in-depth preserved for unexpected/unknown mode values
+
+### Verification Results
+
+- **TypeScript compilation**: No new errors introduced. Pre-existing errors in `ClickUpSyncService.ts` (import path) and `KanbanProvider.ts` line 4478 (import path) are unrelated to this change.
+- **Webpack build**: Compiled successfully.
+- **Automated tests**: Test file `src/test/kanban-dropdown-workspaces.test.ts` exists with 5 tests including direct coverage of `resolveEffectiveWorkspaceRoot()` with dropdown workspaces (test 5). Tests require VS Code extension host and cannot be run in terminal.
+- **ESLint**: Pre-existing configuration issue (missing `eslint.config.js`), unrelated to this change.
+
+### Implementation Notes (Actual vs. Planned)
+
+1. **`resolveEffectiveWorkspaceRoot()`**: Implementation uses a combined condition (`matchingIndex !== -1 || dropdownIndex !== -1`) instead of the plan's two separate `if` blocks. This avoids duplicating the parent resolution logic and matches the pattern in `WorkspaceIdentityService.resolveEffectiveWorkspaceRootFromMappings()`. Functionally equivalent — if a folder appears in both `workspaceFolders` and `dropdownWorkspaces`, the same parent is resolved regardless of which list matched.
+
+2. **`KanbanDatabase.forWorkspace()` log message**: Implemented exactly as the plan's refined version (split into `else if (mapping)` and `else` branches).
+
+3. **`SetupPanelProvider` dropdown validation**: Implemented with the plan's mode-aware logic, then further refined during review to eliminate duplicate error messages for standard modes.
+
+### Remaining Risks
+
+- **Mapping with only dropdownWorkspaces**: If a user creates a mapping with `dropdownWorkspaces` but no `workspaceFolders` array, the mapping is silently skipped by all three resolution methods (`KanbanProvider.resolveEffectiveWorkspaceRoot()`, `WorkspaceIdentityService.resolveEffectiveWorkspaceRootFromMappings()`, `KanbanDatabase._redirectToParentIfMapped()`). The type annotation requires `workspaceFolders` but runtime config could omit it. Low risk — no known user scenario requires dropdown-only mappings.
+- **Overlap validation gap for connect mode**: For `mode='connect'`, a mapping where the parent folder is also listed as a dropdown workspace would not produce an error. The `seenFolders` tracking catches cross-mapping duplicates but not within-mapping overlaps for connect mode. Low risk — the UI likely prevents this configuration.
+
 ## Recommendation
-Complexity 5 → **Send to Coder**
+Complexity 5 → **Send to Coder** → **Implementation Complete, Review Passed**

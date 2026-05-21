@@ -129,3 +129,37 @@ Apply the same `filterGhostPlans` filter to completed plans that is already appl
 ---
 
 **Recommendation:** Send to Intern (complexity 2)
+
+---
+
+## Review Pass (Grumpy + Balanced)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+Well well well. Let me look at what we have here. You had ONE job — apply `filterGhostPlans` to `completedRows` — and you actually did it. I'm almost disappointed I can't rip this apart.
+
+- **NIT:** The comment at lines 13286-13289 is a near-verbatim copy of the plan's suggested comment. Good. No creative liberties taken. I'll allow it.
+- **NIT:** The `filterGhostPlans` closure itself (lines 13290-13295) is unchanged from the original. The application pattern for `visibleCompletedRows` (lines 13300-13302) mirrors `visibleActiveRows` (lines 13297-13299) exactly. Symmetric. Clean. Boring. Exactly what a complexity-2 fix should be.
+- **No CRITICAL findings.**
+- **No MAJOR findings.**
+
+I hate to admit it, but this is correct. The ghost plans from workspace A will no longer haunt workspace B's completed dropdown. The edge case about intra-workspace moved/deleted files is acknowledged in the comment and is acceptable per the plan's own analysis.
+
+### Stage 2: Balanced Synthesis
+
+- **Keep:** All findings are NITs. Implementation matches plan exactly.
+- **Fix now:** Nothing.
+- **Defer:** Nothing.
+
+### Stage 3: Code Fixes Applied
+
+None — implementation is correct as-is.
+
+### Stage 4: Verification Results
+
+No automated tests exist for this code path (per plan's own acknowledgment). The `filterGhostPlans` closure is a local function inside a private method, making unit testing impractical without refactoring. Manual verification per the plan's checklist is required.
+
+### Stage 5: Remaining Risks
+
+- No automated regression test for the completed-plan ghost filter. If this code path regresses, it won't be caught by CI.
+- Consider extracting `filterGhostPlans` to a testable utility as a follow-up if this area sees further changes.

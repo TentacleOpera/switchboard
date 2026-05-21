@@ -305,6 +305,48 @@
             color: var(--danger);
         }
 
+        .refresh-flash {
+            position: fixed;
+            bottom: 30px;
+            right: 20px;
+            background: var(--vscode-button-background, #3ddbd9);
+            color: var(--vscode-button-foreground, #0f1117);
+            padding: 4px 12px;
+            border-radius: 4px;
+            opacity: 0;
+            transition: opacity 0.3s;
+            font-size: 12px;
+            z-index: 100;
+            pointer-events: none;
+        }
+
+        .refresh-flash.visible {
+            opacity: 1;
+        }
+
+        .file-changed-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            background: var(--vscode-inputValidation-warningBackground, rgba(204, 167, 0, 0.1));
+            border: 1px solid var(--vscode-inputValidation-warningBorder, rgba(204, 167, 0, 0.4));
+            padding: 8px 12px;
+            border-radius: 6px;
+            font-size: 12px;
+            color: var(--vscode-editorWarning-foreground, #cca700);
+            margin-bottom: 8px;
+        }
+
+        .file-changed-banner-actions {
+            display: flex;
+            gap: 6px;
+        }
+
+        .file-changed-banner button {
+            padding: 2px 8px;
+            font-size: 11px;
+        }
+
         .comment-popup {
             position: fixed;
             z-index: 999;
@@ -560,9 +602,19 @@
     </div>
 
     <div class="editor-shell">
-        <div class="editor-toolbar">
-            <div class="editor-title" id="editor-title">Review plan - select text and submit comment to send to planner agent</div>
-            <button id="toggle-preview" class="secondary-btn" style="padding: 2px 8px; font-size: 11px;">Edit Plan</button>
+        <div class="editor-header-wrap">
+            <!-- File changed banner -->
+            <div id="fileChangedBanner" style="display:none;" class="file-changed-banner">
+                <span>File changed on disk</span>
+                <div class="file-changed-banner-actions">
+                    <button class="primary" onclick="reloadFromDisk()">Reload</button>
+                    <button onclick="dismissBanner()">Dismiss</button>
+                </div>
+            </div>
+            <div class="editor-toolbar">
+                <div class="editor-title" id="editor-title">Review plan - select text and submit comment to send to planner agent</div>
+                <button id="toggle-preview" class="secondary-btn" style="padding: 2px 8px; font-size: 11px;">Edit Plan</button>
+            </div>
         </div>
         <textarea class="editor hidden" id="plan-editor" spellcheck="false"></textarea>
         <div id="markdown-content" class="markdown-body active"></div>
@@ -608,8 +660,22 @@
         </div>
     </div>
 
+    <!-- Refresh flash indicator -->
+    <div id="refreshFlash" class="refresh-flash">Updated</div>
+
     <script>
         const vscode = acquireVsCodeApi();
+
+        function reloadFromDisk() {
+            const banner = document.getElementById('fileChangedBanner');
+            if (banner) banner.style.display = 'none';
+            vscode.postMessage({ type: 'reloadFromDisk' });
+        }
+
+        function dismissBanner() {
+            const banner = document.getElementById('fileChangedBanner');
+            if (banner) banner.style.display = 'none';
+        }
 
         // Infer a readable topic/title from a plan file path (mirrors planMetadataUtils.ts)
         function inferTopicFromPath(filePath) {
@@ -980,6 +1046,10 @@
                 : `<pre>${escapeHtml(state.planText)}</pre>`;
             renderActionLog(Array.isArray(message.actionLog) ? message.actionLog : []);
             mtimeMessageEl.textContent = state.planMtimeMs ? `Loaded: ${formatTimestamp(state.planMtimeMs)}` : '';
+            
+            const banner = document.getElementById('fileChangedBanner');
+            if (banner) banner.style.display = 'none';
+
             applyMode();
             updateActionButtons();
             setStatus('Ticket loaded.');
@@ -1174,6 +1244,40 @@
                 case 'ticketData':
                     renderTicketData(message);
                     break;
+                case 'checkEditMode': {
+                    const isEditing = !state.isPreview;
+                    const hasUnsavedChanges = planEditorEl.value !== state.planText;
+                    vscode.postMessage({
+                        type: 'editModeStatus',
+                        isEditing,
+                        hasUnsavedChanges
+                    });
+                    break;
+                }
+                case 'refreshFlash': {
+                    const flash = document.getElementById('refreshFlash');
+                    if (flash) {
+                        flash.classList.add('visible');
+                        setTimeout(() => flash.classList.remove('visible'), 2000);
+                    }
+                    break;
+                }
+                case 'fileChangedBanner': {
+                    const banner = document.getElementById('fileChangedBanner');
+                    if (banner) {
+                        banner.style.display = message.show ? 'flex' : 'none';
+                    }
+                    break;
+                }
+                case 'planDeleted': {
+                    markdownContentEl.innerHTML =
+                        '<div style="padding:20px;color:#f48771;text-align:center;">This plan file has been deleted.</div>';
+                    planEditorEl.classList.add('hidden');
+                    markdownContentEl.classList.add('active');
+                    togglePreviewBtn.disabled = true;
+                    savePlanButtonEl.disabled = true;
+                    break;
+                }
                 case 'ticketUpdateResult':
                     setBusy(false);
                     if (message.ok) {
