@@ -151,7 +151,7 @@
             transition: all 0.15s;
         }
 
-        .strip-btn:hover {
+        .strip-btn:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: var(--accent-teal-dim);
             color: var(--accent-teal);
@@ -170,7 +170,7 @@
             background: color-mix(in srgb, var(--accent-teal) 6%, transparent);
         }
 
-        .strip-btn.is-teal:hover {
+        .strip-btn.is-teal:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 14%, transparent);
             box-shadow: var(--glow-teal);
         }
@@ -179,7 +179,6 @@
         .strip-btn.is-teal:disabled {
             opacity: 0.4;
             cursor: not-allowed;
-            pointer-events: none;
         }
 
         .btn-add-plan {

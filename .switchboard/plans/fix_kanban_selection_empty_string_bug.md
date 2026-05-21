@@ -119,5 +119,25 @@ function getAllInColumn(col) {
 5. Trigger a board re-render (e.g., switch workspace and back) and verify selection state is preserved correctly with no phantom selections
 6. Use "move all" on a column and verify no empty-string IDs are sent to backend
 
+## Reviewer Pass (Grumpy Principal Engineer)
+
+**Stage 1: Grumpy Analysis**
+*   **[NIT]** A bug where empty strings snuck into a selection set? Rookie mistake using `|| ''` as a fallback without verifying truthiness later. 
+*   You added a guard clause `if (!pid) return;`. It handles the symptoms correctly. 
+*   You also caught the re-apply state missing the same guard, and added `filter(Boolean)` to `getAllInColumn` just in case. Good. It's solid defense-in-depth. 
+*   But don't let me catch you using `|| ''` as a fallback when you actually need a valid identifier again. 
+
+**Stage 2: Balanced Synthesis**
+*   The implementation correctly applies all three modifications described in the plan:
+    1.  Location 1 (`kanban.html` line 3798): `if (!pid) return;` properly short-circuits adding empty IDs to `selectedCards`.
+    2.  Location 2 (`kanban.html` line 3818): `if (pid && selectedCards.has(pid))` properly prevents empty strings from matching the selection logic during re-render.
+    3.  Location 3 (`kanban.html` line 3198): `.filter(Boolean)` is properly attached to the return values of `getAllInColumn`.
+*   The fix handles the root cause. No material defects found.
+
+**Stage 3: Verification & Execution**
+*   **Code Changes:** Applied correctly as documented.
+*   **Validation:** Verified the HTML JS snippet logically meets all criteria.
+*   **Status:** **[COMPLETED]**
+
 ## Recommendation
 **Send to Intern** — Complexity 3, single-file changes, all routine guard-clause additions.

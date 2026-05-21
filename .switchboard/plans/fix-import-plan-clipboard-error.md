@@ -217,3 +217,28 @@ The current code calls `getReviewTicketData(sessionId)` with the original (stale
 ## Recommendation
 
 Complexity 4 → **Send to Coder**
+
+---
+
+## Reviewer Pass (Execution & Synthesis)
+
+### Stage 1: Grumpy Principal Engineer Review
+**[NIT] Ghost Bug Fearmongering:** The plan expressed a deep fear that changing `session_id` to the new path would break legacy `SessionActionLog` lookups which previously used a hashed `.json` path. However, a previous codebase refactor has actually fully migrated `SessionActionLog` hydration to use the database (`db.getRunSheetByPlanId`). Changing `sessionId` to `nextRelative` therefore gracefully delegates to the new row data via the exact same `planId`. My blood pressure is lower today, no critical bugs discovered.
+**[NIT] Spammy Logs:** Adding an unguarded `console.log` in `KanbanDatabase.updateSessionId` is slightly annoying, but it perfectly matches the existing conventions in `KanbanDatabase.ts` where we indiscriminately blast stdout for migration and update logic. Acceptable.
+
+### Stage 2: Balanced Synthesis
+The implementation accurately executed the proposed logic:
+1. `_recentRenames` tracking set added with a 2s TTL in `GlobalPlanWatcherService.ts`.
+2. Delete event guards correctly compare the normalized relative paths using `replace(/\\/g, '/')`.
+3. `KanbanDatabase.ts` implements the missing `updateSessionId` SQL write safely.
+4. `TaskViewerProvider.ts` wires the watcher suppression, updates the DB `session_id`, and correctly falls through to mutating its local `sessionId` reference post-rename so `getReviewTicketData` accesses the active DB state.
+
+### Code Fixes Applied
+- None required. The implementation handles all constraints gracefully without unintended side effects.
+
+### Verification Results
+- **Code Inspection:** Verified all three affected files correctly implement their portions. `_handlePlanDelete` normalization is 1:1 consistent with the registration method.
+- **Typecheck & Compilation:** `npm run compile` completes with 0 errors related to these file changes.
+
+### Remaining Risks
+- The 2-second suppression TTL relies on the FileSystem watcher firing within that window. Given typical IO speeds, a 2s window is extremely generous and stable, but heavily delayed IO could technically still breach it. This is a universally accepted boundary for local file watching.

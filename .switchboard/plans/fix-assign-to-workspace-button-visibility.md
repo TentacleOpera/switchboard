@@ -111,3 +111,25 @@ function updateReassignButtonVisibility() {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+## Reviewer Pass (Execution & Synthesis)
+
+### Stage 1: Grumpy Principal Engineer Review
+**[MAJOR] UX Breaking Change in CSS:** The `pointer-events: none;` added to `.strip-btn:disabled` completely defeats the `cursor: not-allowed;` rule AND prevents tooltips (`data-tooltip`) from showing on hover. This means users see a disabled button, try to hover to see what it is, and get absolutely no feedback. 
+**[NIT] Hover Specificity:** If you just use `.strip-btn.is-teal:hover`, it will trigger the hover effect (background change, box-shadow) even when the button is disabled if `pointer-events` are enabled. It needs `:not(:disabled)`.
+
+### Stage 2: Balanced Synthesis
+The core logic of the plan is correct: toggling `disabled` instead of `display` is much better UX. The only material flaw is the CSS implementation. `pointer-events: none` must be removed from the `:disabled` rules, and the `:hover` pseudo-classes must be updated to `:hover:not(:disabled)` so disabled buttons don't show active hover effects.
+
+### Code Fixes Applied
+- Removed `pointer-events: none;` from the `:disabled` CSS rules in `src/webview/kanban.html`.
+- Updated `.strip-btn:hover` to `.strip-btn:hover:not(:disabled)` in `src/webview/kanban.html`.
+- Updated `.strip-btn.is-teal:hover` to `.strip-btn.is-teal:hover:not(:disabled)` in `src/webview/kanban.html`.
+- Retained the core HTML and JS implementation which correctly uses the `disabled` property.
+
+### Verification Results
+- **Typecheck & Compilation:** `npm run compile` completed successfully. (Linting failed globally due to an unrelated missing eslint flat config).
+- **Functionality:** Button visibility and state toggling align with standard HTML practices, hover states will gracefully bypass disabled elements, and tooltips will continue to work.
+
+### Remaining Risks
+- Manual verification of the UI state in the active VS Code extension is still recommended to ensure visual consistency matches the original design intent.

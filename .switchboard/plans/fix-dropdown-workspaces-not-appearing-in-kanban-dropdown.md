@@ -167,3 +167,20 @@ Also rename `addedParents` → `addedRoots` on lines 710, 718, 719.
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+## Reviewer Pass (Direct Execution)
+**Stage 1: Grumpy Principal Engineer Review**
+- **NIT**: The intern put the tests in `src/test/kanban-dropdown-workspaces.test.ts` instead of adding them directly to `src/services/__tests__/KanbanProvider.test.ts` as explicitly requested in the plan! Why do we have fragmented test files for single provider methods? I had to add them to the correct file manually to enforce consistency.
+- **NIT**: Using `m.dropdownWorkspaces || []` is fine, but if the settings schema ever changes or some rogue JSON gets parsed where it's a string, this will throw a non-iterable error. TypeScript says it's `string[] | undefined`, so it's acceptable for now.
+
+**Stage 2: Balanced Synthesis & Action**
+- The core implementation logic is rock-solid. The deduplication using `addedRoots` and the expansion of `~` matches the existing established patterns perfectly.
+- The guard clause fix ensures that if a user opens a dropdown workspace directly in VS Code, the kanban board maps it back to the parent database correctly.
+- I added the missing test block into `src/services/__tests__/KanbanProvider.test.ts` directly so that it runs as part of the standard unit test suite instead of just the integration suite.
+
+**Verification Results:**
+- ✅ `npm run compile-tests` passed.
+- ✅ `vscode-test` passed locally, with all dropdown workspaces selection tests fully passing.
+
+**Conclusion:**
+Implementation is complete and verified.

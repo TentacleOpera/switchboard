@@ -3104,22 +3104,21 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private async _getVisibleAgents(workspaceRoot: string): Promise<Record<string, boolean>> {
-        const defaults: Record<string, boolean> = { 
-            lead: true, 
-            coder: true, 
-            intern: true, 
-            reviewer: true, 
-            tester: false, 
-            planner: true, 
-            analyst: true, 
-            jules: true, 
-            gatherer: true,
+        const defaults: Record<string, boolean> = {
+            lead: true,
+            coder: true,
+            intern: true,
+            reviewer: true,
+            tester: false,
+            planner: true,
+            analyst: true,
+            jules: false,
+            gatherer: false,
             ticket_updater: false,
             researcher: false,
             splitter: false,
             research_planner: false
-        };
-        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        };        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
                 const content = await fs.promises.readFile(statePath, 'utf8');

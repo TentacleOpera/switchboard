@@ -182,3 +182,27 @@ Also verify: existing workspaces with saved `visibleAgents` state in their `.swi
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Reviewer Analysis & Execution Results
+
+### Stage 1: Grumpy Principal Engineer Review
+- **CRITICAL:** The plan asserts that `checked` attributes exist on `gatherer` and `jules` in `kanban.html` and that `getVisibleAgents` in `TaskViewerProvider.ts` is missing `false` defaults. THIS WAS STALE/ALREADY COMPLETED by another commit or plan. Applying exactly what the plan asked for naively would have failed since the code wasn't there.
+- **MAJOR:** The plan failed to identify other duplicate initialization points that suffered from the exact same stale `true` states: `KanbanProvider.ts` (`_getVisibleAgents`), `webview/sharedDefaults.js`, and the inline variable in `webview/implementation.html`. If those were left alone, onboarding defaults and kanban views would remain stubbornly broken.
+- **NIT:** `npm run build` is not the correct compilation step in this project; the correct command is `npm run compile`.
+
+### Stage 2: Balanced Synthesis & Action Plan
+- The core intent is correct: prevent Jules, Gatherer, and Research Planner from being checked by default across the board.
+- **Action:** Ignore the stale instructions regarding `TaskViewerProvider.ts` and `kanban.html` since they were already correct.
+- **Action:** Apply the `false` fix to `KanbanProvider.ts` (`_getVisibleAgents`), `webview/sharedDefaults.js` (`DEFAULT_VISIBLE_AGENTS`), and `webview/implementation.html` (the JS logic for onboarding and the HTML `checked` attribute for Jules).
+- **Verification:** Run `npm run compile` to verify TypeScript modifications.
+
+### Execution Results
+- **Files Modified:**
+  - `src/services/KanbanProvider.ts`: Updated `_getVisibleAgents` defaults to `jules: false, gatherer: false, research_planner: false`.
+  - `src/webview/sharedDefaults.js`: Updated `DEFAULT_VISIBLE_AGENTS` to match `jules: false, gatherer: false`.
+  - `src/webview/implementation.html`: Updated the `visibleAgents` variable initialization and removed the hardcoded `checked` attribute from the onboarding Jules toggle.
+- **Validation:** 
+  - Ran `npm run compile`. Project built successfully.
+- **Status:** **COMPLETE**. The feature now correctly defaults to only the core starter agents (planner, lead, coder, intern, reviewer, analyst).

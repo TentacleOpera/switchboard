@@ -1777,7 +1777,7 @@
                         placeholder="e.g. qwen" style="flex:1;">
                 </div>
                 <div class="startup-row" style="display:flex; align-items:center; gap:6px;">
-                    <input type="checkbox" class="onboard-agent-toggle" data-role="jules" checked
+                    <input type="checkbox" class="onboard-agent-toggle" data-role="jules"
                         style="width:auto; margin:0; flex-shrink:0;">
                     <label style="min-width:70px;">Jules</label>
                     <span style="flex:1; font-size: 10px; color: var(--text-secondary);">Cloud coder visibility
@@ -5611,7 +5611,7 @@ Work through all plans in the list, using the marker format above.`;
                 planner: document.getElementById('onboard-cli-planner').value,
                 analyst: document.getElementById('onboard-cli-analyst').value
             };
-            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: true };
+            const visibleAgents = { lead: true, coder: true, intern: true, reviewer: true, tester: false, planner: true, analyst: true, jules: false, gatherer: false };
             document.querySelectorAll('.onboard-agent-toggle').forEach(cb => {
                 const role = cb.dataset.role;
                 if (role) visibleAgents[role] = cb.checked;
