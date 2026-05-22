@@ -45,7 +45,7 @@ suite('Workspace Mappings Settings Sync Suite', () => {
         };
     }
 
-    test('1. SetupPanelProvider - getWorkspaceMappings handler requests config with folderUri', async () => {
+    test('1. SetupPanelProvider - getWorkspaceMappings handler requests config at workspace scope (no folderUri)', async () => {
         mockGetConfiguration('switchboard');
         const provider = new SetupPanelProvider(vscode.Uri.file('/tmp'));
         
@@ -66,8 +66,9 @@ suite('Workspace Mappings Settings Sync Suite', () => {
 
         await (provider as any)._handleMessage({ command: 'getWorkspaceMappings' });
         
-        assert.ok(capturedFolderUri !== undefined, 'getConfiguration should have been called with a folderUri');
-        assert.strictEqual(capturedFolderUri?.fsPath, mockWorkspaceFolderUri.fsPath);
+        // After the scope fix, getConfiguration must be called WITHOUT a folderUri so
+        // the read resolves from workspace scope (not per-folder scope).
+        assert.strictEqual(capturedFolderUri, undefined, 'getConfiguration should NOT be called with a folderUri — must read from workspace scope');
         
         assert.ok(postedMessage !== null);
         assert.strictEqual(postedMessage.type, 'workspaceMappings');
@@ -76,7 +77,7 @@ suite('Workspace Mappings Settings Sync Suite', () => {
         (vscode.workspace as any).workspaceFolders = originalWorkspaceFolders;
     });
 
-    test('2. SetupPanelProvider - setWorkspaceMappingEnabled handler writes to config using folderUri', async () => {
+    test('2. SetupPanelProvider - setWorkspaceMappingEnabled handler writes to config at workspace scope (no folderUri)', async () => {
         mockGetConfiguration('switchboard');
         const provider = new SetupPanelProvider(vscode.Uri.file('/tmp'));
         
@@ -103,8 +104,8 @@ suite('Workspace Mappings Settings Sync Suite', () => {
         try {
             await (provider as any)._handleMessage({ command: 'setWorkspaceMappingEnabled', enabled: true });
             
-            assert.ok(capturedFolderUri !== undefined);
-            assert.strictEqual(capturedFolderUri?.fsPath, mockWorkspaceFolderUri.fsPath);
+            // After the scope fix, getConfiguration must NOT receive a folderUri.
+            assert.strictEqual(capturedFolderUri, undefined, 'getConfiguration should NOT be called with a folderUri — must use workspace scope');
 
             assert.strictEqual(configUpdatedData.length, 1);
             assert.strictEqual(configUpdatedData[0].section, 'workspaceDatabaseMappings');
@@ -120,7 +121,7 @@ suite('Workspace Mappings Settings Sync Suite', () => {
         }
     });
 
-    test('3. SetupPanelProvider - saveWorkspaceMappings handler writes to config using folderUri', async () => {
+    test('3. SetupPanelProvider - saveWorkspaceMappings handler writes to config at workspace scope (no folderUri)', async () => {
         mockGetConfiguration('switchboard');
         const provider = new SetupPanelProvider(vscode.Uri.file('/tmp'));
         
@@ -150,8 +151,8 @@ suite('Workspace Mappings Settings Sync Suite', () => {
                 payload: { enabled: true, mappings: [] }
             });
             
-            assert.ok(capturedFolderUri !== undefined);
-            assert.strictEqual(capturedFolderUri?.fsPath, mockWorkspaceFolderUri.fsPath);
+            // After the scope fix, getConfiguration must NOT receive a folderUri.
+            assert.strictEqual(capturedFolderUri, undefined, 'getConfiguration should NOT be called with a folderUri — must use workspace scope');
 
             assert.strictEqual(configUpdatedData.length, 1);
             assert.strictEqual(configUpdatedData[0].section, 'workspaceDatabaseMappings');

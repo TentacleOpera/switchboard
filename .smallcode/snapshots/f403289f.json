@@ -1,0 +1,12 @@
+{
+  "id": "f403289f",
+  "label": "turn-1779406055707",
+  "startedAt": "2026-05-21T23:27:35.707Z",
+  "endedAt": "2026-05-21T23:27:38.296Z",
+  "fileCount": 0,
+  "files": [],
+  "outcome": {
+    "rolledBack": false,
+    "committed": true
+  }
+}

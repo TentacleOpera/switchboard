@@ -1,0 +1,13 @@
+{
+  "id": "88b7dcd7",
+  "model": "gemini-3.1-flash-lite",
+  "prompt": "ok, can you see the switchboard directory?",
+  "startedAt": "2026-05-21T23:27:35.561Z",
+  "steps": [],
+  "tokens": {
+    "prompt": 0,
+    "completion": 0
+  },
+  "endedAt": "2026-05-21T23:27:38.292Z",
+  "durationMs": 2731
+}

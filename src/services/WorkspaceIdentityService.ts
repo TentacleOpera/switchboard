@@ -239,7 +239,9 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
             if (!isDropdown && dbReady) {
                 await db.setWorkspaceId(trimmed);
             }
-            await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, trimmed);
+            if (!isDropdown) {
+                await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, trimmed);
+            }
             return trimmed;
         }
     } catch {
@@ -280,6 +282,8 @@ export async function ensureWorkspaceIdentity(workspaceRoot: string): Promise<st
     if (!isDropdown && dbReady) {
         await db.setWorkspaceId(hashId);
     }
-    await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, hashId);
+    if (!isDropdown) {
+        await tryWriteCommittedWorkspaceIdIfDifferent(resolvedRoot, hashId);
+    }
     return hashId;
 }

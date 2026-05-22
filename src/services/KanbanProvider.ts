@@ -32,6 +32,7 @@ import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAuto
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
 import { RelayPromptService, type RelayConfig } from './RelayPromptService';
+import { isDropdownWorkspace, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -742,7 +743,7 @@ export class KanbanProvider implements vscode.Disposable {
                     if (!addedRoots.has(resolvedDw)) {
                         addedRoots.add(resolvedDw);
                         items.push({
-                            label: path.basename(resolvedDw),
+                            label: `${m.name ? m.name + ' › ' : ''}${path.basename(resolvedDw)}`,
                             workspaceRoot: resolvedDw
                         });
                     }
@@ -1694,10 +1695,15 @@ export class KanbanProvider implements vscode.Disposable {
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
                 // Filter out ghost plans: plan files that don't exist in this workspace
+                const isDropdown = isDropdownWorkspace(resolvedWorkspaceRoot);
+                const effectiveRootForPaths = isDropdown
+                    ? resolveEffectiveWorkspaceRootFromMappings(resolvedWorkspaceRoot)  // parent root
+                    : resolvedWorkspaceRoot;
+
                 const activeRows = dbRows.filter(row => {
                     const planFile = row.planFile || '';
                     if (!planFile) return false;
-                    const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
+                    const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(effectiveRootForPaths, planFile);
                     return fs.existsSync(planPath);
                 });
                 if (activeRows.length < dbRows.length) {
@@ -2172,6 +2178,8 @@ export class KanbanProvider implements vscode.Disposable {
                     dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                     aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                     splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                    skipCompilation: role === 'planner' ? promptsConfig.skipCompilation : undefined,
+                    skipTests: role === 'planner' ? promptsConfig.skipTests : undefined,
                     designDocLink,
                     designDocContent,
                     routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
@@ -2253,6 +2261,8 @@ export class KanbanProvider implements vscode.Disposable {
             designDocLink: config.get<string>('planner.designDocLink', ''),
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
             splitPlan: plannerConfig?.addons?.splitPlan ?? false,
+            skipCompilation: plannerConfig?.addons?.skipCompilation ?? false,
+            skipTests: plannerConfig?.addons?.skipTests ?? false,
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
             researchPlanner: {
                 enableDeepPlanning: researchPlannerConfig?.enableDeepPlanning ?? false,
@@ -2403,6 +2413,8 @@ export class KanbanProvider implements vscode.Disposable {
                 dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                 aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                 splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                skipCompilation: role === 'planner' ? promptsConfig.skipCompilation : undefined,
+                skipTests: role === 'planner' ? promptsConfig.skipTests : undefined,
                 plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
                 designDocLink,
                 designDocContent,
@@ -2502,6 +2514,8 @@ export class KanbanProvider implements vscode.Disposable {
             designDocLink: designDocLink || undefined,
             designDocContent,
             splitPlan: promptsConfig.splitPlan,
+            skipCompilation: promptsConfig.skipCompilation,
+            skipTests: promptsConfig.skipTests,
             gitProhibitionEnabled: promptsConfig.gitProhibitionEnabled,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.planner ?? true,
             defaultPromptOverrides,
@@ -3959,47 +3973,99 @@ export class KanbanProvider implements vscode.Disposable {
             case 'reassignPlansWorkspace': {
                 const sessionIds: string[] = msg.sessionIds;
                 const targetWorkspaceRoot: string = msg.targetWorkspaceRoot;
-                
+
                 if (!targetWorkspaceRoot || !Array.isArray(sessionIds) || sessionIds.length === 0) {
                     break;
                 }
 
-                const db = this._getKanbanDb(targetWorkspaceRoot);
-                if (await db.ensureReady()) {
-                    const targetWorkspaceId = await this._readWorkspaceId(targetWorkspaceRoot) 
-                        || await db.getWorkspaceId() 
-                        || await db.getDominantWorkspaceId();
+                // Guard: source workspace must be known
+                const sourceWorkspaceRoot = this._currentWorkspaceRoot;
+                if (!sourceWorkspaceRoot) {
+                    vscode.window.showWarningMessage('Cannot determine source workspace for reassignment.');
+                    break;
+                }
 
-                    if (targetWorkspaceId) {
-                        let successCount = 0;
-                        for (const sessionId of sessionIds) {
-                            const plan = await db.getPlanBySessionId(sessionId);
-                            if (plan) {
-                                const ok = await db.reassignWorkspaceByPlanFile(
-                                    plan.planFile, 
-                                    plan.workspaceId, 
-                                    targetWorkspaceId
-                                );
-                                if (ok) successCount++;
-                            }
-                        }
+                // Prevent no-op reassignment to same workspace
+                if (path.resolve(sourceWorkspaceRoot) === path.resolve(targetWorkspaceRoot)) {
+                    vscode.window.showWarningMessage('Source and target workspaces are the same — no plans were moved.');
+                    break;
+                }
 
-                        await this._refreshBoard(this._currentWorkspaceRoot || undefined);
-                        const totalCount = sessionIds.length;
-                        if (successCount === 0) {
-                            vscode.window.showWarningMessage(
-                                `No plans were reassigned (0 of ${totalCount}). The plans may not exist in the target workspace database.`
-                            );
-                        } else if (successCount < totalCount) {
-                            vscode.window.showWarningMessage(
-                                `Reassigned ${successCount} of ${totalCount} plans. ${totalCount - successCount} plan(s) could not be reassigned — they may already exist in the target workspace.`
-                            );
-                        } else {
-                            vscode.window.showInformationMessage(
-                                `Successfully reassigned ${successCount} plan${successCount === 1 ? '' : 's'} to the target workspace.`
-                            );
-                        }
+                const sourceDb = this._getKanbanDb(sourceWorkspaceRoot);
+                const targetDb = this._getKanbanDb(targetWorkspaceRoot);
+
+                if (!(await sourceDb.ensureReady()) || !(await targetDb.ensureReady())) {
+                    vscode.window.showWarningMessage('Failed to access one or both workspace databases.');
+                    break;
+                }
+
+                const sourceWorkspaceId = await this._readWorkspaceId(sourceWorkspaceRoot)
+                    || await sourceDb.getWorkspaceId()
+                    || await sourceDb.getDominantWorkspaceId();
+
+                const targetWorkspaceId = await this._readWorkspaceId(targetWorkspaceRoot)
+                    || await targetDb.getWorkspaceId()
+                    || await targetDb.getDominantWorkspaceId();
+
+                if (!sourceWorkspaceId || !targetWorkspaceId) {
+                    vscode.window.showWarningMessage('Cannot determine workspace IDs for reassignment.');
+                    break;
+                }
+
+                let successCount = 0;
+                const totalCount = sessionIds.length;
+
+                for (const sessionId of sessionIds) {
+                    // Query from SOURCE database (where the plan actually lives).
+                    // Note: getPlanBySessionId has no workspace_id filter — validate the returned
+                    // record belongs to this workspace to guard against ghost records in mixed DBs.
+                    const plan = await sourceDb.getPlanBySessionId(sessionId);
+                    if (!plan) {
+                        console.warn(`[KanbanProvider] reassignPlansWorkspace: plan ${sessionId} not found in source workspace`);
+                        continue;
                     }
+                    if (plan.workspaceId !== sourceWorkspaceId) {
+                        console.warn(`[KanbanProvider] reassignPlansWorkspace: plan ${sessionId} belongs to workspace ${plan.workspaceId}, not source ${sourceWorkspaceId} — skipping`);
+                        continue;
+                    }
+
+                    try {
+                        // Upsert full record into target DB, overriding only the workspaceId and timestamp.
+                        // Note: planFile remains relative to the source workspace root. The plan file
+                        // is NOT moved on disk — only the DB record is transferred. "Open Plan" on the
+                        // moved card in the target workspace will not resolve until the user also moves
+                        // the plan file to the target workspace directory.
+                        const ok = await targetDb.upsertPlan({
+                            ...plan,
+                            workspaceId: targetWorkspaceId,
+                            updatedAt: new Date().toISOString()
+                        });
+
+                        if (ok) {
+                            successCount++;
+                            // Soft-delete from source DB so the plan no longer appears on the source board.
+                            // If this fails, the plan will still be visible on the source board (acceptable fallback).
+                            await sourceDb.updateStatusByPlanFile(plan.planFile, sourceWorkspaceId, 'deleted');
+                        }
+                    } catch (err) {
+                        console.error(`[KanbanProvider] reassignPlansWorkspace: failed for session ${sessionId}:`, err);
+                    }
+                }
+
+                await this._refreshBoard(sourceWorkspaceRoot);
+
+                if (successCount === 0) {
+                    vscode.window.showWarningMessage(
+                        `No plans were reassigned (0 of ${totalCount}). The plans may not exist in the source workspace.`
+                    );
+                } else if (successCount < totalCount) {
+                    vscode.window.showWarningMessage(
+                        `Reassigned ${successCount} of ${totalCount} plans. ${totalCount - successCount} plan(s) failed — check the developer console for details.`
+                    );
+                } else {
+                    vscode.window.showInformationMessage(
+                        `Successfully reassigned ${successCount} plan${successCount === 1 ? '' : 's'} to the target workspace.`
+                    );
                 }
                 break;
             }
@@ -5795,6 +5861,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                         aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                         splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                        skipCompilation: role === 'planner' ? promptsConfig.skipCompilation : undefined,
+                        skipTests: role === 'planner' ? promptsConfig.skipTests : undefined,
                         plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
                         designDocLink,
                         designDocContent,

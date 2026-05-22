@@ -2219,6 +2219,18 @@
                   <span>Clear Antigravity Context</span>
                   <span class="tooltip">Instruct agent to ignore previous checkpoint summaries from prior sessions</span>
                 </label>
+
+                <label class="checkbox-item" title="Skip project compilation step in generated prompts">
+                  <input type="checkbox" id="plannerAddonSkipCompilation">
+                  <span>Do not recompile the project</span>
+                  <span class="tooltip">Skip compilation step to save tokens</span>
+                </label>
+
+                <label class="checkbox-item" title="Skip automated test execution in generated prompts">
+                  <input type="checkbox" id="plannerAddonSkipTests">
+                  <span>Do not run automated tests</span>
+                  <span class="tooltip">Skip automated test execution to save tokens</span>
+                </label>
               </div>
             </div>
           </div>
@@ -2452,6 +2464,8 @@
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
                 document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
+                document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
+                document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
             } else if (currentRole === 'research_planner') {
                 const config = roleConfigs.research_planner;
                 document.getElementById('rp-enable-deep-planning').checked = !!config.enableDeepPlanning;
@@ -3007,7 +3021,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {

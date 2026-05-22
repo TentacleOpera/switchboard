@@ -1,3 +1,4 @@
+import { isDropdownWorkspace } from './services/WorkspaceIdentityService';
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -132,6 +133,43 @@ function setLastCopiedAgentVersion(workspaceRoot: string, version: string): void
         fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
     } catch (e) {
         console.error('Failed to write agent version:', e);
+    }
+}
+
+async function migrateWorkspaceDatabaseMappings(): Promise<void> {
+    const workspaceCfg = vscode.workspace.getConfiguration('switchboard');
+    const workspaceValue = workspaceCfg.get<any>('workspaceDatabaseMappings');
+    const isDefault = !workspaceValue?.enabled && (!workspaceValue?.mappings || workspaceValue.mappings.length === 0);
+
+    // Check each open folder for folder-scoped values that may differ from workspace scope
+    let migrated = false;
+    const skippedFolders: string[] = [];
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        const folderCfg = vscode.workspace.getConfiguration('switchboard', folder.uri);
+        const folderValue = folderCfg.get<any>('workspaceDatabaseMappings');
+        if (folderValue?.enabled || (Array.isArray(folderValue?.mappings) && folderValue.mappings.length > 0)) {
+            if (!migrated) {
+                // Lift first folder's data to workspace scope (overwriting whatever is there)
+                await workspaceCfg.update('workspaceDatabaseMappings', folderValue, vscode.ConfigurationTarget.Workspace);
+                console.log('[Switchboard] Migrated workspaceDatabaseMappings from folder scope to workspace scope');
+                migrated = true;
+            } else {
+                // Additional folders with folder-scoped data — cannot safely merge, log warning
+                skippedFolders.push(folder.uri.fsPath);
+            }
+        }
+    }
+    if (skippedFolders.length > 0) {
+        console.warn(
+            '[Switchboard] WARNING: workspaceDatabaseMappings found in multiple folder scopes during migration. ' +
+            'Only the first folder was migrated. The following folders were skipped and their mappings were NOT migrated: ' +
+            skippedFolders.join(', ') +
+            '. Please manually consolidate these into the workspace-level setting.'
+        );
+    }
+    // If no folder-scoped data was found but workspace scope was also default, nothing to do
+    if (!migrated && !isDefault) {
+        console.log('[Switchboard] workspaceDatabaseMappings already at workspace scope, no migration needed');
     }
 }
 
@@ -1128,11 +1166,42 @@ function syncSettingsToMcp() {
     mcpOutputChannel?.appendLine(`[MCP] Synced settings (YOLO: ${settings.cli.yolo})`);
 }
 
+async function cleanupDropdownIdentityFiles(): Promise<void> {
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        const resolved = path.resolve(folder.uri.fsPath);
+        if (isDropdownWorkspace(resolved)) {
+            const idFile = path.join(resolved, '.switchboard', 'workspace-id');
+            if (fs.existsSync(idFile)) {
+                try {
+                    await fs.promises.unlink(idFile);
+                    console.log(`[Switchboard] Removed dead identity file in dropdown workspace: ${idFile}`);
+                } catch (err) {
+                    console.warn(`[Switchboard] Failed to remove dead identity file: ${idFile}`, err);
+                }
+            }
+        }
+    }
+}
+
 export async function activate(context: vscode.ExtensionContext) {
     console.time('switchboard.activate');
+    
+    // Cleanup stale identity files in dropdown workspaces
+    cleanupDropdownIdentityFiles().catch(err => console.error('[Switchboard] Cleanup failed:', err));
+
     if (!mcpOutputChannel) {
         mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
     }
+
+    // One-time migration: lift folder-scoped workspaceDatabaseMappings to workspace scope
+    // before the scope change to "window" makes them invisible. Must run before KanbanProvider
+    // or SetupPanel read the setting.
+    try {
+        await migrateWorkspaceDatabaseMappings();
+    } catch (err) {
+        console.error('[Switchboard] Migration failed, continuing activation:', err);
+    }
+
     kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 

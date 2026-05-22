@@ -745,7 +745,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'airlock_openFolder': {
-                const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'airlock'));
+                const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'integration'));
                 await vscode.commands.executeCommand('revealFileInOS', folderUri);
                 break;
             }
@@ -1446,12 +1446,15 @@ export class PlanningPanelProvider {
     private async _handleFetchImportedDocs(workspaceRoot: string): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
+            console.log('[PlanningPanelProvider] _handleFetchImportedDocs: allRoots=', allRoots);
             const allDocs: any[] = [];
             const seenSlugs = new Set<string>();
 
             for (const root of allRoots) {
                 const wsId = await this._getWorkspaceId(root);
+                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: root=', root, 'wsId=', wsId);
                 const cacheService = this._adapterFactories.getCacheService(root);
+                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: cacheService._kanbanDb.dbPath=', (cacheService as any)._kanbanDb?.dbPath);
 
                 // Run heal scan first (idempotent, fast if recent)
                 const kanbanDb = (cacheService as any)._kanbanDb;
@@ -1465,6 +1468,7 @@ export class PlanningPanelProvider {
 
                 // Query DB for imported docs
                 const dbEntries = await cacheService.getImportedDocs(wsId);
+                console.log('[PlanningPanelProvider] _handleFetchImportedDocs: dbEntries count=', dbEntries.length, 'for wsId=', wsId);
 
                 for (const entry of dbEntries) {
                     if (!seenSlugs.has(entry.slugPrefix)) {
@@ -1897,16 +1901,16 @@ export class PlanningPanelProvider {
 
     private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {
         try {
-            const airlockDir = path.join(workspaceRoot, '.switchboard', 'airlock');
-            if (!fs.existsSync(airlockDir)) {
-                fs.mkdirSync(airlockDir, { recursive: true });
+            const integrationDir = path.join(workspaceRoot, '.switchboard', 'integration');
+            if (!fs.existsSync(integrationDir)) {
+                fs.mkdirSync(integrationDir, { recursive: true });
             }
 
             // For now, return a success message. The actual bundling logic
             // can be implemented later by calling the appropriate service.
-            return { success: true, message: 'Airlock folder ready. Export functionality coming soon.' };
+            return { success: true, message: 'Integration folder ready. Export functionality coming soon.' };
         } catch (err) {
-            return { success: false, message: `Failed to prepare airlock: ${String(err)}` };
+            return { success: false, message: `Failed to prepare integration: ${String(err)}` };
         }
     }
 

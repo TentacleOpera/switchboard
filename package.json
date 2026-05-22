@@ -409,7 +409,7 @@
               }
             }
           },
-          "scope": "resource"
+          "scope": "window"
         },
         "switchboard.workspace.ignoreStrategy": {
           "type": "string",

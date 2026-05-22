@@ -545,6 +545,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 case 'saveIntegrationProviderPreference': {
                     const provider = message.provider === 'clickup' ? 'clickup' : 'linear';
+                    // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
                     const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     await config.update(
@@ -574,6 +575,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         notion: message.notion === true,
                         'local-folder': message.localFolder === true
                     };
+                    // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
                     const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     await config.update(
@@ -675,6 +677,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getPlanningSources': {
+                    // NOTE: intentionally folder-scoped — this setting is per-project, not shared across workspaces
                     const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
                     const config = vscode.workspace.getConfiguration('switchboard', folderUri);
                     const enabledSources = config.get<any>('planning.enabledSources', {
@@ -690,24 +693,32 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getWorkspaceMappings': {
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
+                    const config = vscode.workspace.getConfiguration('switchboard');
                     const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                    const warnings: string[] = [];
+                    for (const m of mappings.mappings ?? []) {
+                        if (m.mode === 'connect' && m.dbPath && !fs.existsSync(m.dbPath)) {
+                            warnings.push(`Mapping "${m.name}": database not found at ${m.dbPath}`);
+                        }
+                        if (m.parentFolder && !fs.existsSync(m.parentFolder)) {
+                            warnings.push(`Mapping "${m.name}": parent folder not found at ${m.parentFolder}`);
+                        }
+                    }
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappings',
-                        ...mappings
+                        ...mappings,
+                        warnings
                     });
                     break;
                 }
                 case 'setWorkspaceMappingEnabled': {
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
+                    const config = vscode.workspace.getConfiguration('switchboard');
                     const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                     const enabled = typeof message.enabled === 'boolean' ? message.enabled : false;
                     await config.update(
                         'workspaceDatabaseMappings',
                         { ...current, enabled },
-                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
+                        vscode.ConfigurationTarget.Workspace
                     );
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappingEnabled',
@@ -806,12 +817,11 @@ export class SetupPanelProvider implements vscode.Disposable {
                         break;
                     }
  
-                    const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                    const config = vscode.workspace.getConfiguration('switchboard', folderUri);
+                    const config = vscode.workspace.getConfiguration('switchboard');
                     await config.update(
                         'workspaceDatabaseMappings',
                         incoming,
-                        folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
+                        vscode.ConfigurationTarget.Workspace
                     );
 
                     // Provision workspace identity files for dropdown workspaces immediately after saving
@@ -879,8 +889,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             break;
                         }
                         // Save the mapping config with dbPath pre-filled
-                        const folderUri = this._getWorkspaceFolderUri(this._getCurrentWorkspaceRoot() ?? undefined);
-                        const config = vscode.workspace.getConfiguration('switchboard', folderUri);
+                        const config = vscode.workspace.getConfiguration('switchboard');
                         const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                         const newMapping = {
                             id: message.mappingId || ('mapping-' + Date.now()),
@@ -898,7 +907,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         await config.update(
                             'workspaceDatabaseMappings',
                             { ...current, enabled: true, mappings: updatedMappings },
-                            folderUri ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace
+                            vscode.ConfigurationTarget.Workspace
                         );
 
                         // Provision workspace identity files for dropdown workspaces immediately
@@ -1006,6 +1015,7 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
 
         const dbPath = await this._taskViewerProvider?.handleGetDbPath(workspaceRoot);
+        // NOTE: intentionally folder-scoped — controlPlaneRoot is per-project, not shared across workspaces
         const folderUri = this._getWorkspaceFolderUri(dbPath?.workspaceRoot || workspaceRoot);
         const config = vscode.workspace.getConfiguration('switchboard', folderUri);
         const explicitControlPlaneRoot = String(config.get<string>('kanban.controlPlaneRoot', '') || '').trim();
@@ -1037,6 +1047,7 @@ export class SetupPanelProvider implements vscode.Disposable {
         }
 
         const normalizedRoot = await this._validateControlPlaneRoot(controlPlaneRoot);
+        // NOTE: intentionally folder-scoped — controlPlaneRoot is per-project, not shared across workspaces
         const folderUri = this._getWorkspaceFolderUri(workspaceRoot);
         const config = vscode.workspace.getConfiguration('switchboard', folderUri);
         await config.update(
