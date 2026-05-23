@@ -4934,10 +4934,12 @@
                         if (!agentListProject.querySelector('.project-panel')) {
                             agentListProject.appendChild(createProjectPanel());
                         }
-                        renderSidebarLinearProjectPanel();
-                        // FIX: Default to 'terminals' tab when no agent terminals are alive
-                        const hasAgentTerminalsAlive = Object.values(lastTerminals).some(term => term.role && term.alive);
-                        switchAgentTab(hasAgentTerminalsAlive ? currentAgentTab : 'terminals');
+                        if (lastIntegrationProvider === 'clickup') {
+                            renderSidebarClickUpProjectPanel();
+                        } else {
+                            renderSidebarLinearProjectPanel();
+                        }
+                        switchAgentTab(currentAgentTab);
                         return; // skip the rest of normal renderAgentList
                     }
                 }
@@ -5067,7 +5069,11 @@
             if (!agentListProject.querySelector('.project-panel')) {
                 agentListProject.appendChild(createProjectPanel());
             }
-            renderSidebarLinearProjectPanel();
+            if (lastIntegrationProvider === 'clickup') {
+                renderSidebarClickUpProjectPanel();
+            } else {
+                renderSidebarLinearProjectPanel();
+            }
 
             // Restore active tab visibility after re-render
             switchAgentTab(currentAgentTab);

@@ -757,6 +757,10 @@ export class PlanningPanelProvider {
                 await this._handleSetActivePlanningContext(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
                 break;
             }
+            case 'linkToDocument': {
+                await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
+                break;
+            }
             case 'resolveDuplicate': {
                 const { docName, sourceId, docId, action } = msg;
                 await this._handleResolveDuplicate(workspaceRoot, docName, sourceId, docId, action);
@@ -968,12 +972,57 @@ export class PlanningPanelProvider {
                 'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
             );
 
-            // Update the active doc banner to reflect the new context
-            await this._sendActiveDesignDocState();
-
-            this._panel?.webview.postMessage({ type: 'activeContextSet', success: true, message: 'Set as active planning context' });
+            this._panel?.webview.postMessage({ type: 'activeContextSet', success: true });
         } catch (err) {
-            this._panel?.webview.postMessage({ type: 'activeContextSet', success: false, error: String(err) });
+            this._panel?.webview.postMessage({
+                type: 'activeContextSet',
+                success: false,
+                error: String(err)
+            });
+        }
+    }
+
+    private async _handleLinkToDocument(
+        workspaceRoot: string,
+        sourceId: string,
+        docId: string,
+        docName: string
+    ): Promise<void> {
+        try {
+            let docPath: string | null = null;
+
+            if (sourceId === 'local-folder') {
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const folderPath = localFolderService.getFolderPath();
+                if (folderPath) {
+                    docPath = path.join(folderPath, docId);
+                    try {
+                        await fs.promises.access(docPath, fs.constants.R_OK);
+                    } catch {
+                        docPath = null;
+                    }
+                }
+            } else {
+                if (this._cacheService) {
+                    const rawSlug = (docName || sourceId)
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .slice(0, 60) || sourceId;
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    docPath = await this._cacheService.resolveImportedDocPath(rawSlug, workspaceId);
+                }
+            }
+
+            if (!docPath) {
+                vscode.window.showErrorMessage('Document not found');
+                return;
+            }
+
+            await vscode.env.clipboard.writeText(docPath);
+            vscode.window.showInformationMessage(`Document path copied to clipboard: ${docPath}`);
+        } catch (err) {
+            vscode.window.showErrorMessage(`Failed to link to document: ${String(err)}`);
         }
     }
 

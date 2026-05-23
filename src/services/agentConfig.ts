@@ -17,6 +17,7 @@ export interface CustomAgentAddons {
     researchEnabled?: boolean; // NEW: enable deep research mode
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
     ticketUpdateEnabled?: boolean;    // from ticket_updater_role.md
+    suppressWalkthrough?: boolean;
 
     // Design doc
     designDocLink?: string;

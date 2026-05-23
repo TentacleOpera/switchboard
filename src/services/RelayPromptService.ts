@@ -7,6 +7,8 @@ export interface RelayConfig {
     planContent: string;
     estimatedComplexity: number;
     dependencies: string[];
+    customGatherPrompt?: string;
+    customExecutePrompt?: string;
 }
 
 /**
@@ -19,6 +21,9 @@ export class RelayPromptService {
      * Generate the context gathering prompt for the cheap agent.
      */
     generateGatherPrompt(config: RelayConfig): string {
+        if (config.customGatherPrompt && config.customGatherPrompt.trim()) {
+            return config.customGatherPrompt;
+        }
         const codeBlock = '```';
         return `You are a context gathering agent. Your ONLY job is to explore the codebase and produce a structured brief.
 
@@ -73,6 +78,9 @@ RULES:
      * Generate the execute prompt for the premium agent.
      */
     generateExecutePrompt(config: RelayConfig): string {
+        if (config.customExecutePrompt && config.customExecutePrompt.trim()) {
+            return config.customExecutePrompt;
+        }
         return `You are a senior engineer. You have received a context brief from a relay agent.
 
 ## Original Plan

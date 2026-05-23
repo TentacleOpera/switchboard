@@ -14,7 +14,7 @@ import {
     parseDefaultPromptOverrides
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
@@ -408,11 +408,17 @@ export class KanbanProvider implements vscode.Disposable {
             const dependencies: string[] = Array.isArray(planRecord?.dependencies) ? planRecord.dependencies : [];
             const estimatedComplexity = planRecord?.complexity ? parseComplexityScore(planRecord.complexity) : 5;
 
+            // NEW: Read relay prompt overrides from prompts tab
+            const customGatherPrompt: string | undefined = this._getSetting('switchboard.prompts.relay_gatherPrompt', undefined) || undefined;
+            const customExecutePrompt: string | undefined = this._getSetting('switchboard.prompts.relay_executePrompt', undefined) || undefined;
+
             const relayConfig: RelayConfig = {
                 planPath: planFileAbsolute,
                 planContent,
                 estimatedComplexity,
-                dependencies
+                dependencies,
+                customGatherPrompt,
+                customExecutePrompt,
             };
 
             if (type === 'gather') {
@@ -2189,7 +2195,10 @@ export class KanbanProvider implements vscode.Disposable {
                     // Coder/Lead-specific options
                     accurateCodingEnabled: (role === 'coder' || role === 'lead') ? promptsConfig.accurateCodingEnabled : undefined,
                     // Reviewer-specific options (matching _generateBatchReviewerPrompt pattern)
-                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined
+                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
+                    suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
+                        ? promptsConfig.suppressWalkthroughByRole?.[role as any] ?? false
+                        : undefined,
                 });
                 previews[role] = preview;
             } catch {
@@ -2306,6 +2315,11 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.clearAntigravityContext ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
                 research_planner: researchPlannerConfig?.addons?.clearAntigravityContext ?? false,
+            },
+            suppressWalkthroughByRole: {
+                lead: leadConfig?.addons?.suppressWalkthrough ?? false,
+                coder: coderConfig?.addons?.suppressWalkthrough ?? false,
+                intern: internConfig?.addons?.suppressWalkthrough ?? false,
             },
         };
     }
@@ -2424,6 +2438,9 @@ export class KanbanProvider implements vscode.Disposable {
                 accurateCodingEnabled: (role === 'coder' || role === 'lead') ? promptsConfig.accurateCodingEnabled : undefined,
                 includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
                 pairProgrammingEnabled: (role === 'lead' || role === 'coder') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
+                suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
+                    ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
+                    : undefined,
                 enableDeepPlanning: role === 'research_planner' ? promptsConfig.researchPlanner?.enableDeepPlanning : undefined,
                 researchDepth: role === 'research_planner' ? promptsConfig.researchPlanner?.researchDepth : undefined,
             };
@@ -2566,6 +2583,7 @@ export class KanbanProvider implements vscode.Disposable {
             workspaceRoot,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
+            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
             sourceColumnLabel
         });
     }
@@ -2599,7 +2617,8 @@ export class KanbanProvider implements vscode.Disposable {
             defaultPromptOverrides,
             workspaceRoot,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.coder ?? true,
-            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true
+            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true,
+            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false
         });
         if (coderUsesIde) {
             const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
@@ -2741,15 +2760,21 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         if (!role && roleSourceDef) {
-            switch (roleSourceDef.kind) {
-                case 'created': role = 'planner'; break;
-                case 'coded': role = 'reviewer'; break;
-                case 'reviewed': role = 'tester'; break;
-                case 'review': role = null; break; // execution fallback
-                case 'custom-user': role = null; break; // custom-user columns have role set via columnDef.role
-                case 'custom-agent': role = null; break; // custom-agent columns have role set via columnDef.role
-                case 'gather': role = null; break; // CONTEXT GATHERER has dragDropMode:disabled
-                case 'completed': role = null; break; // not a source column
+            // When source is PLAN REVIEWED and destination is coded, we want execution (role=null)
+            // Do not fall back to 'reviewer' for coded kind in this case
+            if (column === 'PLAN REVIEWED' && roleSourceDef.kind === 'coded') {
+                role = null; // Keep null for complexity-based execution routing
+            } else {
+                switch (roleSourceDef.kind) {
+                    case 'created': role = 'planner'; break;
+                    case 'coded': role = 'reviewer'; break;
+                    case 'reviewed': role = 'tester'; break;
+                    case 'review': role = null; break; // execution fallback
+                    case 'custom-user': role = null; break; // custom-user columns have role set via columnDef.role
+                    case 'custom-agent': role = null; break; // custom-agent columns have role set via columnDef.role
+                    case 'gather': role = null; break; // CONTEXT GATHERER has dragDropMode:disabled
+                    case 'completed': role = null; break; // not a source column
+                }
             }
         }
 
@@ -2839,7 +2864,13 @@ export class KanbanProvider implements vscode.Disposable {
                 }
             }
             const { planList } = buildPromptDispatchContext(this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap));
-            return `Please process the following plans.\n\nPLANS TO PROCESS:\n${planList}`;
+
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const agentId = role.replace('custom_agent_', '');
+            const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
+            const suppressWalkthrough = agentConfig?.addons?.suppressWalkthrough === true;
+            const suppressBlock = suppressWalkthrough ? `\n\n${SUPPRESS_WALKTHROUGH_DIRECTIVE}` : '';
+            return `Please process the following plans.${suppressBlock}\n\nPLANS TO PROCESS:\n${planList}`;
         }
 
         // For execution roles (e.g. 'lead', 'coder', 'intern'),
@@ -5001,9 +5032,15 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
 
+                // Read chat prompt override from prompts tab settings
+                const chatPromptOverride: string = this._getSetting('switchboard.prompts.chatPromptOverride', '') || '';
                 const chatWorkflowPath = '.agent/workflows/chat.md';
-                let planSection = '';
+                const chatOverrideTrimmed = chatPromptOverride.trim();
+                const chatBase = chatOverrideTrimmed
+                    ? chatOverrideTrimmed
+                    : `/chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.`;
 
+                let planSection = '';
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
                     const selectedCards = this._lastCards.filter(card =>
                         card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
@@ -5017,8 +5054,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                 }
 
-                const prompt = `/chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
-
+                const prompt = `${chatBase}${planSection}`;
                 await vscode.env.clipboard.writeText(prompt);
                 const count = Array.isArray(msg.sessionIds) ? msg.sessionIds.length : 0;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
@@ -5456,7 +5492,8 @@ export class KanbanProvider implements vscode.Disposable {
                     defaultPromptOverrides,
                     workspaceRoot: this._currentWorkspaceRoot,
                     gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.lead ?? true,
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.lead ?? true
+                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.lead ?? true,
+                    suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.lead ?? false
                 });
 
                 // Build coder (Routine) prompt
@@ -5467,7 +5504,8 @@ export class KanbanProvider implements vscode.Disposable {
                     defaultPromptOverrides,
                     workspaceRoot: this._currentWorkspaceRoot,
                     gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.coder ?? true,
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true
+                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true,
+                    suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false
                 });
 
                 if (coderUsesIde) {
@@ -5876,6 +5914,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         pairProgrammingEnabled: (role === 'lead' || role === 'coder') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
                         enableDeepPlanning: role === 'research_planner' ? promptsConfig.researchPlanner?.enableDeepPlanning : undefined,
                         researchDepth: role === 'research_planner' ? promptsConfig.researchPlanner?.researchDepth : undefined,
+                        suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
+                            ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
+                            : undefined,
                     });
                     this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
                 } catch (err) {

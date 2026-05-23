@@ -405,8 +405,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.activeDocName = docName;
         state.previewRequestId++;
 
-        if (btnAppendToPrompts) btnAppendToPrompts.disabled = true;
-        if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = true;
+        if (btnAppendToPrompts) btnAppendToPrompts.disabled = false;
+        if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
+        const btnLinkToOnline = document.getElementById('btn-link-to-doc-online');
+        if (btnLinkToOnline) btnLinkToOnline.disabled = false;
         
         if (sourceId === 'local-folder' && btnExportToSource) {
             const importedInfo = state.importedDocs.get(docName);
@@ -750,6 +752,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         const btnImportFullDoc = document.getElementById(btnImportFullId);
         const btnSetActiveLocal = document.getElementById('btn-set-active-context-local');
+        const btnLinkToLocal = document.getElementById('btn-link-to-doc-local');
 
         if (sourceId === 'local-folder') {
             if (btnImportFullDoc) {
@@ -760,6 +763,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 btnSetActiveLocal.style.display = '';
                 btnSetActiveLocal.disabled = false;
             }
+            if (btnLinkToLocal) {
+                btnLinkToLocal.style.display = '';
+                btnLinkToLocal.disabled = false;
+            }
         } else {
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = '';
@@ -769,6 +776,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (btnSetActiveLocal) {
                 btnSetActiveLocal.style.display = 'none';
                 btnSetActiveLocal.disabled = true;
+            }
+            if (btnLinkToLocal) {
+                btnLinkToLocal.style.display = 'none';
+                btnLinkToLocal.disabled = true;
             }
         }
 
@@ -1608,6 +1619,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    const btnLinkToOnline = document.getElementById('btn-link-to-doc-online');
+    if (btnLinkToOnline) {
+        btnLinkToOnline.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            vscode.postMessage({
+                type: 'linkToDocument',
+                sourceId: state.activeSource,
+                docId: state.activeDocId,
+                docName: state.activeDocName || state.activeDocId
+            });
+        });
+    }
+
     const btnImportFullDoc = document.getElementById('btn-import-full-doc');
     if (btnImportFullDoc) {
         btnImportFullDoc.addEventListener('click', () => {
@@ -1652,6 +1676,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             statusEl.textContent = 'Setting as active planning context...';
             vscode.postMessage({
                 type: 'setActivePlanningContext',
+                sourceId: state.activeSource,
+                docId: state.activeDocId,
+                docName: state.activeDocName || state.activeDocId
+            });
+        });
+    }
+
+    const btnLinkToLocal = document.getElementById('btn-link-to-doc-local');
+    if (btnLinkToLocal) {
+        btnLinkToLocal.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            vscode.postMessage({
+                type: 'linkToDocument',
                 sourceId: state.activeSource,
                 docId: state.activeDocId,
                 docName: state.activeDocName || state.activeDocId

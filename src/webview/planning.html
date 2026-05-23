@@ -9,8 +9,8 @@
         :root {
             /* Kanban dark theme - matching kanban screen */
             --kanban-bg: #1a1a1a;
-            --panel-bg: #000000;
-            --panel-bg2: #0d0d0d;
+            --panel-bg: #181818;
+            --panel-bg2: #111111;
             --border-color: #333333;
             --border-bright: #444444;
 
@@ -644,7 +644,9 @@
         #preview-pane-online {
             display: flex;
             flex-direction: column;
-            background: #080808;
+            background: var(--panel-bg);
+            background-image: radial-gradient(circle, #333 1px, transparent 1px);
+            background-size: 20px 20px;
             overflow-y: auto;
             padding: 0 16px 16px 16px;
             height: 100%;
@@ -705,12 +707,12 @@
             margin-bottom: 16px;
             font-weight: 600;
             line-height: 1.25;
+            color: var(--accent-teal);
         }
 
         #markdown-preview h1,
         #markdown-preview-online h1 {
             font-size: 16px;
-            color: var(--text-primary);
             padding-bottom: 8px;
             border-bottom: 1px solid var(--border-color);
             letter-spacing: -0.5px;
@@ -719,25 +721,18 @@
         #markdown-preview h2,
         #markdown-preview-online h2 {
             font-size: 14px;
-            color: var(--text-primary);
         }
 
         #markdown-preview h3,
         #markdown-preview-online h3 {
             font-size: 13px;
-            color: var(--text-primary);
-        }
-
-        #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
-        #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6 {
-            color: var(--text-primary);
         }
 
         #markdown-preview p, #markdown-preview li,
         #markdown-preview-online p, #markdown-preview-online li {
             margin-bottom: 12px;
             line-height: 1.5;
-            color: var(--text-primary);
+            color: #cccccc;
             font-size: 12px;
         }
 
@@ -782,6 +777,55 @@
         #markdown-preview-online ul, #markdown-preview-online ol {
             margin-bottom: 16px;
             padding-left: 24px;
+        }
+
+        /* Table Styling */
+        #markdown-preview table,
+        #markdown-preview-online table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 16px 0;
+            font-size: 12px;
+            border: 1px solid var(--border-color);
+        }
+
+        #markdown-preview th,
+        #markdown-preview-online th {
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            font-weight: 600;
+            text-align: left;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+        }
+
+        #markdown-preview th:last-child,
+        #markdown-preview-online th:last-child {
+            border-right: none;
+        }
+
+        #markdown-preview td,
+        #markdown-preview-online td {
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
+            border-right: 1px solid var(--border-color);
+            color: var(--text-primary);
+        }
+
+        #markdown-preview td:last-child,
+        #markdown-preview-online td:last-child {
+            border-right: none;
+        }
+
+        #markdown-preview tr:last-child td,
+        #markdown-preview-online tr:last-child td {
+            border-bottom: none;
+        }
+
+        #markdown-preview tr:hover td,
+        #markdown-preview-online tr:hover td {
+            background: var(--card-bg-hover);
         }
 
         /* Subtle, Interactive Links */
@@ -1146,6 +1190,7 @@
             <div class="controls-strip" id="controls-strip-local">
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
+                <button id="btn-link-to-doc-local" class="strip-btn" disabled>Link to Document</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <span id="status"></span>
             </div>
@@ -1184,6 +1229,7 @@
             <div class="controls-strip" id="controls-strip-online">
                 <button id="btn-import-full-doc-online" class="strip-btn" disabled>Import</button>
                 <button id="btn-append-to-prompts-online" class="strip-btn" disabled>Set as active planning context</button>
+                <button id="btn-link-to-doc-online" class="strip-btn" disabled>Link to Document</button>
                 <span id="status-online"></span>
             </div>
             <div class="content-row">

@@ -116,6 +116,8 @@ export interface PromptBuilderOptions {
     skipCompilation?: boolean;
     /** When true, instructs planner agent to skip automated test execution in its verification steps. */
     skipTests?: boolean;
+    /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
+    suppressWalkthroughEnabled?: boolean;
 }
 
 export function resolveBaseInstructions(
@@ -211,6 +213,7 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any project compilation step (e.g. tsc, mvn compile, gradle build, make) as part of the verification plan. The project is assumed to be in a pre-compiled or compilation-free state for this session.`;
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
+export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
 export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
 
@@ -263,6 +266,7 @@ export function buildKanbanBatchPrompt(
     const clearAntigravityContext = options?.clearAntigravityContext ?? false;
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
+    const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
 
     const parallelInstruction = plans.length > 1
         ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
@@ -492,6 +496,7 @@ For each plan:
             .filter(Boolean)
             .join('\n\n');
 
+        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             `Please execute the following ${plans.length} plans${sourceSuffix}.`,
             executionDirective,
@@ -499,7 +504,8 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            depSection.trim()
+            depSection.trim(),
+            suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
         return normalizeNewlines(promptParts);
@@ -527,6 +533,7 @@ For each plan:
             .filter(Boolean)
             .join('\n\n');
 
+        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             intro,
             executionDirective,
@@ -534,7 +541,8 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            depSection.trim()
+            depSection.trim(),
+            suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
         const coderPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
@@ -551,12 +559,14 @@ For each plan:
             .filter(Boolean)
             .join('\n\n');
 
+        const suppressWalkthroughBlock = suppressWalkthroughEnabled ? SUPPRESS_WALKTHROUGH_DIRECTIVE : '';
         const promptParts = [
             `Please process the following ${plans.length} plans.`,
             safeguardsBlock,
             baseInstructions,
             suffixBlock,
-            `PLANS TO PROCESS:\n${planList}`
+            `PLANS TO PROCESS:\n${planList}`,
+            suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
         return normalizeNewlines(promptParts);
