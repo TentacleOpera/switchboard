@@ -18,6 +18,8 @@ export interface CustomAgentAddons {
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
     ticketUpdateEnabled?: boolean;    // from ticket_updater_role.md
     suppressWalkthrough?: boolean;
+    cavemanOutput?: boolean;
+    useSubagents?: boolean;
 
     // Design doc
     designDocLink?: string;
@@ -69,17 +71,17 @@ export interface KanbanColumnBuildOverrides {
 }
 
 export const BUILT_IN_AGENT_LABELS: Record<BuiltInAgentRole, string> = {
+    gatherer: 'Context Gatherer',
+    planner: 'Planner',
+    splitter: 'Splitter Agent',
     lead: 'Lead Coder',
     coder: 'Coder',
     intern: 'Intern',
     reviewer: 'Reviewer',
     tester: 'Acceptance Tester',
-    planner: 'Planner',
-    'analyst': 'Analyst',
-    'ticket_updater': 'Ticket Updater',
-    'researcher': 'Researcher',
-    'splitter': 'Splitter Agent',
-    'gatherer': 'Context Gatherer'
+    analyst: 'Analyst',
+    ticket_updater: 'Ticket Updater',
+    researcher: 'Researcher',
 };
 
 const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
@@ -87,7 +89,7 @@ const DEFAULT_KANBAN_COLUMNS: KanbanColumnDefinition[] = [
     { id: 'RESEARCHER', label: 'Researcher', role: 'researcher', order: 90, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
     { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', order: 100, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'SPLITTER', label: 'Splitter', role: 'splitter', order: 110, kind: 'review', source: 'built-in', autobanEnabled: false, dragDropMode: 'prompt', hideWhenNoAgent: true },
-    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 150, kind: 'gather', source: 'built-in', autobanEnabled: false, dragDropMode: 'disabled', hideWhenNoAgent: true },
+    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', role: 'gatherer', order: 50, kind: 'review', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
     { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', order: 180, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'CODER CODED', label: 'Coder', role: 'coder', order: 190, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli' },
     { id: 'INTERN CODED', label: 'Intern', role: 'intern', order: 200, kind: 'coded', source: 'built-in', autobanEnabled: true, dragDropMode: 'cli', hideWhenNoAgent: true },
@@ -157,6 +159,9 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.researchEnabled === true) a.researchEnabled = true;
     if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
     if (s.ticketUpdateEnabled === true) a.ticketUpdateEnabled = true;
+    if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
+    if (s.cavemanOutput === true) a.cavemanOutput = true;
+    if (s.useSubagents === false) a.useSubagents = false;
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();

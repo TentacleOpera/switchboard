@@ -132,6 +132,25 @@ suite('agentPromptBuilder', () => {
             assert.ok(prompt.includes(defaultBaseText), 'Should include default base instructions');
             assert.ok(prompt.includes('ADVANCED REGRESSION ANALYSIS'), 'Should include advanced reviewer directive');
         });
+
+        test('cavemanOutputEnabled: true injects caveman directive', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                cavemanOutputEnabled: true
+            });
+            assert.ok(prompt.includes('CAVEMAN MODE'), 'Should include CAVEMAN MODE directive');
+        });
+
+        test('cavemanOutputEnabled: false omits caveman directive', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {
+                cavemanOutputEnabled: false
+            });
+            assert.ok(!prompt.includes('CAVEMAN MODE'), 'Should NOT include CAVEMAN MODE directive');
+        });
+
+        test('cavemanOutputEnabled: undefined omits caveman directive', () => {
+            const prompt = buildKanbanBatchPrompt('coder', makePlans(1), {});
+            assert.ok(!prompt.includes('CAVEMAN MODE'), 'Should NOT include CAVEMAN MODE directive');
+        });
     });
 
     suite('columnToPromptRole', () => {

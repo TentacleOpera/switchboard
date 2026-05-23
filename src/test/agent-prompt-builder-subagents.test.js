@@ -338,6 +338,35 @@ function testResolveBaseInstructions() {
     console.log('  PASS: resolveBaseInstructions precedence & fallback correct');
 }
 
+function testUseSubagentsInstruction() {
+    console.log('\nTesting useSubagents instruction...');
+    
+    const plans1 = [{ sessionId: 'sess1', title: 'Plan 1', topic: 'Plan 1', absolutePath: '/path/to/plan1.md' }];
+    const plans2 = [
+        { sessionId: 'sess1', title: 'Plan 1', topic: 'Plan 1', absolutePath: '/path/to/plan1.md' },
+        { sessionId: 'sess2', title: 'Plan 2', topic: 'Plan 2', absolutePath: '/path/to/plan2.md' }
+    ];
+    
+    // Single plan — no instruction regardless of useSubagentsEnabled
+    const singlePlanPrompt = buildKanbanBatchPrompt('coder', plans1, { useSubagentsEnabled: true });
+    assert.ok(!singlePlanPrompt.includes('sub-agent'), 'Single plan should NOT include subagent instruction');
+    
+    // Multiple plans with useSubagentsEnabled=true → include parallel instruction
+    const parallelPrompt = buildKanbanBatchPrompt('coder', plans2, { useSubagentsEnabled: true });
+    assert.ok(parallelPrompt.includes('parallel sub-agents'), 'Multiple plans with useSubagentsEnabled=true SHOULD include parallel instruction');
+    
+    // Multiple plans with useSubagentsEnabled=false → include sequential instruction
+    const sequentialPrompt = buildKanbanBatchPrompt('coder', plans2, { useSubagentsEnabled: false });
+    assert.ok(sequentialPrompt.includes('Process each plan sequentially'), 'Multiple plans with useSubagentsEnabled=false SHOULD include sequential instruction');
+    assert.ok(!sequentialPrompt.includes('parallel sub-agents'), 'Multiple plans with useSubagentsEnabled=false should NOT include parallel instruction');
+    
+    // Default behavior (no option passed) → should include parallel instruction (default true)
+    const defaultPrompt = buildKanbanBatchPrompt('coder', plans2, {});
+    assert.ok(defaultPrompt.includes('parallel sub-agents'), 'Default (no useSubagentsEnabled) SHOULD include parallel instruction');
+    
+    console.log('Use subagents instruction tests PASSED!');
+}
+
 try {
     testSinglePlan();
     testMultiplePlans();
@@ -361,6 +390,7 @@ try {
     testInternAnalystPrompts();
     testResearchPlannerPrompt();
     testResolveBaseInstructions();
+    testUseSubagentsInstruction();
     testUnknownRoleThrows();
     console.log('\nSubagent conditional tests PASSED!');
 } catch (err) {

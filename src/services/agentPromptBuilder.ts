@@ -118,6 +118,18 @@ export interface PromptBuilderOptions {
     skipTests?: boolean;
     /** When true, instructs the agent to skip walkthrough.md artifact generation at task completion. */
     suppressWalkthroughEnabled?: boolean;
+    /** When true, injects caveman communication style directive to reduce token usage. */
+    cavemanOutputEnabled?: boolean;
+    /** When true (default), uses parallel sub-agent instruction for multi-plan batches. When false, uses sequential-only instruction. */
+    useSubagentsEnabled?: boolean;
+    /** When true (default), includes DEPENDENCY ORDER section in prompts when plans have dependencies. */
+    includeDependencyInstructions?: boolean;
+    /** When false (explicitly), ticket_updater omits the ticket-update step. Defaults to enabled (undefined). */
+    ticketUpdateEnabled?: boolean;
+    /** When false (explicitly), splitter omits the complexity-scoring step. Defaults to enabled (undefined). */
+    complexityScoringSkill?: boolean;
+    /** When false (explicitly), researcher uses a lightweight base prompt without DEEP_RESEARCH_DIRECTIVE. Defaults to enabled (undefined). */
+    researchEnabled?: boolean;
 }
 
 export function resolveBaseInstructions(
@@ -213,6 +225,7 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any project compilation step (e.g. tsc, mvn compile, gradle build, make) as part of the verification plan. The project is assumed to be in a pre-compiled or compilation-free state for this session.`;
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
+export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
 export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
@@ -267,9 +280,14 @@ export function buildKanbanBatchPrompt(
     const skipCompilation = options?.skipCompilation ?? false;
     const skipTests = options?.skipTests ?? false;
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
+    const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
+    const useSubagentsEnabled = options?.useSubagentsEnabled ?? true;
+    const includeDependencyInstructions = options?.includeDependencyInstructions ?? true;
 
     const parallelInstruction = plans.length > 1
-        ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
+        ? (useSubagentsEnabled
+            ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
+            : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
         : '';
 
     const batchExecutionRules = `${parallelInstruction}CRITICAL INSTRUCTIONS:
@@ -281,6 +299,10 @@ export function buildKanbanBatchPrompt(
     const antigravityBlock = clearAntigravityContext
         ? 'Ignore any previous checkpoint summaries or context carried over from prior agent sessions. Do NOT ignore workspace-level context such as AGENTS.md, existing code conventions, or project configuration.'
         : '';
+    const skipBlock = [
+        skipCompilation ? SKIP_COMPILATION_DIRECTIVE : '',
+        skipTests ? SKIP_TESTS_DIRECTIVE : '',
+    ].filter(Boolean).join('\n\n');
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
@@ -291,7 +313,7 @@ export function buildKanbanBatchPrompt(
     });
 
     const plansWithDeps = plans.filter(p => p.dependencies);
-    const depSection = plansWithDeps.length > 0
+    const depSection = includeDependencyInstructions && plansWithDeps.length > 0
         ? `\n\nDEPENDENCY ORDER: Execute in order; do not start a plan until its dependencies are implemented:\n${
             plansWithDeps.map((p, i) => {
                 const depIds = (p.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
@@ -351,6 +373,9 @@ export function buildKanbanBatchPrompt(
         if (skipTests) {
             plannerBase += '\n\n' + SKIP_TESTS_DIRECTIVE;
         }
+        if (cavemanOutputEnabled) {
+            plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
         if (workspaceTypeBlock) {
             plannerBase += '\n\n' + workspaceTypeBlock;
         }
@@ -400,11 +425,14 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? `${batchExecutionRules}`
             : '';
 
-        const baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+        let baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -442,7 +470,10 @@ For each plan:
 4. Run verification checks as applicable and include results.
 5. Update the original plan with files changed, validation results, and remaining requirement gaps.`;
 
-        const baseInstructions = resolveBaseInstructions('tester', testerBase, options);
+        let baseInstructions = resolveBaseInstructions('tester', testerBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const intro = plans.length <= 1
             ? 'The implementation for this plan passed code review. Execute a direct acceptance test against the product requirements document in-place.'
@@ -488,11 +519,14 @@ For each plan:
             }
         }
 
-        const baseInstructions = resolveBaseInstructions('lead', leadBase, options);
+        let baseInstructions = resolveBaseInstructions('lead', leadBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -525,11 +559,14 @@ For each plan:
             coderBase += `Additional Instructions: only do Routine (Band A) work.`;
         }
 
-        const baseInstructions = resolveBaseInstructions('coder', coderBase, options);
+        let baseInstructions = resolveBaseInstructions('coder', coderBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -550,12 +587,20 @@ For each plan:
     }
 
     if (role === 'intern') {
-        const baseInstructions = resolveBaseInstructions('intern', '', options);
+        let internBase = '';
+        if (pairProgrammingEnabled) {
+            internBase += `Additional Instructions: only do Routine (Band A) work.`;
+        }
+
+        let baseInstructions = resolveBaseInstructions('intern', internBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -566,14 +611,19 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
+            depSection.trim(),
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
-        return normalizeNewlines(promptParts);
+        const internPrompt = withCoderAccuracyInstruction(normalizeNewlines(promptParts), accurateCodingEnabled);
+        return normalizeNewlines(internPrompt);
     }
 
     if (role === 'analyst') {
-        const baseInstructions = resolveBaseInstructions('analyst', '', options);
+        let baseInstructions = resolveBaseInstructions('analyst', '', options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -601,7 +651,10 @@ For each plan:
             `Do not modify the ticket description. Only add a comment. ` +
             `If no ticket number is found, skip the ticket update and notify the user.`;
 
-        const updaterBase = `You are a Ticket Updater Agent.
+        const ticketUpdateEnabled = options?.ticketUpdateEnabled !== false;
+
+        const updaterBase = ticketUpdateEnabled
+            ? `You are a Ticket Updater Agent.
 
 STEP 1: Analyze the Plan
 Generate a concise analysis covering:
@@ -619,9 +672,28 @@ ${ticketUpdateDirective}
 Format the analysis as:
 ## AI Analysis
 
+[Your analysis content here]`
+            : `You are a Ticket Updater Agent.
+
+STEP 1: Analyze the Plan
+Generate a concise analysis covering:
+- **Goal Summary**: Brief overview of what the plan aims to achieve
+- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas
+- **Key Dependencies**: Major dependencies or blockers
+- **Implementation Notes**: Any notable implementation considerations
+- **Estimated Effort**: Rough effort estimate (if discernible from complexity)
+
+Keep the analysis under 500 words for readability in the ticket.
+
+Format the analysis as:
+## AI Analysis
+
 [Your analysis content here]`;
 
-        const baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
+        let baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -641,11 +713,18 @@ Format the analysis as:
     }
 
     if (role === 'researcher') {
-        const researcherBase = `You are a Researcher Agent.
+        const researchEnabled = options?.researchEnabled !== false;
 
-${DEEP_RESEARCH_DIRECTIVE}`;
+        const researcherBase = researchEnabled
+            ? `You are a Researcher Agent.
 
-        const baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
+${DEEP_RESEARCH_DIRECTIVE}`
+            : `You are a Researcher Agent. For each plan, read the plan file and produce a concise research summary: identify the key technical questions raised by the plan, list relevant prior art or dependencies you are aware of, and flag any unknowns that require further investigation before implementation can begin.`;
+
+        let baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -687,7 +766,10 @@ ${DEEP_RESEARCH_DIRECTIVE}`;
             rpBase += `\n\nUse the web_research skill to conduct comprehensive research on the following topic.\n\nResearch depth: ${label}\n\nPlease begin by proposing a research plan for my approval, following the web_research skill protocol.`;
         }
 
-        const baseInstructions = resolveBaseInstructions('research_planner', rpBase, options);
+        let baseInstructions = resolveBaseInstructions('research_planner', rpBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -713,7 +795,10 @@ ${DEEP_RESEARCH_DIRECTIVE}`;
             `### Routine and ### Complex / Risky subsections. ` +
             `Classify each implementation step by complexity before splitting.`;
 
-        const splitterBase = `You are a Plan Splitter Agent.
+        const complexityScoringSkill = options?.complexityScoringSkill !== false;
+
+        const splitterBase = complexityScoringSkill
+            ? `You are a Plan Splitter Agent.
 
 STEP 1: Check for Complexity Audit
 Read the provided plan file. If it lacks a "## Complexity Audit" section with "### Routine" and "### Complex / Risky" subsections, apply the following directive:
@@ -728,9 +813,51 @@ After creating both files:
 - Manually drag the original file (Complex) to the Lead Coder column
 - Manually drag the _routine.md file to the Coder column
 
+Create both files in the same directory as the original plan.`
+            : `You are a Plan Splitter Agent.
+
+STEP 1: Apply Split Plan Directive
+Apply the following directive:
+\n\n${SPLIT_PLAN_DIRECTIVE}
+
+STEP 2: Dispatch Instructions (for the USER, not automated)
+After creating both files:
+- Manually drag the original file (Complex) to the Lead Coder column
+- Manually drag the _routine.md file to the Coder column
+
 Create both files in the same directory as the original plan.`;
 
-        const baseInstructions = resolveBaseInstructions('splitter', splitterBase, options);
+        let baseInstructions = resolveBaseInstructions('splitter', splitterBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
+
+        const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
+        const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+        const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+            .filter(Boolean)
+            .join('\n\n');
+
+        const promptParts = [
+            baseInstructions,
+            safeguardsBlock,
+            suffixBlock,
+            `PLANS TO PROCESS:\n${planList}`
+        ].filter(Boolean).join('\n\n');
+
+        return normalizeNewlines(promptParts);
+    }
+
+    if (role === 'gatherer') {
+        const gathererBase = `You are operating as the **Context Gatherer** — a pre-planning research specialist.
+
+Read the persona at \`.agent/personas/gatherer.md\` and follow it step-by-step.`;
+
+        let baseInstructions = resolveBaseInstructions('gatherer', gathererBase, options);
+        if (cavemanOutputEnabled) {
+            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
 
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
@@ -751,7 +878,7 @@ Create both files in the same directory as the original plan.`;
 
     // No fallback — every built-in role must have an explicit template.
     // Custom agents are NOT routed through this function; they use plan-file-link-only prompts built at call sites.
-    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter. Custom agents should be handled at the call site, not here.`);
+    throw new Error(`Unknown role '${role}' in buildKanbanBatchPrompt. Built-in roles: planner, reviewer, tester, lead, coder, intern, analyst, ticket_updater, researcher, splitter, gatherer. Custom agents should be handled at the call site, not here.`);
 }
 
 /**

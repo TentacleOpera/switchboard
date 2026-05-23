@@ -27,9 +27,40 @@ async function run() {
             leadChallengeEnabled: true,
             pairProgrammingEnabled: {
                 lead: true,
-                coder: true
+                coder: true,
+                intern: true
             },
-            accurateCodingEnabled: true,
+            accurateCodingEnabledByRole: {
+                lead: true,
+                coder: true,
+                intern: true
+            },
+            skipCompilationByRole: {
+                planner: false,
+                lead: false,
+                coder: false,
+                reviewer: false,
+                tester: false,
+                intern: false,
+                analyst: false,
+                researcher: false,
+                splitter: false,
+                ticket_updater: false,
+                research_planner: false
+            },
+            skipTestsByRole: {
+                planner: false,
+                lead: false,
+                coder: false,
+                reviewer: false,
+                tester: false,
+                intern: false,
+                analyst: false,
+                researcher: false,
+                splitter: false,
+                ticket_updater: false,
+                research_planner: false
+            },
             gitProhibitionByRole: {},
             switchboardSafeguardsByRole: {},
             researchPlanner: {
@@ -68,11 +99,13 @@ async function run() {
                         dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                         aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                         splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                        skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
+                        skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
                         // Lead-specific options
                         includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
-                        pairProgrammingEnabled: (role === 'lead' || role === 'coder') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
-                        // Coder/Lead-specific options
-                        accurateCodingEnabled: (role === 'coder' || role === 'lead') ? promptsConfig.accurateCodingEnabled : undefined,
+                        pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
+                        // Coder/Lead/Intern-specific options
+                        accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
                         // Reviewer-specific options (matching _generateBatchReviewerPrompt pattern)
                         advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined
                     });
@@ -93,8 +126,8 @@ async function run() {
     KanbanProvider.promptsConfig.splitPlan = false;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = false;
     KanbanProvider.promptsConfig.leadChallengeEnabled = false;
-    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: false, coder: false };
-    KanbanProvider.promptsConfig.accurateCodingEnabled = false;
+    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: false, coder: false, intern: false };
+    KanbanProvider.promptsConfig.accurateCodingEnabledByRole = { lead: false, coder: false, intern: false };
 
     let previews = await KanbanProvider._getDefaultPromptPreviews('/root');
     
@@ -116,8 +149,8 @@ async function run() {
     KanbanProvider.promptsConfig.splitPlan = true;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = true;
     KanbanProvider.promptsConfig.leadChallengeEnabled = true;
-    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: true, coder: true };
-    KanbanProvider.promptsConfig.accurateCodingEnabled = true;
+    KanbanProvider.promptsConfig.pairProgrammingEnabled = { lead: true, coder: true, intern: true };
+    KanbanProvider.promptsConfig.accurateCodingEnabledByRole = { lead: true, coder: true, intern: true };
 
     previews = await KanbanProvider._getDefaultPromptPreviews('/root');
 

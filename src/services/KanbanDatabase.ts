@@ -406,7 +406,7 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
 const runtimeRequire = createRequire(__filename);
 
 export const VALID_KANBAN_COLUMNS = new Set([
-    'CREATED', 'BACKLOG', 'PLAN REVIEWED', 'CONTEXT GATHERER', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
+    'CREATED', 'BACKLOG', 'CONTEXT GATHERER', 'PLAN REVIEWED', 'LEAD CODED', 'CODER CODED', 'CODE REVIEWED', 'CODED', 'COMPLETED'
 ]);
 // VALID_COMPLEXITIES is now handled by isValidComplexityValue() in complexityScale.ts
 const VALID_STATUSES = new Set(['active', 'archived', 'completed', 'deleted']);

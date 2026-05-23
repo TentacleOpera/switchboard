@@ -60,7 +60,6 @@ import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
 import { LocalApiServer } from './LocalApiServer';
 import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
-import { RelayPromptService, RelayConfig } from './RelayPromptService';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
@@ -338,7 +337,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _clickUpServices: Map<string, ClickUpSyncService> = new Map();
     private _linearServices: Map<string, LinearSyncService> = new Map();
     private _notionContentCache: Map<string, string | null> = new Map();
-    private readonly _relayPromptService = new RelayPromptService();
     private _localApiServer: LocalApiServer | null = null;
     private _globalSettingsEnabled: boolean = true;
     private _isMigratingSettings: boolean = false;
@@ -514,6 +512,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public async saveRoleConfig(key: string, value: unknown): Promise<void> {
         await this.updateSetting(`switchboard.prompts.${key}`, value);
+
+        // Invalidate and rebuild the cached prompt overrides when a role config changes.
+        // This ensures kanban card copy buttons reflect the latest custom prompts
+        // without requiring the user to reopen the Prompts Tab.
+        if (key.startsWith('roleConfig_')) {
+            const workspaceRoot = this._getWorkspaceRoot();
+            if (workspaceRoot) {
+                try {
+                    this._cachedDefaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+                } catch {
+                    // Silently ignore — cache will be refreshed next time the Prompts Tab is opened
+                }
+            }
+        }
     }
 
     public getRoleConfig(key: string): unknown {
@@ -1451,6 +1463,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return 'CODE REVIEWED';
             case 'tester':
                 return 'ACCEPTANCE TESTED';
+            case 'gatherer':
+                return 'PLAN REVIEWED';
             default:
                 return role.startsWith('custom_agent_') ? role : null;
         }
@@ -1622,7 +1636,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'PLAN REVIEWED':
                 return this._targetColumnForRole(await this._resolvePlanReviewedDispatchRole(sessionId, workspaceRoot));
             case 'CONTEXT GATHERER':
-                return this._targetColumnForRole(await this._resolvePlanReviewedDispatchRole(sessionId, workspaceRoot));
+                return 'PLAN REVIEWED';
             case 'LEAD CODED':
             case 'CODER CODED':
             case 'INTERN CODED':
@@ -2470,60 +2484,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    /**
-     * Handle relay column move by generating and copying the appropriate prompt.
-     * Silent operation - no VS Code toast notifications.
-     */
-    private async _handleRelayColumnMove(
-        sessionId: string,
-        workspaceRoot: string,
-        action: 'gather' | 'execute'
-    ): Promise<void> {
-        try {
-            const db = await this._getKanbanDb(workspaceRoot);
-            if (!db) {
-                console.warn(`[TaskViewerProvider] Relay: DB not available for ${workspaceRoot}`);
-                return;
-            }
-            const planRecord = await db.getPlanBySessionId(sessionId);
-            if (!planRecord?.planFile) {
-                console.warn(`[TaskViewerProvider] Relay: No plan file for session ${sessionId}`);
-                return;
-            }
 
-            const planFileAbsolute = path.isAbsolute(planRecord.planFile)
-                ? planRecord.planFile
-                : path.join(workspaceRoot, planRecord.planFile);
-
-            if (!fs.existsSync(planFileAbsolute)) {
-                console.warn(`[TaskViewerProvider] Relay: Plan file not found: ${planFileAbsolute}`);
-                return;
-            }
-
-            const planContent = await fs.promises.readFile(planFileAbsolute, 'utf-8');
-            const dependencies: string[] = Array.isArray(planRecord?.dependencies) ? planRecord.dependencies : [];
-            const estimatedComplexity = planRecord?.complexity ? parseComplexityScore(planRecord.complexity) : 5;
-
-            const relayConfig: RelayConfig = {
-                planPath: planFileAbsolute,
-                planContent,
-                estimatedComplexity,
-                dependencies
-            };
-
-            if (action === 'gather') {
-                const prompt = this._relayPromptService.generateGatherPrompt(relayConfig);
-                await vscode.env.clipboard.writeText(prompt);
-                console.log(`[TaskViewerProvider] Relay gather prompt copied for ${sessionId}`);
-            } else {
-                const prompt = this._relayPromptService.generateExecutePrompt(relayConfig);
-                await vscode.env.clipboard.writeText(prompt);
-                console.log(`[TaskViewerProvider] Relay execute prompt copied for ${sessionId}`);
-            }
-        } catch (error) {
-            console.error('[TaskViewerProvider] Relay column move failed:', error);
-        }
-    }
 
     private _plannerWorkflowNameForInstruction(instruction?: string): string | undefined {
         const { baseInstruction } = this._parsePromptInstruction(instruction);
@@ -2728,11 +2689,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (role === 'lead' && this._autobanState.pairProgrammingMode !== 'off') {
                 const coderUsesIde = this._autobanState.pairProgrammingMode === 'cli-ide'
                     || this._autobanState.pairProgrammingMode === 'ide-ide';
+                const coderConfig: any = this.getSetting('switchboard.prompts.roleConfig_coder', undefined);
                 const coderPrompt = buildKanbanBatchPrompt('coder', validPlans, {
                     pairProgrammingEnabled: true,
                     accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled(),
                     defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: resolvedWorkspaceRoot
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? true
                 });
                 if (coderUsesIde) {
                     await vscode.env.clipboard.writeText(coderPrompt);
@@ -5900,7 +5863,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
+        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? true;
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
+        const ticketUpdateEnabled = roleConfig?.addons?.ticketUpdateEnabled ?? true;
+        const complexityScoringSkill = roleConfig?.addons?.complexityScoringSkill ?? true;
+        const researchEnabled = roleConfig?.addons?.researchEnabled ?? true;
 
         return buildKanbanBatchPrompt(role, plans, {
             instruction,
@@ -5918,9 +5885,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             workspaceRoot,
             gitProhibitionEnabled,
             switchboardSafeguardsEnabled,
+            useSubagentsEnabled,
             enableDeepPlanning: roleConfig?.enableDeepPlanning,
             researchDepth: roleConfig?.researchDepth,
-            routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null)
+            routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
+            ticketUpdateEnabled,
+            complexityScoringSkill,
+            researchEnabled,
         });
     }
 
@@ -5957,7 +5928,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const safeguardsBlock = addons?.switchboardSafeguards
             ? (() => {
                 const parallelInstruction = plans.length > 1
-                    ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
+                    ? (addons?.useSubagents !== false
+                        ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
+                        : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
                     : '';
                 return `${parallelInstruction}CRITICAL INSTRUCTIONS:
 1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
