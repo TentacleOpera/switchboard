@@ -13236,8 +13236,10 @@ What would you like to find?`;
 
             // ONE DB read — this snapshot feeds both sidebar and kanban
             const repoScope = this._kanbanProvider?.getRepoScopeFilter() ?? null;
-            const activeRows = repoScope
-                ? await db.getBoardFiltered(workspaceId, repoScope)
+            const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+
+            const activeRows = (repoScope || projectFilter)
+                ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                 : await db.getBoard(workspaceId);
             const completedRows = repoScope
                 ? await db.getCompletedPlansFiltered(workspaceId, repoScope)
@@ -13249,9 +13251,11 @@ What would you like to find?`;
             }
             console.log(`[refreshRunSheets] DB returned ${activeRows.length} active, ${completedRows.length} completed for workspace ${workspaceId}. Column distribution:`, JSON.stringify(colDist));
 
+            const projects = await db.getProjects(workspaceId);
+
             // Feed kanban board from the SAME snapshot (always, even without sidebar)
             console.log(`[refreshRunSheets] kanbanProvider=${!!this._kanbanProvider}, calling refreshWithData`);
-            await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot);
+            await this._kanbanProvider?.refreshWithData(activeRows, completedRows, resolvedWorkspaceRoot, projects);
 
             // Feed sidebar dropdown from the same kanban snapshot so both surfaces
             // reflect the same effective repo-scope snapshot.

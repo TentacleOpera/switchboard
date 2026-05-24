@@ -28,6 +28,7 @@ export interface KanbanPlanRecord {
     tags: string;
     dependencies: string;
     repoScope: string;
+    project?: string;
     workspaceId: string;
     createdAt: string;
     updatedAt: string;
@@ -96,6 +97,7 @@ CREATE TABLE IF NOT EXISTS plans (
     tags          TEXT DEFAULT '',
     dependencies  TEXT DEFAULT '',
     repo_scope    TEXT DEFAULT '',
+    project       TEXT DEFAULT '',
     workspace_id  TEXT NOT NULL,
     created_at    TEXT NOT NULL,
     updated_at    TEXT NOT NULL,
@@ -112,6 +114,7 @@ CREATE TABLE IF NOT EXISTS plans (
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -121,6 +124,14 @@ CREATE TABLE IF NOT EXISTS migration_meta (
     key   TEXT PRIMARY KEY,
     value TEXT NOT NULL
 );
+CREATE TABLE IF NOT EXISTS projects (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(name, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 `;
 
 // Migration SQL to add new columns to existing databases
@@ -358,6 +369,21 @@ const MIGRATION_V20_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_events_time ON plan_events(timestamp)`
 ];
 
+const MIGRATION_V23_SQL = [
+    // Add projects table (workspace-scoped)
+    `CREATE TABLE IF NOT EXISTS projects (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        name TEXT NOT NULL,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(name, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id)`,
+    // Add project column to plans table
+    `ALTER TABLE plans ADD COLUMN project TEXT DEFAULT ''`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project)`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -367,10 +393,10 @@ const MIGRATION_V20_SQL = [
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-    repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
+    repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
     clickup_task_id, linear_issue_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -382,6 +408,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     tags = excluded.tags,
     dependencies = excluded.dependencies,
     repo_scope = excluded.repo_scope,
+    project = excluded.project,
     workspace_id = excluded.workspace_id,
     updated_at = excluded.updated_at,
     last_action = excluded.last_action,
@@ -399,7 +426,7 @@ const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
-                       repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
+                       repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        clickup_task_id, linear_issue_id`;
 
@@ -1015,18 +1042,19 @@ export class KanbanDatabase {
                     record.tags || '',    // 8
                     record.dependencies || '', // 9
                     record.repoScope || '', // 10
-                    record.workspaceId,   // 11
-                    record.createdAt,     // 12
-                    record.updatedAt,     // 13
-                    record.lastAction,    // 14
-                    record.sourceType,    // 15
-                    this._ensureRelativePlanFile(record.brainSourcePath), // 16
-                    this._ensureRelativePlanFile(record.mirrorPath), // 17
-                    record.routedTo || '',       // 18
-                    record.dispatchedAgent || '', // 19
-                    record.dispatchedIde || '',   // 20
-                    record.clickupTaskId || '',   // 21
-                    record.linearIssueId || ''    // 22
+                    record.project || '',   // 11
+                    record.workspaceId,   // 12
+                    record.createdAt,     // 13
+                    record.updatedAt,     // 14
+                    record.lastAction,    // 15
+                    record.sourceType,    // 16
+                    this._ensureRelativePlanFile(record.brainSourcePath), // 17
+                    this._ensureRelativePlanFile(record.mirrorPath), // 18
+                    record.routedTo || '',       // 19
+                    record.dispatchedAgent || '', // 20
+                    record.dispatchedIde || '',   // 21
+                    record.clickupTaskId || '',   // 22
+                    record.linearIssueId || ''    // 23
                 ]);
             }
             this._db.run('COMMIT');
@@ -1892,6 +1920,99 @@ export class KanbanDatabase {
              ORDER BY updated_at DESC`,
             [workspaceId, repoScope]
         );
+        return this._readRows(stmt);
+    }
+
+    public async getProjects(workspaceId: string): Promise<string[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        const stmt = this._db.prepare(
+            'SELECT name FROM projects WHERE workspace_id = ? ORDER BY name',
+            [workspaceId]
+        );
+        const rows: any[] = [];
+        while (stmt.step()) {
+            rows.push(stmt.getAsObject());
+        }
+        stmt.free();
+        return rows.map((r: any) => String(r.name || ''));
+    }
+
+    public async addProject(workspaceId: string, projectName: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'INSERT INTO projects (name, workspace_id) VALUES (?, ?)',
+                [projectName, workspaceId]
+            );
+            return await this._persist();
+        } catch (e) {
+            console.debug('[KanbanDatabase] addProject failed (might already exist):', e);
+            return false;
+        }
+    }
+
+    public async deleteProject(workspaceId: string, projectName: string): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db) return false;
+        try {
+            this._db.run(
+                'DELETE FROM projects WHERE workspace_id = ? AND name = ?',
+                [workspaceId, projectName]
+            );
+            this._db.run(
+                "UPDATE plans SET project = '' WHERE workspace_id = ? AND project = ?",
+                [workspaceId, projectName]
+            );
+            return await this._persist();
+        } catch (e) {
+            console.error('[KanbanDatabase] deleteProject failed:', e);
+            return false;
+        }
+    }
+
+    public async assignPlansToProject(
+        planIds: string[],
+        projectName: string,
+        workspaceId: string
+    ): Promise<boolean> {
+        if (!(await this.ensureReady()) || !this._db || planIds.length === 0) return false;
+        try {
+            this._db.run('BEGIN');
+            for (const planId of planIds) {
+                this._db.run(
+                    "UPDATE plans SET project = ? WHERE (plan_id = ? OR session_id = ?) AND workspace_id = ?",
+                    [projectName, planId, planId, workspaceId]
+                );
+            }
+            this._db.run('COMMIT');
+            return await this._persist();
+        } catch (e) {
+            try { this._db.run('ROLLBACK'); } catch { }
+            console.error('[KanbanDatabase] assignPlansToProject failed:', e);
+            return false;
+        }
+    }
+
+    public async getBoardFilteredByProject(
+        workspaceId: string,
+        project: string | null,
+        repoScope: string | null
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        if (!project && !repoScope) {
+            return this.getBoard(workspaceId);
+        }
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
+        const params: unknown[] = [workspaceId];
+        if (project) {
+            sql += ' AND project = ?';
+            params.push(project);
+        }
+        if (repoScope) {
+            sql += " AND repo_scope IN (?, '')";
+            params.push(repoScope);
+        }
+        sql += ' ORDER BY updated_at DESC';
+        const stmt = this._db.prepare(sql, params);
         return this._readRows(stmt);
     }
 
@@ -3457,6 +3578,18 @@ export class KanbanDatabase {
                 console.error('[KanbanDatabase] V22 migration FAILED — rolled back. Error:', e);
             }
         }
+
+        // V23: add projects table and project column to plans for project-level grouping/filtering.
+        const v23 = await this.getMigrationVersion();
+        if (v23 < 23) {
+            for (const sql of MIGRATION_V23_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V23 migration step skipped (already applied):', e);
+                }
+            }
+            await this.setMigrationVersion(23);
+            console.log('[KanbanDatabase] V23 migration completed: projects table and plans.project column added');
+        }
     }
 
     private _planTableHasColumn(columnName: string): boolean {
@@ -3656,6 +3789,7 @@ FROM plans
                     tags: p.tags || '',
                     dependencies: p.dependencies || '',
                     repoScope: p.repo_scope || p.repoScope || '',
+                    project: p.project || p.project || '',
                     workspaceId,
                     createdAt: p.created_at || p.createdAt || now,
                     updatedAt: now,
@@ -3674,6 +3808,7 @@ FROM plans
                     this._db.run(UPSERT_PLAN_SQL, [
                         record.planId, record.sessionId, record.topic, record.planFile, record.kanbanColumn,
                         record.status, record.complexity, record.tags, record.dependencies, record.repoScope,
+                        record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
                         record.dispatchedIde, record.clickupTaskId, record.linearIssueId
@@ -4151,6 +4286,7 @@ FROM plans
                     tags: String(row.tags || ""),
                     dependencies: String(row.dependencies || ""),
                     repoScope: String(row.repo_scope || ""),
+                    project: String(row.project || ""),
                     workspaceId: String(row.workspace_id || ""),
                     createdAt: String(row.created_at || ""),
                     updatedAt: String(row.updated_at || ""),

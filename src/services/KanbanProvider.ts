@@ -134,6 +134,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
     private _repoScopeFilter: string | null = null;
+    private _projectFilter: string | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
@@ -466,6 +467,19 @@ export class KanbanProvider implements vscode.Disposable {
             }
         } catch { /* fall through */ }
         return allowedRoots;
+    }
+
+    private _showTemporaryNotification(message: string, durationMs: number = 2000): void {
+        void vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: message,
+                cancellable: false
+            },
+            async () => {
+                await new Promise(resolve => setTimeout(resolve, durationMs));
+            }
+        );
     }
 
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
@@ -902,7 +916,7 @@ export class KanbanProvider implements vscode.Disposable {
      * This ensures sidebar and kanban render from the exact same DB snapshot.
      * Builds cards and posts DIRECTLY to webview — no intermediary that could silently fail.
      */
-    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string) {
+    public async refreshWithData(activeRows: import('./KanbanDatabase').KanbanPlanRecord[], completedRows: import('./KanbanDatabase').KanbanPlanRecord[], workspaceRoot: string, projects?: string[]) {
         if (!this._panel) {
             console.warn('[KanbanProvider] refreshWithData: no panel — skipping');
             return;
@@ -911,6 +925,9 @@ export class KanbanProvider implements vscode.Disposable {
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
+
+            const workspaceId = await db.getWorkspaceId();
+            const projList = projects || (workspaceId ? await db.getProjects(workspaceId) : []);
 
             // Filter out ghost plans: plan files that don't exist in this workspace or are outside the workspace root.
             // Only filter ACTIVE plans — completed plans may have been archived (file moved)
@@ -991,7 +1008,9 @@ export class KanbanProvider implements vscode.Disposable {
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
-                activeFilter: this._repoScopeFilter || null
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter || null,
+                projects: projList
             });
 
             // THE critical message — sends cards to webview
@@ -1638,7 +1657,11 @@ export class KanbanProvider implements vscode.Disposable {
             console.log(`[KanbanProvider] _refreshBoardImpl: workspaceId=${workspaceId}, dbReady=${dbReady}`);
 
             if (workspaceId && dbReady) {
-                const dbRows = await db.getBoard(workspaceId);
+                const projectFilter = this._projectFilter;
+                const repoScope = this._repoScopeFilter;
+                const dbRows = (projectFilter || repoScope)
+                    ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
+                    : await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
                 // Filter out ghost plans: plan files that don't exist in this workspace
@@ -1713,12 +1736,15 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
+            const projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
-                activeFilter: this._repoScopeFilter || null
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter || null,
+                projects
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1834,12 +1860,17 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
+            const db = this._getKanbanDb(resolvedWorkspaceRoot);
+            const workspaceId = await db.getWorkspaceId();
+            const projects = workspaceId ? await db.getProjects(workspaceId) : [];
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
-                activeFilter: this._repoScopeFilter || null
+                activeFilter: this._repoScopeFilter || null,
+                projectFilter: this._projectFilter || null,
+                projects
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -3622,7 +3653,13 @@ export class KanbanProvider implements vscode.Disposable {
     public setRepoScopeFilter(filter: string | null): void {
         this._repoScopeFilter = filter;
     }
+    public getProjectFilter(): string | null {
+        return this._projectFilter;
+    }
 
+    public setProjectFilter(filter: string | null): void {
+        this._projectFilter = filter;
+    }
     public async queueIntegrationSyncForSession(
         workspaceRoot: string,
         sessionId: string,
@@ -4171,6 +4208,60 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;
+            case 'addProject': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot) {
+                    const projectName = await vscode.window.showInputBox({
+                        prompt: 'Enter project name',
+                        placeHolder: 'e.g. frontend, backend, infrastructure',
+                        validateInput: (v) => v.trim() ? null : 'Project name cannot be empty'
+                    });
+                    if (projectName?.trim()) {
+                        const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                        if (workspaceId) {
+                            const db = this._getKanbanDb(workspaceRoot);
+                            await db.addProject(workspaceId, projectName.trim());
+                            await this._refreshBoard(workspaceRoot);
+                        }
+                    }
+                }
+                break;
+            }
+            case 'deleteProject': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string') {
+                    if (this._projectFilter === msg.projectName) {
+                        this._projectFilter = null;
+                    }
+                    const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                    if (workspaceId) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        await db.deleteProject(workspaceId, msg.projectName);
+                        await this._refreshBoard(workspaceRoot);
+                    }
+                }
+                break;
+            }
+            case 'setProjectFilter': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
+                    this.setProjectFilter(msg.project || null);
+                    await this._refreshBoard(workspaceRoot);
+                }
+                break;
+            }
+            case 'assignSelectedToProject': {
+                const workspaceRoot = this._currentWorkspaceRoot;
+                if (workspaceRoot && typeof msg.projectName === 'string' && Array.isArray(msg.planIds)) {
+                    const workspaceId = await this._readWorkspaceId(workspaceRoot);
+                    if (workspaceId) {
+                        const db = this._getKanbanDb(workspaceRoot);
+                        await db.assignPlansToProject(msg.planIds, msg.projectName, workspaceId);
+                        await this._refreshBoard(workspaceRoot);
+                    }
+                }
+                break;
+            }
             case 'toggleAutoban': {
                 const enabled = !!msg.enabled;
                 if (this._autobanState) {
@@ -4750,7 +4841,7 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._refreshBoard(workspaceRoot);
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
                     }
                     break;
                 }
@@ -4789,7 +4880,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
-                vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
                 break;
             }
             case 'batchPlannerPrompt': {
@@ -4807,7 +4898,7 @@ export class KanbanProvider implements vscode.Disposable {
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`);
+                this._showTemporaryNotification(`Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`);
                 break;
             }
             case 'batchDispatchLow': {
@@ -4834,7 +4925,7 @@ export class KanbanProvider implements vscode.Disposable {
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                vscode.window.showInformationMessage(`Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`);
+                this._showTemporaryNotification(`Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`);
                 break;
             }
             case 'julesLowComplexity': {
@@ -5013,7 +5104,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     await this._refreshBoard(workspaceRoot);
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                    vscode.window.showInformationMessage(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
+                    this._showTemporaryNotification(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
@@ -5063,7 +5154,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     await this._refreshBoard(workspaceRoot);
-                    vscode.window.showInformationMessage(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
+                    this._showTemporaryNotification(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
                 }
                 break;
             }
@@ -5141,7 +5232,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     break;
                 }
 
@@ -5167,9 +5258,9 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                         }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`);
+                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`);
                     } else {
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`);
+                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`);
                     }
                 } else {
                     // DB-first
@@ -5183,7 +5274,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', msg.sessionIds, nextCol, workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to next stage.`);
+                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to next stage.`);
                 }
                 break;
             }
@@ -5230,7 +5321,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                     break;
                 }
 
@@ -5257,9 +5348,9 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`);
+                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`);
                     } else {
-                        vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans. No plans advanced.`);
+                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. No plans advanced.`);
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
@@ -5274,7 +5365,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
-                    vscode.window.showInformationMessage(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
                 }
                 break;
             }

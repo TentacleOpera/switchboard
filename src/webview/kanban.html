@@ -103,6 +103,32 @@
             flex-wrap: wrap;
         }
 
+        .project-strip {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 6px 16px;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+        }
+
+        .project-select {
+            background: #0a0a0a;
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            padding: 4px 8px;
+            min-width: 150px;
+        }
+
+        .project-select:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+
         .settings-strip {
             display: flex;
             align-items: center;
@@ -1894,6 +1920,15 @@
             </select>
             <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
         </div>
+        <div class="project-strip" id="project-strip">
+            <select id="project-select" class="project-select" title="Filter by project">
+                <option value="">All Projects</option>
+            </select>
+            <button id="btn-add-project" class="strip-btn" title="Add new project">+ ADD PROJECT</button>
+            <button id="btn-assign-project" class="strip-btn" title="Assign selected plans to project" disabled>ASSIGN TO PROJECT</button>
+            <button id="btn-delete-project" class="strip-btn" title="Delete selected project" style="display:none;">DELETE PROJECT</button>
+            <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
+        </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
         </div>
@@ -2911,6 +2946,62 @@
         let activeIntegration = null;
         const selectedCards = new Set();
         let testingFailSessionIds = [];
+
+        // Project strip elements and helpers
+        const projectSelect = document.getElementById('project-select');
+        const btnAddProject = document.getElementById('btn-add-project');
+        const btnAssignProject = document.getElementById('btn-assign-project');
+        const btnDeleteProject = document.getElementById('btn-delete-project');
+
+        function updateProjectDropdown(projects, activeProjectFilter) {
+            if (!projectSelect) return;
+            const currentValue = activeProjectFilter || projectSelect.value;
+            projectSelect.innerHTML = '<option value="">All Projects</option>';
+            (projects || []).forEach(p => {
+                const opt = document.createElement('option');
+                opt.value = p;
+                opt.textContent = p;
+                projectSelect.appendChild(opt);
+            });
+            // Restore selection
+            if (currentValue && [...projectSelect.options].some(o => o.value === currentValue)) {
+                projectSelect.value = currentValue;
+            } else {
+                projectSelect.value = '';
+            }
+            // Show delete button only when a real project is selected
+            if (btnDeleteProject) {
+                btnDeleteProject.style.display = projectSelect.value ? '' : 'none';
+            }
+        }
+
+        projectSelect?.addEventListener('change', () => {
+            const selectedProject = projectSelect.value || null;
+            postKanbanMessage({ type: 'setProjectFilter', project: selectedProject });
+            if (btnDeleteProject) {
+                btnDeleteProject.style.display = selectedProject ? '' : 'none';
+            }
+        });
+
+        btnAddProject?.addEventListener('click', () => {
+            postKanbanMessage({ type: 'addProject' });
+        });
+
+        btnAssignProject?.addEventListener('click', () => {
+            const selectedProject = projectSelect?.value;
+            if (!selectedProject || selectedCards.size === 0) return;
+            postKanbanMessage({
+                type: 'assignSelectedToProject',
+                projectName: selectedProject,
+                planIds: Array.from(selectedCards)
+            });
+        });
+
+        btnDeleteProject?.addEventListener('click', () => {
+            const selectedProject = projectSelect?.value;
+            if (!selectedProject) return;
+            postKanbanMessage({ type: 'deleteProject', projectName: selectedProject });
+        });
         let testingFailSourceColumn = '';
         // Routing map state
         let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
@@ -4695,6 +4786,19 @@
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceSelector(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
+
+                    if (msg.projects !== undefined) {
+                        updateProjectDropdown(msg.projects, msg.projectFilter || null);
+                    }
+                    const projectFilterBadge = document.getElementById('project-filter-badge');
+                    if (projectFilterBadge) {
+                        if (msg.projectFilter) {
+                            projectFilterBadge.textContent = 'PROJECT: ' + msg.projectFilter;
+                            projectFilterBadge.hidden = false;
+                        } else {
+                            projectFilterBadge.hidden = true;
+                        }
+                    }
                     break;
                 }
                 case 'moveCards': {
@@ -5195,14 +5299,20 @@
 
         function updateReassignButtonVisibility() {
             const btn = document.getElementById('btn-reassign-workspace');
-            if (!btn) return;
-            const count = selectedCards.size;
-            if (count > 0) {
-                btn.disabled = false;
-                btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
-            } else {
-                btn.disabled = true;
-                btn.textContent = 'ASSIGN TO WORKSPACE';
+            if (btn) {
+                const count = selectedCards.size;
+                if (count > 0) {
+                    btn.disabled = false;
+                    btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
+                } else {
+                    btn.disabled = true;
+                    btn.textContent = 'ASSIGN TO WORKSPACE';
+                }
+            }
+
+            const btnAssign = document.getElementById('btn-assign-project');
+            if (btnAssign) {
+                btnAssign.disabled = selectedCards.size === 0;
             }
         }
 
