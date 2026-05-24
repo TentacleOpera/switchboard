@@ -216,4 +216,45 @@ includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole
 
 ---
 
+## Review Results (Post-Implementation Pass)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **CRITICAL** | `DEFAULT_ROLE_CONFIG` had `includeDependencyInstructions: false` for lead, coder, intern instead of `true`. This causes a behavioral regression: new workspaces would hide DEPENDENCY ORDER sections by default, and existing workspaces would show an unchecked checkbox in the UI but still include the section (UI/backend state mismatch until any config save overwrites the value to `false`). |
+| 2 | **CRITICAL** | `ROLE_ADDONS` had `default: false` for lead, coder, intern instead of `true`. The `renderRoleAddons()` function at kanban.html:2585 falls back to `addon.default` when no saved state exists, so the checkbox would appear unchecked by default, contradicting the plan requirement. |
+
+### Stage 2 — Balanced Synthesis
+
+Both findings are the same root cause: default values were inverted from `true` to `false`. The plan explicitly requires `true` in both `DEFAULT_ROLE_CONFIG` and `ROLE_ADDONS.default` to preserve current behavior (DEPENDENCY ORDER sections shown by default). The `?? true` fallback in `_getPromptsConfig` and `agentPromptBuilder.ts` only works when the value is `undefined`, not when it's explicitly `false`.
+
+**Action**: Fix all six occurrences (3 in `DEFAULT_ROLE_CONFIG`, 3 in `ROLE_ADDONS`) from `false` to `true`.
+
+### Fixes Applied
+
+- `src/webview/sharedDefaults.js` line 22: `DEFAULT_ROLE_CONFIG.lead.addons.includeDependencyInstructions: false` → `true`
+- `src/webview/sharedDefaults.js` line 23: `DEFAULT_ROLE_CONFIG.coder.addons.includeDependencyInstructions: false` → `true`
+- `src/webview/sharedDefaults.js` line 26: `DEFAULT_ROLE_CONFIG.intern.addons.includeDependencyInstructions: false` → `true`
+- `src/webview/sharedDefaults.js` line 83: `ROLE_ADDONS.lead[includeDependencyInstructions].default: false` → `true`
+- `src/webview/sharedDefaults.js` line 96: `ROLE_ADDONS.coder[includeDependencyInstructions].default: false` → `true`
+- `src/webview/sharedDefaults.js` line 126: `ROLE_ADDONS.intern[includeDependencyInstructions].default: false` → `true`
+
+### Validation Results
+
+- **TypeScript compilation**: No new errors introduced. Two pre-existing errors in unrelated files (import path extensions in `ClickUpSyncService.ts` and `KanbanProvider.ts` line 4705).
+- **Regex verification**: Tested 8 cases programmatically — the regex `^#{1,4}\s+Dependencies\s*$/im` correctly matches bare "Dependencies" headings and correctly rejects "Dependencies & Conflicts", "Dependencies and Stuff", etc. ALL TESTS PASSED.
+- **All other implementation items verified correct**: `PromptBuilderOptions` interface, `includeDependencyInstructions` extraction with `?? true`, `depSection` conditional, intern `depSection.trim()` addition, `_getPromptsConfig` map, all 6 call sites in `KanbanProvider.ts` (including 3 additional sites not enumerated in the plan: lines 5626, 5643, 6057).
+
+### Remaining Risks
+
+- **Existing workspace configs**: Users who already saved a role config while the defaults were `false` will have `includeDependencyInstructions: false` persisted in their `workspaceState`. The `?? true` fallback won't help because the value is explicitly `false`, not `undefined`. These users will need to manually check the checkbox. This is a one-time migration issue affecting only users who saved configs during the window when `false` defaults were deployed.
+- No other risks identified.
+
+### Final Verdict
+
+**Ready** — All plan requirements are now met. The only issue found (inverted default values) has been fixed and verified.
+
+---
+
 **Recommendation: Send to Coder**

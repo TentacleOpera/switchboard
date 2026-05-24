@@ -103,32 +103,6 @@
             flex-wrap: wrap;
         }
 
-        .project-strip {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 6px 16px;
-            border-bottom: 1px solid var(--border-color);
-            background: var(--panel-bg2);
-        }
-
-        .project-select {
-            background: #0a0a0a;
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 2px;
-            font-family: var(--font-mono);
-            font-size: 10px;
-            letter-spacing: 0.5px;
-            padding: 4px 8px;
-            min-width: 150px;
-        }
-
-        .project-select:focus {
-            outline: none;
-            border-color: var(--accent-teal-dim);
-        }
-
         .settings-strip {
             display: flex;
             align-items: center;
@@ -426,13 +400,6 @@
             filter: brightness(1.2);
         }
 
-        .worktree-count {
-            font-size: 9px;
-            font-weight: 600;
-            color: var(--accent-teal);
-            margin-left: 2px;
-        }
-
         .column-body {
             flex: 1;
             padding: 8px;
@@ -615,16 +582,6 @@
         }
         .flash {
             animation: iconFlash 0.3s ease-out forwards;
-        }
-
-        /* Column Highlight Animation for Advance Operations */
-        @keyframes columnHighlight {
-            0% { background: color-mix(in srgb, var(--accent-teal) 20%, transparent); }
-            50% { background: color-mix(in srgb, var(--accent-teal) 30%, transparent); }
-            100% { background: transparent; }
-        }
-        .column-body.highlight {
-            animation: columnHighlight 0.8s ease-out forwards;
         }
 
         .empty-state {
@@ -1848,27 +1805,6 @@
             gap: 8px;
         }
 
-        .radio-group {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-            margin-top: 12px;
-        }
-
-        .radio-option {
-            display: flex;
-            align-items: center;
-            gap: 8px;
-            cursor: pointer;
-            font-size: 13px;
-            color: var(--text-primary);
-        }
-
-        .radio-option input[type="radio"] {
-            cursor: pointer;
-            accent-color: var(--accent-teal);
-        }
-
         .checkbox-item {
             display: flex;
             align-items: center;
@@ -1917,7 +1853,7 @@
         <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="kanban-tab-btn" data-tab="dependencies">DEPENDENCIES</button>
-        <button class="kanban-tab-btn" data-tab="uat">test</button>
+        <button class="kanban-tab-btn" data-tab="uat">UAT</button>
         <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
     </div>
 
@@ -1947,15 +1883,6 @@
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
             <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
-        </div>
-        <div class="project-strip" id="project-strip">
-            <select id="project-select" class="project-select" title="Filter by project">
-                <option value="">All Projects</option>
-            </select>
-            <button id="btn-add-project" class="strip-btn" title="Add new project">+ ADD PROJECT</button>
-            <button id="btn-assign-project" class="strip-btn" title="Assign selected plans to project" disabled>ASSIGN TO PROJECT</button>
-            <button id="btn-delete-project" class="strip-btn" title="Delete selected project" style="display:none;">DELETE PROJECT</button>
-            <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
         </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
@@ -2091,14 +2018,8 @@
         <!-- Agent Visibility & CLI Commands -->
         <div class="db-subsection">
           <div class="subsection-header"><span>Agent Visibility &amp; CLI Commands</span></div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="gatherer" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Context Gatherer</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Pre-planning research and context briefs</span></div>
-          <div class="agent-description">Researches codebase context for plans and writes context briefs before planning review.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="code_researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Code Researcher</label><input type="text" data-role="code_researcher" id="agents-tab-cmd-code-researcher" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
-          <div class="agent-description">Uses research to scope and improve coding plans with codebase exploration and external research.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
-          <div class="agent-description">Segregates planned files into distinct routine and complex task batches.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
           <div class="agent-description">Implements high-complexity files, complex refactors, and core architecture changes.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
@@ -2114,20 +2035,19 @@
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="ticket_updater" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Ticket Updater</label><input type="text" data-role="ticket_updater" id="agents-tab-cmd-ticket-updater" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Researcher</label><input type="text" data-role="researcher" id="agents-tab-cmd-researcher" placeholder="e.g. claude" style="flex:1;"></div>
-          <div class="agent-description">Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).</div>
+          <div class="agent-description">Conducts semantic code searches and web research to discover necessary implementation context.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="research_planner" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Research Planner</label><input type="text" data-role="research_planner" id="agents-tab-cmd-research-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="agent-description">Scopes complex multi-part plans by gathering extensive context using deep research.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
+          <div class="agent-description">Segregates planned files into distinct routine and complex task batches.</div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="gatherer" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Context Gatherer</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Clipboard context gathering only</span></div>
+          <div class="agent-description">Aggregates codebase files, directory structure, and relevant symbols into the active prompt context.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="jules" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Jules</label><span style="flex:1;font-size:10px;color:var(--text-secondary);">Cloud coder visibility only</span></div>
           <div class="agent-description">Offloads tasks to Google Jules cloud-coding service for quota-free background execution.</div>
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
             <span>Auto-sync repo before sending to Jules</span>
           </label>
-          <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-            <input id="agents-tab-git-worktrees" type="checkbox" style="width:auto;margin:0;">
-            <span>Use git worktrees for coder agents</span>
-          </label>
-          <div id="worktree-auto-commit-note" style="display:none;font-size:10px;color:var(--text-muted);margin-left:24px;margin-top:2px;">
-            Uncommitted changes are auto-committed to main before each worktree is created.
-          </div>
         </div>
 
         <!-- Custom Agents -->
@@ -2160,11 +2080,9 @@
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-git-prohibition" style="width:auto;margin:0;"> Git Prohibition</label>                <label class="checkbox-label"><input type="checkbox" id="ca-addon-workspace-detection" style="width:auto;margin:0;"> Workspace Type Detection</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-inline-challenge" style="width:auto;margin:0;"> Inline Adversarial Challenge</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-accuracy" style="width:auto;margin:0;"> Accuracy Mode</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-suppress-walkthrough" style="width:auto;margin:0;"> Suppress Walkthrough Artifact</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-pair-programming" style="width:auto;margin:0;"> Pair Programming (Complex only)</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-aggressive-pair" style="width:auto;margin:0;"> Aggressive Pair Programming</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-advanced-reviewer" style="width:auto;margin:0;"> Advanced Regression Analysis</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-caveman-output" style="width:auto;margin:0;"> Caveman Output</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-dependency-check" style="width:auto;margin:0;"> Dependency Check</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-split-plan" style="width:auto;margin:0;"> Split Plan (Routine/Complex files)</label>
                 <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
@@ -2215,22 +2133,19 @@
           <div class="role-selector-section">
           <label for="roleSelect">Role:</label>
           <select id="roleSelect">
-            <option value="gatherer">Context Gatherer</option>
             <option value="planner" selected>Planner</option>
-            <option value="code_researcher">Code Researcher</option>
-            <option value="splitter">Splitter Agent</option>
             <option value="lead">Lead Coder</option>
             <option value="coder">Coder</option>
-            <option value="intern">Intern</option>
             <option value="reviewer">Reviewer</option>
             <option value="tester">Acceptance Tester</option>
+            <option value="intern">Intern</option>
             <option value="analyst">Analyst</option>
             <option value="ticket_updater">Ticket Updater</option>
             <option value="researcher">Researcher</option>
-            <option value="jules">Jules</option>
+            <option value="research_planner">Research Planner</option>
+            <option value="splitter">Splitter Agent</option>
             <optgroup id="customAgentsGroup" label="Custom Agents"></optgroup>
           </select>
-          <div id="roleDescription" class="agent-description" style="margin-top: 8px; margin-left: 0;"></div>
           </div>
         </div>
 
@@ -2305,67 +2220,45 @@
                   <span class="tooltip">Instruct agent to ignore previous checkpoint summaries from prior sessions</span>
                 </label>
 
-                <label class="checkbox-item" title="Compress responses to reduce tokens by 65-75% while maintaining accuracy">
-                  <input type="checkbox" id="plannerAddonCavemanOutput">
-                  <span>Caveman Output</span>
-                  <span class="tooltip">Compress responses to reduce tokens by 65-75% while maintaining accuracy</span>
-                </label>
-
                 <label class="checkbox-item" title="Skip project compilation step in generated prompts">
                   <input type="checkbox" id="plannerAddonSkipCompilation">
                   <span>Do not recompile the project</span>
                   <span class="tooltip">Skip compilation step to save tokens</span>
                 </label>
 
-                 <label class="checkbox-item" title="Skip automated test execution in generated prompts">
+                <label class="checkbox-item" title="Skip automated test execution in generated prompts">
                   <input type="checkbox" id="plannerAddonSkipTests">
                   <span>Do not run automated tests</span>
                   <span class="tooltip">Skip automated test execution to save tokens</span>
-                </label>
-
-                <label class="checkbox-item" title="When processing multiple plans, instruct platform to use parallel subagents (if supported)">
-                  <input type="checkbox" id="plannerAddonUseSubagents">
-                  <span>Use Subagents for Multiple Plans</span>
-                  <span class="tooltip">When processing multiple plans, instruct platform to use parallel subagents (if supported)</span>
                 </label>
               </div>
             </div>
           </div>
         </div>
         
-        <!-- Research Complexity Section (for researcher and code_researcher) -->
-        <div id="researchComplexityConfig" class="role-config" style="display: none;">
+        <!-- Research Planner-specific configuration -->
+        <div id="research_plannerConfig" class="role-config" style="display: none;">
           <div class="db-subsection">
-            <div class="subsection-header"><span>Research Complexity</span></div>
-            <div class="config-section">
-              <p class="section-desc">Select the depth of research for the generated prompt.</p>
+            <div class="subsection-header"><span>Deep Planning Settings</span></div>
+            <div class="config-section addons-section">
+              <p class="section-desc">Configure research depth and deep planning behavior.</p>
               
-              <div class="radio-group">
-                <label class="radio-option">
-                  <input type="radio" name="researchComplexity" value="quick">
-                  <span>Quick (5-10 sources)</span>
+              <div class="checkbox-group">
+                <label class="checkbox-item" title="Enable full deep planning protocol (50-100 sources)">
+                  <input type="checkbox" id="rp-enable-deep-planning">
+                  <span>Enable Deep Planning</span>
+                  <span class="tooltip">Triggers deep_planning skill protocol. Skips planning proposal phase.</span>
                 </label>
-                <label class="radio-option">
-                  <input type="radio" name="researchComplexity" value="standard">
-                  <span>Standard (15-30 sources)</span>
-                </label>
-                <label class="radio-option">
-                  <input type="radio" name="researchComplexity" value="deep" checked>
-                  <span>Deep (50-100+ sources)</span>
-                </label>
-                <label class="radio-option">
-                  <input type="radio" name="researchComplexity" value="academic">
-                  <span>Academic (100-200+ sources)</span>
-                </label>
-              </div>
-
-              <!-- Save to local docs toggle (researcher only) -->
-              <div id="saveToLocalDocsRow" class="checkbox-group" style="margin-top: 16px; display: none;">
-                <label class="checkbox-item" title="Save research results to .switchboard/docs/ for later viewing">
-                  <input type="checkbox" id="saveToLocalDocs">
-                  <span>Save Results to Local Docs</span>
-                  <span class="tooltip">Instructs the agent to save research results to .switchboard/docs/ using write_to_file</span>
-                </label>
+                
+                <div class="input-group" style="margin-top:10px;">
+                  <label for="rp-research-depth">Research Depth:</label>
+                  <select id="rp-research-depth" style="flex:1;">
+                    <option value="quick">Quick (5-10 sources)</option>
+                    <option value="standard">Standard (15-30 sources)</option>
+                    <option value="deep" selected>Deep (50-100+ sources)</option>
+                    <option value="academic">Academic (100-200+ sources)</option>
+                  </select>
+                </div>
               </div>
             </div>
           </div>
@@ -2385,17 +2278,19 @@
           </div>
         </div>
         
-
         <!-- Preview section (shown for all roles) -->
         <div class="db-subsection">
           <div class="subsection-header">
-            <span>Edit Prompt Template</span>
+            <span>Preview</span>
             <span id="previewPlanIndicator" style="margin-left: 8px; font-size: 10px; font-weight: normal; text-transform: none; letter-spacing: 0;"></span>
           </div>
           <div class="config-section preview-section">
             <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:8px;">
               <span class="section-desc" style="margin:0;">Final composed prompt sent to the agent (editable):</span>
-              
+              <label style="display:flex; align-items:center; gap:6px; font-size:11px; color:var(--text-secondary); cursor:pointer;">
+                <input type="checkbox" id="useSelectedInPreview">
+                <span>Use selected plans in preview</span>
+              </label>
             </div>
             <textarea id="promptPreview"></textarea>
           </div>
@@ -2529,29 +2424,6 @@
         let currentRole = 'planner';
         let roleConfigs = JSON.parse(JSON.stringify(DEFAULT_CONFIG));
 
-        const ROLE_DESCRIPTIONS = {
-            planner: 'Writes detailed step-by-step implementation plans and creates work checklists.',
-            lead: 'Implements high-complexity files, complex refactors, and core architecture changes.',
-            coder: 'Implements low-complexity boilerplate, routine functions, and minor enhancements.',
-            intern: 'Executes simple, repetitive code edits and heavily guided tasks at lowest cost.',
-            reviewer: 'Evaluates completed implementations against plans, checking for regressions and scope creep.',
-            tester: 'Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.',
-            analyst: 'Researches general-purpose technical queries and outlines plan dependencies.',
-            ticket_updater: 'Synchronizes plan state and comments back to connected project management systems (e.g. ClickUp/Linear).',
-            researcher: 'Researches general topics and saves results as documents to local docs storage (.switchboard/docs/).',
-            code_researcher: 'Uses research to scope and improve coding plans with codebase exploration and external research.',
-            splitter: 'Segregates planned files into distinct routine and complex task batches.',
-            gatherer: 'Researches codebase context for plans and writes context briefs before planning review.',
-            jules: 'Offloads tasks to Google Jules cloud-coding service for quota-free background execution.'
-        };
-
-        function updateRoleDescription() {
-            const descEl = document.getElementById('roleDescription');
-            if (descEl) {
-                descEl.textContent = ROLE_DESCRIPTIONS[currentRole] || '';
-            }
-        }
-
         function loadRoleConfigs() {
             const roles = ROLE_KEYS;
             roles.forEach(role => {
@@ -2574,13 +2446,13 @@
 
         async function handleRoleChange() {
             const plannerConfig = document.getElementById('plannerConfig');
-            const researchComplexityConfig = document.getElementById('researchComplexityConfig');
+            const researchPlannerConfig = document.getElementById('research_plannerConfig');
             const promptCustomization = document.getElementById('promptCustomization');
-            if (!plannerConfig || !researchComplexityConfig || !promptCustomization) return;
+            if (!plannerConfig || !researchPlannerConfig || !promptCustomization) return;
 
             plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
-            researchComplexityConfig.style.display = (currentRole === 'researcher' || currentRole === 'code_researcher') ? 'block' : 'none';
-            promptCustomization.style.display = (currentRole === 'planner' || currentRole === 'researcher' || currentRole === 'code_researcher') ? 'none' : 'block';
+            researchPlannerConfig.style.display = currentRole === 'research_planner' ? 'block' : 'none';
+            promptCustomization.style.display = (currentRole === 'planner') ? 'none' : 'block';
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
@@ -2592,23 +2464,12 @@
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
                 document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
                 document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
-                document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
-                document.getElementById('plannerAddonUseSubagents').checked = config.addons?.useSubagents !== false;
-            } else if (currentRole === 'researcher' || currentRole === 'code_researcher') {
-                const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
-                const complexity = config.researchComplexity || 'deep';
-                const radio = document.querySelector(`input[name="researchComplexity"][value="${complexity}"]`);
-                if (radio) radio.checked = true;
-
-                const saveToLocalDocsRow = document.getElementById('saveToLocalDocsRow');
-                if (saveToLocalDocsRow) {
-                    saveToLocalDocsRow.style.display = currentRole === 'researcher' ? 'block' : 'none';
-                    if (currentRole === 'researcher') {
-                        document.getElementById('saveToLocalDocs').checked = !!config.saveToLocalDocs;
-                    }
-                }
+            } else if (currentRole === 'research_planner') {
+                const config = roleConfigs.research_planner;
+                document.getElementById('rp-enable-deep-planning').checked = !!config.enableDeepPlanning;
+                document.getElementById('rp-research-depth').value = config.researchDepth || 'deep';
                 renderRoleAddons(currentRole);
             } else {
                 renderRoleAddons(currentRole);
@@ -2616,7 +2477,7 @@
 
             const previewEl = document.getElementById('promptPreview');
             if (previewEl) {
-                previewEl.readOnly = (currentRole === 'planner' || currentRole === 'code_researcher');
+                previewEl.readOnly = (currentRole === 'planner' || currentRole === 'research_planner');
             }
 
             refreshPreview();
@@ -2668,7 +2529,13 @@
             const preview = document.getElementById('promptPreview');
             if (!preview) return;
             
+            const useSelected = document.getElementById('useSelectedInPreview')?.checked;
+            const sessionIds = useSelected && selectedCards.size > 0 ? Array.from(selectedCards) : undefined;
+            
             const msg = { type: 'getPromptPreview', role: currentRole };
+            if (sessionIds) {
+                msg.sessionIds = sessionIds;
+            }
             postKanbanMessage(msg);
             preview.value = 'Loading preview...';
         }
@@ -2706,11 +2573,9 @@
           document.getElementById('ca-addon-git-prohibition').checked = addons.gitProhibitionEnabled === true;          document.getElementById('ca-addon-workspace-detection').checked = addons.workspaceTypeDetection === true;
           document.getElementById('ca-addon-inline-challenge').checked = addons.includeInlineChallenge === true;
           document.getElementById('ca-addon-accuracy').checked = addons.accurateCodingEnabled === true;
-          document.getElementById('ca-addon-suppress-walkthrough').checked = addons.suppressWalkthrough === true;
           document.getElementById('ca-addon-pair-programming').checked = addons.pairProgrammingEnabled === true;
           document.getElementById('ca-addon-aggressive-pair').checked = addons.aggressivePairProgramming === true;
           document.getElementById('ca-addon-advanced-reviewer').checked = addons.advancedReviewerEnabled === true;
-          document.getElementById('ca-addon-caveman-output').checked = addons.cavemanOutput === true;
           document.getElementById('ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
           document.getElementById('ca-addon-split-plan').checked = addons.splitPlan === true;
           document.getElementById('ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
@@ -2758,11 +2623,9 @@
                 workspaceTypeDetection: document.getElementById('ca-addon-workspace-detection').checked,
                 includeInlineChallenge: document.getElementById('ca-addon-inline-challenge').checked,
                 accurateCodingEnabled: document.getElementById('ca-addon-accuracy').checked,
-                suppressWalkthrough: document.getElementById('ca-addon-suppress-walkthrough').checked,
                 pairProgrammingEnabled: document.getElementById('ca-addon-pair-programming').checked,
                 aggressivePairProgramming: document.getElementById('ca-addon-aggressive-pair').checked,
                 advancedReviewerEnabled: document.getElementById('ca-addon-advanced-reviewer').checked,
-                cavemanOutput: document.getElementById('ca-addon-caveman-output').checked,
                 dependencyCheckEnabled: document.getElementById('ca-addon-dependency-check').checked,
                 splitPlan: document.getElementById('ca-addon-split-plan').checked,
                 complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
@@ -2861,7 +2724,6 @@
           return {
             commands, visibleAgents,
             julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
-            gitWorktreesEnabled: document.getElementById('agents-tab-git-worktrees')?.checked ?? false,
           };
         }
         function agentsTabSaveConfig() {
@@ -2875,16 +2737,6 @@
         document.querySelectorAll('#agents-tab-content input[type="text"][data-role]').forEach(i => {
           i.addEventListener('blur', agentsTabSaveConfig);
         });
-
-        // Toggle worktree auto-commit note visibility based on checkbox state
-        const worktreeCb = document.getElementById('agents-tab-git-worktrees');
-        const worktreeNote = document.getElementById('worktree-auto-commit-note');
-        if (worktreeCb && worktreeNote) {
-          worktreeNote.style.display = worktreeCb.checked ? 'block' : 'none';
-          worktreeCb.addEventListener('change', () => {
-            worktreeNote.style.display = worktreeCb.checked ? 'block' : 'none';
-          });
-        }
         // NOTE: Prompts tab autosave is handled by initPromptsTabListeners() and saveRoleConfig(),
         // which correctly read from actual element IDs (plannerAddon*, roleAddonsGroup, etc.).
         // The old promptsTabCollectConfig() was removed — it referenced non-existent element IDs
@@ -2958,11 +2810,10 @@
             { id: 'PLAN REVIEWED', label: 'Planned', role: 'planner', autobanEnabled: true },
             {
                 id: 'CONTEXT GATHERER',
-                label: 'Context Gatherer',
+                label: 'Gather',
                 role: 'gatherer',
-                kind: 'review',
-                autobanEnabled: true,
-                dragDropMode: 'cli',
+                kind: 'gather',
+                autobanEnabled: false,
                 hideWhenNoAgent: true
             },
             { id: 'LEAD CODED', label: 'Lead Coder', role: 'lead', autobanEnabled: true },
@@ -2978,7 +2829,6 @@
         let currentCards = [];
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
-        window.worktreeCounts = {};
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = false;
         let clearTerminalBeforePrompt = false;
@@ -3013,62 +2863,6 @@
         let activeIntegration = null;
         const selectedCards = new Set();
         let testingFailSessionIds = [];
-
-        // Project strip elements and helpers
-        const projectSelect = document.getElementById('project-select');
-        const btnAddProject = document.getElementById('btn-add-project');
-        const btnAssignProject = document.getElementById('btn-assign-project');
-        const btnDeleteProject = document.getElementById('btn-delete-project');
-
-        function updateProjectDropdown(projects, activeProjectFilter) {
-            if (!projectSelect) return;
-            const currentValue = activeProjectFilter || projectSelect.value;
-            projectSelect.innerHTML = '<option value="">All Projects</option>';
-            (projects || []).forEach(p => {
-                const opt = document.createElement('option');
-                opt.value = p;
-                opt.textContent = p;
-                projectSelect.appendChild(opt);
-            });
-            // Restore selection
-            if (currentValue && [...projectSelect.options].some(o => o.value === currentValue)) {
-                projectSelect.value = currentValue;
-            } else {
-                projectSelect.value = '';
-            }
-            // Show delete button only when a real project is selected
-            if (btnDeleteProject) {
-                btnDeleteProject.style.display = projectSelect.value ? '' : 'none';
-            }
-        }
-
-        projectSelect?.addEventListener('change', () => {
-            const selectedProject = projectSelect.value || null;
-            postKanbanMessage({ type: 'setProjectFilter', project: selectedProject });
-            if (btnDeleteProject) {
-                btnDeleteProject.style.display = selectedProject ? '' : 'none';
-            }
-        });
-
-        btnAddProject?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'addProject' });
-        });
-
-        btnAssignProject?.addEventListener('click', () => {
-            const selectedProject = projectSelect?.value;
-            if (!selectedProject || selectedCards.size === 0) return;
-            postKanbanMessage({
-                type: 'assignSelectedToProject',
-                projectName: selectedProject,
-                planIds: Array.from(selectedCards)
-            });
-        });
-
-        btnDeleteProject?.addEventListener('click', () => {
-            const selectedProject = projectSelect?.value;
-            if (!selectedProject) return;
-            postKanbanMessage({ type: 'deleteProject', projectName: selectedProject });
-        });
         let testingFailSourceColumn = '';
         // Routing map state
         let routingMapConfig = { lead: [7, 8, 9, 10], coder: [4, 5, 6], intern: [1, 2, 3] };
@@ -3092,7 +2886,6 @@
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
         const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
-        const ICON_MERGE_WORKTREES = '{{ICON_MERGE_WORKTREES}}';
 
         // Tab switching logic
         const kanbanTabButtons = document.querySelectorAll('.kanban-tab-btn');
@@ -3145,7 +2938,6 @@
                 if (tabName === 'prompts') {
                   postKanbanMessage({ type: 'getCustomAgents' });
                   loadRoleConfigs();
-                  updateRoleDescription();
                 }
             });
         });
@@ -3168,7 +2960,6 @@
                 roleSelect.addEventListener('change', (e) => {
                     currentRole = e.target.value;
                     handleRoleChange();
-                    updateRoleDescription();
                     postKanbanMessage({ type: 'saveSetting', key: 'selectedRole', value: currentRole });
                 });
             }
@@ -3195,35 +2986,42 @@
             const promptPreview = document.getElementById('promptPreview');
             if (promptPreview) {
                 promptPreview.addEventListener('change', (e) => {
-                    if (currentRole === 'planner' || currentRole === 'code_researcher') return; // read-only for planners
+                    if (currentRole === 'planner' || currentRole === 'research_planner') return; // read-only for planners
                     if (!roleConfigs[currentRole]) roleConfigs[currentRole] = { prompt: '', addons: {} };
                     roleConfigs[currentRole].prompt = e.target.value;
                     saveRoleConfig(currentRole);
                 });
             }
-            // Research complexity radio buttons (shared by researcher and code_researcher)
-            document.querySelectorAll('input[name="researchComplexity"]').forEach(radio => {
-                radio.addEventListener('change', (e) => {
-                    if (!roleConfigs[currentRole]) roleConfigs[currentRole] = { prompt: '', addons: {} };
-                    roleConfigs[currentRole].researchComplexity = e.target.value;
-                    saveRoleConfig(currentRole);
+            const useSelectedInPreview = document.getElementById('useSelectedInPreview');
+            if (useSelectedInPreview) {
+                useSelectedInPreview.addEventListener('change', () => {
                     refreshPreview();
                 });
-            });
+            }
 
-            // Save to local docs listener (researcher only)
-            const saveToLocalDocsCheckbox = document.getElementById('saveToLocalDocs');
-            if (saveToLocalDocsCheckbox) {
-                saveToLocalDocsCheckbox.addEventListener('change', (e) => {
-                    if (!roleConfigs.researcher) roleConfigs.researcher = { prompt: '', addons: {} };
-                    roleConfigs.researcher.saveToLocalDocs = e.target.checked;
-                    saveRoleConfig('researcher');
+            // Research Planner specific listeners
+            const rpEnableDeepPlanning = document.getElementById('rp-enable-deep-planning');
+            if (rpEnableDeepPlanning) {
+                rpEnableDeepPlanning.addEventListener('change', (e) => {
+                    if (!roleConfigs.research_planner) roleConfigs.research_planner = { enableDeepPlanning: false, researchDepth: 'deep', addons: {} };
+                    roleConfigs.research_planner.enableDeepPlanning = e.target.checked;
+                    saveRoleConfig('research_planner');
+                    refreshPreview();
+                });
+            }
+
+            const rpResearchDepth = document.getElementById('rp-research-depth');
+            if (rpResearchDepth) {
+                rpResearchDepth.addEventListener('change', (e) => {
+                    if (!roleConfigs.research_planner) roleConfigs.research_planner = { enableDeepPlanning: false, researchDepth: 'deep', addons: {} };
+                    roleConfigs.research_planner.researchDepth = e.target.value;
+                    saveRoleConfig('research_planner');
                     refreshPreview();
                 });
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonUseSubagents'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -3237,7 +3035,6 @@
                     });
                 }
             });
-
         }
         initPromptsTabListeners();
 
@@ -3388,71 +3185,6 @@
             void btn.offsetWidth;
             btn.classList.add('flash');
             btn.addEventListener('animationend', () => btn.classList.remove('flash'), { once: true });
-        }
-
-        /**
-         * Move cards optimistically in the DOM before backend processing.
-         * @param {string[]} sessionIds - Session IDs to move
-         * @param {string} sourceColumn - Logical source column (may be 'CODED_AUTO')
-         * @param {string} targetColumn - Logical target column
-         */
-        function moveCardsOptimistically(sessionIds, sourceColumn, targetColumn) {
-            const targetBody = document.getElementById('col-' + targetColumn);
-            if (!targetBody) return;
-
-            // Remove empty state from target if present
-            const emptyState = targetBody.querySelector('.empty-state');
-            if (emptyState) emptyState.remove();
-
-            // Track which source DOM columns need empty-state check and count decrements
-            // Key: DOM column ID, Value: count of cards moved from that DOM col
-            const sourceDomColCounts = {};
-            let actualMovedCount = 0;
-
-            sessionIds.forEach(id => {
-                const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
-                if (!cardEl) return;
-
-                // Resolve actual source column from currentCards (cards have no data-column attribute)
-                const cardData = currentCards.find(c => (c.sessionId || c.planId) === id);
-                const actualColumn = cardData ? cardData.column : sourceColumn;
-
-                // When coders are collapsed, actual coder columns display in CODED_AUTO DOM container
-                const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                const sourceDomCol = (collapseCodersEnabled && CODED_IDS.includes(actualColumn))
-                    ? 'CODED_AUTO'
-                    : actualColumn;
-
-                // Move card to target with arrival animation
-                cardEl.classList.add('card-dropped');
-                targetBody.appendChild(cardEl);
-
-                // Update currentCards so subsequent lookups see the new column
-                if (cardData) cardData.column = targetColumn;
-
-                // Track for post-loop empty state + count updates
-                if (!sourceDomColCounts[sourceDomCol]) sourceDomColCounts[sourceDomCol] = 0;
-                sourceDomColCounts[sourceDomCol]++;
-                actualMovedCount++;
-            });
-
-            // Update source column empty states and counts
-            Object.entries(sourceDomColCounts).forEach(([domCol, movedCount]) => {
-                const sourceBody = document.getElementById('col-' + domCol);
-                if (sourceBody && sourceBody.querySelectorAll('.kanban-card').length === 0) {
-                    sourceBody.innerHTML = '<div class="empty-state">No plans</div>';
-                }
-                const srcCount = document.getElementById('count-' + domCol);
-                if (srcCount) {
-                    srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent || '0') - movedCount));
-                }
-            });
-
-            // Increment target count by actual moved count (not sessionIds.length)
-            const tgtCount = document.getElementById('count-' + targetColumn);
-            if (tgtCount) {
-                tgtCount.textContent = String((parseInt(tgtCount.textContent || '0') + actualMovedCount));
-            }
         }
 
         /** Get all selected session IDs within a specific column. */
@@ -3660,15 +3392,6 @@
                 const backlogToggleBtn = isCreated
                     ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'NEW' : 'BACKLOG'}</button>`
                     : '';
-                const isCodeReviewed = def.id === 'CODE REVIEWED';
-                const worktreeCount = window.worktreeCounts?.[def.id] || 0;
-                const mergeBtn = (isCodeReviewed && worktreeCount > 0)
-                    ? `<button class="column-icon-btn merge-worktrees-btn" data-action="mergeWorktrees" data-column="${escapeAttr(def.id)}" data-tooltip="Merge git worktrees for reviewed plans (${worktreeCount} active)">
-                           <img src="${ICON_MERGE_WORKTREES}" alt="Merge Worktrees" style="width: 16px; height: 16px;">
-                           <span class="worktree-count">(${worktreeCount})</span>
-                       </button>`
-                    : '';
-
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
                             ${backlogToggleBtn}
@@ -3679,7 +3402,6 @@
                     : `<div style="display: flex; align-items: center; gap: 4px;">
                             ${complexityRoutingToggle}
                             ${modeToggle}
-                            ${mergeBtn}
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`;
                 const subline = hasAgent
@@ -3807,37 +3529,16 @@
                     flashIconBtn(btn);
                     const action = btn.dataset.action;
                     const column = btn.dataset.column;
-                    // CODED_AUTO is synthetic — resolve to a real coder column for backend messages.
+                    // CODED_AUTO is synthetic — resolve to a real coder column for getNextColumn and backend messages.
+                    // All coded columns share the same next column (CODE REVIEWED), so using the first real one works.
                     const backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
-                    // For getNextColumn, coded columns are parallel (same stage) — must resolve to the
-                    // LAST visible coded column so getNextColumn returns the next PIPELINE STAGE
-                    // (e.g. CODE REVIEWED), not the next coder column. Same pattern as drag-drop (line 4206).
-                    const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                    let nextColSource = backendColumn;
-                    if (CODED_IDS.includes(backendColumn) || column === 'CODED_AUTO') {
-                        const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
-                        nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
-                    }
-                    const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'mergeWorktrees') return;
+                    const nextCol = getNextColumn(backendColumn);
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed') return;
 
                     switch (action) {
-                        case 'mergeWorktrees': {
-                            postKanbanMessage({ type: 'mergeWorktrees', workspaceRoot: currentWorkspaceRoot });
-                            break;
-                        }
                         case 'moveSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
-                            // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
-                                const targetBody = document.getElementById('col-' + nextCol);
-                                if (targetBody) {
-                                    targetBody.classList.add('highlight');
-                                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                                }
-                                moveCardsOptimistically(ids, column, nextCol);
-                            }
                             postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
@@ -3845,15 +3546,6 @@
                         case 'moveAll': {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
-                            // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
-                                const targetBody = document.getElementById('col-' + nextCol);
-                                if (targetBody) {
-                                    targetBody.classList.add('highlight');
-                                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                                }
-                                moveCardsOptimistically(ids, column, nextCol);
-                            }
                             // CODED_AUTO: backend moveAll filters by single column, so send explicit IDs instead
                             if (column === 'CODED_AUTO') {
                                 postKanbanMessage({ type: 'moveSelected', column: backendColumn, sessionIds: ids });
@@ -3866,15 +3558,6 @@
                         case 'promptSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
-                            // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
-                                const targetBody = document.getElementById('col-' + nextCol);
-                                if (targetBody) {
-                                    targetBody.classList.add('highlight');
-                                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                                }
-                                moveCardsOptimistically(ids, column, nextCol);
-                            }
                             postKanbanMessage({ type: 'promptSelected', column: backendColumn, sessionIds: ids });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
@@ -3882,15 +3565,6 @@
                         case 'promptAll': {
                             const ids = getAllInColumn(column);
                             if (ids.length === 0) return;
-                            // Optimistic UI: highlight target column and move cards immediately
-                            if (nextCol) {
-                                const targetBody = document.getElementById('col-' + nextCol);
-                                if (targetBody) {
-                                    targetBody.classList.add('highlight');
-                                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
-                                }
-                                moveCardsOptimistically(ids, column, nextCol);
-                            }
                             // CODED_AUTO: backend promptAll filters by single column, so send explicit IDs instead
                             if (column === 'CODED_AUTO') {
                                 postKanbanMessage({ type: 'promptSelected', column: backendColumn, sessionIds: ids });
@@ -4148,6 +3822,9 @@
                         }
                     }
                     updateReassignButtonVisibility();
+                    if (document.getElementById('useSelectedInPreview')?.checked) {
+                        refreshPreview();
+                    }
                 });
 
                 // Re-apply selection state after re-render
@@ -4181,12 +3858,16 @@
 
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
+                    btn.disabled = true;
+                    btn.textContent = 'Copied!';
+                    btn.classList.add('copied');
+
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                    const sessionId = btn.dataset.session || '';
                     postKanbanMessage({
-                        type: 'promptSelected',
+                        type: 'copyPlanLink',
+                        sessionId: btn.dataset.session || '',
+                        planId: btn.dataset.planId || '',
                         column,
-                        sessionIds: [sessionId],
                         workspaceRoot: btn.dataset.workspaceRoot
                     });
                 });
@@ -4220,7 +3901,22 @@
                 });
             });
 
-
+            document.querySelectorAll('.card-btn.copy-gather').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    const sessionId = btn.dataset.session || '';
+                    const planId = btn.dataset.planId || '';
+                    const workspaceRoot = btn.dataset.workspaceRoot;
+                    postKanbanMessage({ type: 'copyGatherPrompt', sessionId, planId, workspaceRoot });
+                    // Visual feedback
+                    const originalText = btn.textContent;
+                    btn.textContent = 'COPIED';
+                    btn.disabled = true;
+                    setTimeout(() => {
+                        btn.textContent = originalText;
+                        btn.disabled = false;
+                    }, 2000);
+                });
+            });
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
@@ -4331,7 +4027,9 @@
                 : (!isCompleted && showingBacklog && card.column === 'BACKLOG')
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
-
+            const copyGatherBtn = (card.column === 'CONTEXT GATHERER')
+                ? `<button class="card-btn copy-gather" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Copy gather prompt to clipboard">📋 Copy Gather</button>`
+                : '';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
                 : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
@@ -4359,6 +4057,7 @@
                             ${pairProgramBtn}
                             ${primaryActionBtn}
                             ${backlogActionBtn}
+                            ${copyGatherBtn}
                         </div>
                         <div style="display: flex; gap: 4px;">
                             <button class="card-btn icon-btn review" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Review plan">
@@ -4828,7 +4527,9 @@
                 }
             });
 
-
+            // Check for CONTEXT GATHERER -> coded column transition for execute prompt copy
+            const codedColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+            const isGatherToCoded = sourceColumnForPrompt === 'CONTEXT GATHERER' && codedColumns.includes(effectiveTargetColumn);
 
             if (validIds.length > 0) {
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
@@ -4852,7 +4553,10 @@
                         }
                     }
 
-
+                    // Silent clipboard copy for gather -> coded transition (single card only)
+                    if (isGatherToCoded && forwardIds.length === 1) {
+                        postKanbanMessage({ type: 'copyExecutePrompt', sessionId: forwardIds[0], workspaceRoot });
+                    }
 
                     if (backwardIds.length > 0) {
                         postKanbanMessage({ type: 'moveCardBackwards', sessionIds: backwardIds, targetColumn: effectiveTargetColumn, workspaceRoot });
@@ -4878,19 +4582,6 @@
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceSelector(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
-
-                    if (msg.projects !== undefined) {
-                        updateProjectDropdown(msg.projects, msg.projectFilter || null);
-                    }
-                    const projectFilterBadge = document.getElementById('project-filter-badge');
-                    if (projectFilterBadge) {
-                        if (msg.projectFilter) {
-                            projectFilterBadge.textContent = 'PROJECT: ' + msg.projectFilter;
-                            projectFilterBadge.hidden = false;
-                        } else {
-                            projectFilterBadge.hidden = true;
-                        }
-                    }
                     break;
                 }
                 case 'moveCards': {
@@ -4943,7 +4634,6 @@
                             if (roleSelect) roleSelect.value = value;
                         }
                         handleRoleChange();
-                        updateRoleDescription();
                     } else if (key.startsWith('roleConfig_')) {
                         const role = key.replace('roleConfig_', '');
                         roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role]));
@@ -5020,7 +4710,6 @@
                         renderBoard(currentCards);
                         updateAllColumnAgents();
                         updateAutobanIndicators();
-                        renderAutobanPanel();
                     }
                     break;
                 case 'dependencyMapData':
@@ -5280,11 +4969,6 @@
                   });
                   const julesSyncCb = document.getElementById('agents-tab-jules-auto-sync');
                   if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
-                  const gitWorktreesCb = document.getElementById('agents-tab-git-worktrees');
-                  if (gitWorktreesCb) gitWorktreesCb.checked = !!msg.gitWorktreesEnabled;
-                  // Show/hide the auto-commit note based on checkbox state
-                  const worktreeHydrateNote = document.getElementById('worktree-auto-commit-note');
-                  if (worktreeHydrateNote) worktreeHydrateNote.style.display = !!msg.gitWorktreesEnabled ? 'block' : 'none';
                   // Sync lastVisibleAgents and column/Jules visibility.
                   // Unlike the visibleAgents handler (which receives defaults-merged data
                   // and uses a truthiness guard), startupCommands sends raw state.visibleAgents
@@ -5306,19 +4990,6 @@
                 case 'julesAutoSyncSetting': {
                   const el = document.getElementById('agents-tab-jules-auto-sync');
                   if (el) el.checked = msg.enabled === true;
-                  break;
-                }
-                case 'gitWorktreesSetting': {
-                  const el = document.getElementById('agents-tab-git-worktrees');
-                  if (el) el.checked = msg.enabled === true;
-                  const noteEl = document.getElementById('worktree-auto-commit-note');
-                  if (noteEl) noteEl.style.display = msg.enabled === true ? 'block' : 'none';
-                  break;
-                }
-                case 'worktreeCounts': {
-                  window.worktreeCounts = msg.counts;
-                  renderColumns();
-                  renderBoard(currentCards);
                   break;
                 }
                 case 'saveCustomAgentResult': {
@@ -5410,20 +5081,14 @@
 
         function updateReassignButtonVisibility() {
             const btn = document.getElementById('btn-reassign-workspace');
-            if (btn) {
-                const count = selectedCards.size;
-                if (count > 0) {
-                    btn.disabled = false;
-                    btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
-                } else {
-                    btn.disabled = true;
-                    btn.textContent = 'ASSIGN TO WORKSPACE';
-                }
-            }
-
-            const btnAssign = document.getElementById('btn-assign-project');
-            if (btnAssign) {
-                btnAssign.disabled = selectedCards.size === 0;
+            if (!btn) return;
+            const count = selectedCards.size;
+            if (count > 0) {
+                btn.disabled = false;
+                btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
+            } else {
+                btn.disabled = true;
+                btn.textContent = 'ASSIGN TO WORKSPACE';
             }
         }
 
@@ -5741,8 +5406,6 @@
         let lastTerminals = {};
         let lastCustomAgents = [];
         let isAutobanPanelInteracting = false;
-        let lastAntigravityAgent = '';
-        let lastAntigravityColumn = '';
 
         function emitAutobanState() {
             if (!autobanConfig) return;
@@ -5853,7 +5516,7 @@
 
             const antigravityDesc = document.createElement('div');
             antigravityDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-            antigravityDesc.textContent = 'Select an agent and column, then copy a prompt (using prompts tab configuration) for the oldest plan in that column. Paste this prompt into the Antigravity automation timer (or similar IDE feature) to have Antigravity process all plans in a kanban column.';
+            antigravityDesc.textContent = 'Select an agent and copy a prompt (using prompts tab configuration) for the oldest plan in the CREATED column.';
             antigravitySection.appendChild(antigravityDesc);
 
             const antigravityActions = document.createElement('div');
@@ -5872,41 +5535,8 @@
                 opt.textContent = agentName;
                 agentSelect.appendChild(opt);
             });
-            
-            // Restore last selected agent if it still exists
-            if (lastAntigravityAgent && enabledAgents.includes(lastAntigravityAgent)) {
-                agentSelect.value = lastAntigravityAgent;
-            } else if (enabledAgents.length > 0) {
-                lastAntigravityAgent = enabledAgents[0]; // initialize if empty
-            }
-            agentSelect.addEventListener('change', () => { lastAntigravityAgent = agentSelect.value; });
 
             antigravityActions.appendChild(agentSelect);
-
-            const columnSelect = document.createElement('select');
-            columnSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; flex:1;';
-            guardInteraction(columnSelect);
-
-            columnDefinitions.forEach(col => {
-                const opt = document.createElement('option');
-                opt.value = col.id;
-                opt.textContent = col.label;
-                columnSelect.appendChild(opt);
-            });
-
-            // Default to 'CREATED'; fall back to first column if not present
-            const createdExists = columnDefinitions.some(col => col.id === 'CREATED');
-            const defaultCol = createdExists ? 'CREATED' : (columnDefinitions[0]?.id || '');
-            
-            if (lastAntigravityColumn && columnDefinitions.some(col => col.id === lastAntigravityColumn)) {
-                columnSelect.value = lastAntigravityColumn;
-            } else {
-                columnSelect.value = defaultCol;
-                lastAntigravityColumn = defaultCol; // initialize if empty
-            }
-            columnSelect.addEventListener('change', () => { lastAntigravityColumn = columnSelect.value; });
-
-            antigravityActions.appendChild(columnSelect);
 
             const copyPromptBtn = document.createElement('button');
             copyPromptBtn.className = 'strip-btn';
@@ -5928,7 +5558,6 @@
                     postKanbanMessage({
                         type: 'generateAntigravityPrompt',
                         agent: selectedAgent,
-                        column: columnSelect.value,
                         workspaceRoot: getActiveWorkspaceRoot()
                     });
 

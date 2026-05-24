@@ -2237,27 +2237,28 @@ export async function activate(context: vscode.ExtensionContext) {
             })
         );
 
-        context.subscriptions.push(
-            vscode.commands.registerCommand('switchboard.forceOpenFile', async (uri: vscode.Uri) => {
-                if (!uri) {
-                    return;
-                }
-                allowedUrisToOpen.add(uri.toString());
-                await vscode.commands.executeCommand('vscode.open', uri);
-            })
-        );
-
-        context.subscriptions.push(
-            vscode.commands.registerCommand('switchboard.togglePreventAgentFileOpening', async () => {
-                const config = vscode.workspace.getConfiguration('switchboard');
-                const current = config.get<boolean>('preventAgentFileOpening', false);
-                await config.update('preventAgentFileOpening', !current, vscode.ConfigurationTarget.Workspace);
-                // UI refresh is handled by the configuration change listener.
-            })
-        );
-
         // 9. LEASE SYSTEM: Heartbeat removed — only used for MCP server re-registration.
     }
+
+    // Register file-opening commands unconditionally — they do not depend on workspaceRoot
+    context.subscriptions.push(
+        vscode.commands.registerCommand('switchboard.forceOpenFile', async (uri: vscode.Uri) => {
+            if (!uri) {
+                return;
+            }
+            allowedUrisToOpen.add(uri.toString());
+            await vscode.commands.executeCommand('vscode.open', uri);
+        })
+    );
+
+    context.subscriptions.push(
+        vscode.commands.registerCommand('switchboard.togglePreventAgentFileOpening', async () => {
+            const config = vscode.workspace.getConfiguration('switchboard');
+            const current = config.get<boolean>('preventAgentFileOpening', false);
+            await config.update('preventAgentFileOpening', !current, vscode.ConfigurationTarget.Workspace);
+            // UI refresh is handled by the configuration change listener.
+        })
+    );
 
     /**
      * Re-claim terminals from state.json by matching PIDs.

@@ -153,6 +153,10 @@ type ConfiguredKanbanDispatchOptions = {
     additionalInstructions?: string;
     instruction?: string;
     workspaceRoot?: string;
+    /** Override the working directory for the dispatch (used by git worktree feature). */
+    workingDirectory?: string;
+    /** Override git prohibition for this dispatch (false = allow git commands, used by worktree sessions). */
+    gitProhibitionEnabled?: boolean;
 };
 
 type ClickUpSetupColumnState = {
@@ -2258,7 +2262,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
 
-        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'].includes(role);
+        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'].includes(role);
         const [customAgents, prompt] = await Promise.all([
             this.getCustomAgents(resolvedWorkspaceRoot),
             isBuiltInRole ? this._buildKanbanBatchPrompt(role, validPlans, options.instruction, resolvedWorkspaceRoot) : Promise.resolve('')
@@ -2467,6 +2471,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        // Note: Worktrees are NOT auto-cleaned when a plan leaves CODE REVIEWED.
+        // Worktrees persist until the user explicitly merges (merge button) or
+        // manually resolves them. This prevents accidental destruction of
+        // in-progress work that hasn't been merged yet.
+
         if (workflowName) {
             await this._updateSessionRunSheet(sessionId, workflowName, outcome, true, resolvedWorkspaceRoot);
         }
@@ -2636,7 +2645,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
-        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'].includes(role);
+        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'].includes(role);
         const [customAgents, prompt] = await Promise.all([
             this.getCustomAgents(resolvedWorkspaceRoot),
             isBuiltInRole ? this._buildKanbanBatchPrompt(role, validPlans, instruction, resolvedWorkspaceRoot) : Promise.resolve('')
@@ -2851,7 +2860,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             analyst: true, 
             jules: false, 
             gatherer: false,
-            research_planner: false,
+            code_researcher: false,
             ticket_updater: false,
             researcher: false,
             splitter: false
@@ -5867,7 +5876,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
         const ticketUpdateEnabled = roleConfig?.addons?.ticketUpdateEnabled ?? true;
         const complexityScoringSkill = roleConfig?.addons?.complexityScoringSkill ?? true;
-        const researchEnabled = roleConfig?.addons?.researchEnabled ?? true;
 
         return buildKanbanBatchPrompt(role, plans, {
             instruction,
@@ -5886,12 +5894,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             gitProhibitionEnabled,
             switchboardSafeguardsEnabled,
             useSubagentsEnabled,
-            enableDeepPlanning: roleConfig?.enableDeepPlanning,
-            researchDepth: roleConfig?.researchDepth,
+            researchDepth: roleConfig?.researchComplexity || 'deep',
+            saveToLocalDocs: role === 'researcher' ? (roleConfig?.saveToLocalDocs ?? false) : undefined,
+            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string>('research.localFolderPath', undefined) : undefined,
             routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
             ticketUpdateEnabled,
             complexityScoringSkill,
-            researchEnabled,
         });
     }
 
@@ -13202,6 +13210,21 @@ What would you like to find?`;
                     }
                 }
             }
+
+            if (isStop && workflow === 'reviewer-pass') {
+                const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+                if (db) {
+                    const plan = await db.getPlanBySessionId(sessionId);
+                    if (plan?.hasWorktree) {
+                        const lowOutcome = (outcome || '').toLowerCase();
+                        const isSuccess = !lowOutcome.includes('fail') && !lowOutcome.includes('error') && !lowOutcome.includes('conflict') && !lowOutcome.includes('abort') && !lowOutcome.includes('cancel');
+                        if (isSuccess) {
+                            await this._cleanupWorktree(resolvedWorkspaceRoot, sessionId);
+                        }
+                    }
+                }
+            }
+
             console.log(`[TaskViewerProvider] Updated Run Sheet for session ${sessionId} -> ${workflow} (${isStop ? 'stop' : 'start'})`);
             this._refreshRunSheets();
         } catch (e) {
@@ -14381,6 +14404,49 @@ What would you like to find?`;
             return false;
         }
 
+        const gitWorktreesEnabled = await this._getGitWorktreesEnabled(resolvedWorkspaceRoot);
+
+        if (gitWorktreesEnabled && ['coder', 'lead', 'intern'].includes(role)) {
+            // Pre-check: is this a git repo?
+            const isGit = await this._isGitRepo(resolvedWorkspaceRoot);
+            if (!isGit) {
+                vscode.window.showWarningMessage(
+                    'Git worktrees enabled but workspace is not a git repository. Dispatching without worktree.'
+                );
+            } else {
+                try {
+                    // Auto-commit any dirty working directory before creating worktree.
+                    // This ensures the worktree starts from a clean HEAD and prevents
+                    // merge conflicts caused by uncommitted changes drifting in main.
+                    await this._autoCommitDirtyMain(resolvedWorkspaceRoot);
+
+                    const { worktreePath, worktreeBranch } = await this._createWorktree(resolvedWorkspaceRoot, sessionId);
+
+                    // Store metadata in kanban_meta
+                    const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+                    if (db) {
+                        await db.setWorktreeMeta(sessionId, { worktreePath, worktreeBranch });
+                        await db.updateHasWorktree(sessionId, true);
+                    }
+
+                    // Override options
+                    options = {
+                        ...options,
+                        workingDirectory: worktreePath,
+                        gitProhibitionEnabled: false
+                    };
+
+                    vscode.window.showInformationMessage(
+                        `Created worktree at ${worktreePath} on branch ${worktreeBranch}`
+                    );
+                } catch (err: any) {
+                    vscode.window.showErrorMessage(
+                        `Failed to create worktree: ${err.message}. Dispatching without worktree.`
+                    );
+                }
+            }
+        }
+
         // Focus the terminal for immediate feedback
         vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
 
@@ -14400,10 +14466,17 @@ What would you like to find?`;
         const customAgent = findCustomAgentByRole(customAgents, role);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
-        const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
+        
+        let gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
+        if (options?.gitProhibitionEnabled !== undefined) {
+            gitProhibitionEnabled = options.gitProhibitionEnabled;
+        }
+
+        const effectiveWorkspaceRoot = options?.workingDirectory ?? resolvedWorkspaceRoot;
+        const effectiveWorkingDir = options?.workingDirectory ?? workingDir;
 
         // Canonical plan object for shared builder
-        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir };
+        const dispatchPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir: effectiveWorkingDir };
 
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
@@ -14414,7 +14487,7 @@ What would you like to find?`;
                 designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
                 designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: resolvedWorkspaceRoot,
+                workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
                 switchboardSafeguardsEnabled,
                 routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null)
@@ -14437,11 +14510,13 @@ Do NOT output the critiques or plan twice in your response; integrate this file 
 Do NOT output the critiques or plan twice in your response; integrate this with your single step-by-step workflow execution.`;
             }
         } else if (role === 'reviewer') {
+            const isMerge = baseInstruction === 'merge-worktrees';
             messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
+                instruction: baseInstruction,
                 advancedReviewerEnabled: this._isAdvancedReviewerEnabled(),
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: resolvedWorkspaceRoot,
-                gitProhibitionEnabled,
+                workspaceRoot: effectiveWorkspaceRoot,
+                gitProhibitionEnabled: isMerge ? false : gitProhibitionEnabled,
                 switchboardSafeguardsEnabled
             });
             messageMetadata.phase_gate = {
@@ -14450,22 +14525,53 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
                 bypass_workflow_triggers: 'true'
             };
 
-            // Append dispatch-specific strict/light mode delivery extensions
-            const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
-            const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
-            if (strictReviewPrompts) {
-                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
+            if (isMerge) {
+                // For merging worktrees, append custom merge context info with ALL worktree sessions
+                const mergeDb = await this._getKanbanDb(resolvedWorkspaceRoot);
+                let worktreeListBlock = '';
+                if (mergeDb) {
+                    const mergeWorkspaceId = await mergeDb.getWorkspaceId();
+                    if (mergeWorkspaceId) {
+                        const allBoardCards = await mergeDb.getBoard(mergeWorkspaceId);
+                        const reviewedWithWorktrees = allBoardCards.filter(
+                            c => c.kanbanColumn === 'CODE REVIEWED' && c.hasWorktree
+                        );
+                        const worktreeEntries: string[] = [];
+                        for (const card of reviewedWithWorktrees) {
+                            const meta = await mergeDb.getWorktreeMeta(card.sessionId);
+                            if (meta) {
+                                worktreeEntries.push(
+                                    `  - Session: ${card.sessionId} | Topic: ${card.topic || card.sessionId}\n` +
+                                    `    Branch: ${meta.worktreeBranch} | Path: ${meta.worktreePath}`
+                                );
+                            }
+                        }
+                        if (worktreeEntries.length > 0) {
+                            worktreeListBlock = `\n- Worktrees to merge (${worktreeEntries.length}):\n${worktreeEntries.join('\n')}`;
+                        }
+                    }
+                }
+                messagePayload += `\n\nMerge Target Context:
+- Main Workspace Root: ${resolvedWorkspaceRoot}${worktreeListBlock}
+- Please run local merges for all reviewed worktrees as instructed in the MERGE WORKTREES DIRECTIVE.`;
+            } else {
+                // Append dispatch-specific strict/light mode delivery extensions for normal reviews
+                const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
+                const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
+                if (strictReviewPrompts) {
+                    messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Write Stage 1 findings to ${reviewerFindingsPath}
 - Write Stage 2 synthesis to ${reviewerSynthesisPath}
 - Apply fixes and update the plan. Keep file outputs as archival artifacts.
 - Strict format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
-            } else {
-                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
+                } else {
+                    messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Do NOT write plan/review artifact files in light mode.
 - Apply fixes and update the plan after posting findings in chat.
 - Suggested format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
+                }
             }
         } else if (role === 'tester') {
             if (!await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
@@ -14476,7 +14582,7 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
                 designDocLink: this._getDesignDocLink().trim(),
                 designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: resolvedWorkspaceRoot,
+                workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
                 switchboardSafeguardsEnabled
             });
@@ -14485,7 +14591,7 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
             messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { 
                 includeInlineChallenge, 
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides, 
-                workspaceRoot: resolvedWorkspaceRoot,
+                workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
                 switchboardSafeguardsEnabled
             });
@@ -14504,7 +14610,7 @@ Create this file exactly as specified, then continue your work.`);
                     includeInlineChallenge,
                     accurateCodingEnabled: this._isAccurateCodingEnabled(),
                     defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: resolvedWorkspaceRoot,
+                    workspaceRoot: effectiveWorkspaceRoot,
                     gitProhibitionEnabled,
                     switchboardSafeguardsEnabled
                 });
@@ -14515,7 +14621,14 @@ Create this file exactly as specified, then continue your work.`);
                 includeInlineChallenge,
                 accurateCodingEnabled: this._isAccurateCodingEnabled(),
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: resolvedWorkspaceRoot,
+                workspaceRoot: effectiveWorkspaceRoot,
+                gitProhibitionEnabled,
+                switchboardSafeguardsEnabled
+            });
+        } else if (role === 'gatherer') {
+            messagePayload = buildKanbanBatchPrompt('gatherer', [dispatchPlan], {
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
+                workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
                 switchboardSafeguardsEnabled
             });
@@ -16538,6 +16651,134 @@ Create this file exactly as specified, then continue your work.`);
         const uri = firstFile ? vscode.Uri.file(path.join(airlockDir, firstFile)) : vscode.Uri.file(airlockDir);
 
         await vscode.commands.executeCommand('revealFileInOS', uri);
+    }
+
+    /**
+     * Auto-commit any uncommitted changes in the main working tree before
+     * creating a worktree. This prevents merge conflicts caused by dirty
+     * state drifting in main while the coder works in the worktree.
+     * Commits are only created when there are actual changes to commit.
+     */
+    private async _autoCommitDirtyMain(workspaceRoot: string): Promise<void> {
+        const execAsync = promisify(cp.exec);
+        try {
+            // Check for unstaged changes
+            const { stdout: diffStdout } = await execAsync('git diff --exit-code --stat', { cwd: workspaceRoot });
+            // Check for staged but uncommitted changes
+            const { stdout: cachedStdout } = await execAsync('git diff --cached --exit-code --stat', { cwd: workspaceRoot });
+
+            const hasUnstaged = diffStdout.trim().length > 0;
+            const hasStaged = cachedStdout.trim().length > 0;
+
+            if (!hasUnstaged && !hasStaged) {
+                return; // Working tree is clean — nothing to do
+            }
+
+            // Stage all changes if there are unstaged files
+            if (hasUnstaged) {
+                await execAsync('git add -A', { cwd: workspaceRoot });
+            }
+
+            // Commit with a descriptive message
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            await execAsync(`git commit -m "switchboard: auto-commit before worktree creation (${timestamp})"`, { cwd: workspaceRoot });
+
+            console.log(`[TaskViewerProvider] Auto-committed dirty working tree before worktree creation`);
+        } catch (e: any) {
+            // If auto-commit fails (e.g., empty commit, pre-commit hook rejection), log and continue.
+            // The worktree creation will still proceed — a dirty main is a soft risk, not a hard block.
+            console.warn(`[TaskViewerProvider] Auto-commit before worktree failed (non-fatal): ${e.message}`);
+        }
+    }
+
+    private async _isGitRepo(workspaceRoot: string): Promise<boolean> {
+        const execAsync = promisify(cp.exec);
+        try {
+            await execAsync('git rev-parse --is-inside-work-tree', { cwd: workspaceRoot });
+            return true;
+        } catch {
+            return false;
+        }
+    }
+
+    private async _createWorktree(workspaceRoot: string, sessionId: string): Promise<{ worktreePath: string; worktreeBranch: string }> {
+        const execAsync = promisify(cp.exec);
+
+        const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '-').substring(0, 40);
+        let worktreeBranch = `sb-coder-${safeId}`;
+
+        const repoName = path.basename(workspaceRoot);
+        const parentDir = path.dirname(workspaceRoot);
+        let worktreePath = path.join(parentDir, `${repoName}-wt-${safeId}`);
+
+        // Handle branch name collision: append timestamp suffix if branch already exists
+        try {
+            const { stdout: existingBranches } = await execAsync('git branch --list', { cwd: workspaceRoot });
+            if (existingBranches.split('\n').some(b => b.trim() === worktreeBranch)) {
+                const ts = Date.now().toString(36);
+                worktreeBranch = `sb-coder-${safeId}-${ts}`;
+                worktreePath = path.join(parentDir, `${repoName}-wt-${safeId}-${ts}`);
+                console.warn(`[TaskViewerProvider] Branch collision detected, using ${worktreeBranch}`);
+            }
+        } catch {
+            // git branch --list may fail in unusual states; proceed with original name
+        }
+
+        // Handle path collision: append numeric suffix if directory already exists
+        let suffix = 0;
+        let candidatePath = worktreePath;
+        while (fs.existsSync(candidatePath)) {
+            suffix++;
+            candidatePath = `${worktreePath}-${suffix}`;
+        }
+        if (suffix > 0) {
+            worktreePath = candidatePath;
+            // Also update branch name to stay consistent
+            worktreeBranch = `${worktreeBranch}-${suffix}`;
+            console.warn(`[TaskViewerProvider] Path collision detected, using ${worktreePath}`);
+        }
+
+        await execAsync(
+            `git worktree add -b "${worktreeBranch}" "${worktreePath}"`,
+            { cwd: workspaceRoot }
+        );
+
+        return { worktreePath, worktreeBranch };
+    }
+
+    private async _cleanupWorktree(workspaceRoot: string, sessionId: string): Promise<void> {
+        const execAsync = promisify(cp.exec);
+
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) return;
+        const meta = await db.getWorktreeMeta(sessionId);
+        if (!meta) return;
+
+        try {
+            await execAsync(`git worktree remove --force "${meta.worktreePath}"`, { cwd: workspaceRoot });
+        } catch (e: any) {
+            console.warn(`[TaskViewerProvider] Failed to remove worktree: ${e.message}`);
+        }
+
+        try {
+            await execAsync(`git branch -D "${meta.worktreeBranch}"`, { cwd: workspaceRoot });
+        } catch (e: any) {
+            console.warn(`[TaskViewerProvider] Failed to delete branch ${meta.worktreeBranch}: ${e.message}`);
+        }
+
+        try {
+            await execAsync('git worktree prune', { cwd: workspaceRoot });
+        } catch (e: any) {
+            console.warn(`[TaskViewerProvider] Failed to prune worktrees: ${e.message}`);
+        }
+
+        await db.clearWorktreeMeta(sessionId);
+        await db.updateHasWorktree(sessionId, false);
+    }
+
+    private async _getGitWorktreesEnabled(workspaceRoot: string): Promise<boolean> {
+        if (!this._kanbanProvider) return false;
+        return this._kanbanProvider.getGitWorktreesEnabled(workspaceRoot);
     }
 
     public dispose() {

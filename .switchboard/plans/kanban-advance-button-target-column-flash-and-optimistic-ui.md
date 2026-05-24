@@ -371,4 +371,37 @@ Manual verification steps:
 - Test network timeout → verify UI handles gracefully
 
 ---
+
+## Review Pass — Grumpy Principal Engineer
+
+### Findings
+
+| # | Severity | Finding | Status |
+|---|----------|---------|--------|
+| 1 | CRITICAL | `card-completing` class makes cards invisible — `cardComplete` animation ends at `opacity:0; height:0` with `forwards` fill. Cards vanish in target column instead of appearing. | **Fixed** — replaced with `card-dropped` (arrival pulse animation) |
+| 2 | CRITICAL | `getNextColumn(backendColumn)` returns wrong target for coded columns — e.g. `getNextColumn('LEAD CODED')` returns `'CODER CODED'` not `'CODE REVIEWED'`. Coded columns are parallel (same stage), not sequential. The drag-drop handler (line 4206) already solves this by resolving to the LAST visible coded column. | **Fixed** — added coded-column resolution logic matching drag-drop pattern |
+| 3 | MAJOR | `currentCards` not updated after optimistic move — `card.column` stays at old value. Drag-drop reference updates `card.column = effectiveTargetColumn` (line 4650). Stale data can cause incorrect behavior for subsequent operations before refresh. | **Fixed** — added `if (cardData) cardData.column = targetColumn;` in loop |
+| 4 | MAJOR | Target count incremented by `sessionIds.length` instead of actual moved count — if any card element is missing from DOM (skipped), count drifts. | **Fixed** — added `actualMovedCount` tracker, used for target count increment |
+| 5 | NIT | `sourceBody` variable captured (line 3358) but never used — dead code. Post-loop empty-state check re-fetches via `getElementById`. | **Fixed** — removed unused variable |
+| 6 | NIT | No arrival animation — cards just appear in target column with zero visual feedback. `card-dropped` class exists and provides a scale-pulse animation. | **Fixed** — `card-dropped` class now added (replaced `card-completing`) |
+
+### Files Changed
+
+- `src/webview/kanban.html`:
+  - `moveCardsOptimistically()`: replaced `card-completing` → `card-dropped`, added `currentCards` update, added `actualMovedCount` tracker, removed dead `sourceBody` variable
+  - Advance button handler: fixed `getNextColumn` resolution for coded columns — now resolves to last visible coded column before calling `getNextColumn`, matching drag-drop pattern (line 4206)
+
+### Validation Results
+
+- TypeScript: pre-existing errors only (import path issues in `.ts` files, unrelated to HTML changes). No new errors introduced.
+- No automated tests exist for this webview UI component. Manual verification required per Verification Plan above.
+- Compilation and automated tests skipped per session instructions.
+
+### Remaining Risks
+
+1. **Error revert path still deferred** — if backend move fails, optimistic DOM state diverges silently. No revert mechanism. This was documented in the original plan as a follow-up.
+2. **CODED_AUTO collapsed mode still skips optimistic UI** — when coders are collapsed, `columns` array has individual coder IDs (not `CODED_AUTO`), so `getNextColumn(lastCodedCol)` returns `'CODE REVIEWED'` correctly. However, `document.getElementById('col-CODE REVIEWED')` exists in the DOM even when collapsed, so the optimistic UI should now work for CODED_AUTO collapsed mode too. Manual verification needed.
+3. **Rapid double-click** — no button disabling during processing. Multiple optimistic moves could conflict. Low priority.
+
+---
 **Recommendation**: Send to Coder

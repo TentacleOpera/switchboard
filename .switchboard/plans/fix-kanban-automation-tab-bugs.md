@@ -243,3 +243,26 @@ error: `No plans found in ${column} column`
 ---
 
 **Recommendation:** Send to Coder
+
+---
+
+## Reviewer Pass
+
+### Stage 1: Grumpy Principal Engineer Review
+- **[NIT] Semantic Mismatch:** In `KanbanProvider.ts`, `createdPlans` is now semantically incorrect since we pass a dynamic `column` argument. `createdPlans` implies they are in the `'CREATED'` state, which is no longer exclusively true. 
+- **[MAJOR] UX Flakiness:** The dropdown states (`agentSelect` and `columnSelect`) in the kanban webview are completely blown away every time `renderAutobanPanel()` is called. Since this is triggered dynamically by background terminal status messages, a user who is reading the text or moving their mouse to the "COPY PROMPT" button might have their selection reset right out from under them, leading to generating a prompt for the wrong agent or column. `guardInteraction` only prevents this *while the element is actively focused*.
+
+### Stage 2: Balanced Synthesis
+- The semantic mismatch in `KanbanProvider.ts` is minor but sloppy. Let's rename `createdPlans` to `columnPlans` to accurately reflect its contents.
+- The UX flakiness is a genuine problem. Even if the user isn't actively focusing the dropdown, their last selection should persist across re-renders. We should introduce module-scoped variables (`lastAntigravityAgent` and `lastAntigravityColumn`) to hold the last selected values and restore them during `createAutobanPanel()`.
+
+### Code Fixes Applied
+- **src/webview/kanban.html**: Introduced `lastAntigravityAgent` and `lastAntigravityColumn` to persist the Antigravity automation dropdown states across dynamic panel re-renders. Bound `change` listeners to update these values.
+- **src/services/KanbanProvider.ts**: Renamed `createdPlans` to `columnPlans` within `_generateAntigravityPrompt` to correct the semantic mismatch.
+
+### Verification Results
+- Applied code fixes directly in the repo.
+- Ran `npm run compile` to verify the TypeScript/webpack build. The code compiled successfully with no type errors.
+- Both frontend variables are correctly initialized and bounded, preventing state loss on `terminalStatuses` broadcasts.
+
+**Status:** Plan complete and validated. Code is fixed and ready for commit.

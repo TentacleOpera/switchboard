@@ -46,7 +46,7 @@ async function run() {
                 researcher: false,
                 splitter: false,
                 ticket_updater: false,
-                research_planner: false
+                code_researcher: false
             },
             skipTestsByRole: {
                 planner: false,
@@ -59,14 +59,16 @@ async function run() {
                 researcher: false,
                 splitter: false,
                 ticket_updater: false,
-                research_planner: false
+                code_researcher: false
             },
             gitProhibitionByRole: {},
             switchboardSafeguardsByRole: {},
-            researchPlanner: {
-                enableDeepPlanning: false,
+            codeResearcher: {
                 researchDepth: 'deep'
-            }
+            },
+            researchDepth: 'deep',
+            saveToLocalDocs: false,
+            localDocsPath: undefined
         },
 
         defaultPromptOverrides: {},
@@ -82,7 +84,7 @@ async function run() {
         // The actual implementation of _getDefaultPromptPreviews copied from KanbanProvider.ts
         async _getDefaultPromptPreviews(workspaceRoot) {
             const previews = {};
-            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'research_planner'];
+            const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
             for (const role of roles) {
                 try {
@@ -92,8 +94,9 @@ async function run() {
                         defaultPromptOverrides,
                         gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
                         switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                        enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
-                        researchDepth: promptsConfig.researchPlanner?.researchDepth,
+                        researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
+                        saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                        localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
                         // Planner-specific options (matching _generateBatchPlannerPrompt pattern)
                         plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
                         dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,

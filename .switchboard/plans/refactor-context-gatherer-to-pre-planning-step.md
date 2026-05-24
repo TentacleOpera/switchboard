@@ -361,3 +361,69 @@ You are operating as the **Context Gatherer** — a pre-planning research specia
 ---
 
 **Recommendation: Send to Coder** (Complexity 6 — multi-file changes, moderate logic, but all changes are well-scoped extensions of existing patterns.)
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|---|---|---|
+| CRITICAL-1 | CRITICAL | `_generatePromptForDestinationRole` in KanbanProvider.ts (line 2892) had a curated list of non-execution built-in roles that did NOT include `'gatherer'`. When a card in CONTEXT GATHERER generated a prompt, the role resolved to 'gatherer' from `roleSourceDef.role`, but fell through to the execution block which called `_generateBatchExecutionPrompt(cards, workspaceRoot, undefined)`, producing a 'lead' or 'coder' prompt instead of a gatherer prompt. The entire `buildKanbanBatchPrompt('gatherer', ...)` branch was dead code. |
+| CRITICAL-2 | CRITICAL | `columnToPromptRole` in agentPromptBuilder.ts had no `case 'CONTEXT GATHERER': return 'gatherer'` entry. Used as fallback in TaskViewerProvider line 12386: `role = columnToPromptRole(effectiveColumn) \|\| 'coder'` — returned null for CONTEXT GATHERER, falling back to 'coder'. TaskViewerProvider dispatch path generated CODER execution prompts for CONTEXT GATHERER cards. |
+| CRITICAL-3 | CRITICAL | TaskViewerProvider `isBuiltInRole` list (line 2639) excluded 'gatherer'. When autoban batch-dispatched a gatherer card, `isBuiltInRole` was false, so the prompt was `Promise.resolve('')` — an empty string. Autoban dispatch produced literally nothing for gatherer cards. |
+| CRITICAL-4 | CRITICAL | TaskViewerProvider single-card dispatch if/else chain (lines 14440-14528) had no `gatherer` branch. Since 'gatherer' isn't a custom agent, it fell to the `else` block which showed `vscode.window.showErrorMessage('Unknown role: gatherer')` and returned false. CLI dispatch for single gatherer cards showed an error dialog and failed. |
+| MAJOR-1 | MAJOR | kanban.html column definition (lines 2894-2901) still had old values: `kind: 'gather'` (should be `'review'`), `autobanEnabled: false` (should be `true`), missing `dragDropMode: 'cli'`, `label: 'Gather'` (should be `'Context Gatherer'`). Webview UI behavior was driven by these stale values. |
+| MAJOR-2 | MAJOR | kanban.html description text (lines 2066-2067, 2499) still described the OLD relay workflow: "Clipboard context gathering only" and "Aggregates codebase files, directory structure, and relevant symbols into the active prompt context." Misleading to users. |
+| MAJOR-3 | MAJOR | Test file KanbanProvider.test.ts (line 145) still had old column values: `order: 150, kind: 'gather', autobanEnabled: false, dragDropMode: 'disabled'`. Tests would pass against wrong column definition. |
+| NIT-1 | NIT | `kind: 'gather'` still in `KanbanColumnDefinition` type union (agentConfig.ts line 61). Dead type surface — no column uses it. Cosmetic only. |
+| NIT-2 | NIT | `copyGatherPrompt` and `copyExecutePrompt` message handlers in KanbanProvider.ts (lines 6091-6123) are now dead code since the webview no longer sends these messages. Harmless but dead. |
+| NIT-3 | NIT | `_workflowNameForDispatchRole` missing 'gatherer' — already documented in plan as known gap. No runsheet workflow name for gatherer dispatches. Acceptable. |
+
+### Stage 2: Balanced Synthesis — Fixes Applied
+
+| Finding | Verdict | Action Taken |
+|---|---|---|
+| CRITICAL-1 | **Fixed** | Added `\|\| role === 'gatherer'` to the non-execution role condition in `_generatePromptForDestinationRole` (KanbanProvider.ts line 2892). Gatherer now routes through `buildKanbanBatchPrompt('gatherer', ...)` like researcher/splitter/analyst. |
+| CRITICAL-2 | **Fixed** | Added `case 'CONTEXT GATHERER': return 'gatherer';` to `columnToPromptRole` (agentPromptBuilder.ts line 899). TaskViewerProvider fallback now correctly resolves gatherer role. |
+| CRITICAL-3 | **Fixed** | Added `'gatherer'` to both `isBuiltInRole` lists in TaskViewerProvider (lines 2261, 2639). Autoban batch dispatch now correctly generates gatherer prompts via `_buildKanbanBatchPrompt`. |
+| CRITICAL-4 | **Fixed** | Added `else if (role === 'gatherer')` branch to single-card dispatch chain (TaskViewerProvider.ts after line 14521). Uses `buildKanbanBatchPrompt('gatherer', ...)` with appropriate options. |
+| MAJOR-1 | **Fixed** | Updated kanban.html column definition: `kind: 'review'`, `autobanEnabled: true`, `dragDropMode: 'cli'`, `label: 'Context Gatherer'`. |
+| MAJOR-2 | **Fixed** | Updated both kanban.html description strings: "Pre-planning research and context briefs" and "Researches codebase context for plans and writes context briefs before planning review." |
+| MAJOR-3 | **Fixed** | Updated test file column definition to match production: `order: 50, kind: 'review', autobanEnabled: true, dragDropMode: 'cli'`. |
+| NIT-1 | Deferred | Dead type surface, no runtime impact. |
+| NIT-2 | Deferred | Dead code but harmless, not in original plan scope. |
+| NIT-3 | Deferred | Already documented, acceptable. |
+
+### Additional Fixes (Discovered During Review)
+
+| File | Change | Reason |
+|---|---|---|
+| `src/mcp-server/register-tools.js` line 319 | `order: 150` → `order: 50` | MCP server column definition was stale, would return wrong ordering to API consumers. |
+| `src/webview/implementation.html` line 3224 | `label: 'Gather'` → `label: 'Context Gatherer'` | Implementation view had stale label from old relay era. |
+| `src/services/__tests__/agentPromptBuilder.test.ts` | Added test: `maps CONTEXT GATHERER to gatherer` | New `columnToPromptRole` mapping needs test coverage. |
+
+### Files Changed by Review
+
+1. `src/services/KanbanProvider.ts` — Added `gatherer` to non-execution role list
+2. `src/services/agentPromptBuilder.ts` — Added `CONTEXT GATHERER` case to `columnToPromptRole`
+3. `src/services/TaskViewerProvider.ts` — Added `gatherer` to both `isBuiltInRole` lists; added `gatherer` branch to single-card dispatch
+4. `src/webview/kanban.html` — Updated column definition (kind, autobanEnabled, dragDropMode, label) and description strings
+5. `src/webview/implementation.html` — Updated stale column label
+6. `src/mcp-server/register-tools.js` — Updated stale column order
+7. `src/services/__tests__/KanbanProvider.test.ts` — Updated stale column definition
+8. `src/services/__tests__/agentPromptBuilder.test.ts` — Added test for new mapping
+
+### Validation Results
+
+- **Grep sweep**: No remaining `kind: 'gather'`, `RelayPromptService`, `_generateRelayPrompt`, `_handleRelayColumnMove`, `isGatherToCoded`, `copy-gather`, `order: 150` (for CONTEXT GATHERER), or stale description text in `src/`.
+- **Compilation**: Skipped per session constraints.
+- **Automated tests**: Skipped per session constraints.
+
+### Remaining Risks
+
+1. **`_workflowNameForDispatchRole('gatherer')`** returns `undefined` — no runsheet workflow name logged for gatherer dispatches. Documented as known gap; acceptable.
+2. **`kind: 'gather'`** still in `KanbanColumnDefinition` type union — dead type surface, cosmetic only. Can be removed in a future cleanup pass.
+3. **`copyGatherPrompt`/`copyExecutePrompt` handlers** in KanbanProvider.ts are dead code — the webview no longer sends these messages. Can be removed in a future cleanup pass.
+4. **Manual end-to-end verification** still needed: drag a card into CONTEXT GATHERER, verify Copy Prompt generates a gatherer prompt (not lead/coder), verify autoban dispatch works, verify card advances to PLAN REVIEWED.

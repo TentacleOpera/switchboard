@@ -1041,6 +1041,9 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
+            const worktreeCounts = await this._getWorktreeCounts(resolvedWorkspaceRoot);
+            this._panel.webview.postMessage({ type: 'worktreeCounts', counts: worktreeCounts });
+
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
                 // Built-in 'disabled' is a hard constraint — never let a persisted override
@@ -2082,7 +2085,7 @@ export class KanbanProvider implements vscode.Disposable {
     ): Promise<Record<string, string>> {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
-        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'research_planner'];
+        const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         for (const role of roles) {
             try {
@@ -2149,8 +2152,7 @@ export class KanbanProvider implements vscode.Disposable {
                         : (promptsConfig.gitProhibitionByRole?.[role as any] ?? true),
                     switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role as any] ?? true,
                     useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role as any] ?? true,
-                    enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
-                    researchDepth: promptsConfig.researchPlanner?.researchDepth,
+                    researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
                     sourceColumnLabel,
                     instruction,
                     // Planner-specific options (matching _generateBatchPlannerPrompt pattern)
@@ -2178,7 +2180,8 @@ export class KanbanProvider implements vscode.Disposable {
                         : undefined,
                     ticketUpdateEnabled: role === 'ticket_updater' ? promptsConfig.ticketUpdateEnabled : undefined,
                     complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                    researchEnabled: role === 'researcher' ? promptsConfig.researchEnabled : undefined,
+                    saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                    localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
                 });
                 previews[role] = preview;
             } catch {
@@ -2196,11 +2199,17 @@ export class KanbanProvider implements vscode.Disposable {
             return {
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
-                julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false
+                julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
+                gitWorktreesEnabled: state.gitWorktreesEnabled ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, gitWorktreesEnabled: false };
         }
+    }
+
+    public async getGitWorktreesEnabled(workspaceRoot: string): Promise<boolean> {
+        const state = await this._getStartupCommands(workspaceRoot);
+        return state.gitWorktreesEnabled ?? false;
     }
 
     private async _saveStartupCommands(workspaceRoot: string, msg: any): Promise<void> {
@@ -2214,6 +2223,7 @@ export class KanbanProvider implements vscode.Disposable {
             if (msg.commands) state.startupCommands = msg.commands;
             if (msg.visibleAgents) state.visibleAgents = { ...(state.visibleAgents || {}), ...msg.visibleAgents };
             if (typeof msg.julesAutoSyncEnabled === 'boolean') state.julesAutoSyncEnabled = msg.julesAutoSyncEnabled;
+            if (typeof msg.gitWorktreesEnabled === 'boolean') state.gitWorktreesEnabled = msg.gitWorktreesEnabled;
             await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
         } catch (err) {
             console.error('[KanbanProvider] Failed to save startup commands:', err);
@@ -2234,7 +2244,8 @@ export class KanbanProvider implements vscode.Disposable {
         const researcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_researcher', undefined);
         const splitterConfig: any = this._getSetting('switchboard.prompts.roleConfig_splitter', undefined);
         const ticketUpdaterConfig: any = this._getSetting('switchboard.prompts.roleConfig_ticket_updater', undefined);
-        const researchPlannerConfig: any = this._getSetting('switchboard.prompts.roleConfig_research_planner', undefined);
+        const codeResearcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_code_researcher', undefined)
+            ?? this._getSetting('switchboard.prompts.roleConfig_research_planner', undefined);
 
         return {
             accurateCodingEnabledByRole: {
@@ -2266,7 +2277,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.skipCompilation ?? false,
                 splitter: splitterConfig?.addons?.skipCompilation ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipCompilation ?? false,
-                research_planner: researchPlannerConfig?.addons?.skipCompilation ?? false,
+                code_researcher: codeResearcherConfig?.addons?.skipCompilation ?? false,
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
@@ -2279,13 +2290,15 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.skipTests ?? false,
                 splitter: splitterConfig?.addons?.skipTests ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.skipTests ?? false,
-                research_planner: researchPlannerConfig?.addons?.skipTests ?? false,
+                code_researcher: codeResearcherConfig?.addons?.skipTests ?? false,
             },
             gitProhibitionEnabled: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
-            researchPlanner: {
-                enableDeepPlanning: researchPlannerConfig?.enableDeepPlanning ?? false,
-                researchDepth: researchPlannerConfig?.researchDepth || 'deep'
+            codeResearcher: {
+                researchDepth: codeResearcherConfig?.researchComplexity || 'deep',
             },
+            researchDepth: researcherConfig?.researchComplexity || 'deep',
+            saveToLocalDocs: researcherConfig?.saveToLocalDocs ?? false,
+            localDocsPath: config.get<string>('research.localFolderPath', undefined),
             gitProhibitionByRole: {
                 planner: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
                 lead: leadConfig?.addons?.gitProhibition ?? true,
@@ -2297,7 +2310,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.gitProhibition ?? true,
                 splitter: splitterConfig?.addons?.gitProhibition ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.gitProhibition ?? true,
-                research_planner: researchPlannerConfig?.addons?.gitProhibition ?? true,
+                code_researcher: codeResearcherConfig?.addons?.gitProhibition ?? true,
             },
             switchboardSafeguardsByRole: {
                 planner: plannerConfig?.addons?.switchboardSafeguards ?? true,
@@ -2310,7 +2323,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.switchboardSafeguards ?? true,
                 splitter: splitterConfig?.addons?.switchboardSafeguards ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.switchboardSafeguards ?? true,
-                research_planner: researchPlannerConfig?.addons?.switchboardSafeguards ?? true,
+                code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
             },
             useSubagentsByRole: {
                 planner: plannerConfig?.addons?.useSubagents ?? true,
@@ -2323,7 +2336,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.useSubagents ?? true,
                 splitter: splitterConfig?.addons?.useSubagents ?? true,
                 ticket_updater: ticketUpdaterConfig?.addons?.useSubagents ?? true,
-                research_planner: researchPlannerConfig?.addons?.useSubagents ?? true,
+                code_researcher: codeResearcherConfig?.addons?.useSubagents ?? true,
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
@@ -2336,7 +2349,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.clearAntigravityContext ?? false,
                 splitter: splitterConfig?.addons?.clearAntigravityContext ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
-                research_planner: researchPlannerConfig?.addons?.clearAntigravityContext ?? false,
+                code_researcher: codeResearcherConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? false,
@@ -2349,7 +2362,7 @@ export class KanbanProvider implements vscode.Disposable {
                 researcher: researcherConfig?.addons?.cavemanOutput ?? false,
                 splitter: splitterConfig?.addons?.cavemanOutput ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
-                research_planner: researchPlannerConfig?.addons?.cavemanOutput ?? false,
+                code_researcher: codeResearcherConfig?.addons?.cavemanOutput ?? false,
             },
             suppressWalkthroughByRole: {
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,
@@ -2363,7 +2376,6 @@ export class KanbanProvider implements vscode.Disposable {
             },
             ticketUpdateEnabled: ticketUpdaterConfig?.addons?.ticketUpdateEnabled ?? true,
             complexityScoringSkill: splitterConfig?.addons?.complexityScoringSkill ?? true,
-            researchEnabled: researcherConfig?.addons?.researchEnabled ?? true,
         };
     }
 
@@ -2403,9 +2415,9 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             // Query for plans in the specified column
-            const createdPlans = await db.getPlansByColumn(workspaceId, column);
+            const columnPlans = await db.getPlansByColumn(workspaceId, column);
 
-            if (!createdPlans || createdPlans.length === 0) {
+            if (!columnPlans || columnPlans.length === 0) {
                 this._panel?.webview.postMessage({
                     type: 'antigravityPrompt',
                     prompt: null,
@@ -2415,12 +2427,13 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             // Sort by creation timestamp (oldest first) — createdAt is a string
-            createdPlans.sort((a, b) => {
+            columnPlans.sort((a, b) => {
                 const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
                 const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
                 return aTime - bTime;
             });
-            const oldestPlan = createdPlans[0];
+
+            const oldestPlan = columnPlans[0];
 
             // Convert KanbanPlanRecord to BatchPromptPlan
             // NOTE: KanbanPlanRecord has planFile (relative), BatchPromptPlan needs absolutePath
@@ -2486,11 +2499,11 @@ export class KanbanProvider implements vscode.Disposable {
                 suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
                     ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
                     : undefined,
-                enableDeepPlanning: role === 'research_planner' ? promptsConfig.researchPlanner?.enableDeepPlanning : undefined,
-                researchDepth: role === 'research_planner' ? promptsConfig.researchPlanner?.researchDepth : undefined,
+                researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
                 ticketUpdateEnabled: role === 'ticket_updater' ? promptsConfig.ticketUpdateEnabled : undefined,
                 complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                researchEnabled: role === 'researcher' ? promptsConfig.researchEnabled : undefined,
+                saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
             };
 
             // Generate prompt using actual prompts tab configuration
@@ -2888,7 +2901,7 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         // Built-in non-execution roles that buildKanbanBatchPrompt supports
-        if (role === 'researcher' || role === 'splitter' || role === 'analyst' || role === 'ticket_updater' || role === 'research_planner') {
+        if (role === 'researcher' || role === 'splitter' || role === 'analyst' || role === 'ticket_updater' || role === 'code_researcher' || role === 'gatherer') {
             const repoScopeMap = new Map<string, string>();
             const db = this._getKanbanDb(workspaceRoot);
             if (await db.ensureReady()) {
@@ -2910,11 +2923,11 @@ export class KanbanProvider implements vscode.Disposable {
                 gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
                 switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
                 useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? true,
-                enableDeepPlanning: promptsConfig.researchPlanner?.enableDeepPlanning,
-                researchDepth: promptsConfig.researchPlanner?.researchDepth,
+                researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
                 ticketUpdateEnabled: role === 'ticket_updater' ? promptsConfig.ticketUpdateEnabled : undefined,
                 complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                researchEnabled: role === 'researcher' ? promptsConfig.researchEnabled : undefined,
+                saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
             });
         }
 
@@ -3232,7 +3245,7 @@ export class KanbanProvider implements vscode.Disposable {
             ticket_updater: false,
             researcher: false,
             splitter: false,
-            research_planner: false
+            code_researcher: false
         };        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         try {
             if (fs.existsSync(statePath)) {
@@ -5865,6 +5878,50 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await this._saveStartupCommands(workspaceRoot, msg);
                 break;
             }
+            case 'mergeWorktrees': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+
+                const db = this._getKanbanDb(workspaceRoot);
+                const workspaceId = await db.getWorkspaceId();
+                if (!workspaceId) break;
+
+                const allCards = await db.getBoard(workspaceId);
+                const cardsInCodeReviewed = allCards.filter(c => c.kanbanColumn === 'CODE REVIEWED');
+
+                const sessionsWithWorktrees = [];
+                for (const card of cardsInCodeReviewed) {
+                    if (card.hasWorktree) {
+                        const meta = await db.getWorktreeMeta(card.sessionId);
+                        if (meta) {
+                            sessionsWithWorktrees.push({
+                                sessionId: card.sessionId,
+                                worktreePath: meta.worktreePath,
+                                worktreeBranch: meta.worktreeBranch,
+                                topic: card.topic || card.sessionId
+                            });
+                        }
+                    }
+                }
+
+                if (sessionsWithWorktrees.length === 0) {
+                    vscode.window.showInformationMessage('No worktrees to merge');
+                    break;
+                }
+
+                const dispatched = await vscode.commands.executeCommand<boolean>(
+                    'switchboard.triggerAgentFromKanban',
+                    'reviewer',
+                    sessionsWithWorktrees[0].sessionId,
+                    'merge-worktrees',
+                    workspaceRoot
+                );
+
+                if (dispatched) {
+                    vscode.window.showInformationMessage(`Merging ${sessionsWithWorktrees.length} worktree(s)...`);
+                }
+                break;
+            }
             case 'getPromptsConfig': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
@@ -6048,8 +6105,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         // Preview reads from role config addon (what the checkbox controls);
                         // dispatch paths (_generateBatchExecutionPrompt etc.) correctly use autobanState.
                         pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
-                        enableDeepPlanning: role === 'research_planner' ? promptsConfig.researchPlanner?.enableDeepPlanning : undefined,
-                        researchDepth: role === 'research_planner' ? promptsConfig.researchPlanner?.researchDepth : undefined,
+                        researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
                         suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
                             ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
                             : undefined,
@@ -6058,7 +6114,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             : undefined,
                         ticketUpdateEnabled: role === 'ticket_updater' ? promptsConfig.ticketUpdateEnabled : undefined,
                         complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                        researchEnabled: role === 'researcher' ? promptsConfig.researchEnabled : undefined,
+                        saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                        localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
                     });
                     this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
                 } catch (err) {
@@ -6458,6 +6515,22 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         });
     }
 
+    private async _getWorktreeCounts(workspaceRoot: string): Promise<Record<string, number>> {
+        const db = this._getKanbanDb(workspaceRoot);
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) return {};
+        const cards = await db.getBoard(workspaceId);
+
+        const counts: Record<string, number> = {};
+        for (const card of cards) {
+            if (card.hasWorktree) {
+                counts[card.kanbanColumn] = (counts[card.kanbanColumn] || 0) + 1;
+            }
+        }
+
+        return counts;
+    }
+
     private async _getHtml(webview: vscode.Webview): Promise<string> {
         const paths = [
             vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'kanban.html'),
@@ -6521,6 +6594,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_59}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-59.png')).toString(),
             '{{ICON_41}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-41.png')).toString(),
             '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
+            '{{ICON_MERGE_WORKTREES}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'git-merge.svg')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);

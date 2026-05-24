@@ -278,22 +278,34 @@ function testUnknownRoleThrows() {
     console.log('  PASS: Unknown role correctly throws error');
 }
 
-function testResearchPlannerPrompt() {
-    console.log('Testing research_planner prompt template...');
-    // Default (no deep planning)
-    const prompt1 = buildKanbanBatchPrompt('research_planner', plans1);
-    assert.ok(prompt1.includes('You are a Research Planner Agent.'), 'Should start with base persona');
-    assert.ok(prompt1.includes('Use the web_research skill to conduct comprehensive research'), 'Should include web_research fallback when deep planning disabled');
-    assert.ok(prompt1.includes('Research depth: Deep (50-100+ sources)'), 'Should use default deep depth');
+function testCodeResearcherAndResearcherPrompts() {
+    console.log('Testing code_researcher and researcher prompt templates...');
     
-    // Deep planning enabled, custom depth
-    const prompt2 = buildKanbanBatchPrompt('research_planner', plans1, { enableDeepPlanning: true, researchDepth: 'quick' });
-    assert.ok(prompt2.includes('You are a Research Planner Agent.'), 'Should start with base persona');
-    assert.ok(prompt2.includes('DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research'), 'Should include deep research directive');
-    assert.ok(prompt2.includes('depth set to "quick" (Quick (5-10 sources))'), 'Should inject configured depth into directive');
+    // Code Researcher default depth
+    const prompt1 = buildKanbanBatchPrompt('code_researcher', plans1);
+    assert.ok(prompt1.includes('You are a Code Researcher Agent.'), 'Should start with base persona');
+    assert.ok(prompt1.includes('DEEP RESEARCH MODE: You are authorized to perform comprehensive deep research'), 'Should include deep research directive');
+    assert.ok(prompt1.includes('depth set to "deep" (Deep (50-100+ sources))'), 'Should use default deep depth');
+
+    // Code Researcher quick depth
+    const prompt2 = buildKanbanBatchPrompt('code_researcher', plans1, { researchDepth: 'quick' });
+    assert.ok(prompt2.includes('You are a Code Researcher Agent.'), 'Should start with base persona');
+    assert.ok(prompt2.includes('depth set to "quick" (Quick (5-10 sources))'), 'Should inject configured depth');
     assert.ok(prompt2.includes('TARGET SOURCE COUNT: Quick (5-10 sources)'), 'Should inject configured depth into target count');
-    assert.ok(!prompt2.includes('Use the web_research skill to conduct comprehensive research'), 'Should not include web_research fallback when deep planning enabled');
-    console.log('  PASS: research_planner prompt templates correctly implemented');
+
+    // Researcher quick depth, save to local docs disabled
+    const prompt3 = buildKanbanBatchPrompt('researcher', plans1, { researchDepth: 'quick', saveToLocalDocs: false });
+    assert.ok(prompt3.includes('You are a Researcher Agent.'), 'Should start with base persona');
+    assert.ok(prompt3.includes('depth set to "quick" (Quick (5-10 sources))'), 'Should inject configured depth');
+    assert.ok(!prompt3.includes('IMPORTANT: After completing the research, save the results to'), 'Should not include save instruction');
+
+    // Researcher deep depth, save to local docs enabled
+    const prompt4 = buildKanbanBatchPrompt('researcher', plans1, { researchDepth: 'deep', saveToLocalDocs: true, localDocsPath: '.switchboard/docs/' });
+    assert.ok(prompt4.includes('You are a Researcher Agent.'), 'Should start with base persona');
+    assert.ok(prompt4.includes('depth set to "deep" (Deep (50-100+ sources))'), 'Should use default deep depth');
+    assert.ok(prompt4.includes('IMPORTANT: After completing the research, save the results to .switchboard/docs/ using the write_to_file tool so I can review them later.'), 'Should include save instruction');
+
+    console.log('  PASS: code_researcher and researcher prompt templates correctly implemented');
 }
 
 function testResolveBaseInstructions() {
@@ -388,7 +400,7 @@ try {
     testSplitPlanEnabledCustomWorkflow();
     testSplitPlanWithAggressivePairProgramming();
     testInternAnalystPrompts();
-    testResearchPlannerPrompt();
+    testCodeResearcherAndResearcherPrompts();
     testResolveBaseInstructions();
     testUseSubagentsInstruction();
     testUnknownRoleThrows();

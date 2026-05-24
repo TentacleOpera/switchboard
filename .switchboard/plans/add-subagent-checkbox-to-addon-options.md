@@ -316,4 +316,38 @@ npx tsc --noEmit
 
 ---
 
+## Review Results (2026-05-25)
+
+### Reviewer: Devin (in-place reviewer pass)
+
+### Findings
+
+| # | Severity | Description | Resolution |
+|---|----------|-------------|------------|
+| 1 | NIT | Plan text says `default: true`; implementation uses `default: false` for most roles (only `splitter` gets `true`). This was an intentional implementer decision — `?? true` fallbacks in backend code ensure parallel instruction is still the default when no saved config exists, while the UI checkbox starts unchecked. | No change needed — design choice, not a defect. |
+| 2 | NIT | `gatherer` role has no `useSubagents` addon in `ROLE_ADDONS` or `DEFAULT_ROLE_CONFIG`. Consistent with `gatherer` not being a batch-processing role and matching how other per-role maps treat it. | No change needed. |
+| 3 | NIT | Plan references `research_planner`; codebase uses `code_researcher`. Implementation correctly handles both via fallback in `KanbanProvider.ts` (line 2248). | No change needed — plan doc issue only. |
+
+### Verification
+
+- All 7 target files have the feature implemented as described in the plan
+- `agentPromptBuilder.ts`: `useSubagentsEnabled` in interface + conditional `parallelInstruction` logic ✓
+- `agentConfig.ts`: `useSubagents` in `CustomAgentAddons` + `parseCustomAgentAddons()` parses `=== false` ✓
+- `KanbanProvider.ts`: `useSubagentsByRole` map + passed to all 12 `buildKanbanBatchPrompt` call sites ✓
+- `TaskViewerProvider.ts`: Both paths updated — `_buildKanbanBatchPrompt` helper (autoban) + `buildCustomAgentPrompt` (custom agents) ✓
+- `kanban.html`: Static checkbox for planner + dynamic rendering via `ROLE_ADDONS` for all other roles ✓
+- `sharedDefaults.js`: Addon metadata and defaults for all roles ✓
+- `agent-prompt-builder-subagents.test.js`: `testUseSubagentsInstruction()` covers parallel, sequential, single-plan, and default cases ✓
+
+### Files Changed by Review
+
+None — no code fixes required.
+
+### Remaining Risks
+
+- Users with existing saved configs (pre-feature) will get `?? true` fallback → parallel instruction, which matches pre-feature behavior. No migration needed.
+- The `default: false` in `ROLE_ADDONS` / `DEFAULT_ROLE_CONFIG` means new users see the checkbox unchecked, but the backend still sends parallel instruction by default. This is intentional: the checkbox is an opt-in confirmation, not the source of truth for the prompt.
+
+---
+
 **Recommendation: Send to Coder**

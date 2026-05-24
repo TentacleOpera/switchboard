@@ -104,8 +104,6 @@ export interface PromptBuilderOptions {
     switchboardSafeguardsEnabled?: boolean;
     /** Optional display label of the column where the plans originated. */
     sourceColumnLabel?: string;
-    /** When true, the research_planner role triggers the full deep research protocol. */
-    enableDeepPlanning?: boolean;
     /** The research depth to use for the deep research protocol (e.g. 'quick', 'standard', 'deep', 'academic'). */
     researchDepth?: string;
     /** The user's custom routing map configuration for agent complexities. */
@@ -128,8 +126,10 @@ export interface PromptBuilderOptions {
     ticketUpdateEnabled?: boolean;
     /** When false (explicitly), splitter omits the complexity-scoring step. Defaults to enabled (undefined). */
     complexityScoringSkill?: boolean;
-    /** When false (explicitly), researcher uses a lightweight base prompt without DEEP_RESEARCH_DIRECTIVE. Defaults to enabled (undefined). */
-    researchEnabled?: boolean;
+    /** When true, researcher prompt includes instruction to save results to local docs folder (.switchboard/docs/). */
+    saveToLocalDocs?: boolean;
+    /** The local docs folder path for the save-to-local-docs instruction. */
+    localDocsPath?: string;
 }
 
 export function resolveBaseInstructions(
@@ -227,6 +227,22 @@ export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any proj
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+
+export const MERGE_WORKTREES_DIRECTIVE = `MERGE WORKTREES DIRECTIVE:
+You are tasked with merging git worktrees for reviewed plans.
+For each worktree listed in the plan context:
+1. Check if there are changes: cd <worktree-path> && git diff --exit-code
+2. If no changes: remove worktree (git worktree remove <worktree-path>) and skip
+3. If changes exist:
+   - Navigate to main workspace: cd <workspace-root>
+   - Attempt to merge the branch: git merge <worktree-branch>
+   - If merge succeeds: remove worktree and branch, mark as merged
+   - If merge conflicts:
+     * Show the conflicted files to the user
+     * Ask user how to resolve (accept theirs, accept ours, edit manually)
+     * After resolution, complete merge and remove worktree
+4. Report final status for each worktree in the plan file
+5. Do NOT push to remote — only local merge`;
 
 export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
 
@@ -425,7 +441,12 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? `${batchExecutionRules}`
             : '';
 
-        let baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+        let baseInstructions = '';
+        if (baseInstruction === 'merge-worktrees') {
+            baseInstructions = MERGE_WORKTREES_DIRECTIVE;
+        } else {
+            baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+        }
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
@@ -713,13 +734,29 @@ Format the analysis as:
     }
 
     if (role === 'researcher') {
-        const researchEnabled = options?.researchEnabled !== false;
+        const researchDepth = options?.researchDepth || 'deep';
 
-        const researcherBase = researchEnabled
-            ? `You are a Researcher Agent.
+        const depthLabels: Record<string, string> = {
+            quick: 'Quick (5-10 sources)',
+            standard: 'Standard (15-30 sources)',
+            deep: 'Deep (50-100+ sources)',
+            academic: 'Academic (100-200+ sources)'
+        };
+        const label = depthLabels[researchDepth] || researchDepth;
 
-${DEEP_RESEARCH_DIRECTIVE}`
-            : `You are a Researcher Agent. For each plan, read the plan file and produce a concise research summary: identify the key technical questions raised by the plan, list relevant prior art or dependencies you are aware of, and flag any unknowns that require further investigation before implementation can begin.`;
+        // Parameterize the research directive with the selected depth
+        const customDeepDirective = DEEP_RESEARCH_DIRECTIVE
+            .replace('depth set to "deep" (50-100 sources)', `depth set to "${researchDepth}" (${label})`)
+            .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
+
+        let researcherBase = `You are a Researcher Agent.\n\n${customDeepDirective}`;
+
+        // Add save-to-local-docs instruction if enabled (matches planning.html import-toggle behavior)
+        const saveToLocalDocs = options?.saveToLocalDocs ?? false;
+        if (saveToLocalDocs) {
+            const savePath = options?.localDocsPath || '.switchboard/docs/';
+            researcherBase += `\n\nIMPORTANT: After completing the research, save the results to ${savePath} using the write_to_file tool so I can review them later.`;
+        }
 
         let baseInstructions = resolveBaseInstructions('researcher', researcherBase, options);
         if (cavemanOutputEnabled) {
@@ -743,8 +780,7 @@ ${DEEP_RESEARCH_DIRECTIVE}`
         return normalizeNewlines(promptParts);
     }
 
-    if (role === 'research_planner') {
-        const enableDeepPlanning = options?.enableDeepPlanning ?? false;
+    if (role === 'code_researcher') {
         const depth = options?.researchDepth || 'deep';
 
         const depthLabels: Record<string, string> = {
@@ -755,18 +791,14 @@ ${DEEP_RESEARCH_DIRECTIVE}`
         };
         const label = depthLabels[depth] || depth;
 
-        let rpBase = `You are a Research Planner Agent.`;
+        // Parameterize the research directive with the selected depth
+        const customDeepDirective = DEEP_RESEARCH_DIRECTIVE
+            .replace('depth set to "deep" (50-100 sources)', `depth set to "${depth}" (${label})`)
+            .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
 
-        if (enableDeepPlanning) {
-            // Replace depth in DEEP_RESEARCH_DIRECTIVE
-            const customDeepDirective = DEEP_RESEARCH_DIRECTIVE.replace('depth set to "deep" (50-100 sources)', `depth set to "${depth}" (${label})`)
-                .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
-            rpBase += `\n\n${customDeepDirective}`;
-        } else {
-            rpBase += `\n\nUse the web_research skill to conduct comprehensive research on the following topic.\n\nResearch depth: ${label}\n\nPlease begin by proposing a research plan for my approval, following the web_research skill protocol.`;
-        }
+        let crBase = `You are a Code Researcher Agent.\n\n${customDeepDirective}`;
 
-        let baseInstructions = resolveBaseInstructions('research_planner', rpBase, options);
+        let baseInstructions = resolveBaseInstructions('code_researcher', crBase, options);
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
@@ -896,6 +928,7 @@ export function columnToPromptRole(column: string): string | null {
             return 'reviewer';
         case 'CODE REVIEWED':
             return 'tester';
+        case 'CONTEXT GATHERER': return 'gatherer';
         case 'RESEARCHER': return 'researcher';
         case 'SPLITTER': return 'splitter';
         case 'TICKET UPDATER': return 'ticket_updater';

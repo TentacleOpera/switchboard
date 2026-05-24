@@ -190,6 +190,10 @@ suite('agentPromptBuilder', () => {
             assert.strictEqual(columnToPromptRole('TICKET UPDATER'), 'ticket_updater');
         });
 
+        test('maps CONTEXT GATHERER to gatherer', () => {
+            assert.strictEqual(columnToPromptRole('CONTEXT GATHERER'), 'gatherer');
+        });
+
         test('maps CODED to reviewer (legacy normalization)', () => {
             assert.strictEqual(columnToPromptRole('CODED'), 'reviewer');
         });

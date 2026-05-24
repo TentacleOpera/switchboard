@@ -316,7 +316,7 @@ let sqlJsInitPromise = null;
 const BUILTIN_KANBAN_COLUMN_DEFINITIONS = [
     { id: 'CREATED', label: 'New', order: 0 },
     { id: 'PLAN REVIEWED', label: 'Planned', order: 100 },
-    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', order: 150 },
+    { id: 'CONTEXT GATHERER', label: 'Context Gatherer', order: 50 },
     { id: 'INTERN CODED', label: 'Intern', order: 180 },
     { id: 'LEAD CODED', label: 'Lead Coder', order: 190 },
     { id: 'CODER CODED', label: 'Coder', order: 200 },

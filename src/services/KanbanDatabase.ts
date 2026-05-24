@@ -41,6 +41,7 @@ export interface KanbanPlanRecord {
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
     clickupTaskId?: string;
     linearIssueId?: string;
+    hasWorktree: number;     // 0 or 1
 }
 
 export interface ImportedDocEntry {
@@ -109,7 +110,8 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
-    linear_issue_id   TEXT DEFAULT ''
+    linear_issue_id   TEXT DEFAULT '',
+    has_worktree      INTEGER DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
@@ -384,6 +386,10 @@ const MIGRATION_V23_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project)`,
 ];
 
+const MIGRATION_V24_SQL = [
+    `ALTER TABLE plans ADD COLUMN has_worktree INTEGER DEFAULT 0`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -428,7 +434,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id`;
+                       clickup_task_id, linear_issue_id, has_worktree`;
 
 const runtimeRequire = createRequire(__filename);
 
@@ -1299,6 +1305,61 @@ export class KanbanDatabase {
              ON CONFLICT(key) DO UPDATE SET value = excluded.value`,
             [key, value]
         );
+    }
+
+    public async updateHasWorktree(sessionId: string, hasWorktree: boolean): Promise<void> {
+        if (!this._db) return;
+        this._db.run(
+            'UPDATE plans SET has_worktree = ? WHERE session_id = ?',
+            [hasWorktree ? 1 : 0, sessionId]
+        );
+        await this._persist();
+    }
+
+    /**
+     * Build a workspace-scoped key for kanban_meta entries.
+     * When child workspaces share a parent DB (via workspaceDatabaseMappings),
+     * the workspace_id prefix prevents key collisions between workspaces.
+     */
+    private async _worktreeMetaKey(sessionId: string): Promise<string> {
+        const wsId = await this.getWorkspaceId();
+        return `worktree_${wsId || 'default'}_${sessionId}`;
+    }
+
+    public async setWorktreeMeta(sessionId: string, meta: { worktreePath: string; worktreeBranch: string }): Promise<void> {
+        if (!this._db) return;
+        const key = await this._worktreeMetaKey(sessionId);
+        this._db.run(
+            'INSERT OR REPLACE INTO kanban_meta (key, value) VALUES (?, ?)',
+            [key, JSON.stringify(meta)]
+        );
+        await this._persist();
+    }
+
+    public async getWorktreeMeta(sessionId: string): Promise<{ worktreePath: string; worktreeBranch: string } | null> {
+        if (!this._db) return null;
+        const key = await this._worktreeMetaKey(sessionId);
+        const stmt = this._db.prepare(
+            "SELECT value FROM kanban_meta WHERE key = ?"
+        );
+        try {
+            if (stmt.bind([key]) && stmt.step()) {
+                return JSON.parse(String(stmt.getAsObject().value));
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async clearWorktreeMeta(sessionId: string): Promise<void> {
+        if (!this._db) return;
+        const key = await this._worktreeMetaKey(sessionId);
+        this._db.run(
+            "DELETE FROM kanban_meta WHERE key = ?",
+            [key]
+        );
+        await this._persist();
     }
 
     public async getDependencyStatus(
@@ -3590,6 +3651,18 @@ export class KanbanDatabase {
             await this.setMigrationVersion(23);
             console.log('[KanbanDatabase] V23 migration completed: projects table and plans.project column added');
         }
+
+        // V24: add has_worktree flag for git worktree tracking
+        const v24 = await this.getMigrationVersion();
+        if (v24 < 24) {
+            for (const sql of MIGRATION_V24_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V24 migration step skipped (already applied):', e);
+                }
+            }
+            await this.setMigrationVersion(24);
+            console.log('[KanbanDatabase] V24 migration completed: has_worktree column added');
+        }
     }
 
     private _planTableHasColumn(columnName: string): boolean {
@@ -4303,7 +4376,8 @@ FROM plans
                     dispatchedAgent: String(row.dispatched_agent || ""),
                     dispatchedIde: String(row.dispatched_ide || ""),
                     clickupTaskId: String(row.clickup_task_id || ""),
-                    linearIssueId: String(row.linear_issue_id || "")
+                    linearIssueId: String(row.linear_issue_id || ""),
+                    hasWorktree: Number(row.has_worktree || 0)
                 });
             }
         } finally {
