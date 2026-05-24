@@ -124,6 +124,7 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             routedTo: '',
             dispatchedAgent: '',
             dispatchedIde: '',
+            hasWorktree: 0,
             clickupTaskId: hasMixedAutomationMetadata ? '' : clickupTaskId,
             linearIssueId: hasMixedAutomationMetadata ? '' : linearIssueId
         });

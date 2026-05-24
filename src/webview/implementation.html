@@ -2509,6 +2509,11 @@
                     updateMcpStatus(message);
                     setActiveTab(message.activeTab || 'agents', false);
                     if (message.type === 'initialState') {
+                        if (message.activeSubTab) {
+                            const validSubTabs = ['agents', 'terminals', 'project'];
+                            currentAgentTab = validSubTabs.includes(message.activeSubTab) ? message.activeSubTab : 'terminals';
+                            switchAgentTab(currentAgentTab);
+                        }
                         toggleOnboarding(message.needsSetup === true);
                         if (message.workspaceRoot) {
                             currentWorkspaceRoot = String(message.workspaceRoot).trim();
@@ -3311,6 +3316,7 @@
         let isAutobanPanelInteracting = false;
         function switchAgentTab(tab) {
             currentAgentTab = tab;
+            vscode.postMessage({ type: 'setActiveSubTab', tab: tab });
             const tabs = { agents: agentListStandard, terminals: agentListTerminals, project: agentListProject };
             document.querySelectorAll('.sub-tab-btn').forEach(btn => {
                 btn.classList.toggle('is-active', btn.dataset.tab === tab);

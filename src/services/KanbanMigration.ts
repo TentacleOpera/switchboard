@@ -45,7 +45,8 @@ export class KanbanMigration {
             mirrorPath: (row as any).mirrorPath || '',
             routedTo: '',
             dispatchedAgent: '',
-            dispatchedIde: ''
+            dispatchedIde: '',
+            hasWorktree: 0
         }));
     }
 

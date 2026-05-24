@@ -321,6 +321,7 @@ export class NotionBackupService {
                 routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
+                hasWorktree: getNumber(p['Has Worktree']),
                 clickupTaskId: getRichText(p['ClickUp Task ID']),
                 linearIssueId: getRichText(p['Linear Issue ID'])
             };

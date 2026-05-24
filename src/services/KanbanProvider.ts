@@ -2246,6 +2246,7 @@ export class KanbanProvider implements vscode.Disposable {
         const ticketUpdaterConfig: any = this._getSetting('switchboard.prompts.roleConfig_ticket_updater', undefined);
         const codeResearcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_code_researcher', undefined)
             ?? this._getSetting('switchboard.prompts.roleConfig_research_planner', undefined);
+        const gathererConfig: any = this._getSetting('switchboard.prompts.roleConfig_gatherer', undefined);
 
         return {
             accurateCodingEnabledByRole: {
@@ -2298,7 +2299,7 @@ export class KanbanProvider implements vscode.Disposable {
             },
             researchDepth: researcherConfig?.researchComplexity || 'deep',
             saveToLocalDocs: researcherConfig?.saveToLocalDocs ?? false,
-            localDocsPath: config.get<string>('research.localFolderPath', undefined),
+            localDocsPath: config.get<string | undefined>('research.localFolderPath', undefined),
             gitProhibitionByRole: {
                 planner: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
                 lead: leadConfig?.addons?.gitProhibition ?? true,
@@ -2350,6 +2351,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.clearAntigravityContext ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.clearAntigravityContext ?? false,
                 code_researcher: codeResearcherConfig?.addons?.clearAntigravityContext ?? false,
+                gatherer: gathererConfig?.addons?.clearAntigravityContext ?? false,
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? false,
@@ -2363,6 +2365,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.cavemanOutput ?? false,
                 ticket_updater: ticketUpdaterConfig?.addons?.cavemanOutput ?? false,
                 code_researcher: codeResearcherConfig?.addons?.cavemanOutput ?? false,
+                gatherer: gathererConfig?.addons?.cavemanOutput ?? false,
             },
             suppressWalkthroughByRole: {
                 lead: leadConfig?.addons?.suppressWalkthrough ?? false,

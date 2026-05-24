@@ -74,6 +74,7 @@ type SqlJsDatabase = {
     exec: (sql: string) => void;
     run: (sql: string, params?: unknown[]) => void;
     prepare: (sql: string, params?: unknown[]) => {
+        bind: (params?: unknown[]) => boolean;
         step: () => boolean;
         getAsObject: () => Record<string, unknown>;
         free: () => void;
@@ -401,8 +402,8 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    clickup_task_id, linear_issue_id, has_worktree
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -425,7 +426,8 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_agent = excluded.dispatched_agent,
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
-    linear_issue_id = excluded.linear_issue_id
+    linear_issue_id = excluded.linear_issue_id,
+    has_worktree = excluded.has_worktree
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
@@ -435,6 +437,26 @@ const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, stat
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        clickup_task_id, linear_issue_id, has_worktree`;
+
+// Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
+// This ensures that databases created before a column was added to SCHEMA_SQL
+// get the missing column added, since CREATE TABLE IF NOT EXISTS silently
+// skips tables that already exist (leaving them with the old schema).
+const SCHEMA_PLAN_COLUMN_DEFS: Array<{ name: string; def: string }> = (() => {
+    const match = SCHEMA_SQL.match(/CREATE TABLE IF NOT EXISTS plans\s*\(\s*([\s\S]*?)\s*\)\s*;/);
+    if (!match) return [];
+    const body = match[1];
+    return body
+        .split('\n')
+        .map(line => line.trim().replace(/,\s*$/, ''))
+        .filter(line => line.length > 0)
+        .map(line => {
+            const m = line.match(/^(\w+)\s+(.*)$/);
+            if (!m) return null;
+            return { name: m[1], def: m[2] };
+        })
+        .filter((x): x is { name: string; def: string } => x !== null);
+})();
 
 const runtimeRequire = createRequire(__filename);
 
@@ -988,6 +1010,7 @@ export class KanbanDatabase {
             // Execute schema and migrations
             this._db.exec(SCHEMA_SQL);
             await this._runMigrations();
+            this._ensureSchemaColumns();
 
             // Persist to disk
             await this._persist();
@@ -1060,7 +1083,8 @@ export class KanbanDatabase {
                     record.dispatchedAgent || '', // 20
                     record.dispatchedIde || '',   // 21
                     record.clickupTaskId || '',   // 22
-                    record.linearIssueId || ''    // 23
+                    record.linearIssueId || '',    // 23
+                    record.hasWorktree ?? 0         // 24
                 ]);
             }
             this._db.run('COMMIT');
@@ -3006,6 +3030,7 @@ export class KanbanDatabase {
                 }
             }
             await this._runMigrations();
+            this._ensureSchemaColumns();
 
             this._loadedMtime = currentMtime;
             KanbanDatabase._lastLoadedMtimes.set(this._dbPath, currentMtime);
@@ -3085,6 +3110,7 @@ export class KanbanDatabase {
 
             // Run migrations for existing databases
             await this._runMigrations();
+            this._ensureSchemaColumns();
 
             // Persist migration changes (new tables/columns) to disk
             await this._persist();
@@ -3643,25 +3669,77 @@ export class KanbanDatabase {
         // V23: add projects table and project column to plans for project-level grouping/filtering.
         const v23 = await this.getMigrationVersion();
         if (v23 < 23) {
+            let v23Failed = false;
             for (const sql of MIGRATION_V23_SQL) {
                 try { this._db.exec(sql); } catch (e) {
-                    console.debug('[KanbanDatabase] V23 migration step skipped (already applied):', e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    // Distinguish "already exists" (harmless) from real failures
+                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
+                        console.debug('[KanbanDatabase] V23 migration step skipped (already exists):', msg);
+                    } else {
+                        console.error('[KanbanDatabase] V23 migration step FAILED:', msg);
+                        v23Failed = true;
+                    }
                 }
             }
-            await this.setMigrationVersion(23);
-            console.log('[KanbanDatabase] V23 migration completed: projects table and plans.project column added');
+            if (!v23Failed) {
+                await this.setMigrationVersion(23);
+                console.log('[KanbanDatabase] V23 migration completed: projects table and plans.project column added');
+            } else {
+                console.error('[KanbanDatabase] V23 migration had failures — version NOT stamped. _ensureSchemaColumns() will reconcile.');
+            }
         }
 
         // V24: add has_worktree flag for git worktree tracking
         const v24 = await this.getMigrationVersion();
         if (v24 < 24) {
+            let v24Failed = false;
             for (const sql of MIGRATION_V24_SQL) {
                 try { this._db.exec(sql); } catch (e) {
-                    console.debug('[KanbanDatabase] V24 migration step skipped (already applied):', e);
+                    const msg = e instanceof Error ? e.message : String(e);
+                    // Distinguish "already exists" (harmless) from real failures
+                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
+                        console.debug('[KanbanDatabase] V24 migration step skipped (already exists):', msg);
+                    } else {
+                        console.error('[KanbanDatabase] V24 migration step FAILED:', msg);
+                        v24Failed = true;
+                    }
                 }
             }
-            await this.setMigrationVersion(24);
-            console.log('[KanbanDatabase] V24 migration completed: has_worktree column added');
+            if (!v24Failed) {
+                await this.setMigrationVersion(24);
+                console.log('[KanbanDatabase] V24 migration completed: has_worktree column added');
+            } else {
+                console.error('[KanbanDatabase] V24 migration had failures — version NOT stamped. _ensureSchemaColumns() will reconcile.');
+            }
+        }
+    }
+
+    /**
+     * Schema reconciliation: ensure all columns defined in SCHEMA_SQL's plans table
+     * actually exist in the database. This fixes the gap where CREATE TABLE IF NOT EXISTS
+     * silently skips existing tables that are missing columns added in later schema versions.
+     *
+     * Runs after _runMigrations() so that version-gated ALTER TABLE steps have already
+     * had their chance. Any columns still missing are added here as a safety net.
+     */
+    private _ensureSchemaColumns(): void {
+        if (!this._db) return;
+
+        let addedCount = 0;
+        for (const { name, def } of SCHEMA_PLAN_COLUMN_DEFS) {
+            if (!this._planTableHasColumn(name)) {
+                try {
+                    this._db.exec(`ALTER TABLE plans ADD COLUMN ${name} ${def}`);
+                    console.warn(`[KanbanDatabase] Schema reconciliation: added missing column '${name}' to plans table`);
+                    addedCount++;
+                } catch (e) {
+                    console.error(`[KanbanDatabase] Schema reconciliation: failed to add column '${name}':`, e);
+                }
+            }
+        }
+        if (addedCount > 0) {
+            console.log(`[KanbanDatabase] Schema reconciliation: added ${addedCount} missing column(s) to plans table`);
         }
     }
 
@@ -3873,6 +3951,7 @@ FROM plans
                     routedTo: p.routed_to || p.routedTo || '',
                     dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
                     dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
+                    hasWorktree: p.has_worktree ?? p.hasWorktree ?? 0,
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
                     linearIssueId: p.linear_issue_id || p.linearIssueId || ''
                 };
@@ -3884,7 +3963,7 @@ FROM plans
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.hasWorktree ?? 0
                     ]);
                     restored++;
                 } catch (e) {

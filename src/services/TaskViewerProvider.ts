@@ -246,6 +246,7 @@ type BrainRunSheetMetadata = {
 export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public static readonly viewType = 'switchboard-view';
     private static readonly ACTIVE_TAB_STATE_KEY = 'switchboard.activeTab';
+    private static readonly ACTIVE_SUB_TAB_STATE_KEY = 'switchboard.activeSubTab';
     private static readonly CLIPBOARD_SEPARATOR_REGEX = /^---\s*PLAN\s*---\s*$/;
     private _view?: vscode.WebviewView;
     private _stateWatcher?: vscode.FileSystemWatcher;
@@ -1773,7 +1774,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : '',
             routedTo: '',
             dispatchedAgent: '',
-            dispatchedIde: ''
+            dispatchedIde: '',
+            hasWorktree: 0
         };
     }
 
@@ -4293,6 +4295,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _sendInitialState() {
         const activeTab = this._context.workspaceState.get<string>(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, 'agents');
+        const activeSubTab = this._context.workspaceState.get<string>(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, 'terminals');
         const workspaceRoot = this._resolveWorkspaceRoot();
 
         // Load ClickUp hierarchy state if available
@@ -4342,6 +4345,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             connected: this._mcpIdeConfigured && this._mcpToolReachable,
             currentIdeName: vscode.env.appName,
             activeTab,
+            activeSubTab,
             workspaceRoot: workspaceRoot || undefined,
             clickupHierarchyState,
             linearProjectPickerValue,
@@ -5896,7 +5900,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             useSubagentsEnabled,
             researchDepth: roleConfig?.researchComplexity || 'deep',
             saveToLocalDocs: role === 'researcher' ? (roleConfig?.saveToLocalDocs ?? false) : undefined,
-            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string>('research.localFolderPath', undefined) : undefined,
+            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string | undefined>('research.localFolderPath', undefined) : undefined,
             routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
             ticketUpdateEnabled,
             complexityScoringSkill,
@@ -7973,6 +7977,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_TAB_STATE_KEY, activeTab);
                         break;
                     }
+                    case 'setActiveSubTab': {
+                        const validSubTabs = ['agents', 'terminals', 'project'];
+                        const activeSubTab = validSubTabs.includes(data.tab) ? data.tab : 'terminals';
+                        await this._context.workspaceState.update(TaskViewerProvider.ACTIVE_SUB_TAB_STATE_KEY, activeSubTab);
+                        break;
+                    }
                     case 'getRecentActivity': {
                         const limit = Number(data.limit) || 50;
                         const beforeTimestamp = typeof data.before === 'string' ? data.before : undefined;
@@ -8209,6 +8219,60 @@ What would you like to find?`;
                     }
                     case 'resetDatabase': {
                         await this.handleResetDatabase();
+                        break;
+                    }
+                    case 'sendToTerminal': {
+                        const { name, input, paced } = data;
+                        if (typeof name !== 'string' || !name.trim()) {
+                            console.error('[TaskViewer] sendToTerminal rejected: invalid terminal name');
+                            break;
+                        }
+                        if (typeof input !== 'string') {
+                            console.error('[TaskViewer] sendToTerminal rejected: invalid input');
+                            break;
+                        }
+
+                        // Resolve terminal: registered terminals first (exact → suffix-aware → case-insensitive),
+                        // then fall back to open VS Code terminals.
+                        // NOTE: Do NOT use _attemptDirectTerminalPush here — it has clearBeforePrompt
+                        // side effects that would double-clear when input is '/clear'.
+                        let terminal: vscode.Terminal | undefined;
+                        if (this._registeredTerminals) {
+                            terminal = this._registeredTerminals.get(name);
+                            if (!terminal) {
+                                terminal = this._registeredTerminals.get(this._suffixedName(name));
+                            }
+                            if (!terminal) {
+                                const normalized = this._normalizeAgentKey(this._stripIdeSuffix(name));
+                                for (const [n, t] of this._registeredTerminals.entries()) {
+                                    if (this._normalizeAgentKey(this._stripIdeSuffix(n)) === normalized) {
+                                        terminal = t;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        if (!terminal) {
+                            const openTerminals = vscode.window.terminals || [];
+                            const strippedTarget = this._normalizeAgentKey(this._stripIdeSuffix(name));
+                            terminal = openTerminals.find(t => {
+                                const tName = this._normalizeAgentKey(t.name);
+                                return tName === strippedTarget;
+                            });
+                        }
+
+                        if (!terminal) {
+                            console.error(`[TaskViewer] sendToTerminal failed: terminal '${name}' not found or not local`);
+                            break;
+                        }
+
+                        await sendRobustText(terminal, input, paced);
+                        console.log(`[TaskViewer] sendToTerminal: sent to '${name}' (paced: ${paced}, len: ${input.length})`);
+                        break;
+                    }
+                    case 'getDesignDocSetting': {
+                        const setting = this.handleGetDesignDocSetting();
+                        this._view?.webview.postMessage({ type: 'designDocSetting', ...setting });
                         break;
                     }
                 }
@@ -9349,6 +9413,7 @@ What would you like to find?`;
                 routedTo: '',
                 dispatchedAgent: '',
                 dispatchedIde: '',
+                hasWorktree: 0
             });
         }
         if (records.length > 0) {
@@ -9397,6 +9462,7 @@ What would you like to find?`;
                 routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
+                hasWorktree: existing?.hasWorktree ?? 0
             });
         }
         if (records.length > 0) {
@@ -9482,6 +9548,7 @@ What would you like to find?`;
                 routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
+                hasWorktree: existing?.hasWorktree ?? 0
             }]);
         }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
@@ -10417,7 +10484,8 @@ What would you like to find?`;
                             mirrorPath: '',
                             routedTo: '',
                             dispatchedAgent: '',
-                            dispatchedIde: ''
+                            dispatchedIde: '',
+                            hasWorktree: 0
                         }]);
                     } else {
                         await db.tombstonePlan(hash);
@@ -10465,7 +10533,8 @@ What would you like to find?`;
                     mirrorPath: '',
                     routedTo: '',
                     dispatchedAgent: '',
-                    dispatchedIde: ''
+                    dispatchedIde: '',
+                    hasWorktree: 0
                 }]);
             }
             this._tombstones.add(hash);

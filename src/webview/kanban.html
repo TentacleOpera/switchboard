@@ -1924,14 +1924,6 @@
     <!-- Kanban Tab Content -->
     <div id="kanban-tab-content" class="kanban-tab-content active">
         <div class="controls-strip">
-            <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
-            <select id="workspace-select" class="workspace-select" data-tooltip="Select workspace" style="min-width:180px;"></select>
-            <button class="strip-btn is-teal" id="btn-reassign-workspace" data-tooltip="Assign selected plan(s) to this workspace" style="margin-left:6px;" disabled>ASSIGN TO WORKSPACE</button>
-            <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
-            <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
-            <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
-            <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
-            <span class="controls-spacer"></span>
             <label class="cli-toggle-inline" id="cli-toggle" data-tooltip="When OFF, moves and prompts do not trigger CLI agent actions">
                 <label class="toggle-switch">
                     <input type="checkbox" id="cli-triggers-toggle" checked>
@@ -1947,13 +1939,20 @@
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
             <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
+            <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
+            <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
         </div>
         <div class="project-strip" id="project-strip">
+            <select id="workspace-select" class="workspace-select" data-tooltip="Select workspace" style="min-width:180px;"></select>
+            <button class="strip-btn is-teal" id="btn-reassign-workspace" data-tooltip="Assign selected plan(s) to this workspace" disabled>ASSIGN TO WORKSPACE</button>
+            <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
+            <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
+            <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
             <select id="project-select" class="project-select" title="Filter by project">
                 <option value="">All Projects</option>
             </select>
-            <button id="btn-add-project" class="strip-btn" title="Add new project">+ ADD PROJECT</button>
-            <button id="btn-assign-project" class="strip-btn" title="Assign selected plans to project" disabled>ASSIGN TO PROJECT</button>
+            <button id="btn-add-project" class="strip-btn is-teal" title="Add new project">ADD PROJECT</button>
+            <button id="btn-assign-project" class="strip-btn is-teal" title="Assign selected plans to project" disabled>ASSIGN TO PROJECT</button>
             <button id="btn-delete-project" class="strip-btn" title="Delete selected project" style="display:none;">DELETE PROJECT</button>
             <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
         </div>
@@ -4183,9 +4182,36 @@
                 btn.addEventListener('click', () => {
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
                     const sessionId = btn.dataset.session || '';
+                    
+                    // Optimistic UI: highlight target column and move card immediately
+                    let nextCol = null;
+                    let backendColumn = column;
+                    if (column) {
+                        // Handle coded columns: resolve to last visible coded column before calling getNextColumn
+                        // Pattern matches column header handler (lines 3815-3820) and card rendering (lines 4293-4301)
+                        // CRITICAL: Do NOT resolve to 'CODED_AUTO' — it is not in the `columns` array
+                        const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+                        let nextColSource = column;
+                        if (CODED_IDS.includes(column) || column === 'CODED_AUTO') {
+                            const visibleCodedIds = CODED_IDS.filter(id => columns.includes(id));
+                            nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
+                            backendColumn = (column === 'CODED_AUTO') ? (columnDefinitions.find(d => d.kind === 'coded')?.id || 'LEAD CODED') : column;
+                        }
+                        nextCol = getNextColumn(nextColSource);
+                        
+                        if (nextCol) {
+                            const targetBody = document.getElementById('col-' + nextCol);
+                            if (targetBody) {
+                                targetBody.classList.add('highlight');
+                                targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+                            }
+                            moveCardsOptimistically([sessionId], column, nextCol);
+                        }
+                    }
+                    
                     postKanbanMessage({
                         type: 'promptSelected',
-                        column,
+                        column: backendColumn,
                         sessionIds: [sessionId],
                         workspaceRoot: btn.dataset.workspaceRoot
                     });
@@ -5058,7 +5084,10 @@
                     break;
                 case 'updateAgentNames':
                     lastAgentNames = msg.agentNames || {};
-                    updateAllColumnAgents();
+                    // Defer to next microtask so any pending updateColumns
+                    // message is processed first, ensuring columnDefinitions
+                    // includes custom agent columns before we resolve roles.
+                    setTimeout(() => updateAllColumnAgents(), 0);
                     break;
                 case 'cliTriggersState':
                     cliTriggersEnabled = msg.enabled !== false;

@@ -309,6 +309,72 @@ If issues arise:
 - Phase 5 (Tests): 10 minutes
 - **Total**: ~90 minutes
 
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Status |
+|:--|:---------|:--------|:-------|
+| 1 | **CRITICAL** | `gatherer` role missing from `cavemanOutputByRole` in `_getPromptsConfig()`. No `gathererConfig` variable read from settings. UI checkbox renders, state persists, but directive is NEVER injected into gatherer prompts. `cavemanOutputByRole?.['gatherer']` resolves to `undefined` → `false` at all call sites. Same pre-existing gap in `clearAntigravityContextByRole`. | **FIXED** |
+| 2 | **MAJOR** | `includeDependencyInstructions: true` for lead/coder/intern in both `DEFAULT_ROLE_CONFIG` and `ROLE_ADDONS` — should be `false`. | **FIXED** |
+| 3 | **MAJOR** | `researcher` role missing `researchEnabled: true` addon in `DEFAULT_ROLE_CONFIG` and `ROLE_ADDONS`. Deep research mode should be on by default. | **FIXED** |
+| 4 | **MAJOR** | Default `cavemanOutput` values deviate from plan spec. Plan says `default: false` for all roles. Implementation has `cavemanOutput: true` / `default: true` for lead, coder, and intern. Owner confirmed this is intentional for execution roles. | **CONFIRMED INTENTIONAL** |
+| 5 | **NIT** | Plan references `research_planner` role; codebase uses `code_researcher` (with `research_planner` fallback). Implementation correctly adapted. | No change needed |
+| 6 | **NIT** | Plan lists 11 roles; codebase has 12 (adds `gatherer` and `code_researcher`). Implementation correctly covers all 12. | No change needed |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix #1 now**: Added `gathererConfig` variable + `gatherer` entries to `cavemanOutputByRole` and `clearAntigravityContextByRole`
+- **Fix #2 now**: Changed `includeDependencyInstructions` from `true` to `false` for lead/coder/intern in both `DEFAULT_ROLE_CONFIG` and `ROLE_ADDONS`
+- **Fix #3 now**: Added `researchEnabled: true` to researcher's `DEFAULT_ROLE_CONFIG` addons and `ROLE_ADDONS` metadata
+- **Confirm #4**: `cavemanOutput: true` for lead/coder/intern is intentional per owner
+- **Keep #5/#6**: Implementation is more complete than plan. No regressions.
+
+### Code Fixes Applied
+
+**File: `src/services/KanbanProvider.ts`**
+
+1. **Line ~2249**: Added `gathererConfig` variable:
+   ```typescript
+   const gathererConfig: any = this._getSetting('switchboard.prompts.roleConfig_gatherer', undefined);
+   ```
+
+2. **Line ~2354**: Added `gatherer` to `clearAntigravityContextByRole`:
+   ```typescript
+   gatherer: gathererConfig?.addons?.clearAntigravityContext ?? false,
+   ```
+
+3. **Line ~2368**: Added `gatherer` to `cavemanOutputByRole`:
+   ```typescript
+   gatherer: gathererConfig?.addons?.cavemanOutput ?? false,
+   ```
+
+**File: `src/webview/sharedDefaults.js`**
+
+4. **Line 22**: Changed `includeDependencyInstructions: true` → `false` in lead `DEFAULT_ROLE_CONFIG`
+5. **Line 23**: Changed `includeDependencyInstructions: true` → `false` in coder `DEFAULT_ROLE_CONFIG`
+6. **Line 26**: Changed `includeDependencyInstructions: true` → `false` in intern `DEFAULT_ROLE_CONFIG`
+7. **Line 29**: Added `researchEnabled: true` to researcher `DEFAULT_ROLE_CONFIG` addons
+8. **Line 83**: Changed `includeDependencyInstructions` default `true` → `false` in lead `ROLE_ADDONS`
+9. **Line 96**: Changed `includeDependencyInstructions` default `true` → `false` in coder `ROLE_ADDONS`
+10. **Line 126**: Changed `includeDependencyInstructions` default `true` → `false` in intern `ROLE_ADDONS`
+11. **Line 148**: Added `researchEnabled` entry to researcher `ROLE_ADDONS`:
+    ```javascript
+    { id: 'researchEnabled', label: 'Enable Deep Research', tooltip: 'Enable deep research mode (50-100 sources, codebase + web)', default: true }
+    ```
+
+### Verification Results
+
+- **TypeScript typecheck**: No new errors introduced. All pre-existing errors are unrelated (`hasWorktree` property issues, import path issues in other files).
+- **Modified lines**: No type errors on any modified lines.
+- **Unit tests**: 3 caveman tests present in `agentPromptBuilder.test.ts` (true/false/undefined cases). Not re-run per SKIP TESTS directive.
+
+### Remaining Risks
+
+1. **Pre-existing gap**: `gatherer` is also missing from `skipCompilationByRole` and `skipTestsByRole` maps, but the gatherer role doesn't have those addons in `ROLE_ADDONS`, so this is expected/acceptable.
+2. **`jules` role**: Not included in `DEFAULT_ROLE_CONFIG` or `ROLE_ADDONS` — this is intentional (jules is a special-purpose role without addon UI).
+3. **Existing user configs**: Users who already saved role configs with the old `includeDependencyInstructions: true` default will keep that value until they reset. The `DEFAULT_ROLE_CONFIG` only applies on first use or after reset.
+
 ---
 
 **Recommendation:** Send to Coder (Complexity 5)

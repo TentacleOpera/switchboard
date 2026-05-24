@@ -524,7 +524,8 @@ export class SessionActionLog {
                     mirrorPath: '',
                     routedTo: '',
                     dispatchedAgent: '',
-                    dispatchedIde: ''
+                    dispatchedIde: '',
+                    hasWorktree: 0
                 }]);
                 if (normalized.events.length > 0) {
                     await db.migrateSessionEvents(planFile, normalized.events);

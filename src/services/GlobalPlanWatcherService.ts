@@ -435,6 +435,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     routedTo: '',
                     dispatchedAgent: '',
                     dispatchedIde: '',
+                    hasWorktree: 0,
                     clickupTaskId: '',
                     linearIssueId: ''
                 };
