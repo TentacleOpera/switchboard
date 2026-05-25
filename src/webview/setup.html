@@ -532,6 +532,7 @@
                 <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-warning); border-radius: 2px;">
                     <strong>Note:</strong> When enabled, any workspace folders <em>not</em> listed below will automatically use their own local database (located at <code>.switchboard/kanban.db</code> within each folder).
                 </div>
+                <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">CENTRALIZE CONFIGURATION</button>
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
                     <input id="workspace-mapping-enabled" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <span>Enable workspace-to-database mapping</span>
@@ -542,8 +543,6 @@
                     <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
                 </div>
                 <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
-                <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">CENTRALIZE CONFIGURATION</button>
-
                 <div class="setup-option-group" style="display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
                     <input type="checkbox" id="global-settings-toggle" checked style="width:auto; margin:0; margin-top:2px;">
                     <div style="display:flex; flex-direction:column; gap:4px;">

@@ -85,14 +85,7 @@
             border-color: var(--accent-teal-dim);
         }
 
-        .strip-divider {
-            display: inline-block;
-            width: 1px;
-            height: 16px;
-            background: var(--border-color);
-            margin: 0 4px;
-            flex-shrink: 0;
-        }
+
 
         .workspace-filter-badge {
             font-family: var(--font-mono);
@@ -114,7 +107,6 @@
             padding: 6px 16px;
             border-bottom: 1px solid var(--border-color);
             background: var(--panel-bg2);
-            flex-wrap: wrap;
         }
 
         .settings-strip {
@@ -224,6 +216,52 @@
 
         .btn-add-plan:hover img {
             filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(1.2);
+        }
+
+        .strip-icon-btn {
+            width: 32px;
+            height: 32px;
+            padding: 4px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            border-radius: 4px;
+            cursor: pointer;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+        }
+
+        .strip-icon-btn img {
+            width: 24px;
+            height: 24px;
+            object-fit: contain;
+            pointer-events: none;
+        }
+
+        .strip-icon-btn.is-active {
+            border-color: var(--accent-teal-dim);
+            box-shadow: var(--glow-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+
+        .strip-icon-btn.is-off {
+            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            opacity: 0.6;
+        }
+
+        .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
         }
 
         .backlog-toggle-btn {
@@ -1918,15 +1956,25 @@
     <!-- Kanban Tab Content -->
     <div id="kanban-tab-content" class="kanban-tab-content active">
         <div class="controls-strip">
-            <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
+            <!-- Left Side: Workspace/Project controls -->
+            <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
+            <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
+            <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
+            <button id="btn-delete-project" class="strip-btn" data-tooltip="Select a project to delete" disabled>🗑</button>
+
+            <!-- Spacer to push right-side controls to the right -->
+            <div style="flex: 1;"></div>
+
+            <!-- Right Side: Automation and view controls -->
+            <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
+                <img src="${ICON_AUTOBAN}" alt="Start Automation" style="width: 24px; height: 24px;">
+            </button>
             <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
-            <label class="cli-toggle-inline" id="cli-toggle" data-tooltip="When OFF, moves and prompts do not trigger CLI agent actions">
-                <label class="toggle-switch">
-                    <input type="checkbox" id="cli-triggers-toggle" checked>
-                    <span class="toggle-slider"></span>
-                </label>
-                <span class="toggle-label">CLI Triggers</span>
-            </label>
+
+            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
+                <img src="${ICON_CLI_TRIGGERS}" alt="CLI Triggers" style="width: 24px; height: 24px;">
+            </button>
+
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
                 <option value="off">Pair Programming: Off</option>
                 <option value="cli-cli">CLI Lead + CLI Coder</option>
@@ -1934,15 +1982,15 @@
                 <option value="ide-cli">IDE Lead + CLI Coder</option>
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
-            <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
-            <span class="strip-divider"></span>
-            <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
-            <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
+
+            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+                <img src="${ICON_COLLAPSE_CODERS}" alt="Collapse Coders" style="width: 24px; height: 24px;">
+            </button>
+
+            <!-- Hidden elements (unchanged) -->
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
             <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
             <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
-            <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
-            <button id="btn-delete-project" class="strip-btn" title="Delete selected project" style="display:none;">DELETE PROJECT</button>
             <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
         </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
@@ -3061,6 +3109,7 @@
             const selectedProject = selectedOption?.dataset?.project;
             const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
             if (!selectedProject) return;
+            if (!confirm(`Delete project "${selectedProject}"?\n\nAll plans in this project will have their project assignment cleared.`)) return;
             postKanbanMessage({ type: 'deleteProject', projectName: selectedProject, workspaceRoot });
         });
         let testingFailSourceColumn = '';
@@ -3071,6 +3120,10 @@
         const COLUMN_ABBREV = { 'CREATED': 'C', 'PLAN REVIEWED': 'P', 'INTERN CODED': 'I', 'LEAD CODED': 'L', 'CODER CODED': 'R', 'CODED_AUTO': 'A', 'COMPLETED': 'D' };
 
         // Icon URIs injected by extension
+        const ICON_AUTOBAN = '{{ICON_22}}';           // Play/automation icon
+        const ICON_CLI_TRIGGERS = '{{ICON_28}}';      // Toggle-like icon
+        const ICON_COLLAPSE_CODERS = '{{ICON_41}}';   // Collapse/expand icon
+
         const ICON_MOVE_SELECTED = '{{ICON_53}}';
         const ICON_MOVE_ALL = '{{ICON_54}}';
         const ICON_PROMPT_SELECTED = '{{ICON_22}}';
@@ -3291,7 +3344,7 @@
                 }
             }
 
-            // Restore selection logic (preserved from updateWorkspaceSelector)
+            // Restore selection logic (preserved from original workspace/project selectors)
             if (explicitRoot && workspaceItems.some(item => item.workspaceRoot === explicitRoot)) {
                 // If the backend explicitly changed workspace, honor that
                 const targetProject = activeProjectFilter || '';
@@ -3300,6 +3353,13 @@
                     select.value = targetValue;
                 } else {
                     select.value = explicitRoot + '|';
+                }
+                const delBtn = document.getElementById('btn-delete-project');
+                if (delBtn) {
+                    const currentOption = select.selectedOptions?.[0];
+                    const hasProject = !!(currentOption?.dataset?.project);
+                    delBtn.disabled = !hasProject;
+                    delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
                 }
                 return;
             }
@@ -3324,6 +3384,15 @@
                         select.value = fallbackRoot + '|';
                     }
                 }
+            }
+
+            // Sync delete button state after dropdown rebuild
+            const delBtn = document.getElementById('btn-delete-project');
+            if (delBtn) {
+                const currentOption = select.selectedOptions?.[0];
+                const hasProject = !!(currentOption?.dataset?.project);
+                delBtn.disabled = !hasProject;
+                delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
             }
         }
 
@@ -3356,13 +3425,10 @@
         }
 
         function updateCliToggleUi() {
-            const toggle = document.getElementById('cli-triggers-toggle');
-            const toggleLabel = document.getElementById('cli-toggle');
-            if (toggle) {
-                toggle.checked = !!cliTriggersEnabled;
-            }
-            if (toggleLabel) {
-                toggleLabel.classList.toggle('is-off', !cliTriggersEnabled);
+            const btn = document.getElementById('btn-cli-triggers');
+            if (btn) {
+                btn.classList.toggle('is-active', !!cliTriggersEnabled);
+                btn.classList.toggle('is-off', !cliTriggersEnabled);
             }
         }
 
@@ -4062,8 +4128,12 @@
             if (!autobanBtn) return;
             const isEnabled = !!(autobanConfig && autobanConfig.enabled);
             autobanBtn.classList.toggle('is-active', isEnabled);
-            autobanBtn.textContent = isEnabled ? '⏸ STOP AUTOMATION' : '▶ START AUTOMATION';
+            autobanBtn.setAttribute('data-tooltip', isEnabled ? 'Stop automation engine' : 'Start automation engine');
             autobanBtn.title = isEnabled ? 'Stop automation engine' : 'Start automation engine';
+            const img = autobanBtn.querySelector('img');
+            if (img) {
+                img.alt = isEnabled ? 'Stop Automation' : 'Start Automation';
+            }
         }
 
         function syncAutobanCountdownTimer() {
@@ -5580,10 +5650,11 @@
                 });
             }
 
-            // Update delete button visibility
+            // Update delete button state
             const btnDeleteProject = document.getElementById('btn-delete-project');
             if (btnDeleteProject) {
-                btnDeleteProject.style.display = selectedProject ? '' : 'none';
+                btnDeleteProject.disabled = !selectedProject;
+                btnDeleteProject.setAttribute('data-tooltip', selectedProject ? 'Delete selected project' : 'Select a project to delete');
             }
         });
         document.getElementById('workspace-reset-control-plane')?.addEventListener('click', () => {
@@ -5598,11 +5669,10 @@
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);
             postKanbanMessage({ type: 'toggleAutoban', enabled: !currentlyEnabled });
         });
-        document.getElementById('cli-triggers-toggle').addEventListener('change', (event) => {
-            const checked = !!event.target?.checked;
-            cliTriggersEnabled = checked;
+        document.getElementById('btn-cli-triggers')?.addEventListener('click', () => {
+            cliTriggersEnabled = !cliTriggersEnabled;
             updateCliToggleUi();
-            postKanbanMessage({ type: 'toggleCliTriggers', enabled: checked });
+            postKanbanMessage({ type: 'toggleCliTriggers', enabled: cliTriggersEnabled });
         });
         document.getElementById('unknown-complexity-toggle')?.addEventListener('change', (event) => {
             const checked = !!event.target?.checked;

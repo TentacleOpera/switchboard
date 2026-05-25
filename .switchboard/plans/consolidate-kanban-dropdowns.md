@@ -722,3 +722,68 @@ Update `deleteProject` handler similarly to accept optional `workspaceRoot`.
 
 ## Recommendation
 **Complexity: 6 → Send to Coder**
+
+---
+
+## Review Pass — 2026-05-25
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Description | File |
+|----|----------|-------------|------|
+| CRITICAL-1 | CRITICAL | Cross-workspace `reassignPlansWorkspace` only refreshes the source board, not the target. Moved plans don't appear under the target workspace until manual switch + refresh. `_allWorkspaceProjectsCache` also not invalidated. | `KanbanProvider.ts:4110` |
+| MAJOR-1 | MAJOR | `_refreshBoard` in `addProject`/`deleteProject` silently switches `this._currentWorkspaceRoot` to the target workspace via `_resolveWorkspaceRoot`. Latent issue — dropdown change handler already switches the board before user clicks +/DELETE, so not actively broken. | `KanbanProvider.ts:4173,4190` |
+| MAJOR-2 | MAJOR | `_allWorkspaceProjectsCache` not invalidated after `reassignPlansWorkspace` with `targetProject`. Unified dropdown won't reflect project assignment changes until cache is stale (which it never becomes). | `KanbanProvider.ts:4095` |
+| NIT-1 | NIT | Plan specified `path.resolve()` for workspace comparison in frontend; implementation uses raw string comparison. Works because backend normalizes all paths, but webview has no `path` module anyway. | `kanban.html:5516` |
+| NIT-2 | NIT | Comment references deleted function `updateWorkspaceSelector` by name. | `kanban.html:3294` |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action Taken |
+|---------|---------|--------------|
+| CRITICAL-1 | **Fix now** | Added `_allWorkspaceProjectsCache = null` + target board refresh after reassignment |
+| MAJOR-1 | **Defer** | Latent — dropdown change handler already switches board. Documented as known behavior. |
+| MAJOR-2 | **Fix now** | Covered by CRITICAL-1 fix (cache invalidation added in same location) |
+| NIT-1 | **Keep as-is** | Webview has no `path` module; backend normalizes. Working correctly. |
+| NIT-2 | **Fix now** | Updated comment to generic reference |
+
+### Code Fixes Applied
+
+1. **`src/services/KanbanProvider.ts`** (after line 4108): Added `_allWorkspaceProjectsCache = null` and conditional `_refreshBoard(targetWorkspaceRoot)` after the reassignment loop. This ensures:
+   - The project cache is invalidated so the unified dropdown reflects new project assignments
+   - The target workspace board is refreshed so moved plans appear immediately
+
+2. **`src/webview/kanban.html`** (line 3294): Updated comment from "preserved from updateWorkspaceSelector" to "preserved from original workspace/project selectors"
+
+### Verification Results
+
+- **TypeScript check**: 2 pre-existing errors (unrelated import path issues in `ClickUpSyncService.ts:2309` and `KanbanProvider.ts:4575`). No new errors introduced by this review's fixes.
+- **Orphan reference check**: No remaining references to `project-strip`, `btn-reassign-workspace`, `btn-assign-project`, `workspace-select` (as element ID), or `project-select` (as element ID) in `src/webview/kanban.html`.
+- **CSS orphan check**: No remaining `.project-strip`, `.workspace-select` (non-hyphenated), or `.project-select` (non-hyphenated) CSS class references.
+
+### Implementation Completeness vs Plan
+
+| Plan Step | Status | Notes |
+|-----------|--------|-------|
+| 1. HTML structure merge | ✅ Complete | Single `.controls-strip`, no `.project-strip`, all elements present |
+| 2. CSS updates | ✅ Complete | `.workspace-project-select`, `.strip-divider` added; old classes removed |
+| 3. `allWorkspaceProjects` global | ✅ Complete | Declared at line 3047 |
+| 4. `updateWorkspaceProjectDropdown()` | ✅ Complete | Replaces both old functions, selection restoration preserved |
+| 5. `updateReassignButtonVisibility()` | ✅ Complete | Targets `btn-assign-workspace-project`, shows count |
+| 6. Unified assign handler | ✅ Complete | Branching logic correct (same-ws project, cross-ws reassign, no-op) |
+| 7. Unified dropdown change handler | ✅ Complete | `selectWorkspace` / `setProjectFilter` branching, delete button visibility |
+| 8. Backend `reassignPlansWorkspace` + `targetProject` | ✅ Complete | `msg.targetProject` handled in upsert |
+| 9. `_getAllWorkspaceProjects()` + cache | ✅ Complete | Cached, invalidated on add/delete/workspace change |
+| 10. `updateWorkspaceSelection` handler | ✅ Complete | Stores `allWorkspaceProjects`, calls unified dropdown function |
+| 11. `btn-add-project` handler | ✅ Complete | Reads workspace from unified dropdown |
+| 12. `btn-delete-project` handler | ✅ Complete | Reads workspace + project from unified dropdown |
+| 13. `workspace-reset-control-plane` handler | ✅ Complete | Unchanged, operates on `currentWorkspaceRoot` |
+| 14. Obsolete function/handler/CSS removal | ✅ Complete | No orphan references found |
+| 15. DOM reference updates | ✅ Complete | Old references removed, new ones in place |
+| 16. Backend `addProject`/`deleteProject` handlers | ✅ Complete | Accept optional `workspaceRoot`, cache invalidation |
+
+### Remaining Risks
+
+1. **MAJOR-1 (deferred)**: `_refreshBoard` in `addProject`/`deleteProject` switches `this._currentWorkspaceRoot` to the target workspace. Currently masked by the dropdown change handler already switching the board. If the dropdown change handler is ever decoupled from board switching, this will cause unexpected workspace switches.
+2. **`dist/webview/kanban.html` is stale**: Contains 20 references to old element IDs. Must be rebuilt before deployment.
+3. **Race condition**: If user changes the unified dropdown and clicks ASSIGN before the board refreshes, `selectedCards` may reference plans that no longer match the visible board state. The plan's mitigation (disable ASSIGN during board refresh via `_boardRefreshing` flag) was not implemented. Low severity — the optimistic selection clear mitigates the visual inconsistency.

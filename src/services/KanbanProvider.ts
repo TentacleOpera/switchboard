@@ -4107,7 +4107,16 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                 }
 
+                // Invalidate project cache — reassignment may change project assignments
+                this._allWorkspaceProjectsCache = null;
+
                 await this._refreshBoard(sourceWorkspaceRoot);
+
+                // Also refresh the target workspace board so moved plans appear immediately
+                // when the user switches to it (or if they're already viewing it in another panel)
+                if (path.resolve(sourceWorkspaceRoot) !== path.resolve(targetWorkspaceRoot)) {
+                    await this._refreshBoard(targetWorkspaceRoot);
+                }
 
                 if (successCount === 0) {
                     vscode.window.showWarningMessage(
