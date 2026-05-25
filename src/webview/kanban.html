@@ -68,7 +68,7 @@
             gap: 10px;
         }
 
-        .workspace-select {
+        .workspace-project-select {
             background: #0a0a0a;
             color: var(--text-primary);
             border: 1px solid var(--border-color);
@@ -77,7 +77,21 @@
             font-size: 10px;
             letter-spacing: 0.5px;
             padding: 4px 8px;
-            min-width: 180px;
+            min-width: 280px;
+        }
+
+        .workspace-project-select:focus {
+            outline: none;
+            border-color: var(--accent-teal-dim);
+        }
+
+        .strip-divider {
+            display: inline-block;
+            width: 1px;
+            height: 16px;
+            background: var(--border-color);
+            margin: 0 4px;
+            flex-shrink: 0;
         }
 
         .workspace-filter-badge {
@@ -101,32 +115,6 @@
             border-bottom: 1px solid var(--border-color);
             background: var(--panel-bg2);
             flex-wrap: wrap;
-        }
-
-        .project-strip {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            padding: 6px 16px;
-            border-bottom: 1px solid var(--border-color);
-            background: var(--panel-bg2);
-        }
-
-        .project-select {
-            background: #0a0a0a;
-            color: var(--text-primary);
-            border: 1px solid var(--border-color);
-            border-radius: 2px;
-            font-family: var(--font-mono);
-            font-size: 10px;
-            letter-spacing: 0.5px;
-            padding: 4px 8px;
-            min-width: 150px;
-        }
-
-        .project-select:focus {
-            outline: none;
-            border-color: var(--accent-teal-dim);
         }
 
         .settings-strip {
@@ -1947,17 +1935,12 @@
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
             <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
-        </div>
-        <div class="project-strip" id="project-strip">
-            <select id="workspace-select" class="workspace-select" data-tooltip="Select workspace" style="min-width:180px;"></select>
-            <button class="strip-btn is-teal" id="btn-reassign-workspace" data-tooltip="Assign selected plan(s) to this workspace" disabled>ASSIGN TO WORKSPACE</button>
+            <span class="strip-divider"></span>
+            <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
+            <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
             <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
             <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
-            <select id="project-select" class="project-select" title="Filter by project">
-                <option value="">All Projects</option>
-            </select>
-            <button id="btn-assign-project" class="strip-btn is-teal" title="Assign selected plans to project" disabled>ASSIGN TO PROJECT</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
             <button id="btn-delete-project" class="strip-btn" title="Delete selected project" style="display:none;">DELETE PROJECT</button>
             <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
@@ -3048,6 +3031,7 @@
             if (attr) currentWorkspaceRoot = decodeURIComponent(attr);
         } catch (_) {}
         let activeWorkspaceFilter = null;
+        let activeProjectFilter = null;
         let workspaceItems = [];
         let currentControlPlaneMode = 'none';
         let currentControlPlaneRoot = '';
@@ -3060,60 +3044,24 @@
         const selectedCards = new Set();
         let testingFailSessionIds = [];
 
-        // Project strip elements and helpers
-        const projectSelect = document.getElementById('project-select');
+        let allWorkspaceProjects = {};
         const btnAddProject = document.getElementById('btn-add-project');
-        const btnAssignProject = document.getElementById('btn-assign-project');
         const btnDeleteProject = document.getElementById('btn-delete-project');
 
-        function updateProjectDropdown(projects, activeProjectFilter) {
-            if (!projectSelect) return;
-            const currentValue = activeProjectFilter || projectSelect.value;
-            projectSelect.innerHTML = '<option value="">All Projects</option>';
-            (projects || []).forEach(p => {
-                const opt = document.createElement('option');
-                opt.value = p;
-                opt.textContent = p;
-                projectSelect.appendChild(opt);
-            });
-            // Restore selection
-            if (currentValue && [...projectSelect.options].some(o => o.value === currentValue)) {
-                projectSelect.value = currentValue;
-            } else {
-                projectSelect.value = '';
-            }
-            // Show delete button only when a real project is selected
-            if (btnDeleteProject) {
-                btnDeleteProject.style.display = projectSelect.value ? '' : 'none';
-            }
-        }
-
-        projectSelect?.addEventListener('change', () => {
-            const selectedProject = projectSelect.value || null;
-            postKanbanMessage({ type: 'setProjectFilter', project: selectedProject });
-            if (btnDeleteProject) {
-                btnDeleteProject.style.display = selectedProject ? '' : 'none';
-            }
-        });
-
         btnAddProject?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'addProject' });
-        });
-
-        btnAssignProject?.addEventListener('click', () => {
-            const selectedProject = projectSelect?.value;
-            if (!selectedProject || selectedCards.size === 0) return;
-            postKanbanMessage({
-                type: 'assignSelectedToProject',
-                projectName: selectedProject,
-                planIds: Array.from(selectedCards)
-            });
+            const select = document.getElementById('workspace-project-select');
+            const selectedOption = select?.selectedOptions?.[0];
+            const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
+            postKanbanMessage({ type: 'addProject', workspaceRoot });
         });
 
         btnDeleteProject?.addEventListener('click', () => {
-            const selectedProject = projectSelect?.value;
+            const select = document.getElementById('workspace-project-select');
+            const selectedOption = select?.selectedOptions?.[0];
+            const selectedProject = selectedOption?.dataset?.project;
+            const workspaceRoot = selectedOption?.dataset?.workspaceRoot || currentWorkspaceRoot;
             if (!selectedProject) return;
-            postKanbanMessage({ type: 'deleteProject', projectName: selectedProject });
+            postKanbanMessage({ type: 'deleteProject', projectName: selectedProject, workspaceRoot });
         });
         let testingFailSourceColumn = '';
         // Routing map state
@@ -3306,40 +3254,75 @@
             return baseLabel;
         }
 
-        function updateWorkspaceSelector(explicitRoot = null) {
-            const select = document.getElementById('workspace-select');
+        function updateWorkspaceProjectDropdown(explicitRoot = null) {
+            const select = document.getElementById('workspace-project-select');
             if (!select) return;
 
             // Save the current selection BEFORE rebuilding options
-            const savedSelection = select.value;
+            const savedValue = select.value;
 
-            const options = workspaceItems.map(item => `
-                <option
-                    value="${escapeAttr(item.workspaceRoot)}"
-                    data-control-plane-action="${escapeAttr(item.controlPlaneAction || item.selectionMode || '')}"
-                >${escapeHtml(buildWorkspaceOptionLabel(item))}</option>
-            `).join('');
-            select.innerHTML = options;
+            // Clear and rebuild
+            select.innerHTML = '';
 
-            // If the backend explicitly changed workspace, honor that over savedSelection
+            for (const item of workspaceItems) {
+                const wsRoot = item.workspaceRoot;
+                const wsLabel = buildWorkspaceOptionLabel(item);
+                const projects = allWorkspaceProjects[wsRoot] || [];
+
+                // "All Projects" option for this workspace
+                const allOpt = document.createElement('option');
+                allOpt.value = wsRoot + '|';
+                allOpt.textContent = wsLabel + ' > All Projects';
+                allOpt.dataset.workspaceRoot = wsRoot;
+                allOpt.dataset.project = '';
+                if (item.controlPlaneAction || item.selectionMode) {
+                    allOpt.dataset.controlPlaneAction = item.controlPlaneAction || item.selectionMode;
+                }
+                select.appendChild(allOpt);
+
+                // Per-project options
+                for (const proj of projects) {
+                    const opt = document.createElement('option');
+                    opt.value = wsRoot + '|' + proj;
+                    opt.textContent = wsLabel + ' > ' + proj;
+                    opt.dataset.workspaceRoot = wsRoot;
+                    opt.dataset.project = proj;
+                    select.appendChild(opt);
+                }
+            }
+
+            // Restore selection logic (preserved from updateWorkspaceSelector)
             if (explicitRoot && workspaceItems.some(item => item.workspaceRoot === explicitRoot)) {
-                select.value = explicitRoot;
+                // If the backend explicitly changed workspace, honor that
+                const targetProject = activeProjectFilter || '';
+                const targetValue = explicitRoot + '|' + targetProject;
+                if ([...select.options].some(o => o.value === targetValue)) {
+                    select.value = targetValue;
+                } else {
+                    select.value = explicitRoot + '|';
+                }
                 return;
             }
 
-            // Restore the saved selection if it still exists in the new options
-            if (savedSelection && workspaceItems.some(item => item.workspaceRoot === savedSelection)) {
-                select.value = savedSelection;
+            // Try to restore saved selection
+            if (savedValue && [...select.options].some(o => o.value === savedValue)) {
+                select.value = savedValue;
             } else {
-                // Only fall back to currentWorkspaceRoot or first option if saved selection is invalid
-                let selectedValue = activeWorkspaceFilter
+                // Fall back to current workspace + active project filter
+                let fallbackRoot = activeWorkspaceFilter
                     ? ((workspaceItems.find(item => getWorkspaceItemRepoScope(item) === activeWorkspaceFilter) || {}).workspaceRoot || currentWorkspaceRoot)
                     : currentWorkspaceRoot;
-                if (selectedValue && !workspaceItems.some(item => item.workspaceRoot === selectedValue)) {
-                    selectedValue = workspaceItems[0]?.workspaceRoot || '';
+                if (fallbackRoot && !workspaceItems.some(item => item.workspaceRoot === fallbackRoot)) {
+                    fallbackRoot = workspaceItems[0]?.workspaceRoot || '';
                 }
-                if (selectedValue) {
-                    select.value = selectedValue;
+                if (fallbackRoot) {
+                    const fallbackProject = activeProjectFilter || '';
+                    const fallbackValue = fallbackRoot + '|' + fallbackProject;
+                    if ([...select.options].some(o => o.value === fallbackValue)) {
+                        select.value = fallbackValue;
+                    } else {
+                        select.value = fallbackRoot + '|';
+                    }
                 }
             }
         }
@@ -4955,19 +4938,19 @@
                     const previousRoot = currentWorkspaceRoot;
                     currentWorkspaceRoot = msg.workspaceRoot || '';
                     activeWorkspaceFilter = msg.activeFilter || null;
+                    activeProjectFilter = msg.projectFilter || null;
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
                     currentControlPlaneRoot = msg.controlPlaneRoot || msg.effectiveControlPlaneRoot || '';
-                    
-                    // On cold start previousRoot is '', so explicitChange is false — safe because
-                    // there's no savedSelection to conflict with; the fallback path handles it.
+
+                    if (msg.allWorkspaceProjects && typeof msg.allWorkspaceProjects === 'object') {
+                        allWorkspaceProjects = msg.allWorkspaceProjects;
+                    }
+
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
-                    updateWorkspaceSelector(explicitChange ? currentWorkspaceRoot : null);
+                    updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
 
-                    if (msg.projects !== undefined) {
-                        updateProjectDropdown(msg.projects, msg.projectFilter || null);
-                    }
                     const projectFilterBadge = document.getElementById('project-filter-badge');
                     if (projectFilterBadge) {
                         if (msg.projectFilter) {
@@ -5503,65 +5486,105 @@
         }
 
         function updateReassignButtonVisibility() {
-            const btn = document.getElementById('btn-reassign-workspace');
+            const btn = document.getElementById('btn-assign-workspace-project');
             if (btn) {
                 const count = selectedCards.size;
                 if (count > 0) {
                     btn.disabled = false;
-                    btn.textContent = `ASSIGN TO WORKSPACE (${count})`;
+                    btn.textContent = `ASSIGN (${count})`;
                 } else {
                     btn.disabled = true;
-                    btn.textContent = 'ASSIGN TO WORKSPACE';
+                    btn.textContent = 'ASSIGN';
                 }
-            }
-
-            const btnAssign = document.getElementById('btn-assign-project');
-            if (btnAssign) {
-                btnAssign.disabled = selectedCards.size === 0;
             }
         }
 
-        document.getElementById('btn-reassign-workspace')?.addEventListener('click', () => {
+        document.getElementById('btn-assign-workspace-project')?.addEventListener('click', () => {
             const sessionIds = Array.from(selectedCards);
-            
-            const select = document.getElementById('workspace-select');
-            const targetWorkspaceRoot = select ? select.value : '';
 
-            if (sessionIds.length === 0 || !targetWorkspaceRoot) {
+            const select = document.getElementById('workspace-project-select');
+            const selectedOption = select?.selectedOptions?.[0];
+            if (!selectedOption || sessionIds.length === 0) return;
+
+            const targetWorkspaceRoot = selectedOption.dataset.workspaceRoot || '';
+            const targetProject = selectedOption.dataset.project || '';
+
+            if (!targetWorkspaceRoot) return;
+
+            // Build confirmation label
+            const wsLabel = selectedOption.textContent || targetWorkspaceRoot;
+            const isSameWorkspace = targetWorkspaceRoot === (currentWorkspaceRoot || '');
+
+            if (isSameWorkspace && !targetProject) {
+                // No-op: same workspace, no project
+                vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
                 return;
             }
 
-            // Confirm before reassigning — plans will disappear from the current view
-            const targetLabel = select.selectedOptions?.[0]?.textContent || targetWorkspaceRoot;
-            if (!confirm(`Reassign ${sessionIds.length} plan${sessionIds.length === 1 ? '' : 's'} to workspace "${targetLabel}"?\n\nThese plans will disappear from the current board and appear under the target workspace.`)) {
+            // Confirm before reassigning
+            const projectLabel = targetProject || 'All Projects';
+            if (!confirm(`Assign ${sessionIds.length} plan${sessionIds.length === 1 ? '' : 's'} to ${wsLabel}?\n\nProject: ${projectLabel}${!isSameWorkspace ? '\n\nThese plans will disappear from the current board and appear under the target workspace.' : ''}`)) {
                 return;
             }
 
-            postKanbanMessage({
-                type: 'reassignPlansWorkspace',
-                sessionIds: sessionIds,
-                targetWorkspaceRoot: targetWorkspaceRoot
-            });
+            if (!isSameWorkspace) {
+                // Cross-workspace: reassign to target workspace first, optionally passing targetProject
+                postKanbanMessage({
+                    type: 'reassignPlansWorkspace',
+                    sessionIds: sessionIds,
+                    targetWorkspaceRoot: targetWorkspaceRoot,
+                    targetProject: targetProject
+                });
+            } else {
+                // Same workspace: project assignment only
+                postKanbanMessage({
+                    type: 'assignSelectedToProject',
+                    projectName: targetProject,
+                    planIds: sessionIds
+                });
+            }
 
             // Optimistically clear the selection
             selectedCards.clear();
             updateReassignButtonVisibility();
-            
+
             // Un-select visually on screen
             document.querySelectorAll('.kanban-card.selected').forEach(el => {
                 el.classList.remove('selected');
             });
         });
 
-        document.getElementById('workspace-select')?.addEventListener('change', (event) => {
-            const selectedWorkspaceRoot = event.target.value || '';
+        document.getElementById('workspace-project-select')?.addEventListener('change', (event) => {
             const selectedOption = event.target.selectedOptions?.[0];
-            lastBoardSignature = '';
-            postKanbanMessage({
-                type: 'selectWorkspace',
-                workspaceRoot: selectedWorkspaceRoot,
-                controlPlaneAction: selectedOption?.dataset?.controlPlaneAction || undefined
-            });
+            if (!selectedOption) return;
+
+            const selectedWorkspaceRoot = selectedOption.dataset.workspaceRoot || '';
+            const selectedProject = selectedOption.dataset.project || '';
+            const controlPlaneAction = selectedOption.dataset.controlPlaneAction || undefined;
+
+            const isDifferentWorkspace = selectedWorkspaceRoot !== currentWorkspaceRoot;
+
+            if (isDifferentWorkspace) {
+                // Switch workspace context (triggers full board refresh)
+                lastBoardSignature = '';
+                postKanbanMessage({
+                    type: 'selectWorkspace',
+                    workspaceRoot: selectedWorkspaceRoot,
+                    controlPlaneAction: controlPlaneAction
+                });
+            } else if (selectedProject !== (activeProjectFilter || '')) {
+                // Same workspace, different project filter
+                postKanbanMessage({
+                    type: 'setProjectFilter',
+                    project: selectedProject || null
+                });
+            }
+
+            // Update delete button visibility
+            const btnDeleteProject = document.getElementById('btn-delete-project');
+            if (btnDeleteProject) {
+                btnDeleteProject.style.display = selectedProject ? '' : 'none';
+            }
         });
         document.getElementById('workspace-reset-control-plane')?.addEventListener('click', () => {
             lastBoardSignature = '';

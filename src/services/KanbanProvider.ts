@@ -136,6 +136,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _taskViewerProvider?: TaskViewerProvider;
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = null;
+    private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
     private _outputChannel?: vscode.OutputChannel;
@@ -259,6 +260,11 @@ export class KanbanProvider implements vscode.Disposable {
 
         this._kanbanOrderOverrides = this._sanitizeKanbanOrderOverrides(
             this._getSetting<Record<string, number>>('kanban.orderOverrides', {})
+        );
+        this._context.subscriptions.push(
+            vscode.workspace.onDidChangeWorkspaceFolders(() => {
+                this._allWorkspaceProjectsCache = null;
+            })
         );
     }
 
@@ -474,6 +480,33 @@ export class KanbanProvider implements vscode.Disposable {
             }
         } catch { /* fall through */ }
         return allowedRoots;
+    }
+
+    private async _getAllWorkspaceProjects(): Promise<Record<string, string[]>> {
+        if (this._allWorkspaceProjectsCache) {
+            return this._allWorkspaceProjectsCache;
+        }
+        const result: Record<string, string[]> = {};
+        const roots = this._getWorkspaceRoots();
+        const allowedRoots = this._getAllowedRoots();
+        const allRoots = [...new Set([...roots, ...allowedRoots])];
+
+        for (const root of allRoots) {
+            try {
+                const db = this._getKanbanDb(root);
+                if (await db.ensureReady()) {
+                    const workspaceId = await db.getWorkspaceId();
+                    if (workspaceId) {
+                        result[path.resolve(root)] = await db.getProjects(workspaceId);
+                    }
+                }
+            } catch {
+                // Skip unavailable workspaces
+                result[path.resolve(root)] = [];
+            }
+        }
+        this._allWorkspaceProjectsCache = result;
+        return result;
     }
 
     private _showTemporaryNotification(message: string, durationMs: number = 2000): void {
@@ -1012,6 +1045,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
@@ -1019,7 +1053,8 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter || null,
-                projects: projList
+                projects: projList,
+                allWorkspaceProjects
             });
 
             // THE critical message — sends cards to webview
@@ -1751,6 +1786,7 @@ export class KanbanProvider implements vscode.Disposable {
             // When mapping is enabled, send the mapped workspace root (from the selected item) instead of the actual folder
             const workspaceItems = this._getWorkspaceItems();
             const projects = workspaceId && dbReady ? await db.getProjects(workspaceId) : [];
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
@@ -1758,7 +1794,8 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter || null,
-                projects
+                projects,
+                allWorkspaceProjects
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -1879,6 +1916,7 @@ export class KanbanProvider implements vscode.Disposable {
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
             const workspaceId = await db.getWorkspaceId();
             const projects = workspaceId ? await db.getProjects(workspaceId) : [];
+            const allWorkspaceProjects = await this._getAllWorkspaceProjects();
 
             this._panel.webview.postMessage({
                 type: 'updateWorkspaceSelection',
@@ -1886,7 +1924,8 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
                 projectFilter: this._projectFilter || null,
-                projects
+                projects,
+                allWorkspaceProjects
             });
             this._lastCards = cards;
             this._panel.webview.postMessage({ type: 'updateBoard', cards, dbUnavailable: false, showingBacklog: this._showingBacklog, routingConfig: this._routingMapConfig });
@@ -4053,6 +4092,7 @@ export class KanbanProvider implements vscode.Disposable {
                         const ok = await targetDb.upsertPlan({
                             ...plan,
                             workspaceId: targetWorkspaceId,
+                            project: msg.targetProject !== undefined ? msg.targetProject : plan.project,
                             updatedAt: new Date().toISOString()
                         });
 
@@ -4117,7 +4157,7 @@ export class KanbanProvider implements vscode.Disposable {
                 }
                 break;
             case 'addProject': {
-                const workspaceRoot = this._currentWorkspaceRoot;
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot) {
                     const projectName = await vscode.window.showInputBox({
                         prompt: 'Enter project name',
@@ -4129,6 +4169,7 @@ export class KanbanProvider implements vscode.Disposable {
                         if (workspaceId) {
                             const db = this._getKanbanDb(workspaceRoot);
                             await db.addProject(workspaceId, projectName.trim());
+                            this._allWorkspaceProjectsCache = null; // Invalidate cache
                             await this._refreshBoard(workspaceRoot);
                         }
                     }
@@ -4136,7 +4177,7 @@ export class KanbanProvider implements vscode.Disposable {
                 break;
             }
             case 'deleteProject': {
-                const workspaceRoot = this._currentWorkspaceRoot;
+                const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot && typeof msg.projectName === 'string') {
                     if (this._projectFilter === msg.projectName) {
                         this._projectFilter = null;
@@ -4145,6 +4186,7 @@ export class KanbanProvider implements vscode.Disposable {
                     if (workspaceId) {
                         const db = this._getKanbanDb(workspaceRoot);
                         await db.deleteProject(workspaceId, msg.projectName);
+                        this._allWorkspaceProjectsCache = null; // Invalidate cache
                         await this._refreshBoard(workspaceRoot);
                     }
                 }
