@@ -1964,7 +1964,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const result = await KanbanDatabase.migrateIfNeeded(defaultPath, db.dbPath);
                             if (result.migrated) {
                                 await KanbanDatabase.invalidateWorkspace(effectiveWorkspaceRoot);
-                                vscode.window.showInformationMessage('Plans migrated successfully.');
+                                this._showTemporaryNotification('Plans migrated successfully.');
                             } else {
                                 vscode.window.showErrorMessage(`Migration failed: ${result.skipped}`);
                             }
@@ -3690,7 +3690,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             priority: options?.priority
         });
         if (task) {
-            vscode.window.showInformationMessage(`Created ClickUp task: ${task.name}`);
+            this._showTemporaryNotification(`Created ClickUp task: ${task.name}`);
         }
         return task;
     }
@@ -3709,7 +3709,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         await this._getClickUpService(resolvedRoot).updateTask(taskId, options);
-        vscode.window.showInformationMessage(`Updated ClickUp task ${taskId}`);
+        this._showTemporaryNotification(`Updated ClickUp task ${taskId}`);
     }
 
     public async handleClickupAddComment(taskId: string, comment: string): Promise<void> {
@@ -3719,7 +3719,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         await this._getClickUpService(resolvedRoot).addTaskComment(taskId, comment);
-        vscode.window.showInformationMessage(`Added comment to ClickUp task ${taskId}`);
+        this._showTemporaryNotification(`Added comment to ClickUp task ${taskId}`);
     }
 
     public async handleApplyLinearConfig(
@@ -4840,7 +4840,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Re-fetch last-accessed lists/projects
         await this.prefetchIntegrationData(resolvedRoot);
 
-        vscode.window.showInformationMessage('Integration cache refreshed');
+        this._showTemporaryNotification('Integration cache refreshed');
     }
 
     public getClickUpDocsAdapter(workspaceRoot: string): ClickUpDocsAdapter {
@@ -5277,7 +5277,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await this._persistAutobanState();
         this._postAutobanState();
         if (level === 'info') {
-            vscode.window.showInformationMessage(message);
+            this._showTemporaryNotification(message);
             return;
         }
         vscode.window.showWarningMessage(message);
@@ -5709,7 +5709,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await this._persistAutobanState();
         this._postAutobanStateNow();
         const label = normalizedMode === 'off' ? 'disabled' : normalizedMode;
-        vscode.window.showInformationMessage(`Pair Programming mode: ${label}.`);
+        this._showTemporaryNotification(`Pair Programming mode: ${label}.`);
     }
 
     /** Called by Kanban automation panel to add a terminal to the autoban pool. */
@@ -6494,7 +6494,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const localDbConfig = vscode.workspace.getConfiguration('switchboard');
         const currentCustomPath = localDbConfig.get<string>('kanban.dbPath', '');
         if (!currentCustomPath || !currentCustomPath.trim()) {
-            vscode.window.showInformationMessage('Already using local database.');
+            this._showTemporaryNotification('Already using local database.');
             return;
         }
 
@@ -6512,7 +6512,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
         } else if (migResult.migrated) {
-            vscode.window.showInformationMessage('✅ Migrated plans back to local database.');
+            this._showTemporaryNotification('✅ Migrated plans back to local database.');
         }
 
         await localDbConfig.update('kanban.dbPath', undefined, vscode.ConfigurationTarget.Workspace);
@@ -6555,13 +6555,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
         } else if (migResult.migrated) {
-            vscode.window.showInformationMessage('✅ Migrated plans to custom database location.');
+            this._showTemporaryNotification('✅ Migrated plans to custom database location.');
         }
 
         await customConfig.update('kanban.dbPath', customPath, vscode.ConfigurationTarget.Workspace);
         await KanbanDatabase.invalidateWorkspace(wsRoot);
         this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: customPath, workspaceRoot: wsRoot });
-        vscode.window.showInformationMessage('✅ Database location set to custom path.');
+        this._showTemporaryNotification('✅ Database location set to custom path.');
         void this._refreshSessionStatus();
     }
 
@@ -6703,7 +6703,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     return;
                 }
             } else if (migResult.migrated) {
-                vscode.window.showInformationMessage(`✅ Migrated plans to ${preset} database.`);
+                this._showTemporaryNotification(`✅ Migrated plans to ${preset} database.`);
             }
         }
 
@@ -6712,7 +6712,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await KanbanDatabase.invalidateWorkspace(wsRoot);
         }
         this._postSharedWebviewMessage({ type: 'dbPathUpdated', path: presetPath });
-        vscode.window.showInformationMessage(`✅ Database location set to ${preset}.`);
+        this._showTemporaryNotification(`✅ Database location set to ${preset}.`);
         void this._refreshSessionStatus();
     }
 
@@ -6992,7 +6992,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         if (availableLowSessions.length === 0) {
-            vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans are currently eligible for batch dispatch.');
+            this._showTemporaryNotification('No LOW-complexity PLAN REVIEWED plans are currently eligible for batch dispatch.');
             return false;
         }
 
@@ -7009,7 +7009,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const summary = availableLowSessions.length > sessionIds.length
             ? `Dispatched ${sessionIds.length} of ${availableLowSessions.length} eligible LOW-complexity plans to the coder (batch cap ${batchSize}).`
             : `Dispatched ${sessionIds.length} LOW-complexity plan${sessionIds.length === 1 ? '' : 's'} to the coder.`;
-        vscode.window.showInformationMessage(summary);
+        this._showTemporaryNotification(summary);
         return true;
     }
 
@@ -7748,14 +7748,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             break;
                         }
                         await vscode.env.clipboard.writeText(text);
-                        vscode.window.showInformationMessage(typeof data.message === 'string' && data.message.trim()
+                        this._showTemporaryNotification(typeof data.message === 'string' && data.message.trim()
                             ? data.message
                             : 'Copied to clipboard.');
                         break;
                     }
                     case 'showInfo':
                         if (typeof data.message === 'string' && data.message.length > 0) {
-                            vscode.window.showInformationMessage(data.message);
+                            this._showTemporaryNotification(data.message);
                         }
                         break;
                     case 'showWarning':
@@ -8193,7 +8193,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                         return;
                                     }
                                 } else if (migResult.migrated) {
-                                    vscode.window.showInformationMessage('✅ Migrated plans to new database location.');
+                                    this._showTemporaryNotification('✅ Migrated plans to new database location.');
                                 }
 
                                 await KanbanDatabase.invalidateWorkspace(wsRoot);
@@ -8201,7 +8201,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             await dbConfig.update('kanban.dbPath', trimmedPath || undefined, vscode.ConfigurationTarget.Workspace);
                             this._view?.webview.postMessage({ type: 'dbPathUpdated', path: trimmedPath || '.switchboard/kanban.db' });
                             void this._refreshSessionStatus();
-                            vscode.window.showInformationMessage('✅ Database path updated successfully.');
+                            this._showTemporaryNotification('✅ Database path updated successfully.');
                         }
                         break;
                     }
@@ -8212,7 +8212,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 const db = await this._getKanbanDb(wsRoot);
                                 if (db) {
                                     this._view?.webview.postMessage({ type: 'dbConnectionResult', success: true });
-                                    vscode.window.showInformationMessage('✅ Database connection successful');
+                                    this._showTemporaryNotification('✅ Database connection successful');
                                 } else {
                                     const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(wsRoot) || wsRoot;
                                     const error = this._lastKanbanDbWarnings.get(effectiveRoot) || 'Unknown initialization error';
@@ -8355,6 +8355,19 @@ What would you like to find?`;
                 vscode.window.showErrorMessage(`Error: ${errorMessage}`);
             }
         });
+    }
+
+    private _showTemporaryNotification(message: string, durationMs: number = 2000): void {
+        void vscode.window.withProgress(
+            {
+                location: vscode.ProgressLocation.Notification,
+                title: message,
+                cancellable: false
+            },
+            async () => {
+                await new Promise(resolve => setTimeout(resolve, durationMs));
+            }
+        );
     }
 
     private _setupStateWatcher() {
@@ -9903,7 +9916,7 @@ What would you like to find?`;
         if (resolvedSessionId) {
             this._view?.webview.postMessage({ type: 'selectSession', sessionId: resolvedSessionId });
         }
-        vscode.window.showInformationMessage(`Restored plan: ${entry.topic || planId}`);
+        this._showTemporaryNotification(`Restored plan: ${entry.topic || planId}`);
         return true;
     }
 
@@ -12788,7 +12801,7 @@ What would you like to find?`;
 
             // Check if already registered
             if (this._isPlanInRegistry(planId)) {
-                vscode.window.showInformationMessage('This plan is already claimed by this workspace.');
+                this._showTemporaryNotification('This plan is already claimed by this workspace.');
                 return;
             }
 
@@ -12827,7 +12840,7 @@ What would you like to find?`;
                 brainSourcePath: baseBrainPath,
                 topic
             });
-            vscode.window.showInformationMessage(`Claimed plan: ${topic}`);
+            this._showTemporaryNotification(`Claimed plan: ${topic}`);
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to claim plan: ${e}`);
         }
@@ -13655,7 +13668,7 @@ What would you like to find?`;
     private async _registerAllTerminals() {
         const openTerminals = vscode.window.terminals;
         if (openTerminals.length === 0) {
-            vscode.window.showInformationMessage('No terminals open to register.');
+            this._showTemporaryNotification('No terminals open to register.');
             return;
         }
 
@@ -13802,9 +13815,9 @@ What would you like to find?`;
         });
 
         if (registeredCount > 0) {
-            vscode.window.showInformationMessage(`Registered ${registeredCount} new terminal(s).`);
+            this._showTemporaryNotification(`Registered ${registeredCount} new terminal(s).`);
         } else {
-            vscode.window.showInformationMessage('All open terminals are already registered.');
+            this._showTemporaryNotification('All open terminals are already registered.');
         }
 
         this._refreshTerminalStatuses();
@@ -13931,9 +13944,9 @@ What would you like to find?`;
         const total = removedCount + orphanCount;
         if (!silent) {
             if (total > 0) {
-                vscode.window.showInformationMessage(`Reset complete. Closed ${removedCount} registered and ${orphanCount} orphaned terminals.`);
+                this._showTemporaryNotification(`Reset complete. Closed ${removedCount} registered and ${orphanCount} orphaned terminals.`);
             } else {
-                vscode.window.showInformationMessage('No active Switchboard agents found to reset.');
+                this._showTemporaryNotification('No active Switchboard agents found to reset.');
             }
         }
 
@@ -14517,7 +14530,7 @@ What would you like to find?`;
                 this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // immediate board refresh
 
                 const summary = dispatches.map(d => `${d.role} (${d.agent})`).join(', ');
-                vscode.window.showInformationMessage(`Team coding started: ${summary}`);
+                this._showTemporaryNotification(`Team coding started: ${summary}`);
                 this._view?.webview.postMessage({ type: 'actionTriggered', role: 'team', success: true });
                 await this._logEvent('dispatch', {
                     event: 'team_dispatch',
@@ -15143,7 +15156,7 @@ Create this file exactly as specified, then continue your work.`);
             try {
                 await this._createInitiatedPlan(title, text, false, { skipBrainPromotion: true });
                 await this._syncFilesAndRefreshRunSheets();
-                vscode.window.showInformationMessage(`Imported plan: ${title}`);
+                this._showTemporaryNotification(`Imported plan: ${title}`);
             } catch (err: any) {
                 const msg = err?.message || String(err);
                 vscode.window.showErrorMessage(`Clipboard import failed: ${msg}`);
@@ -15247,7 +15260,7 @@ Create this file exactly as specified, then continue your work.`);
             const summary = importedTitles.length === 1
                 ? `Imported plan: ${importedTitles[0]}`
                 : `Imported ${importedTitles.length} plans: ${importedTitles.slice(0, 3).join(', ')}${importedTitles.length > 3 ? '...' : ''}`;
-            vscode.window.showInformationMessage(summary);
+            this._showTemporaryNotification(summary);
         }
 
         if (failedPlans.length > 0) {
@@ -15739,7 +15752,7 @@ Create this file exactly as specified, then continue your work.`);
             for (const entry of newlyCompleted) {
                 if (!this._notifiedSessions.has(entry.sessionId)) {
                     this._notifiedSessions.add(entry.sessionId);
-                    vscode.window.showInformationMessage(`Jules session ${entry.sessionId} completed.`);
+                    this._showTemporaryNotification(`Jules session ${entry.sessionId} completed.`);
                 }
             }
 
@@ -16205,7 +16218,7 @@ Create this file exactly as specified, then continue your work.`);
                 ? `Jules Session Started! Session ID: ${sessionId}. Track progress: [Jules Dashboard](${url})`
                 : `Jules Session Started! Session ID: ${sessionId}.`;
 
-            vscode.window.showInformationMessage(message);
+            this._showTemporaryNotification(message);
             this._view?.webview.postMessage({ type: 'actionTriggered', role: 'jules', success: true });
             await this._refreshJulesStatus();
         } catch (error) {
@@ -16610,7 +16623,7 @@ Create this file exactly as specified, then continue your work.`);
             }
 
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
-            vscode.window.showInformationMessage('Airlock: Bundle exported → .switchboard/airlock/');
+            this._showTemporaryNotification('Airlock: Bundle exported → .switchboard/airlock/');
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_exportError', message: msg });
@@ -16686,7 +16699,7 @@ Create this file exactly as specified, then continue your work.`);
             }, 'airlock');
 
             this._view?.webview.postMessage({ type: 'airlock_coderSent' });
-            vscode.window.showInformationMessage(`Airlock: Patch dispatched to ${targetAgent}`);
+            this._showTemporaryNotification(`Airlock: Patch dispatched to ${targetAgent}`);
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_coderError', message: msg });
@@ -16698,7 +16711,7 @@ Create this file exactly as specified, then continue your work.`);
         try {
             await this._performGitSync();
             this._view?.webview.postMessage({ type: 'airlock_syncComplete' });
-            vscode.window.showInformationMessage('Airlock: Repository synced to cloud successfully.');
+            this._showTemporaryNotification('Airlock: Repository synced to cloud successfully.');
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });

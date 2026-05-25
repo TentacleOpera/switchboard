@@ -152,3 +152,28 @@ Key risks: (1) changing the accuracy default from `true` to `false` in the dispa
 - No new automated tests required for this change; the fix is a string replacement that aligns KanbanProvider with already-tested TaskViewerProvider keys.
 
 **Recommendation**: Send to Coder (Complexity 4)
+
+
+## Review & Execution Results
+
+### Stage 1 (Grumpy Review)
+- **NIT**: The fix opts for simple string replacements in KanbanProvider.ts rather than refactoring to use a single shared getter method with TaskViewerProvider.ts. While this leaves a small amount of duplicated config-fetching logic, it minimizes the blast radius and perfectly addresses the problem described in the plan.
+- **CRITICAL/MAJOR**: None. The changes exactly match the plan's requirements.
+
+### Stage 2 (Balanced Synthesis)
+- The implementation is completely accurate and correctly aligns the configuration keys across KanbanProvider, TaskViewerProvider, and package.json.
+- The accuracy setting's default behavior is now correctly unified (false across the board).
+- No code fixes were necessary.
+
+### Files Modified
+- src/services/TaskViewerProvider.ts
+- package.json
+- src/services/KanbanProvider.ts
+
+### Validation Results
+- Code inspection confirms that reviewer.advancedMode and leadCoder.inlineChallenge are now used consistently in both KanbanProvider and TaskViewerProvider.
+- Code inspection confirms that accurateCoding.enabled defaults to false in both TaskViewerProvider and package.json.
+- Automated test runs were explicitly skipped as per instructions, but existing UI tests (src/test/prompts-tab-move-regression.test.js) are logically expected to pass since the correct keys align with them.
+
+### Remaining Risks
+- Users who had explicitly turned on the orphaned configuration keys (advancedReviewer.enabled, leadChallenge.enabled) via the UI previously will need to re-toggle them, as their saved states won't automatically migrate to the new correct keys. This is considered acceptable as those settings were previously orphaned anyway.
