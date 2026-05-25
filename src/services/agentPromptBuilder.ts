@@ -850,7 +850,14 @@ Format the analysis as:
             .replace('depth set to "deep" (50-100 sources)', `depth set to "${depth}" (${label})`)
             .replace('TARGET SOURCE COUNT: 50-100 sources', `TARGET SOURCE COUNT: ${label}`);
 
-        let crBase = `You are a Code Researcher Agent.\n\n${customDeepDirective}`;
+        let crBase = `You are a Code Researcher Agent.\n\n${customDeepDirective}` +
+            `\n\nPHASE 5: Plan Update — After completing the research synthesis, you MUST update each plan file listed in PLANS TO PROCESS with your findings. ` +
+            `Integrate your research into the plan's existing sections: ` +
+            `add findings and analysis to relevant Proposed Changes subsections, ` +
+            `update the Edge-Case & Dependency Audit with newly discovered risks, ` +
+            `and append a "Knowledge Gaps" subsection under the Complexity Audit if gaps were identified. ` +
+            `Do NOT truncate, summarize, or delete existing plan content. ` +
+            `Do NOT add new top-level sections that duplicate or conflict with the plan's canonical structure.`;
 
         let baseInstructions = resolveBaseInstructions('code_researcher', crBase, options);
         if (cavemanOutputEnabled) {

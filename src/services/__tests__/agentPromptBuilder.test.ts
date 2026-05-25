@@ -153,6 +153,14 @@ suite('agentPromptBuilder', () => {
         });
     });
 
+    suite('buildKanbanBatchPrompt — code_researcher role', () => {
+        test('injects PHASE 5 Plan Update instructions', () => {
+            const prompt = buildKanbanBatchPrompt('code_researcher', makePlans(1), {});
+            assert.ok(prompt.includes('PHASE 5: Plan Update'), 'Should include Phase 5 Plan Update instruction');
+            assert.ok(prompt.includes('update each plan file listed in PLANS TO PROCESS'), 'Should instruct to update plan files');
+        });
+    });
+
     suite('columnToPromptRole', () => {
         test('maps CREATED to planner', () => {
             assert.strictEqual(columnToPromptRole('CREATED'), 'planner');
