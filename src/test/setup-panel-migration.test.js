@@ -32,8 +32,8 @@ function run() {
     );
 
     assert.ok(
-        setupSource.includes('Control Plane Setup') &&
-        setupSource.includes('id="control-plane-fields"') &&
+        setupSource.includes('Centralize Switchboard Configuration') &&
+        setupSource.includes('id="control-plane-modal"') &&
         setupSource.includes('id="btn-control-plane-mode-migrate"') &&
         setupSource.includes('id="btn-control-plane-mode-fresh"') &&
         setupSource.includes('id="btn-detect-control-plane"') &&
@@ -45,11 +45,7 @@ function run() {
         setupSource.includes('id="btn-reset-control-plane-root"') &&
         setupSource.includes('id="btn-clear-control-plane-cache"') &&
         !setupSource.includes('id="multi-repo-toggle"'),
-        'Expected the setup panel to expose the merged Control Plane Setup accordion with mode switching, explicit-root controls, and no duplicate multi-repo accordion.'
-    );
-    assert.ok(
-        setupSource.indexOf('id="project-mgmt-toggle"') < setupSource.indexOf('id="control-plane-toggle"'),
-        'Expected Control Plane Setup to move below Project Management near the bottom of setup.html.'
+        'Expected the setup panel to expose the Centralize Switchboard Configuration modal with mode switching, explicit-root controls, and no duplicate multi-repo accordion.'
     );
     assert.ok(
         setupSource.includes('id="project-mgmt-fields"') &&

@@ -459,11 +459,9 @@
         <div class="tab-nav" role="tablist" aria-label="Setup sections">
             <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
             <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
-            <button class="tab-btn" data-tab="workspace" role="tab" aria-selected="false">Workspace</button>
+            <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
-            <button class="tab-btn" data-tab="sources" role="tab" aria-selected="false">Sources</button>
-            <button class="tab-btn" data-tab="control" role="tab" aria-selected="false">Control Plane</button>
-            <button class="tab-btn" data-tab="sync" role="tab" aria-selected="false">Sync</button>
+            <button class="tab-btn" data-tab="planning-panel" role="tab" aria-selected="false">Planning Panel</button>
         </div>
 
         <div class="tab-content open" id="startup-fields" data-tab-content="setup">
@@ -527,7 +525,7 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="workspace-mapping-fields" data-tab-content="workspace">
+        <div class="tab-content" id="multi-repo-fields" data-tab-content="multi-repo">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Map multiple workspace folders to a shared kanban.db for centralized plan management.
                 </div>
@@ -544,6 +542,7 @@
                     <button id="btn-save-mappings" class="secondary-btn" style="flex:1;">Save Mappings</button>
                 </div>
                 <div id="workspace-mapping-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; font-family:var(--font-mono); white-space:pre-wrap;"></div>
+                <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">CENTRALIZE CONFIGURATION</button>
 
                 <div class="setup-option-group" style="display: flex; align-items: flex-start; gap: 8px; margin-top: 16px; padding-top: 12px; border-top: 1px solid var(--border-dim);">
                     <input type="checkbox" id="global-settings-toggle" checked style="width:auto; margin:0; margin-top:2px;">
@@ -840,7 +839,11 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="planning-sources-fields" data-tab-content="sources">
+
+
+
+
+        <div class="tab-content" id="planning-panel-fields" data-tab-content="planning-panel">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     Select which research sources to show in the Planning panel.
                 </div>
@@ -869,117 +872,10 @@
                     <button id="btn-save-planning-sources" class="action-btn w-full" style="margin-top: 12px;">SAVE SOURCE SELECTIONS</button>
                     <div id="planning-sources-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
                 </div>
-            </div>
-
-        <div class="tab-content" id="control-plane-fields" data-tab-content="control">
-                <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
-                    Use <strong>Migrate Existing</strong> when your repos already contain local Switchboard state. Use <strong>Fresh Setup</strong> when you want a new parent Control Plane root, either in-place or by scaffolding and cloning multiple repos into sibling folders.
+                <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
+                <div class="subsection-header" style="margin-top: 4px;">
+                    <span>Document Caching</span>
                 </div>
-                <div class="setup-mode-switch">
-                    <button id="btn-control-plane-mode-migrate" type="button" class="secondary-btn w-full setup-mode-btn is-active">MIGRATE EXISTING</button>
-                    <button id="btn-control-plane-mode-fresh" type="button" class="secondary-btn w-full setup-mode-btn">FRESH SETUP</button>
-                </div>
-
-                <div class="db-subsection">
-                    <div class="subsection-header">
-                        <span>Detection &amp; Status</span>
-                    </div>
-                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                        Move Switchboard into your shared parent projects folder so <code>.switchboard/</code>, <code>.agent/</code>, and <code>AGENTS.md</code> live outside each repo. You can also pin an explicit Control Plane root or clear remembered auto-detect decisions.
-                    </div>
-                    <div class="control-plane-status-grid">
-                        <div class="control-plane-status-card">
-                            <div class="control-plane-status-label">Effective root</div>
-                            <div id="control-plane-effective-root" style="font-size:11px; line-height:1.4;">Auto-detect</div>
-                        </div>
-                        <div class="control-plane-status-card">
-                            <div class="control-plane-status-label">Source</div>
-                            <div id="control-plane-mode-status" style="font-size:11px; line-height:1.4;">Auto-detect</div>
-                        </div>
-                        <div class="control-plane-status-card">
-                            <div class="control-plane-status-label">Selected workspace</div>
-                            <div id="control-plane-selected-workspace" style="font-size:11px; line-height:1.4;">Waiting for status…</div>
-                        </div>
-                        <div class="control-plane-status-card">
-                            <div class="control-plane-status-label">Repo filter</div>
-                            <div id="control-plane-repo-filter-status" style="font-size:11px; line-height:1.4;">None</div>
-                        </div>
-                    </div>
-                    <label class="startup-row" style="display:block; margin-top:6px;">
-                        <span style="display:block; margin-bottom:4px;">Explicit Control Plane folder override</span>
-                        <input id="control-plane-explicit-root-input" type="text" placeholder="Path to a folder containing .switchboard/kanban.db" style="width:100%;">
-                    </label>
-                    <div class="flex gap-2" style="margin-top:8px;">
-                        <button id="btn-set-control-plane-root" type="button" class="secondary-btn w-full">SAVE EXPLICIT ROOT</button>
-                        <button id="btn-reset-control-plane-root" type="button" class="secondary-btn w-full">RESET TO AUTO-DETECT</button>
-                    </div>
-                    <button id="btn-clear-control-plane-cache" type="button" class="secondary-btn w-full" style="margin-top:8px;">CLEAR CONTROL PLANE CACHE</button>
-                    <label class="startup-row" style="display:block; margin-top:10px;">
-                        <span style="display:block; margin-bottom:4px;">Parent folder</span>
-                        <input id="control-plane-parent-input" type="text" placeholder="Detected parent folder" style="width:100%;">
-                    </label>
-                    <button id="btn-detect-control-plane" class="secondary-btn w-full">DETECT CONTROL PLANE</button>
-                    <div id="control-plane-status-result" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
-                    <div id="control-plane-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
-                    <div id="control-plane-warning" style="font-size:10px; margin-top:8px; line-height:1.5;"></div>
-                </div>
-
-                <div id="control-plane-migrate-pane">
-                    <div class="db-subsection">
-                        <div class="subsection-header">
-                            <span>Migrate Existing</span>
-                        </div>
-                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                            Preview existing child repos before merging databases, copying local plan files into <code>plans/&lt;repoName&gt;/</code>, and promoting shared agent config.
-                        </div>
-                        <button id="btn-preview-control-plane" class="secondary-btn w-full">PREVIEW MIGRATION</button>
-                        <div id="control-plane-cleanup-options" style="display:flex; flex-direction:column; gap:6px; margin-top:10px;"></div>
-                        <button id="btn-execute-control-plane" class="secondary-btn w-full">EXECUTE MIGRATION</button>
-                        <div id="control-plane-preview" style="font-size:10px; color:var(--text-secondary); margin-top:10px; line-height:1.5;"></div>
-                    </div>
-                </div>
-
-                <div id="control-plane-fresh-pane" class="hidden">
-                    <div class="db-subsection">
-                        <div class="subsection-header">
-                            <span>Fresh Setup</span>
-                        </div>
-                        <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
-                            Initialize a new control-plane workspace in the selected parent folder without migrating existing sub-repo databases.
-                        </div>
-                        <button id="btn-fresh-control-plane" class="secondary-btn w-full">SET UP FRESH CONTROL PLANE</button>
-                    </div>
-
-                    <div class="db-subsection">
-                        <div class="subsection-header">
-                            <span>Scaffold &amp; Clone Repositories</span>
-                        </div>
-                        <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
-                            Create a parent Control Plane root, clone each HTTPS repository into sibling folders, and generate a workspace file that keeps the parent root first. The PAT field is transient only and is cleared after every scaffold result.
-                        </div>
-                        <label class="startup-row" style="display:block; margin-top:6px;">
-                            <span style="display:block; margin-bottom:4px;">Control Plane parent directory</span>
-                            <input id="multi-repo-parent-dir" type="text" placeholder="e.g. /Users/you/Documents/GitHub" style="width:100%;">
-                        </label>
-                        <label class="startup-row" style="display:block; margin-top:8px;">
-                            <span style="display:block; margin-bottom:4px;">Workspace file name</span>
-                            <input id="multi-repo-workspace-name" type="text" placeholder="e.g. switchboard-control-plane" style="width:100%;">
-                        </label>
-                        <label class="startup-row" style="display:block; margin-top:8px;">
-                            <span style="display:block; margin-bottom:4px;">Repository clone URLs (one HTTPS URL per line)</span>
-                            <textarea id="multi-repo-repo-urls" rows="6" placeholder="https://github.com/org/service-a.git&#10;https://github.com/org/service-b.git" style="width:100%; resize:vertical;"></textarea>
-                        </label>
-                        <label class="startup-row" style="display:block; margin-top:8px;">
-                            <span style="display:block; margin-bottom:4px;">Personal Access Token</span>
-                            <input id="multi-repo-pat" type="password" placeholder="Transient PAT used only while cloning" style="width:100%;">
-                        </label>
-                        <button id="btn-scaffold-multi-repo" class="action-btn w-full" style="margin-top: 8px;">SCAFFOLD MULTI-REPO CONTROL PLANE</button>
-                        <div id="multi-repo-scaffold-status" style="min-height:16px; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
-                    </div>
-                </div>
-            </div>
-
-        <div class="tab-content" id="planning-panel-fields" data-tab-content="sync">
                 <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
                     Choose how Planning Panel documents are cached locally for AI collaboration.
                 </div>
@@ -1026,6 +922,123 @@
                     Status: <span id="planning-sync-status-text">Not configured</span>
                 </div>
             </div>
+    </div>
+
+    <div id="control-plane-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-title">Centralize Switchboard Configuration</div>
+            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                Move .switchboard/, .agent/, and AGENTS.md to a parent folder outside individual repos. All repos will share the same Switchboard configuration and plan storage.
+            </div>
+            <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                Use <strong>Migrate Existing</strong> when your repos already contain local Switchboard state. Use <strong>Fresh Setup</strong> when you want a new parent Control Plane root, either in-place or by scaffolding and cloning multiple repos into sibling folders.
+            </div>
+            <div class="setup-mode-switch">
+                <button id="btn-control-plane-mode-migrate" type="button" class="secondary-btn w-full setup-mode-btn is-active">MIGRATE EXISTING</button>
+                <button id="btn-control-plane-mode-fresh" type="button" class="secondary-btn w-full setup-mode-btn">FRESH SETUP</button>
+            </div>
+
+            <div class="db-subsection">
+                <div class="subsection-header">
+                    <span>Detection &amp; Status</span>
+                </div>
+                <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                    Move Switchboard into your shared parent projects folder so <code>.switchboard/</code>, <code>.agent/</code>, and <code>AGENTS.md</code> live outside each repo. You can also pin an explicit Control Plane root or clear remembered auto-detect decisions.
+                </div>
+                <div class="control-plane-status-grid">
+                    <div class="control-plane-status-card">
+                        <div class="control-plane-status-label">Effective root</div>
+                        <div id="control-plane-effective-root" style="font-size:11px; line-height:1.4;">Auto-detect</div>
+                    </div>
+                    <div class="control-plane-status-card">
+                        <div class="control-plane-status-label">Source</div>
+                        <div id="control-plane-mode-status" style="font-size:11px; line-height:1.4;">Auto-detect</div>
+                    </div>
+                    <div class="control-plane-status-card">
+                        <div class="control-plane-status-label">Selected workspace</div>
+                        <div id="control-plane-selected-workspace" style="font-size:11px; line-height:1.4;">Waiting for status…</div>
+                    </div>
+                    <div class="control-plane-status-card">
+                        <div class="control-plane-status-label">Repo filter</div>
+                        <div id="control-plane-repo-filter-status" style="font-size:11px; line-height:1.4;">None</div>
+                    </div>
+                </div>
+                <label class="startup-row" style="display:block; margin-top:6px;">
+                    <span style="display:block; margin-bottom:4px;">Explicit Control Plane folder override</span>
+                    <input id="control-plane-explicit-root-input" type="text" placeholder="Path to a folder containing .switchboard/kanban.db" style="width:100%;">
+                </label>
+                <div class="flex gap-2" style="margin-top:8px;">
+                    <button id="btn-set-control-plane-root" type="button" class="secondary-btn w-full">SAVE EXPLICIT ROOT</button>
+                    <button id="btn-reset-control-plane-root" type="button" class="secondary-btn w-full">RESET TO AUTO-DETECT</button>
+                </div>
+                <button id="btn-clear-control-plane-cache" type="button" class="secondary-btn w-full" style="margin-top:8px;">CLEAR CONTROL PLANE CACHE</button>
+                <label class="startup-row" style="display:block; margin-top:10px;">
+                    <span style="display:block; margin-bottom:4px;">Parent folder</span>
+                    <input id="control-plane-parent-input" type="text" placeholder="Detected parent folder" style="width:100%;">
+                </label>
+                <button id="btn-detect-control-plane" class="secondary-btn w-full">DETECT CONTROL PLANE</button>
+                <div id="control-plane-status-result" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
+                <div id="control-plane-status" style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.5;"></div>
+                <div id="control-plane-warning" style="font-size:10px; margin-top:8px; line-height:1.5;"></div>
+            </div>
+
+            <div id="control-plane-migrate-pane">
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Migrate Existing</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Preview existing child repos before merging databases, copying local plan files into <code>plans/&lt;repoName&gt;/</code>, and promoting shared agent config.
+                    </div>
+                    <button id="btn-preview-control-plane" class="secondary-btn w-full">PREVIEW MIGRATION</button>
+                    <div id="control-plane-cleanup-options" style="display:flex; flex-direction:column; gap:6px; margin-top:10px;"></div>
+                    <button id="btn-execute-control-plane" class="secondary-btn w-full">EXECUTE MIGRATION</button>
+                    <div id="control-plane-preview" style="font-size:10px; color:var(--text-secondary); margin-top:10px; line-height:1.5;"></div>
+                </div>
+            </div>
+
+            <div id="control-plane-fresh-pane" class="hidden">
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Fresh Setup</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-bottom: 8px; line-height: 1.4;">
+                        Initialize a new control-plane workspace in the selected parent folder without migrating existing sub-repo databases.
+                    </div>
+                    <button id="btn-fresh-control-plane" class="secondary-btn w-full">SET UP FRESH CONTROL PLANE</button>
+                </div>
+
+                <div class="db-subsection">
+                    <div class="subsection-header">
+                        <span>Scaffold &amp; Clone Repositories</span>
+                    </div>
+                    <div style="font-size:10px; color:var(--text-secondary); margin-bottom:10px; line-height:1.5;">
+                        Create a parent Control Plane root, clone each HTTPS repository into sibling folders, and generate a workspace file that keeps the parent root first. The PAT field is transient only and is cleared after every scaffold result.
+                    </div>
+                    <label class="startup-row" style="display:block; margin-top:6px;">
+                        <span style="display:block; margin-bottom:4px;">Control Plane parent directory</span>
+                        <input id="multi-repo-parent-dir" type="text" placeholder="e.g. /Users/you/Documents/GitHub" style="width:100%;">
+                    </label>
+                    <label class="startup-row" style="display:block; margin-top:8px;">
+                        <span style="display:block; margin-bottom:4px;">Workspace file name</span>
+                        <input id="multi-repo-workspace-name" type="text" placeholder="e.g. switchboard-control-plane" style="width:100%;">
+                    </label>
+                    <label class="startup-row" style="display:block; margin-top:8px;">
+                        <span style="display:block; margin-bottom:4px;">Repository clone URLs (one HTTPS URL per line)</span>
+                        <textarea id="multi-repo-repo-urls" rows="6" placeholder="https://github.com/org/service-a.git&#10;https://github.com/org/service-b.git" style="width:100%; resize:vertical;"></textarea>
+                    </label>
+                    <label class="startup-row" style="display:block; margin-top:8px;">
+                        <span style="display:block; margin-bottom:4px;">Personal Access Token</span>
+                        <input id="multi-repo-pat" type="password" placeholder="Transient PAT used only while cloning" style="width:100%;">
+                    </label>
+                    <button id="btn-scaffold-multi-repo" class="action-btn w-full" style="margin-top: 8px;">SCAFFOLD MULTI-REPO CONTROL PLANE</button>
+                    <div id="multi-repo-scaffold-status" style="min-height:16px; margin-top:10px; font-size:10px; color:var(--text-secondary); line-height:1.5;"></div>
+                </div>
+            </div>
+            <div class="flex gap-2" style="margin-top:12px;">
+                <button id="btn-cancel-control-plane-modal" class="secondary-btn w-full">CANCEL</button>
+            </div>
+        </div>
     </div>
 
     <div id="custom-prompts-modal" class="modal-overlay hidden">
@@ -1218,11 +1231,9 @@
             const tabIdMap = {
                 'startup-fields': 'setup',
                 'db-sync-fields': 'database',
-                'workspace-mapping-fields': 'workspace',
+                'multi-repo-fields': 'multi-repo',
                 'project-mgmt-fields': 'integration',
-                'planning-sources-fields': 'sources',
-                'control-plane-fields': 'control',
-                'planning-panel-fields': 'sync'
+                'planning-panel-fields': 'planning-panel'
             };
 
             const tabId = tabIdMap[fieldsId];
@@ -1297,7 +1308,7 @@
                 vscode.setState({ ...vscode.getState?.(), activeTabId });
             }
 
-            // Trigger section-specific load callbacks based on tab
+            // Trigger section-specific load callbacks
             const tabLoadCallbacks = {
                 'setup': () => {
                     vscode.postMessage({ type: 'getGitIgnoreConfig' });
@@ -1306,20 +1317,16 @@
                 'database': () => {
                     vscode.postMessage({ type: 'getAllDbPaths' });
                     vscode.postMessage({ type: 'getStartupCommands' });
-                },                'integration': () => {
+                },
+                'integration': () => {
                     requestIntegrationSetupStates();
                 },
-                'workspace': () => {
+                'multi-repo': () => {
                     vscode.postMessage({ type: 'getWorkspaceMappings' });
                     vscode.postMessage({ type: 'getGlobalSettingsEnabled' });
                 },
-                'sources': () => {
+                'planning-panel': () => {
                     vscode.postMessage({ type: 'getPlanningSources' });
-                },
-                'control': () => {
-                    requestControlPlaneStatus();
-                },
-                'sync': () => {
                     vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
                 }
             };
@@ -1684,8 +1691,19 @@
 
         function openControlPlaneSetup(mode) {
             setControlPlaneSetupMode(mode);
-            activateTab('control');
+            activateTab('multi-repo');
+            openControlPlaneModal();
             requestControlPlaneStatus();
+        }
+
+        function openControlPlaneModal() {
+            const modal = document.getElementById('control-plane-modal');
+            if (modal) modal.classList.remove('hidden');
+        }
+
+        function closeControlPlaneModal() {
+            const modal = document.getElementById('control-plane-modal');
+            if (modal) modal.classList.add('hidden');
         }
 
         function syncDerivedKanbanOrdersFromStructure() {
@@ -2727,6 +2745,11 @@
         });
         document.getElementById('btn-customize-default-prompts')?.addEventListener('click', openCustomPromptsModal);
         document.getElementById('btn-cancel-prompt-overrides')?.addEventListener('click', closeCustomPromptsModal);
+        document.getElementById('btn-open-control-plane-modal')?.addEventListener('click', openControlPlaneModal);
+        document.getElementById('btn-cancel-control-plane-modal')?.addEventListener('click', closeControlPlaneModal);
+        document.getElementById('control-plane-modal')?.addEventListener('click', (e) => {
+            if (e.target.id === 'control-plane-modal') closeControlPlaneModal();
+        });
         document.getElementById('btn-clear-prompt-override')?.addEventListener('click', () => {
             promptOverrideText.value = '';
             delete lastPromptOverrides[editingPromptRole];

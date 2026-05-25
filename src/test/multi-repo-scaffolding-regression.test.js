@@ -19,7 +19,7 @@ function run() {
     const packageSource = fs.readFileSync(packagePath, 'utf8');
 
     assert.ok(
-        setupSource.includes('Control Plane Setup') &&
+        setupSource.includes('Centralize Switchboard Configuration') &&
         setupSource.includes('id="btn-control-plane-mode-fresh"') &&
         !setupSource.includes('id="multi-repo-toggle"') &&
         setupSource.includes('id="multi-repo-parent-dir"') &&
@@ -28,7 +28,7 @@ function run() {
         setupSource.includes('id="multi-repo-pat"') &&
         setupSource.includes('id="btn-scaffold-multi-repo"') &&
         setupSource.includes('id="multi-repo-scaffold-status"'),
-        'Expected setup.html to keep the scaffold inputs inside the merged Control Plane Setup fresh-setup pane.'
+        'Expected setup.html to keep the scaffold inputs inside the Centralize Switchboard Configuration fresh-setup pane.'
     );
     assert.ok(
         setupSource.includes("type: 'scaffoldMultiRepo'") &&
