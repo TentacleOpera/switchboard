@@ -13992,7 +13992,7 @@ What would you like to find?`;
         const leadConfig: any = this.getSetting('switchboard.prompts.roleConfig_lead', undefined);
         if (coderConfig?.addons?.accurateCoding !== undefined) return coderConfig.addons.accurateCoding;
         if (leadConfig?.addons?.accurateCoding !== undefined) return leadConfig.addons.accurateCoding;
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', true);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('accurateCoding.enabled', false);
     }
 
     private _isAdvancedReviewerEnabled(): boolean {

@@ -2311,8 +2311,8 @@ export class KanbanProvider implements vscode.Disposable {
                 coder: coderConfig?.addons?.pairProgramming ?? false,
                 intern: internConfig?.addons?.pairProgramming ?? false,
             },
-            advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('advancedReviewer.enabled', false),
-            leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadChallenge.enabled', false),
+            advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', false),
+            leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
             dependencyCheckEnabled: plannerConfig?.addons?.dependencyCheck ?? config.get<boolean>('planner.dependencyCheckEnabled', false),
             designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
@@ -2588,10 +2588,10 @@ export class KanbanProvider implements vscode.Disposable {
                 await config.update('accurateCoding.enabled', msg.accurateCodingEnabled, true);
             }
             if (typeof msg.advancedReviewerEnabled === 'boolean') {
-                await config.update('advancedReviewer.enabled', msg.advancedReviewerEnabled, true);
+                await config.update('reviewer.advancedMode', msg.advancedReviewerEnabled, true);
             }
             if (typeof msg.leadChallengeEnabled === 'boolean') {
-                await config.update('leadChallenge.enabled', msg.leadChallengeEnabled, true);
+                await config.update('leadCoder.inlineChallenge', msg.leadChallengeEnabled, true);
             }
             if (typeof msg.aggressivePairProgramming === 'boolean') {
                 await config.update('aggressivePairProgramming.enabled', msg.aggressivePairProgramming, true);

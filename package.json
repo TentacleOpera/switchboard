@@ -216,7 +216,7 @@
         },
         "switchboard.accurateCoding.enabled": {
           "type": "boolean",
-          "default": true,
+          "default": false,
           "description": "When enabled, coder prompts from sidebar actions include instructions to follow the accuracy.md workflow."
         },
         "switchboard.leadCoder.inlineChallenge": {
