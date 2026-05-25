@@ -272,3 +272,23 @@ No changes needed — `.strip-btn:disabled` already provides `opacity: 0.4; curs
 - [ ] Verify delete is blocked when button is disabled
 - [ ] Verify visual feedback (opacity, cursor) on disabled state
 - [ ] Verify button state is correct after workspace switch rebuilds dropdown
+
+
+## Execution & Review
+
+### Stage 1: Grumpy Principal Engineer Review
+- **[NIT] Semantic HTML / Native Controls:** The `🗑` emoji is fine for a quick visual fix, but it is raw text inside a `<button>`. Given we have established SVG icons or dedicated classes for other controls, this might feel a bit unpolished, though acceptable in a pinch. The `disabled` state handles the safety natively which is good.
+- **[NIT] Boilerplate Repetition:** The button state sync logic in `updateWorkspaceProjectDropdown` is duplicated twice—once before the early return and once at the end. It is only 5 lines of code, but the repetition is slightly annoying.
+- **[NIT] Synchronous Confirm:** Using `window.confirm()` halts the webview execution. While we do this everywhere else in this app (as the plan correctly notes), it is still technically a bad pattern for modern UI. But consistency wins here.
+
+### Stage 2: Balanced Synthesis
+- **What to keep:** The logic is rock-solid. Disabling the button when there is no project selected and enabling it when one is present handles the primary safety constraint cleanly.
+- **What to fix now:** Nothing. The plan has already been perfectly implemented in the target repository (`src/webview/kanban.html`).
+- **What to defer:** Extracting the delete button toggle into a helper function to avoid repeating it. Replacing `window.confirm()` with a custom modal. These are out of scope for a Complexity 3 task and would break consistency with the current codebase.
+
+### Validation Results
+- Verified that `src/webview/kanban.html` contains the correct target HTML (`<button id="btn-delete-project" ... disabled>🗑</button>`).
+- Verified that the `change` handler and `updateWorkspaceProjectDropdown` function contain the correct disabled-toggling logic.
+- Verified that the `btnDeleteProject` click handler contains the `window.confirm()` call to prevent accidental deletion.
+- Code fixes applied: None required (already fully implemented in the file).
+- Tests/Typechecks: Skipped per instructions.
