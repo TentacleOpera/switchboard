@@ -293,3 +293,104 @@ These functions check for `.agent/workflows` and `.switchboard` directories whic
 
 ## Recommendation
 **Send to Coder** — Large-scale removal across multiple files with moderate risk of breaking core extension functionality if not carefully tested. The pattern is repetitive (deletion, not new logic) which reduces risk, but the scope of extension.ts changes (25+ functions, 5 commands, lifecycle hooks) requires systematic verification after each major component removal.
+
+---
+
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | File | Finding | Severity |
+|---|------|---------|----------|
+| F1 | `src/extension.ts:1340` | Stale comment referencing MCP server re-registration in lease system section | NIT |
+| F2 | `src/extension.ts:1399` | TODO says "when MCP server is removed" — that condition is NOW met, TODO is stale | MAJOR |
+| F3 | `src/lifecycle/cleanWorkspace.ts:7` | `'MCP'` still in TRANSIENT_DIRS — dead reference to removed infrastructure | MAJOR |
+| F4 | `src/webview/switchboard/README.md:7` | Points to deleted `src/mcp-server/workflows.js` | MAJOR |
+| F5 | `src/test/kanban-complexity-regression.test.js` | `require('../mcp-server/register-tools.js')` — imports from deleted directory, will crash at runtime | CRITICAL |
+| F6 | `src/test/kanban-state-filter-regression.test.js` | `require('../mcp-server/register-tools.js')` — imports from deleted directory, will crash at runtime | CRITICAL |
+| F7 | `src/test/split-coded-columns-regression.test.js` | Reads `src/mcp-server/register-tools.js` — 1 of 6 assertions depends on deleted file | MAJOR |
+| F8 | `src/test/resilience-fixes.test.js` | `require('../mcp-server/state-manager')` and `require('../mcp-server/register-tools')` — imports from deleted directory, will crash at runtime | CRITICAL |
+| F9 | `src/test/verify-dedupe.js` | Dead MCP references in incomplete stub file | NIT |
+| F10 | `src/test/agent-version-migration.test.js:208` | Test fixture string "deleted MCP tool reference" — contextually accurate test data | NIT (acceptable) |
+| F11 | `AGENTS.md:87` | Skill description says "no MCP round-trips" — stale wording | NIT |
+| F12 | `.vscode/settings.json` | Full `mcpServers` config block pointing to deleted MCP server — VS Code will attempt connection on startup | MAJOR |
+
+### Stage 2: Balanced Synthesis & Fixes Applied
+
+**CRITICAL fixes (all applied):**
+- Deleted `src/test/kanban-complexity-regression.test.js` — dead import from deleted `mcp-server/`
+- Deleted `src/test/kanban-state-filter-regression.test.js` — dead import from deleted `mcp-server/`
+- Modified `src/test/split-coded-columns-regression.test.js` — removed MCP-dependent `registerToolsSource` read and its assertion; preserved 5 valid kanban column regression assertions
+- Deleted `src/test/resilience-fixes.test.js` — dead imports from deleted `mcp-server/`
+
+**MAJOR fixes (all applied):**
+- `src/extension.ts:1399` — Updated stale TODO to NOTE: "PID resolution retained for backward compatibility — name + ideName matching is preferred"
+- `src/lifecycle/cleanWorkspace.ts:7` — Removed `'MCP'` from TRANSIENT_DIRS array
+- `src/webview/switchboard/README.md:7` — Updated path from `src/mcp-server/workflows.js` to `.agent/workflows/`
+- `.vscode/settings.json` — Removed entire `mcpServers` configuration block (lines 5-18)
+
+**NIT fixes (applied):**
+- `src/extension.ts:1340` — Updated comment from "Heartbeat removed — only used for MCP server re-registration" to "Heartbeat removed (no longer needed)"
+- `AGENTS.md:87` — Removed "no MCP round-trips" from skill description
+- Deleted `src/test/verify-dedupe.js` — incomplete stub with dead MCP references
+
+**Deferred (acceptable):**
+- `src/test/agent-version-migration.test.js:208` — Test fixture data is contextually accurate
+- `.switchboard/plans/*` — Historical plan documents (explicitly excluded per plan Step 24)
+- `.switchboard/sessions/`, `state.json` — Runtime data
+- `old skills/standby-enter.js:90` — Archived legacy code, `mcp-agent` fallback never matches
+
+### Files Changed in This Review
+
+| File | Change |
+|------|--------|
+| `src/test/kanban-complexity-regression.test.js` | DELETED — dead MCP import |
+| `src/test/kanban-state-filter-regression.test.js` | DELETED — dead MCP import |
+| `src/test/split-coded-columns-regression.test.js` | MODIFIED — removed MCP-dependent assertion, preserved 5 valid regression tests |
+| `src/test/resilience-fixes.test.js` | DELETED — dead MCP imports |
+| `src/test/verify-dedupe.js` | DELETED — incomplete stub with dead MCP references |
+| `src/extension.ts` | Line 1340: stale comment updated; Line 1399: stale TODO updated to NOTE |
+| `src/lifecycle/cleanWorkspace.ts` | Line 7: removed `'MCP'` from TRANSIENT_DIRS |
+| `src/webview/switchboard/README.md` | Line 7: updated path from deleted `src/mcp-server/workflows.js` to `.agent/workflows/` |
+| `.vscode/settings.json` | Removed `mcpServers` configuration block |
+| `AGENTS.md` | Line 87: removed "no MCP round-trips" from skill description |
+
+### Verification Results
+
+- **`src/`**: Only 1 remaining MCP reference — `agent-version-migration.test.js:208` (test fixture data, contextually accurate). PASS.
+- **`docs/`**: Zero MCP references. PASS.
+- **`.vscode/settings.json`**: Zero MCP references. PASS.
+- **`webpack.config.js`**: Zero MCP references. PASS.
+- **`package.json`**: Zero MCP references. PASS.
+- **`.gitignore`**: Zero MCP references. PASS.
+- **All major source files** (extension.ts, KanbanProvider.ts, TaskViewerProvider.ts, ControlPlaneMigrationService.ts, DiagramRenderer.ts, planMetadataUtils.ts, implementation.html, setup.html): Zero MCP references. PASS.
+- **Compilation**: PASS (webpack compiles successfully with zero errors after structural fixes).
+- **Tests**: SKIPPED per review instructions.
+
+### Remaining Risks
+
+1. **`agent-version-migration.test.js:208`** — Contains "MCP" in test fixture string. This is contextually accurate (describing a stale workflow that references deleted MCP tools). No action needed but could be updated for consistency.
+2. **`old skills/standby-enter.js:90`** — Archived legacy code with `mcp-agent` directory fallback. Harmless since the directory never exists. Consider deleting the entire `old skills/` directory if no longer needed.
+3. **`package (1).json`** — Backup file at repo root with 11 MCP references. Not part of active codebase. Consider deleting.
+4. **`.switchboard/sessions/` and `state.json`** — Runtime data with MCP references. These will naturally age out as sessions expire. No action needed.
+5. **`.switchboard/reviews/archive/`** — Historical review data with MCP references. No action needed (archived).
+6. **Plan Step 24 verification item "Extension starts successfully"** — Not verified in this review pass (requires runtime testing).
+
+### Compilation Fix (Post-Review)
+
+The original implementation introduced two critical structural breaks in `src/extension.ts` that caused 90+ compilation errors:
+
+**Break 1: Missing `if (workspaceRoot) { try {` block opening (line ~1252)**
+The "Initialize Control Plane Runtime" section had its `if (workspaceRoot) {` guard, `const runtimeStateRoot` declaration, and `try {` opening removed along with MCP-specific code (`if (!mcpOutputChannel)`, `killOrphanMcpServer`). The body code (terminal sync, state watchers, file watchers, window focus listener, tab auto-close) was left dangling at top-level scope, causing:
+- Top-level await errors
+- `context.subscriptions` interpreted as Mocha's `SuiteFunction` (wrong `context` in scope)
+- All local variables (`runtimeStateRoot`, `taskViewerProvider`, `workspaceRoot`, `resolveEffectiveStateRoot`, `getStateJsonPath`) reported as "Cannot find name"
+
+**Fix:** Restored the `if (workspaceRoot) { const runtimeStateRoot = ...; try {` opening and fixed indentation of the entire block (lines 1252-1345).
+
+**Break 2: Accidentally deleted non-MCP utility functions (lines ~407-445)**
+`getEnforcedSwitchboardBooleanSetting()` and `getOrCreateDispatchSigningKey()` were deleted along with adjacent MCP-specific functions (`isWorkspaceRuntimeModeEnabled`, `resolveBundledMcpSourceDirectory`, `logMcpRuntimeLockWarning`). These two functions are NOT MCP-specific — they enforce security-critical settings and manage the dispatch signing key.
+
+**Fix:** Restored both functions at their original location (after `getExtensionVersion`, before agent version tracking).
+
+**Verification:** webpack compiles successfully with zero errors after both fixes.

@@ -6,7 +6,7 @@ import { legacyToScore } from './complexityScale';
 export const ALLOWED_TAGS = new Set([
     'frontend', 'backend', 'auth', 'authentication', 'database', 'api', 'ui', 'ux',
     'bugfix', 'feature', 'refactor', 'test', 'docs', 'security', 'performance',
-    'reliability', 'mobile', 'devops', 'infrastructure', 'cli', 'library', 'mcp'
+    'reliability', 'mobile', 'devops', 'infrastructure', 'cli', 'library'
 ]);
 
 export function sanitizeTags(raw: string): string {

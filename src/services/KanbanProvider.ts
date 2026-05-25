@@ -64,7 +64,7 @@ export type ControlPlaneSelectionStatus = {
     selectedWorkspaceRoot?: string;
     error?: string;
 };
-type McpMoveTargetResolution = { role: string; normalizedTarget: string; usesComplexityRouting: boolean };
+
 type KanbanDispatchSpec = {
     targetColumn: string;
     role: string;
@@ -2636,8 +2636,6 @@ export class KanbanProvider implements vscode.Disposable {
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
 
-        // Accuracy mode is NOT included in copy-to-clipboard prompts — it requires MCP tools
-        // only available in CLI terminal sessions (autoban dispatch handles accuracy separately).
         const pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
@@ -3766,74 +3764,7 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
-    private _normalizeMcpTarget(target: string): string {
-        let normalized = String(target || '')
-            .toLowerCase()
-            .replace(/[_-]+/g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
 
-        normalized = normalized.replace(/^to\s+/, '').trim();
-        normalized = normalized.replace(/^the\s+/, '').trim();
-        while (/\s+(column|lane|stage|queue|agent|role|terminal)$/.test(normalized)) {
-            normalized = normalized.replace(/\s+(column|lane|stage|queue|agent|role|terminal)$/, '').trim();
-        }
-        return normalized;
-    }
-
-    private _registerMcpTargetAlias(
-        aliases: Map<string, { role: string; usesComplexityRouting: boolean }>,
-        alias: string,
-        role: string,
-        usesComplexityRouting: boolean = false
-    ): void {
-        const normalized = this._normalizeMcpTarget(alias);
-        if (!normalized || aliases.has(normalized)) {
-            return;
-        }
-        aliases.set(normalized, { role, usesComplexityRouting });
-    }
-
-    private _buildMcpTargetAliases(customAgents: CustomAgentConfig[]): Map<string, { role: string; usesComplexityRouting: boolean }> {
-        const aliases = new Map<string, { role: string; usesComplexityRouting: boolean }>();
-
-        this._registerMcpTargetAlias(aliases, 'planner', 'planner');
-        this._registerMcpTargetAlias(aliases, 'planned', 'planner');
-        this._registerMcpTargetAlias(aliases, 'plan reviewed', 'planner');
-        this._registerMcpTargetAlias(aliases, 'planning', 'planner');
-
-        this._registerMcpTargetAlias(aliases, 'reviewer', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'reviewed', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'review', 'reviewer');
-        this._registerMcpTargetAlias(aliases, 'code reviewed', 'reviewer');
-
-        this._registerMcpTargetAlias(aliases, 'lead', 'lead');
-        this._registerMcpTargetAlias(aliases, 'lead coder', 'lead');
-        this._registerMcpTargetAlias(aliases, 'coder', 'coder');
-        this._registerMcpTargetAlias(aliases, 'jules', 'jules');
-
-        this._registerMcpTargetAlias(aliases, 'team', 'team', true);
-        this._registerMcpTargetAlias(aliases, 'coded', 'lead', true);
-
-        for (const column of this._buildKanbanColumns(customAgents)) {
-            if (column.id === 'CREATED') {
-                continue;
-            }
-            const role = this._columnToRole(column.id);
-            if (!role) {
-                continue;
-            }
-            this._registerMcpTargetAlias(aliases, column.id, role);
-            this._registerMcpTargetAlias(aliases, column.label, role);
-        }
-
-        for (const agent of customAgents.filter(item => item.includeInKanban)) {
-            this._registerMcpTargetAlias(aliases, agent.role, agent.role);
-            this._registerMcpTargetAlias(aliases, agent.name, agent.role);
-        }
-
-        return aliases;
-    }
 
     private async _resolveComplexityRoutedRole(workspaceRoot: string, sessionId: string): Promise<'lead' | 'coder' | 'intern'> {
         // When dynamic complexity routing is disabled, all tasks route to lead
@@ -3957,99 +3888,7 @@ export class KanbanProvider implements vscode.Disposable {
         return role === 'coder' ? 'CODER CODED' : 'LEAD CODED';
     }
 
-    private async _resolveMcpMoveTarget(workspaceRoot: string, sessionId: string, target: string): Promise<McpMoveTargetResolution | null> {
-        const customAgents = await this._getCustomAgents(workspaceRoot);
-        const normalizedTarget = this._normalizeMcpTarget(target);
-        if (!normalizedTarget) {
-            return null;
-        }
 
-        const resolved = this._buildMcpTargetAliases(customAgents).get(normalizedTarget);
-        if (!resolved) {
-            return null;
-        }
-
-        if (!resolved.usesComplexityRouting) {
-            return {
-                role: resolved.role,
-                normalizedTarget,
-                usesComplexityRouting: false
-            };
-        }
-
-        return {
-            role: await this._resolveComplexityRoutedRole(workspaceRoot, sessionId),
-            normalizedTarget,
-            usesComplexityRouting: true
-        };
-    }
-
-    /** Called by the MCP server to conversationally route a plan through the Kanban dispatch path. */
-    public async handleMcpMove(sessionId: string, target: string, workspaceRoot?: string): Promise<boolean> {
-        const trimmedSessionId = String(sessionId || '').trim();
-        const trimmedTarget = String(target || '').trim();
-        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
-
-        if (!resolvedWorkspaceRoot) {
-            vscode.window.showErrorMessage('No workspace folder found for kanban routing.');
-            return false;
-        }
-        if (!trimmedSessionId) {
-            vscode.window.showErrorMessage('Cannot route a kanban plan without a session ID.');
-            return false;
-        }
-        if (!trimmedTarget) {
-            vscode.window.showErrorMessage('Cannot route a kanban plan without a target.');
-            return false;
-        }
-
-        const log = this._getSessionLog(resolvedWorkspaceRoot);
-        const sheet = await log.getRunSheet(trimmedSessionId);
-        if (!sheet || sheet.completed === true) {
-            vscode.window.showErrorMessage(`Plan session '${trimmedSessionId}' was not found or is already completed.`);
-            return false;
-        }
-
-        const resolvedTarget = await this._resolveMcpMoveTarget(resolvedWorkspaceRoot, trimmedSessionId, trimmedTarget);
-        if (!resolvedTarget) {
-            vscode.window.showErrorMessage(`Unsupported kanban target '${trimmedTarget}'. Use a dispatchable column, built-in role, or kanban-enabled custom agent.`);
-            return false;
-        }
-
-        if (!(await this._canAssignRole(resolvedWorkspaceRoot, resolvedTarget.role))) {
-            vscode.window.showErrorMessage(`Agent for conversational target '${trimmedTarget}' resolved to '${resolvedTarget.role}', but that role is not assigned or visible.`);
-            return false;
-        }
-
-        const instruction = resolvedTarget.role === 'planner' ? 'improve-plan' : undefined;
-        const dispatched = await vscode.commands.executeCommand<boolean>(
-            'switchboard.triggerAgentFromKanban',
-            resolvedTarget.role,
-            trimmedSessionId,
-            instruction,
-            resolvedWorkspaceRoot
-        );
-
-        if (!dispatched) {
-            const routingLabel = resolvedTarget.usesComplexityRouting
-                ? `${trimmedTarget} -> ${resolvedTarget.role}`
-                : trimmedTarget;
-            vscode.window.showErrorMessage(`Failed to route plan '${trimmedSessionId}' via '${routingLabel}'.`);
-            return false;
-        }
-
-        // Record dispatch identity for MCP path (no terminal name available)
-        const roleToCol: Record<string, string> = {
-            'lead': 'LEAD CODED', 'coder': 'CODER CODED', 'intern': 'INTERN CODED',
-            'planner': 'PLANNED', 'reviewer': 'CODE REVIEWED', 'tester': 'ACCEPTANCE TESTED',
-        };
-        const targetColumn = roleToCol[resolvedTarget.role];
-        if (targetColumn) {
-            await this._recordDispatchIdentity(resolvedWorkspaceRoot, trimmedSessionId, targetColumn);
-        }
-
-        return true;
-    }
 
     private async _handleMessage(msg: any) {
         switch (msg.type) {

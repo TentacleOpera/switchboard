@@ -1891,12 +1891,6 @@
                 <div class="tiny-dot green"></div>
                 <span>SYSTEM ONLINE</span>
             </div>
-            <div class="status-indicator" id="mcp-status-footer">
-                <div class="tiny-dot" id="mcp-dot"></div>
-                <span id="mcp-text">MCP: CHECKING</span>
-                <span id="mcp-recheck-btn" title="Recheck MCP connection"
-                    style="cursor:pointer; margin-left:4px; opacity:0.6; font-size:11px;">&#x21bb;</span>
-            </div>
         </div>
     </div>
 
@@ -1921,8 +1915,6 @@
         const liveFeedToggle = document.getElementById('live-feed-toggle');
         const liveFeedChevron = document.getElementById('live-feed-chevron');
         const liveFeedFields = panelActivity;
-        const mcpDot = document.getElementById('mcp-dot');
-        const mcpText = document.getElementById('mcp-text');
         const copyPlanLinkBtn = document.getElementById('btn-copy-plan-link');
 
 
@@ -2055,9 +2047,7 @@
         }
 
 
-        document.getElementById('mcp-recheck-btn')?.addEventListener('click', () => {
-            vscode.postMessage({ type: 'recheckMcpConnection' });
-        });
+
 
         const btnGrid = document.getElementById('createAgentGrid');
         if (btnGrid) {
@@ -2505,8 +2495,6 @@
             const message = event.data;
             switch (message.type) {
                 case 'initialState':
-                case 'mcpStatus':
-                    updateMcpStatus(message);
                     setActiveTab(message.activeTab || 'agents', false);
                     if (message.type === 'initialState') {
                         if (message.activeSubTab) {
@@ -5104,7 +5092,7 @@
 
             const desc1 = document.createElement('div');
             desc1.style.cssText = 'padding:6px 8px 4px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            desc1.innerText = 'Fetch a Notion page and embed its full content in every planner prompt. The page is cached locally—no MCP call at prompt time.';
+            desc1.innerText = 'Fetch a Notion page and embed its full content in every planner prompt. The page is cached locally.';
             container.appendChild(desc1);
 
             const desc2 = document.createElement('div');
@@ -5538,26 +5526,7 @@ Work through all plans in the list, using the marker format above.`;
             return container;
         }
 
-        function updateMcpStatus(msg) {
-            const recheckBtn = document.getElementById('mcp-recheck-btn');
-            if (msg.diagnostic === 'MCP: Checking...') {
-                mcpDot.className = 'tiny-dot orange';
-                mcpText.innerText = 'MCP: CHECKING';
-                if (recheckBtn) recheckBtn.style.opacity = '0.3';
-                return;
-            }
-            if (recheckBtn) recheckBtn.style.opacity = '0.6';
-            if (msg.connected) {
-                mcpDot.className = 'tiny-dot green';
-                mcpText.innerText = 'MCP: ONLINE';
-            } else if (msg.serverRunning) {
-                mcpDot.className = 'tiny-dot orange';
-                mcpText.innerText = 'MCP: CONNECTING';
-            } else {
-                mcpDot.className = 'tiny-dot red';
-                mcpText.innerText = 'MCP: OFFLINE';
-            }
-        }
+
 
         // --- Onboarding Logic ---
         const onboardingContainer = document.getElementById('onboarding-container');

@@ -4,7 +4,6 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as crypto from 'crypto';
 import * as os from 'os';
-import { ChildProcess, fork, execFileSync } from 'child_process';
 import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
@@ -35,14 +34,11 @@ let setupStatusBarItem: vscode.StatusBarItem;
 // Status bar item for file opening prevention toggle
 let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
 
-// Global references for bundled MCP server lifecycle
-let mcpServerProcess: ChildProcess | null = null;
-let mcpOutputChannel: vscode.OutputChannel | null = null;
-let mcpHealthCheckInterval: ReturnType<typeof setInterval> | null = null;
+// Global references
+let outputChannel: vscode.OutputChannel | null = null;
 let kanbanProvider: KanbanProvider | null = null;
 let activeTaskViewerProvider: TaskViewerProvider | null = null;
 const DISPATCH_SIGNING_KEY_SECRET = 'switchboard.dispatchSigningKey.v1';
-const MCP_PID_FILENAME = '.switchboard/.mcp_server.pid';
 
 // Agent File Opening Prevention: URIs explicitly allowed to stay open
 const allowedUrisToOpen = new Set<string>();
@@ -52,20 +48,8 @@ const allowedUrisToOpen = new Set<string>();
 const preventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
 void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', preventAgentFileOpening);
 
-function getWorkspaceMcpDirectory(workspaceRoot: string): string {
-    return path.join(workspaceRoot, '.switchboard', 'MCP');
-}
-
-function getWorkspaceSourceMcpDirectory(workspaceRoot: string): string {
-    return path.join(workspaceRoot, 'src', 'mcp-server');
-}
-
 function getWorkspaceSourceServicesDirectory(workspaceRoot: string): string {
     return path.join(workspaceRoot, 'src', 'services');
-}
-
-function getMcpVersionFilePath(workspaceRoot: string): string {
-    return path.join(workspaceRoot, '.switchboard', '.mcp_version.json');
 }
 
 // Intentionally uses synchronous I/O: called infrequently (once per activation),
@@ -81,31 +65,35 @@ function getExtensionVersion(extensionPath: string): string | undefined {
     }
 }
 
-// Intentionally uses synchronous I/O: cold-path version check on activation.
-function getLastCopiedMcpVersion(workspaceRoot: string): string | undefined {
-    const versionFilePath = getMcpVersionFilePath(workspaceRoot);
-    try {
-        if (fs.existsSync(versionFilePath)) {
-            const versionData = JSON.parse(fs.readFileSync(versionFilePath, 'utf-8'));
-            return versionData.version;
-        }
-    } catch (e) {
-        console.error('Failed to read last MCP version:', e);
-    }
-    return undefined;
+function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean): { value: boolean; ignoredWorkspaceOverride: boolean } {
+    const config = vscode.workspace.getConfiguration('switchboard');
+    const inspected = config.inspect<boolean>(key);
+    const globalValue = inspected?.globalValue;
+    const defaultConfigValue = inspected?.defaultValue;
+    const workspaceValueDefined = inspected?.workspaceValue !== undefined || inspected?.workspaceFolderValue !== undefined;
+
+    const value = typeof globalValue === 'boolean'
+        ? globalValue
+        : (typeof defaultConfigValue === 'boolean' ? defaultConfigValue : defaultValue);
+
+    return {
+        value,
+        ignoredWorkspaceOverride: workspaceValueDefined
+    };
 }
 
-function setLastCopiedMcpVersion(workspaceRoot: string, version: string): void {
-    const versionFilePath = getMcpVersionFilePath(workspaceRoot);
-    try {
-        const versionData = { version, lastUpdated: new Date().toISOString() };
-        fs.writeFileSync(versionFilePath, JSON.stringify(versionData, null, 2));
-    } catch (e) {
-        console.error('Failed to write MCP version:', e);
+async function getOrCreateDispatchSigningKey(context: vscode.ExtensionContext): Promise<string> {
+    const existing = await context.secrets.get(DISPATCH_SIGNING_KEY_SECRET);
+    if (existing && existing.trim().length >= 32) {
+        return existing.trim();
     }
+
+    const generated = crypto.randomBytes(32).toString('hex');
+    await context.secrets.store(DISPATCH_SIGNING_KEY_SECRET, generated);
+    return generated;
 }
 
-// --- Agent version tracking (mirrors MCP version pattern above) ---
+// --- Agent version tracking ---
 
 function getAgentVersionFilePath(workspaceRoot: string): string {
     return path.join(workspaceRoot, '.switchboard', '.agent_version.json');
@@ -190,375 +178,9 @@ function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: 
     return false;
 }
 
-function shouldRefreshMcpWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
-    const currentVersion = getExtensionVersion(extensionPath);
-    const lastVersion = getLastCopiedMcpVersion(workspaceRoot);
 
-    // Refresh if we can't determine versions (defensive: always copy)
-    if (!currentVersion || !lastVersion) {
-        return true;
-    }
 
-    // Refresh if versions differ
-    if (currentVersion !== lastVersion) {
-        return true;
-    }
 
-    // Refresh if workspace MCP directory is missing (handles manual deletion)
-    const workspaceMcpDir = getWorkspaceMcpDirectory(workspaceRoot);
-    if (!fs.existsSync(workspaceMcpDir)) {
-        return true;
-    }
-
-    return false;
-}
-
-function getGlobalAntigravityMcpConfigPath(): string {
-    return path.join(os.homedir(), '.gemini', 'antigravity', 'mcp_config.json');
-}
-
-/**
- * Resolve the absolute path to the Node.js runtime for use in MCP config files.
- * IDEs launched from app launchers (macOS Spotlight/Finder) don't inherit the
- * user's shell PATH, so bare 'node' fails when the MCP client spawns the process.
- * Uses a login shell to source nvm/fnm/brew paths; falls back to process.execPath.
- */
-function resolveNodeRuntime(): string {
-    let nodeRuntime = process.execPath;
-    try {
-        const { execSync } = require('child_process');
-        const isWindows = process.platform === 'win32';
-        const cmd = isWindows ? 'where node' : '/bin/zsh -lc "which node"';
-        const resolved = execSync(cmd, { encoding: 'utf8' }).split('\n')[0].trim();
-        if (resolved && path.isAbsolute(resolved)) {
-            nodeRuntime = resolved;
-        }
-    } catch {
-        // Could not resolve node via login shell — keeping process.execPath as fallback
-    }
-    return nodeRuntime;
-}
-
-function normalizeEnvPath(targetPath: string): string {
-    return targetPath.replace(/\\/g, '/');
-}
-
-export async function buildSwitchboardMcpEnv(workspaceRoot: string, stateRoot: string, baseEnv: NodeJS.ProcessEnv = process.env, context: vscode.ExtensionContext): Promise<NodeJS.ProcessEnv> {
-    const env: NodeJS.ProcessEnv = {
-        ...baseEnv,
-        SWITCHBOARD_WORKSPACE_ROOT: workspaceRoot,
-        SWITCHBOARD_STATE_ROOT: stateRoot
-    };
-
-    // Add Linear API token if available
-    try {
-        const linearToken = await context.secrets.get('switchboard.linear.apiToken');
-        if (linearToken) {
-            env.SWITCHBOARD_LINEAR_TOKEN = linearToken;
-            mcpOutputChannel?.appendLine('[MCP Env] Linear token: present');
-        } else {
-            mcpOutputChannel?.appendLine('[MCP Env] Linear token: absent');
-        }
-    } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        mcpOutputChannel?.appendLine(`[MCP Env] Linear token read failed: ${msg}`);
-        // Token not configured or SecretStorage error — env construction must continue
-    }
-
-    // Add ClickUp API token if available
-    try {
-        const clickupToken = await context.secrets.get('switchboard.clickup.apiToken');
-        if (clickupToken) {
-            env.SWITCHBOARD_CLICKUP_TOKEN = clickupToken;
-            mcpOutputChannel?.appendLine('[MCP Env] ClickUp token: present');
-        } else {
-            mcpOutputChannel?.appendLine('[MCP Env] ClickUp token: absent');
-        }
-    } catch (e) {
-        const msg = e instanceof Error ? e.message : String(e);
-        mcpOutputChannel?.appendLine(`[MCP Env] ClickUp token read failed: ${msg}`);
-        // Token not configured or SecretStorage error — env construction must continue
-    }
-
-    return env;
-}
-
-async function setupGlobalAntigravityMcpConfig(workspaceRoot: string, stateRoot: string = workspaceRoot): Promise<void> {
-    const configPath = getGlobalAntigravityMcpConfigPath();
-    const configDir = path.dirname(configPath);
-
-    // Validate MCP server exists in workspace
-    const serverPath = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
-    if (!fs.existsSync(serverPath)) {
-        // Cannot self-heal here (no extensionPath available); direct the user to re-run setup.
-        mcpOutputChannel?.appendLine('[Antigravity] MCP server not found at expected path, skipping global config.');
-        vscode.window.showWarningMessage(
-            'Switchboard MCP server not found. Run the full setup wizard first.'
-        );
-        return;
-    }
-
-    // Path safety: confirm server path is within workspace
-    if (!isPathWithinRoot(serverPath, workspaceRoot)) {
-        mcpOutputChannel?.appendLine(`[Antigravity] Server path ${serverPath} is outside workspace root — aborting.`);
-        return;
-    }
-
-    // Auto-create ~/.gemini/antigravity/ if it doesn't exist.
-    // This handles new machines where Gemini Desktop has not yet been run.
-    // NOTE: The key written here is the literal string 'switchboard'. The standalone
-    // register-mcp.js script writes a hashed key (e.g. 'switchboard-ab12cd34').
-    // Both can coexist in mcpServers; this is intentional per current architecture.
-    if (!fs.existsSync(configDir)) {
-        try {
-            fs.mkdirSync(configDir, { recursive: true });
-            mcpOutputChannel?.appendLine(`[Antigravity] Created config directory: ${configDir}`);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            vscode.window.showWarningMessage(
-                `Could not create Antigravity config directory at ${configDir}: ${msg}. Please create it manually.`
-            );
-            return;
-        }
-    }
-
-    // Use forward slashes for cross-platform compatibility in JSON
-    const serverPathForward = normalizeEnvPath(serverPath);
-    const workspaceRootForward = normalizeEnvPath(workspaceRoot);
-    const stateRootForward = normalizeEnvPath(stateRoot);
-
-    // Read existing config or start fresh
-    let existingConfig: Record<string, any> = {};
-    if (fs.existsSync(configPath)) {
-        try {
-            existingConfig = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-        } catch (e) {
-            mcpOutputChannel?.appendLine(`[Antigravity] Failed to parse existing config: ${e}`);
-            existingConfig = {};
-        }
-    }
-    if (!existingConfig.mcpServers) {
-        existingConfig.mcpServers = {};
-    }
-
-    // Build the new switchboard entry
-    const newEntry = {
-        command: resolveNodeRuntime(),
-        args: [serverPathForward, workspaceRootForward],
-        env: {
-            SWITCHBOARD_WORKSPACE_ROOT: workspaceRootForward,
-            SWITCHBOARD_STATE_ROOT: stateRootForward
-        }
-    };
-
-    // Build updated config (merge — preserve other keys)
-    const updatedConfig = {
-        ...existingConfig,
-        mcpServers: {
-            ...existingConfig.mcpServers,
-            switchboard: newEntry
-        }
-    };
-
-    const beforeJson = JSON.stringify(existingConfig, null, 2);
-    const afterJson = JSON.stringify(updatedConfig, null, 2);
-
-    if (beforeJson === afterJson) {
-        mcpOutputChannel?.appendLine('[Antigravity] Global config already up to date.');
-        return;
-    }
-
-    // Show confirmation with diff preview
-    const selectionPromise = vscode.window.showInformationMessage(
-        'Update global Antigravity MCP config (~/.gemini/antigravity/mcp_config.json)?',
-        'Write to file',
-        'Copy to clipboard',
-        'Skip'
-    );
-    const timeoutPromise = new Promise<string | undefined>(resolve =>
-        setTimeout(() => resolve('Write to file'), 10_000)
-    );
-    const selection = await Promise.race([selectionPromise, timeoutPromise]);
-
-    if (selection === 'Write to file') {
-        try {
-            // Backup existing file
-            if (fs.existsSync(configPath)) {
-                const backupPath = `${configPath}.bak.${Date.now()}`;
-                fs.copyFileSync(configPath, backupPath);
-                mcpOutputChannel?.appendLine(`[Antigravity] Backed up existing config to ${backupPath}`);
-            }
-            fs.writeFileSync(configPath, afterJson, 'utf8');
-            vscode.window.showInformationMessage('✅ Global Antigravity MCP config updated.');
-            mcpOutputChannel?.appendLine(`[Antigravity] Wrote global config to ${configPath}`);
-        } catch (e) {
-            const msg = e instanceof Error ? e.message : String(e);
-            vscode.window.showErrorMessage(`Failed to write Antigravity config: ${msg}`);
-        }
-    } else if (selection === 'Copy to clipboard') {
-        await vscode.env.clipboard.writeText(afterJson);
-        vscode.window.showInformationMessage(
-            'Config copied to clipboard. Paste into ~/.gemini/antigravity/mcp_config.json'
-        );
-    }
-    // 'Skip' or dismissed — do nothing
-}
-
-function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean): { value: boolean; ignoredWorkspaceOverride: boolean } {
-    const config = vscode.workspace.getConfiguration('switchboard');
-    const inspected = config.inspect<boolean>(key);
-    const globalValue = inspected?.globalValue;
-    const defaultConfigValue = inspected?.defaultValue;
-    const workspaceValueDefined = inspected?.workspaceValue !== undefined || inspected?.workspaceFolderValue !== undefined;
-
-    const value = typeof globalValue === 'boolean'
-        ? globalValue
-        : (typeof defaultConfigValue === 'boolean' ? defaultConfigValue : defaultValue);
-
-    return {
-        value,
-        ignoredWorkspaceOverride: workspaceValueDefined
-    };
-}
-
-function isWorkspaceRuntimeModeEnabled(): boolean {
-    return getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false).value;
-}
-
-async function getOrCreateDispatchSigningKey(context: vscode.ExtensionContext): Promise<string> {
-    const existing = await context.secrets.get(DISPATCH_SIGNING_KEY_SECRET);
-    if (existing && existing.trim().length >= 32) {
-        return existing.trim();
-    }
-
-    const generated = crypto.randomBytes(32).toString('hex');
-    await context.secrets.store(DISPATCH_SIGNING_KEY_SECRET, generated);
-    return generated;
-}
-
-function resolveBundledMcpSourceDirectory(extensionPath: string, workspaceRoot: string, workspaceMode: boolean): string | undefined {
-    const candidates = workspaceMode
-        ? [
-            getWorkspaceSourceMcpDirectory(workspaceRoot),
-            path.join(extensionPath, 'src', 'mcp-server'),
-            path.join(workspaceRoot, 'dist', 'mcp-server'),
-            path.join(extensionPath, 'dist', 'mcp-server')
-        ]
-        : [
-            path.join(workspaceRoot, 'dist', 'mcp-server'),
-            path.join(extensionPath, 'dist', 'mcp-server'),
-            getWorkspaceSourceMcpDirectory(workspaceRoot),
-            path.join(extensionPath, 'src', 'mcp-server')
-        ];
-
-    return candidates.find(candidate => fs.existsSync(path.join(candidate, 'mcp-server.js')));
-}
-
-function isLockError(error: unknown): boolean {
-    const code = (error as NodeJS.ErrnoException | undefined)?.code;
-    return code === 'EBUSY' || code === 'EPERM';
-}
-
-function logMcpRuntimeLockWarning(error: unknown): void {
-    if (!isLockError(error)) return;
-    if (!mcpOutputChannel) {
-        mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
-    }
-    const code = (error as NodeJS.ErrnoException | undefined)?.code || 'UNKNOWN';
-    const message = (error as Error | undefined)?.message || String(error);
-    mcpOutputChannel.appendLine(`[MCP] WARNING: Could not update MCP runtime files (${code}: ${message}). Kill orphan node processes using .switchboard\\MCP and restart.`);
-}
-
-async function copyDirectoryRecursive(sourceDir: string, destinationDir: string): Promise<void> {
-    await fs.promises.mkdir(destinationDir, { recursive: true });
-    const entries = await fs.promises.readdir(sourceDir, { withFileTypes: true });
-
-    for (const entry of entries) {
-        const sourcePath = path.join(sourceDir, entry.name);
-        const destinationPath = path.join(destinationDir, entry.name);
-
-        if (entry.isDirectory()) {
-            await copyDirectoryRecursive(sourcePath, destinationPath);
-            continue;
-        }
-
-        if (entry.isFile()) {
-            await fs.promises.copyFile(sourcePath, destinationPath);
-        }
-    }
-}
-
-async function ensureWorkspaceMcpServerFiles(extensionPath: string, workspaceRoot: string): Promise<string> {
-    const workspaceMode = isWorkspaceRuntimeModeEnabled();
-    const sourceDir = resolveBundledMcpSourceDirectory(extensionPath, workspaceRoot, workspaceMode);
-    if (!sourceDir) {
-        const modeLabel = workspaceMode ? 'workspace source mode' : 'bundled mode';
-        throw new Error(`Could not locate MCP server source directory for ${modeLabel}.`);
-    }
-
-    const bundledEntry = path.join(sourceDir, 'mcp-server.js');
-    if (!fs.existsSync(bundledEntry)) {
-        throw new Error('Bundled MCP server entry not found in extension package.');
-    }
-
-    const workspaceMcpDir = getWorkspaceMcpDirectory(workspaceRoot);
-
-    // Check if we need to refresh workspace files based on version or missing directory
-    const needsRefresh = shouldRefreshMcpWorkspaceFiles(extensionPath, workspaceRoot);
-
-    if (needsRefresh) {
-        const currentVersion = getExtensionVersion(extensionPath);
-        mcpOutputChannel?.appendLine(`[MCP] Refreshing workspace MCP files (version ${currentVersion || 'unknown'})`);
-
-        // Copy to workspace so IDEs can discover and launch it via their MCP config.
-        // The extension internally spawns from the immutable bundle (see spawnBundledMcpServer).
-        try {
-            await copyDirectoryRecursive(sourceDir, workspaceMcpDir);
-        } catch (e) {
-            logMcpRuntimeLockWarning(e);
-            throw e;
-        }
-
-        // Update version tracking after successful copy
-        if (currentVersion) {
-            setLastCopiedMcpVersion(workspaceRoot, currentVersion);
-        }
-    } else {
-        const currentVersion = getExtensionVersion(extensionPath);
-        mcpOutputChannel?.appendLine(`[MCP] Workspace MCP files up-to-date (version ${currentVersion || 'unknown'})`);
-    }
-
-    // Workspace runtime mode uses raw source files, so copy the cross-directory service dependency
-    // that register-tools.js requires via ../services/kanbanColumnDerivation.
-    // NOTE: This runs independently of the version-based refresh above. If the service file
-    // is missing (e.g., manually deleted), it must be recopied even when versions match.
-    if (workspaceMode) {
-        const workspaceServicesDir = path.join(workspaceRoot, '.switchboard', 'services');
-        const serviceDestPath = path.join(workspaceServicesDir, 'kanbanColumnDerivation.js');
-
-        if (!fs.existsSync(serviceDestPath)) {
-            const serviceSourceCandidates = [
-                path.join(getWorkspaceSourceServicesDirectory(workspaceRoot), 'kanbanColumnDerivation.js'),
-                path.join(extensionPath, 'src', 'services', 'kanbanColumnDerivation.js')
-            ];
-            const serviceSourcePath = serviceSourceCandidates.find(candidate => fs.existsSync(candidate));
-            if (!serviceSourcePath) {
-                throw new Error('Workspace runtime mode requires services/kanbanColumnDerivation.js, but no source file was found.');
-            }
-
-            try {
-                await fs.promises.mkdir(workspaceServicesDir, { recursive: true });
-                await fs.promises.copyFile(serviceSourcePath, serviceDestPath);
-                mcpOutputChannel?.appendLine('[MCP] Restored missing workspace service dependency: kanbanColumnDerivation.js');
-            } catch (e) {
-                logMcpRuntimeLockWarning(e);
-                throw e;
-            }
-        }
-    }
-
-    return path.join(workspaceMcpDir, 'mcp-server.js');
-}
 
 // Terminal Registry: Store terminal references for input forwarding
 const registeredTerminals = new Map<string, vscode.Terminal>();
@@ -719,453 +341,6 @@ async function waitWithTimeout<T>(promise: Thenable<T> | Promise<T>, timeoutMs: 
     });
     return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
-
-// Terminal Command Queue Watcher
-
-/**
- * Attach IPC listeners and stream piping to an MCP server process.
- */
-function attachMcpListeners(process: ChildProcess, workspaceRoot: string, stateRoot: string = workspaceRoot) {
-    // Create output channel for observability
-    if (!mcpOutputChannel) {
-        mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
-    }
-
-    // Pipe stderr to output channel (filter JSON protocol messages)
-    process.stderr?.on('data', (data: Buffer) => {
-        const msg = data.toString();
-        // Filter out JSON-RPC protocol messages (start with { or [)
-        if (!msg.trim().startsWith('{') && !msg.trim().startsWith('[')) {
-            mcpOutputChannel?.appendLine(`[MCP] ${msg.trim()}`);
-        }
-    });
-
-    process.on('exit', (code) => {
-        mcpOutputChannel?.appendLine(`[MCP] Server exited with code ${code}`);
-        if (mcpServerProcess === process) {
-            mcpServerProcess = null;
-        }
-    });
-
-    process.on('error', (err) => {
-        mcpOutputChannel?.appendLine(`[MCP] Error: ${err.message}`);
-    });
-
-    // Handle messages from the MCP server (IPC Bridge)
-    process.on('message', async (message: any) => {
-        if (!message || typeof message !== 'object') return;
-
-        try {
-            switch (message.type) {
-                case 'createTerminal': {
-                    const { name, cwd, id } = message;
-
-                    // F-05 SECURITY: Use path.relative containment check instead of prefix match
-                    let terminalCwd = workspaceRoot;
-                    if (cwd && path.isAbsolute(cwd)) {
-                        const normalizedCwd = path.normalize(cwd);
-                        const normalizedRoot = path.normalize(workspaceRoot);
-                        const rel = path.relative(normalizedRoot, normalizedCwd);
-                        if (!rel.startsWith('..') && !path.isAbsolute(rel)) {
-                            terminalCwd = cwd;
-                        } else {
-                            mcpOutputChannel?.appendLine(`[MCP] Blocked out-of-bounds CWD: ${cwd}`);
-                        }
-                    }
-
-                    const baseName = name || 'Switchboard';
-                    const internalName = suffixedName(baseName);
-                    const termOpts: vscode.TerminalOptions = {
-                        name: baseName,
-                        cwd: terminalCwd
-                    };
-
-                    const terminal = vscode.window.createTerminal(termOpts);
-
-                    const pid = await waitWithTimeout(terminal.processId, 2000, undefined);
-
-                    // Store terminal in registry under suffixed key for IDE isolation
-                    registeredTerminals.set(internalName, terminal);
-
-                    // Send back the PID with the correlation ID
-                    process.send({
-                        type: 'createTerminalResponse',
-                        id,
-                        pid
-                    });
-
-                    mcpOutputChannel?.appendLine(`[MCP] Created UI Terminal: ${internalName} (PID: ${pid}), added to registry`);
-                    break;
-                }
-
-                case 'focusTerminal': {
-                    const { pid } = message;
-                    vscode.commands.executeCommand('switchboard.focusTerminal', pid);
-                    break;
-                }
-
-                case 'sendToTerminal': {
-                    const { name, input, paced, id: requestId, source } = message;
-                    if (typeof name !== 'string' || !name.trim()) {
-                        process.send({
-                            type: 'sendToTerminalResponse',
-                            id: requestId,
-                            success: false,
-                            error: 'Rejected by extension: invalid terminal name'
-                        });
-                        break;
-                    }
-                    if (typeof input !== 'string') {
-                        process.send({
-                            type: 'sendToTerminalResponse',
-                            id: requestId,
-                            success: false,
-                            error: 'Rejected by extension: invalid input payload'
-                        });
-                        break;
-                    }
-
-                    const sourceActor = (source && typeof source.actor === 'string') ? source.actor : '';
-                    const sourceTool = (source && typeof source.tool === 'string') ? source.tool : '';
-                    const allowBroadcast = source?.allowBroadcast === true;
-                    if (!sourceActor || !sourceTool) {
-                        mcpOutputChannel?.appendLine(`[MCP] sendToTerminal rejected for '${name}': missing source metadata`);
-                        process.send({
-                            type: 'sendToTerminalResponse',
-                            id: requestId,
-                            success: false,
-                            error: 'Rejected by extension: missing source metadata'
-                        });
-                        break;
-                    }
-
-                    const sourceKey = `${sourceActor}::${sourceTool}`;
-                    const now = Date.now();
-                    const previous = recentBridgeInputBySource.get(sourceKey);
-                    if (previous && previous.target !== name && now - previous.at <= 1500 && !allowBroadcast) {
-                        mcpOutputChannel?.appendLine(
-                            `[MCP] sendToTerminal rejected for '${name}': broadcast fan-out from ${sourceKey} ` +
-                            `(${previous.target} -> ${name}) without allowBroadcast=true`
-                        );
-                        process.send({
-                            type: 'sendToTerminalResponse',
-                            id: requestId,
-                            success: false,
-                            error: 'Rejected by extension: broadcast fan-out requires source.allowBroadcast=true'
-                        });
-                        break;
-                    }
-                    recentBridgeInputBySource.set(sourceKey, { target: name, at: now });
-
-                    let terminal = resolveTerminalByName(name);
-                    if (!terminal) {
-                        // Fallback for stale/incomplete registry: resolve by live VS Code terminal name.
-                        const byName = vscode.window.terminals.find(t => t.name === name || t.name === stripIdeSuffix(name));
-                        if (byName) {
-                            terminal = byName;
-                            registeredTerminals.set(suffixedName(name), byName);
-                            mcpOutputChannel?.appendLine(`[MCP] sendToTerminal recovered terminal '${name}' from live VS Code list`);
-                        }
-                    }
-
-                    if (!terminal) {
-                        mcpOutputChannel?.appendLine(`[MCP] sendToTerminal failed: '${name}' not in registry`);
-                        process.send({
-                            type: 'sendToTerminalResponse',
-                            id: requestId,
-                            success: false,
-                            error: `Terminal '${name}' not found in registry`
-                        });
-                        break;
-                    }
-
-                    // Use robust sending with chunking and explicit newline
-                    await sendRobustText(terminal, input, paced);
-                    mcpOutputChannel?.appendLine(
-                        `[MCP] Sent text to terminal '${name}' ` +
-                        `(paced: ${paced}, len: ${input.length}, source: ${sourceActor}/${sourceTool}, allowBroadcast: ${allowBroadcast})`
-                    );
-
-                    process.send({
-                        type: 'sendToTerminalResponse',
-                        id: requestId,
-                        success: true
-                    });
-                    break;
-                }
-
-                case 'renameTerminal': {
-                    const { pid, newName } = message;
-
-                    // Find terminal by PID (Async safe)
-                    let terminal: vscode.Terminal | undefined;
-                    for (const t of vscode.window.terminals) {
-                        try {
-                            const tPid = await waitWithTimeout(t.processId, 1000, undefined);
-                            if (tPid === pid) {
-                                terminal = t;
-                                break;
-                            }
-                        } catch (e) { }
-                    }
-
-                    if (terminal) {
-                        // We must focus it to rename it via command (limit of VS Code API)
-                        terminal.show(true); // true = preserve focus (don't steal cursor if possible, but we need it active)
-
-                        // Wait a tick for focus to apply
-                        setTimeout(() => {
-                            vscode.commands.executeCommand('workbench.action.terminal.renameWithArg', { name: newName });
-                            mcpOutputChannel?.appendLine(`[MCP] Renamed terminal (PID: ${pid}) to '${newName}'`);
-                        }, 100);
-                    } else {
-                        mcpOutputChannel?.appendLine(`[MCP] Warning: Could not find terminal (PID: ${pid}) to rename.`);
-                    }
-                    break;
-                }
-
-                case 'appendRunSheetEvent': {
-                    const { sessionId, event } = message;
-                    if (sessionId && workspaceRoot) {
-                        const log = new SessionActionLog(workspaceRoot);
-                        await log.updateRunSheet(sessionId, (current: any) => {
-                            if (!Array.isArray(current.events)) current.events = [];
-                            current.events.push({ timestamp: new Date().toISOString(), ...event });
-                            return current;
-                        });
-                    }
-                    break;
-                }
-                case 'triggerKanbanMove': {
-                    const { sessionId, target, workspaceRoot: messageWorkspaceRoot } = message;
-                    if (typeof sessionId !== 'string' || !sessionId.trim() || typeof target !== 'string' || !target.trim()) {
-                        mcpOutputChannel?.appendLine('[MCP] Ignored malformed triggerKanbanMove payload.');
-                        break;
-                    }
-                    await vscode.commands.executeCommand(
-                        'switchboard.mcpMoveKanbanCard',
-                        sessionId,
-                        target,
-                        messageWorkspaceRoot || workspaceRoot
-                    );
-                    break;
-                }
-            }
-        } catch (e) {
-            mcpOutputChannel?.appendLine(`[MCP] Error handling IPC message: ${e}`);
-        }
-    });
-}
-
-/**
- * Spawn the bundled MCP server as a child process.
- * This allows the extension to work without external CLI installation.
- */
-async function spawnBundledMcpServer(context: vscode.ExtensionContext, workspaceRoot: string, stateRoot: string = workspaceRoot): Promise<void> {
-    // Try workspace-local copy first, then extension bundle
-    const workspaceMcpPath = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
-    const bundledPath = path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js');
-
-    let serverPath: string;
-    if (fs.existsSync(workspaceMcpPath)) {
-        serverPath = workspaceMcpPath;
-    } else if (fs.existsSync(bundledPath)) {
-        serverPath = bundledPath;
-    } else {
-        const msg = 'MCP server files not found. Run "Switchboard: Setup MCP Server" command to configure MCP.';
-        vscode.window.showErrorMessage(msg);
-        console.error('[MCP] Server files not found:', { workspaceMcpPath, bundledPath });
-        return;
-    }
-
-
-    // Spawn the server using fork for IPC support
-    // SECURITY FIX: Sanitize environment variables to prevent leaking sensitive extension host tokens
-    const { VSCODE_IPC_HOOK, VSCODE_PID, ...safeEnv } = process.env;
-
-    mcpServerProcess = fork(serverPath, [], {
-        stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-        cwd: workspaceRoot,
-        env: await buildSwitchboardMcpEnv(workspaceRoot, stateRoot, safeEnv, context)
-    });
-
-    attachMcpListeners(mcpServerProcess, workspaceRoot, stateRoot);
-    mcpOutputChannel?.appendLine(`[MCP] Bundled server started (PID: ${mcpServerProcess.pid})`);
-
-    // Persist PID for orphan detection on next activation
-    persistMcpPid(stateRoot, mcpServerProcess.pid ?? null);
-
-    // Initial settings sync
-    syncSettingsToMcp();
-}
-
-function persistMcpPid(workspaceRoot: string, pid: number | null): void {
-    try {
-        const pidPath = path.join(workspaceRoot, MCP_PID_FILENAME);
-        if (pid) {
-            fs.writeFileSync(pidPath, String(pid), 'utf8');
-        } else {
-            if (fs.existsSync(pidPath)) fs.unlinkSync(pidPath);
-        }
-    } catch {
-        // Best-effort — don't block on PID file errors
-    }
-}
-
-function killOrphanMcpServer(workspaceRoot: string): void {
-    try {
-        const pidPath = path.join(workspaceRoot, MCP_PID_FILENAME);
-        if (!fs.existsSync(pidPath)) return;
-        const pidStr = fs.readFileSync(pidPath, 'utf8').trim();
-        const pid = parseInt(pidStr, 10);
-        if (!Number.isFinite(pid) || pid <= 0) return;
-
-        // Check if process is still alive
-        try {
-            process.kill(pid, 0); // Signal 0 = existence check only
-        } catch {
-            // Process doesn't exist — clean up stale PID file
-            try { fs.unlinkSync(pidPath); } catch { }
-            return;
-        }
-
-        // Kill the orphan
-        mcpOutputChannel?.appendLine(`[MCP] Killing orphaned MCP server (PID: ${pid})`);
-        if (process.platform === 'win32') {
-            try {
-                execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-            } catch {
-                try { process.kill(pid, 'SIGKILL'); } catch { }
-            }
-        } else {
-            try { process.kill(pid, 'SIGKILL'); } catch { }
-        }
-        try { fs.unlinkSync(pidPath); } catch { }
-    } catch (e) {
-        mcpOutputChannel?.appendLine(`[MCP] Orphan cleanup failed: ${e}`);
-    }
-}
-
-async function restartBundledMcpServer(context: vscode.ExtensionContext, workspaceRoot: string, stateRoot: string = workspaceRoot): Promise<void> {
-    if (mcpServerProcess && mcpServerProcess.pid) {
-        const pid = mcpServerProcess.pid;
-        const processToKill = mcpServerProcess;
-        mcpServerProcess = null;
-
-        if (process.platform === 'win32') {
-            try {
-                execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-            } catch {
-                processToKill.kill('SIGKILL');
-            }
-        } else {
-            processToKill.kill('SIGTERM');
-        }
-        await new Promise(r => setTimeout(r, 1000));
-    }
-
-    await spawnBundledMcpServer(context, workspaceRoot, stateRoot);
-}
-
-/**
- * Restart the MCP server using the local source file.
- */
-/**
- * Restart the MCP server using the local source file.
- */
-async function restartLocalMcpServer(
-    context: vscode.ExtensionContext,
-    workspaceRoot: string,
-    stateRoot: string,
-    taskViewerProvider: TaskViewerProvider
-) {
-    const serverPath = path.join(workspaceRoot, 'src', 'mcp-server', 'mcp-server.js');
-
-    if (!fs.existsSync(serverPath)) {
-        mcpOutputChannel?.appendLine(`[MCP] Local server script not found at ${serverPath}. Falling back to bundled restart.`);
-        await restartBundledMcpServer(context, workspaceRoot, stateRoot);
-        const mcpStatus = await checkMcpConnection(context, workspaceRoot);
-        taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
-        vscode.window.showInformationMessage('Switchboard MCP Server restarted (bundled).');
-        return;
-    }
-
-    await vscode.window.withProgress({
-        location: vscode.ProgressLocation.Notification,
-        title: 'Restarting Local MCP Server...',
-        cancellable: false
-    }, async () => {
-        // 1. Kill existing process
-        if (mcpServerProcess && mcpServerProcess.pid) {
-            mcpOutputChannel?.appendLine(`[MCP] Stopping existing server (PID: ${mcpServerProcess.pid})...`);
-
-            const pid = mcpServerProcess.pid;
-            const processToKill = mcpServerProcess;
-            mcpServerProcess = null; // Prevent race conditions with exit handler
-
-            if (process.platform === 'win32') {
-                try {
-                    execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-                } catch {
-                    processToKill.kill('SIGKILL');
-                }
-            } else {
-                processToKill.kill('SIGTERM');
-            }
-
-            // Small delay to ensure process is gone and port is released
-            await new Promise(r => setTimeout(r, 1000));
-        } else {
-            mcpOutputChannel?.appendLine('[MCP] No active server process; skipping zombie cleanup.');
-        }
-
-        // 2. Spawn new process from source
-        const { VSCODE_IPC_HOOK, VSCODE_PID, ...safeEnv } = process.env;
-        mcpServerProcess = fork(serverPath, [], {
-            stdio: ['pipe', 'pipe', 'pipe', 'ipc'],
-            cwd: workspaceRoot,
-            env: await buildSwitchboardMcpEnv(workspaceRoot, stateRoot, safeEnv, context)
-        });
-
-        attachMcpListeners(mcpServerProcess, workspaceRoot, stateRoot);
-        mcpOutputChannel?.appendLine(`[MCP] Local server started from source (PID: ${mcpServerProcess.pid})`);
-
-        // Initial settings sync
-        syncSettingsToMcp();
-
-        vscode.window.showInformationMessage('✅ Switchboard MCP Server restarted from source.');
-
-        // 3. Delayed Health Check: Wait for server to initialize
-        setTimeout(async () => {
-            const mcpStatus = await checkMcpConnection(context, workspaceRoot);
-            taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
-        }, 2000);
-    });
-}
-
-/**
- * Sync VS Code settings to the bundled MCP server
- */
-function syncSettingsToMcp() {
-    if (!mcpServerProcess) return;
-
-    const config = vscode.workspace.getConfiguration('switchboard');
-    const settings = {
-        cli: {
-            command: config.get('cli.command'),
-            args: config.get('cli.args'),
-            yolo: config.get('cli.yolo'),
-            yoloFlags: config.get('cli.yoloFlags')
-        }
-    };
-
-    mcpServerProcess.send({
-        type: 'updateSettings',
-        settings
-    });
-    mcpOutputChannel?.appendLine(`[MCP] Synced settings (YOLO: ${settings.cli.yolo})`);
-}
-
 async function cleanupDropdownIdentityFiles(): Promise<void> {
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const resolved = path.resolve(folder.uri.fsPath);
@@ -1189,8 +364,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // Cleanup stale identity files in dropdown workspaces
     cleanupDropdownIdentityFiles().catch(err => console.error('[Switchboard] Cleanup failed:', err));
 
-    if (!mcpOutputChannel) {
-        mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
+    if (!outputChannel) {
+        outputChannel = vscode.window.createOutputChannel('Switchboard');
     }
 
     // One-time migration: lift folder-scoped workspaceDatabaseMappings to workspace scope
@@ -1202,12 +377,12 @@ export async function activate(context: vscode.ExtensionContext) {
         console.error('[Switchboard] Migration failed, continuing activation:', err);
     }
 
-    kanbanProvider = new KanbanProvider(context.extensionUri, context, mcpOutputChannel);
+    kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
     const globalPlanWatcher = new GlobalPlanWatcherService(
         (workspaceRoot: string) => (kanbanProvider as any)._getClickUpService(workspaceRoot),
-        mcpOutputChannel
+        outputChannel
     );
     await globalPlanWatcher.initialize();
     context.subscriptions.push(globalPlanWatcher);
@@ -1277,12 +452,65 @@ export async function activate(context: vscode.ExtensionContext) {
     // 0. LIFECYCLE CLEANUP: Scrub transient state before any subsystem initializes
     if (workspaceRoot) {
         const effectiveStateRoot = kanbanProvider!.resolveEffectiveWorkspaceRoot(workspaceRoot);
-        if (!mcpOutputChannel) {
-            mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
+        // Scrub transient state before any subsystem initializes
+
+        // Kill orphaned MCP server from a previous session that didn't shut down cleanly.
+        // This is a one-time migration guard — the MCP server was removed, but a zombie
+        // process from the old version may still be running if deactivate() never executed.
+        try {
+            const mcpPidPath = path.join(effectiveStateRoot, '.switchboard', '.mcp_server.pid');
+            if (fs.existsSync(mcpPidPath)) {
+                const pidStr = fs.readFileSync(mcpPidPath, 'utf8').trim();
+                const pid = parseInt(pidStr, 10);
+                if (Number.isFinite(pid) && pid > 0) {
+                    try {
+                        process.kill(pid, 0); // Check if process is still alive
+                        // Process exists — kill it
+                        try { process.kill(pid, 'SIGKILL'); } catch { }
+                        outputChannel?.appendLine(`[Migration] Killed orphaned MCP server (PID: ${pid})`);
+                    } catch {
+                        // Process already dead — stale PID file, cleanWorkspace will remove it
+                    }
+                }
+            }
+        } catch {
+            // PID file read failed — non-critical, continue activation
         }
 
-        // Kill orphaned MCP server from a previous session that didn't shut down cleanly
-        killOrphanMcpServer(effectiveStateRoot);
+        // Remove stale switchboard MCP entries from IDE config files.
+        // The MCP server was removed — leftover entries cause IDEs to show
+        // "MCP server not found" errors on every startup.
+        try {
+            const mcpConfigPaths = [
+                { path: path.join(effectiveStateRoot, '.vscode', 'mcp.json'), key: 'servers' },
+                { path: path.join(effectiveStateRoot, '.cursor', 'mcp.json'), key: 'mcpServers' },
+                { path: path.join(effectiveStateRoot, '.mcp.json'), key: 'mcpServers' },
+                { path: path.join(effectiveStateRoot, '.kiro', 'settings', 'mcp.json'), key: 'mcpServers' },
+                { path: path.join(effectiveStateRoot, '.gemini', 'settings.json'), key: 'mcpServers' },
+                { path: path.join(os.homedir(), '.codeium', 'windsurf', 'mcp_config.json'), key: 'mcpServers' }
+            ];
+            for (const { path: configPath, key } of mcpConfigPaths) {
+                if (!fs.existsSync(configPath)) continue;
+                try {
+                    const raw = fs.readFileSync(configPath, 'utf8');
+                    const config = JSON.parse(raw);
+                    const section = config[key];
+                    if (section && typeof section === 'object' && 'switchboard' in section) {
+                        delete section['switchboard'];
+                        // Remove empty section entirely
+                        if (Object.keys(section).length === 0) {
+                            delete config[key];
+                        }
+                        fs.writeFileSync(configPath, JSON.stringify(config, null, 2) + '\n', 'utf8');
+                        outputChannel?.appendLine(`[Migration] Removed stale MCP entry from ${configPath}`);
+                    }
+                } catch {
+                    // Config file corrupt or unreadable — skip
+                }
+            }
+        } catch {
+            // Non-critical — continue activation
+        }
 
         // Read old terminal names from state.json BEFORE cleanWorkspace resets it.
         // This lets us dispose orphaned terminals that survived a crash or restart
@@ -1302,7 +530,7 @@ export async function activate(context: vscode.ExtensionContext) {
             // Corrupt or missing state — nothing to recover
         }
 
-        await cleanWorkspace(effectiveStateRoot, mcpOutputChannel);
+        await cleanWorkspace(effectiveStateRoot, outputChannel);
         console.timeLog('switchboard.activate', 'cleanWorkspace completed');
 
         // Remove legacy static rule files so the Kanban checkbox is the sole
@@ -1341,7 +569,7 @@ export async function activate(context: vscode.ExtensionContext) {
         for (const terminal of vscode.window.terminals) {
             if (terminal.exitStatus !== undefined) continue;
             if (!isLikelySwitchboardTerminal(terminal)) continue;
-            mcpOutputChannel?.appendLine(`[CleanWorkspace] Disposing orphaned terminal: ${terminal.name}`);
+            outputChannel?.appendLine(`[CleanWorkspace] Disposing orphaned terminal: ${terminal.name}`);
             terminal.dispose();
         }
 
@@ -1357,9 +585,9 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(taskViewerProvider);
     if (workspaceRoot) {
         void taskViewerProvider.deregisterAllTerminals(true).then(() => {
-            mcpOutputChannel?.appendLine('[Startup] Auto-reset agent terminals completed.');
+            outputChannel?.appendLine('[Startup] Auto-reset agent terminals completed.');
         }).catch((e) => {
-            mcpOutputChannel?.appendLine(`[Startup] Auto-reset agent terminals failed: ${e}`);
+            outputChannel?.appendLine(`[Startup] Auto-reset agent terminals failed: ${e}`);
         });
     }
     context.subscriptions.push(
@@ -1549,14 +777,8 @@ export async function activate(context: vscode.ExtensionContext) {
             return;
         }
         const stateRoot = resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
-        if (!mcpOutputChannel) {
-            mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
-        }
         await syncTerminalRegistryWithState(stateRoot);
         taskViewerProvider.refresh();
-        if (mcpServerProcess) {
-            await restartBundledMcpServer(context, selectedWorkspaceRoot, stateRoot);
-        }
     });
     context.subscriptions.push(refreshControlPlaneRuntimeDisposable);
 
@@ -1787,10 +1009,7 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(reviewPlanFromKanbanDisposable);
 
-    const mcpMoveKanbanCardDisposable = vscode.commands.registerCommand('switchboard.mcpMoveKanbanCard', async (sessionId: string, target: string, workspaceRoot?: string) => {
-        return kanbanProvider!.handleMcpMove(sessionId, target, workspaceRoot);
-    });
-    context.subscriptions.push(mcpMoveKanbanCardDisposable);
+
 
     const setAutobanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.setAutobanEnabledFromKanban', async (enabled: boolean) => {
         await taskViewerProvider.setAutobanEnabledFromKanban(!!enabled);
@@ -2116,22 +1335,10 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(linearUpdateDescriptionDisposable);
 
-    const refreshMcpStatus = async () => {
-        const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-        if (!currentRoot) return;
-        const mcpStatus = await checkMcpConnection(context, currentRoot);
-        taskViewerProvider.sendMcpConnectionStatus(mcpStatus);
-    };
-
     // Initialize Control Plane Runtime
     if (workspaceRoot) {
         const runtimeStateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
         try {
-            // Ensure output channel exists
-            if (!mcpOutputChannel) {
-                mcpOutputChannel = vscode.window.createOutputChannel('Switchboard');
-            }
-
             // 1. PERSISTENCE SYNC: Re-claim terminals from state.json
             await syncTerminalRegistryWithState(runtimeStateRoot);
 
@@ -2162,7 +1369,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     // VALIDATION: Only create .switchboard in allowed locations
                     // Blocks creation in mapped child workspace folders
                     if (!isAllowedSwitchboardLocation(runtimeStateRoot, workspaceRoot)) {
-                        mcpOutputChannel?.appendLine(`[Extension] Skipping .switchboard creation in ${runtimeStateRoot} — mapped child workspace`);
+                        outputChannel?.appendLine(`[Extension] Skipping .switchboard creation in ${runtimeStateRoot} — mapped child workspace`);
                         console.warn(`[Extension] Blocked .switchboard creation in child workspace: ${runtimeStateRoot}`);
                     } else {
                         fs.mkdirSync(switchboardDir, { recursive: true });
@@ -2176,34 +1383,17 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 context.subscriptions.push({ dispose: () => { try { fsStateWatcher.close(); } catch { } } });
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[Extension] fs.watch fallback for state.json failed: ${e}`);
+                outputChannel?.appendLine(`[Extension] fs.watch fallback for state.json failed: ${e}`);
             }
 
         } catch (e) {
             console.error('[Extension] Failed to initialize Control Plane Runtime:', e);
-            mcpOutputChannel?.appendLine(`[Extension] ERROR: Failed to initialize Control Plane Runtime: ${e}`);
+            outputChannel?.appendLine(`[Extension] ERROR: Failed to initialize Control Plane Runtime: ${e}`);
         }
 
-        // Spawn bundled MCP server (Non-blocking)
-        spawnBundledMcpServer(context, workspaceRoot, runtimeStateRoot).catch(e => {
-            mcpOutputChannel?.appendLine(`[Extension] Failed to spawn bundled MCP server: ${e}`);
-        });
-
-        // 7. Initial Health Check: Run once after extension is fully loaded,
-        // then every 5 minutes to detect IPC connectivity changes without polling spam.
-        setTimeout(async () => {
-            await refreshMcpStatus();
-
-            // Start 5-minute recurring health check (throttled — not per-second polling)
-            const MCP_HEALTH_CHECK_INTERVAL_MS = 300_000; // 5 minutes
-            mcpHealthCheckInterval = setInterval(() => {
-                refreshMcpStatus().catch(() => { });
-            }, MCP_HEALTH_CHECK_INTERVAL_MS);
-        }, 3000);
-
+        // Initial health check / setup timer removed.
         context.subscriptions.push(vscode.window.onDidChangeWindowState((state) => {
             if (state.focused) {
-                refreshMcpStatus().catch(() => { });
                 const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
                 if (currentRoot) {
                     const currentStateRoot = resolveEffectiveStateRoot(currentRoot) || currentRoot;
@@ -2237,7 +1427,7 @@ export async function activate(context: vscode.ExtensionContext) {
             })
         );
 
-        // 9. LEASE SYSTEM: Heartbeat removed — only used for MCP server re-registration.
+        // 9. LEASE SYSTEM: Heartbeat removed (no longer needed).
     }
 
     // Register file-opening commands unconditionally — they do not depend on workspaceRoot
@@ -2296,7 +1486,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }
     }
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
-        // TODO: Remove PID resolution when MCP server is removed — use name + ideName matching instead
+        // NOTE: PID resolution retained for backward compatibility — name + ideName matching is preferred
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         if (!fs.existsSync(statePath)) return;
 
@@ -2342,7 +1532,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 // (e.g. both have a "node" terminal but they're different processes).
                 const termIdeName = (terminalInfo.ideName || '').toLowerCase();
                 if (termIdeName && termIdeName !== currentIdeName) {
-                    mcpOutputChannel?.appendLine(`[Extension] Skipping terminal '${name}' — belongs to '${terminalInfo.ideName}', not '${vscode.env.appName}'`);
+                    outputChannel?.appendLine(`[Extension] Skipping terminal '${name}' — belongs to '${terminalInfo.ideName}', not '${vscode.env.appName}'`);
                     continue;
                 }
 
@@ -2353,7 +1543,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     const matched = openTerminalsByPid.get(terminalInfo.pid);
                     if (matched) {
                         newRegistry.set(name, matched);
-                        mcpOutputChannel?.appendLine(`[Extension] Re-claimed terminal '${name}' by PID match: ${terminalInfo.pid}`);
+                        outputChannel?.appendLine(`[Extension] Re-claimed terminal '${name}' by PID match: ${terminalInfo.pid}`);
                         found = true;
                     }
                 }
@@ -2365,7 +1555,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         if (t.name === name || t.name === terminalInfo.friendlyName ||
                             creationName === name || creationName === terminalInfo.friendlyName) {
                             newRegistry.set(name, t);
-                            mcpOutputChannel?.appendLine(`[Extension] Re-claimed terminal '${name}' by Name match: ${t.name}`);
+                            outputChannel?.appendLine(`[Extension] Re-claimed terminal '${name}' by Name match: ${t.name}`);
                             found = true;
                             break;
                         }
@@ -2380,17 +1570,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 registeredTerminals.set(k, v);
             }
         } catch (e) {
-            mcpOutputChannel?.appendLine(`[Extension] Failed to sync terminal registry: ${e}`);
-        }
-    }
-
-    // Self-heal partial setup: protocol files exist but MCP runtime script is missing.
-    if (workspaceRoot) {
-        const hasProtocolFiles = await hasSwitchboardProtocolFiles(workspaceRoot);
-        const hasMcpRuntime = await hasWorkspaceMcpRuntime(workspaceRoot);
-        if (hasProtocolFiles && !hasMcpRuntime) {
-            mcpOutputChannel?.appendLine('[Setup] Detected missing .switchboard/MCP runtime. Running silent repair.');
-            await setupProtocolFilesSilent(workspaceRoot, context.extensionUri);
+            outputChannel?.appendLine(`[Extension] Failed to sync terminal registry: ${e}`);
         }
     }
 
@@ -2432,15 +1612,11 @@ export async function activate(context: vscode.ExtensionContext) {
                     : 'Agent file opening is allowed. Click to block agent file opening.';
             }
         }
-        if (e.affectsConfiguration('switchboard')) {
-            syncSettingsToMcp();
-        }
     }));
 
     // Register refresh command
     const refreshDisposable = vscode.commands.registerCommand('switchboard.refresh', async () => {
         taskViewerProvider.refresh();
-        await refreshMcpStatus();
     });
     context.subscriptions.push(refreshDisposable);
 
@@ -2464,19 +1640,6 @@ export async function activate(context: vscode.ExtensionContext) {
         }, 2000);
     }
 
-    // Manual MCP connection recheck (triggered from sidebar recheck icon)
-    const recheckMcpDisposable = vscode.commands.registerCommand('switchboard.recheckMcp', async () => {
-        // Send "checking" intermediate state so the UI shows CHECKING immediately
-        taskViewerProvider.sendMcpConnectionStatus({
-            serverRunning: true,
-            ideConfigured: true,
-            toolReachable: false,
-            diagnostic: 'MCP: Checking...'
-        });
-        await refreshMcpStatus();
-    });
-    context.subscriptions.push(recheckMcpDisposable);
-
     const housekeepingDisposable = vscode.commands.registerCommand('switchboard.housekeepNow', async () => {
         const selectedWorkspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
         if (!selectedWorkspaceRoot) {
@@ -2489,7 +1652,7 @@ export async function activate(context: vscode.ExtensionContext) {
             await sessionLog.archiveOldSheets({ olderThanDays: 30 });
 
             // 2. Clean transient .switchboard/ subdirectories
-            await cleanWorkspace(selectedWorkspaceRoot, mcpOutputChannel ?? undefined);
+            await cleanWorkspace(selectedWorkspaceRoot, outputChannel ?? undefined);
 
             vscode.window.showInformationMessage('Switchboard housekeeping complete.');
         } catch (e) {
@@ -2521,7 +1684,7 @@ export async function activate(context: vscode.ExtensionContext) {
         );
         if (confirm === 'Clean') {
             const effectiveStateRoot = resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
-            await cleanWorkspace(effectiveStateRoot, mcpOutputChannel ?? undefined);
+            await cleanWorkspace(effectiveStateRoot, outputChannel ?? undefined);
             vscode.window.showInformationMessage('Switchboard working memory cleaned.');
             taskViewerProvider.refresh();
         }
@@ -2538,11 +1701,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 if (statePath) {
                     const pruned = await pruneZombieTerminalEntries(statePath);
                     if (pruned > 0) {
-                        mcpOutputChannel?.appendLine(`[Extension] State pruner: removed ${pruned} zombie terminal entr${pruned === 1 ? 'y' : 'ies'}`);
+                        outputChannel?.appendLine(`[Extension] State pruner: removed ${pruned} zombie terminal entr${pruned === 1 ? 'y' : 'ies'}`);
                     }
                 }
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[Extension] State pruner error: ${e}`);
+                outputChannel?.appendLine(`[Extension] State pruner error: ${e}`);
             }
         }, 15 * 60 * 1000);
         context.subscriptions.push({ dispose: () => clearInterval(statePrunerInterval) });
@@ -2553,88 +1716,6 @@ export async function activate(context: vscode.ExtensionContext) {
         await showSetupWizard(context, taskViewerProvider);
     });
     context.subscriptions.push(ideSetupDisposable);
-
-    // Register Connect MCP command
-    const connectMcpDisposable = vscode.commands.registerCommand('switchboard.connectMcp', async () => {
-        const currentRoot = kanbanProvider!.getCurrentWorkspaceRoot();
-        if (currentRoot) {
-            const stateRoot = resolveEffectiveStateRoot(currentRoot) || currentRoot;
-            // 1. Write VS Code workspace settings (mcpServers in .vscode/settings.json)
-            try {
-                await handleMcpSetup(context, taskViewerProvider, stateRoot);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[Connect MCP] VS Code config failed: ${e}`);
-            }
-
-            // 2. Setup global Antigravity config
-            try {
-                await setupGlobalAntigravityMcpConfig(currentRoot, stateRoot);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[Connect MCP] Antigravity config failed: ${e}`);
-            }
-            try {
-                await writeAllIdeMcpConfigs(context, currentRoot, stateRoot);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[ConnectMCP] IDE MCP config write failed: ${e}`);
-            }
-        } else {
-            // Fallback for non-workspace context if needed
-            await handleMcpSetup(context, taskViewerProvider);
-        }
-
-        if (vscode.env.appName.toLowerCase().includes('windsurf')) {
-            vscode.window.showInformationMessage(
-                '💡 Windsurf MCP Tip: To get Windsurf to recognise new MCP servers, you may need to install an official Windsurf Marketplace MCP server (we recommend GitHub MCP). Alternatively, disable then re-enable any official Windsurf MCP server in the Marketplace to trigger activation of non-official servers.',
-                'Got it'
-            );
-        }
-    });
-    context.subscriptions.push(connectMcpDisposable);
-
-    const copyMcpConfigDisposable = vscode.commands.registerCommand('switchboard.copyMcpConfig', async () => {
-        const wsRoot = kanbanProvider?.getCurrentWorkspaceRoot();
-        if (!wsRoot) {
-            vscode.window.showWarningMessage('Please select a workspace in the kanban board first.');
-            return;
-        }
-
-        const serverPath = path.join(wsRoot, '.switchboard', 'MCP', 'mcp-server.js');
-        if (!fs.existsSync(serverPath)) {
-            vscode.window.showWarningMessage('MCP server not found. Run Init Plugin first.');
-            return;
-        }
-
-        const serverPathForward = serverPath.replace(/\\/g, '/');
-        const wsRootForward = wsRoot.replace(/\\/g, '/');
-        const stateRootForward = normalizeEnvPath(resolveEffectiveStateRoot(wsRoot) || wsRoot);
-
-        const config = {
-            mcpServers: {
-                switchboard: {
-                    command: resolveNodeRuntime(),
-                    args: [serverPathForward],
-                    env: {
-                        SWITCHBOARD_WORKSPACE_ROOT: wsRootForward,
-                        SWITCHBOARD_STATE_ROOT: stateRootForward
-                    }
-                }
-            }
-        };
-
-        const json = JSON.stringify(config, null, 2);
-        await vscode.env.clipboard.writeText(json);
-        vscode.window.showInformationMessage('✅ MCP config copied to clipboard. Paste into your IDE\'s mcp_config.json.');
-    });
-
-    context.subscriptions.push(copyMcpConfigDisposable);
-
-    // Register MCP setup command (legacy — writes to VS Code workspace settings)
-    const setupMcpDisposable = vscode.commands.registerCommand('switchboard.setupMcp', async () => {
-        const selectedWorkspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot();
-        const stateRoot = selectedWorkspaceRoot ? (resolveEffectiveStateRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot) : undefined;
-        await handleMcpSetup(context, taskViewerProvider, stateRoot);
-    });
-    context.subscriptions.push(setupMcpDisposable);
 
 // ... (rest of the code remains the same)
     // Register focus terminal command
@@ -3018,7 +2099,7 @@ export async function activate(context: vscode.ExtensionContext) {
             if (!includeJulesMonitor) {
                 const julesMatches = vscode.window.terminals.filter(t => t.exitStatus === undefined && matchesGridAgentName(t, 'Jules Monitor'));
                 for (const terminal of julesMatches) {
-                    mcpOutputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
+                    outputChannel?.appendLine(`[Extension] Disposing hidden grid terminal '${terminal.name}' for agent 'Jules Monitor'`);
                     terminal.dispose();
                 }
                 registeredTerminals.delete('Jules Monitor');
@@ -3030,7 +2111,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 const healthy: vscode.Terminal[] = [];
                 for (const term of matches) {
                     if (term.exitStatus !== undefined) {
-                        mcpOutputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
+                        outputChannel?.appendLine(`[Extension] Disposing exited grid terminal '${term.name}' for agent '${agent.name}'`);
                         term.dispose();
                         continue;
                     }
@@ -3038,7 +2119,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
                 if (healthy.length > 1) {
                     for (const extra of healthy.slice(1)) {
-                        mcpOutputChannel?.appendLine(`[Extension] Disposing duplicate grid terminal '${extra.name}' for agent '${agent.name}'`);
+                        outputChannel?.appendLine(`[Extension] Disposing duplicate grid terminal '${extra.name}' for agent '${agent.name}'`);
                         extra.dispose();
                     }
                 }
@@ -3083,7 +2164,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     skipParentResolution: true,
                     ideName: vscode.env.appName
                 });
-                mcpOutputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
+                outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
                 registeredTerminals.set(suffixedName(agent.name), terminal);
                 createdTerminals.push(terminal);
                 terminal.show();
@@ -3091,21 +2172,11 @@ export async function activate(context: vscode.ExtensionContext) {
                     try {
                         await vscode.commands.executeCommand('workbench.action.terminal.moveToTerminalPanel');
                     } catch (e) {
-                        mcpOutputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
+                        outputChannel?.appendLine(`[Extension] Could not move terminal to panel: ${e}`);
                     }
                 }
             }
             if (batchRegistrations.length > 0) {
-                let ipcSent = false;
-                if (mcpServerProcess) {
-                    try {
-                        mcpServerProcess.send({ type: 'registerTerminalsBatch', registrations: batchRegistrations });
-                        mcpOutputChannel?.appendLine(`[Extension] Sent registerTerminalsBatch for ${batchRegistrations.length} terminal(s)`);
-                        ipcSent = true;
-                    } catch (e) {
-                        mcpOutputChannel?.appendLine(`[Extension] IPC send failed (MCP server may have exited): ${e}`);
-                    }
-                }
                 await taskViewerProvider.updateState(async (state: any) => {
                     if (!state.terminals) state.terminals = {};
                     for (const reg of batchRegistrations) {
@@ -3120,9 +2191,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                 });
                 taskViewerProvider.refresh();
-                if (!ipcSent) {
-                    mcpOutputChannel?.appendLine(`[Extension] MCP server not running — registrations were persisted to state.json`);
-                }
+                outputChannel?.appendLine(`[Extension] Registrations for ${batchRegistrations.length} terminal(s) were persisted to state.json`);
             }
             try {
                 for (const agent of agents) {
@@ -3131,7 +2200,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         const terminal = registeredTerminals.get(suffixedName(agent.name));
                         if (terminal) {
                             terminal.sendText(cmd.trim(), true);
-                            mcpOutputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
+                            outputChannel?.appendLine(`[Extension] Sent startup command for '${agent.name}' (${agent.role}): ${cmd.trim()}`);
 
                             // NEW: Cache the binary-derived agent display name
                             const binary = cmd.trim().split(/\s+/)[0];
@@ -3141,12 +2210,12 @@ export async function activate(context: vscode.ExtensionContext) {
                     }
                 }
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[Extension] Startup command execution failed: ${e}`);
+                outputChannel?.appendLine(`[Extension] Startup command execution failed: ${e}`);
             }
             vscode.window.showInformationMessage(`Agent Grid initialized: ${agents.map(a => a.name).join(', ')}`);
         } catch (e) {
             const msg = e instanceof Error ? e.message : String(e);
-            mcpOutputChannel?.appendLine(`[Extension] createAgentGrid failed: ${msg}`);
+            outputChannel?.appendLine(`[Extension] createAgentGrid failed: ${msg}`);
             vscode.window.showErrorMessage(`Failed to open agent terminals: ${msg}`);
         } finally {
             taskViewerProvider.sendLoadingState(false);
@@ -3165,175 +2234,6 @@ export async function activate(context: vscode.ExtensionContext) {
         vscode.window.onDidCloseTerminal(() => taskViewerProvider.refresh())
     );
     console.timeEnd('switchboard.activate');
-}
-
-/**
- * Resolve workspace root considering workspace database mappings.
- * Returns the parent directory of the mapped database if a match is found.
- */
-function resolveWorkspaceRootForMcp(workspaceRoot: string | null | undefined): string | null {
-    if (!workspaceRoot) return null;
-
-    try {
-        const cfg = vscode.workspace.getConfiguration('switchboard')
-                         .get('workspaceDatabaseMappings') as
-                         { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-
-        if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
-            // Helper to expand ~ to home directory (matches KanbanDatabase.ts logic)
-            const expandHome = (p: string): string => {
-                const trimmed = p.trim();
-                return trimmed.startsWith('~')
-                    ? path.join(os.homedir(), trimmed.slice(1))
-                    : trimmed;
-            };
-
-            const stable = path.resolve(workspaceRoot);
-            const mapping = cfg.mappings.find(m =>
-                Array.isArray(m.workspaceFolders) &&
-                m.workspaceFolders.some((f: string) => path.resolve(expandHome(f)) === stable));
-
-            if (mapping?.dbPath) {
-                // Use the parent directory of the mapped database as the workspace root
-                return path.dirname(path.resolve(expandHome(mapping.dbPath)));
-            }
-        }
-    } catch {
-        // Outside extension host - use default behavior
-    }
-
-    return workspaceRoot;
-}
-
-/**
- * Handle MCP Server Setup (Robust Audit-Compliant)
- */
-async function handleMcpSetup(context: vscode.ExtensionContext, provider: TaskViewerProvider, stateRootOverride?: string) {
-    const folders = vscode.workspace.workspaceFolders || [];
-    let serverPath: string | undefined;
-    const preferredRoot = kanbanProvider?.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-    const workspaceRoot = resolveWorkspaceRootForMcp(preferredRoot);
-    const stateRoot = stateRootOverride || (preferredRoot ? preferredRoot : undefined);
-
-    // 1. Auto-Detection Strategy (Multi-Root Support)
-    for (const folder of folders) {
-        const rootPath = folder.uri.fsPath;
-        const candidates = [
-            path.join(rootPath, '.switchboard', 'MCP', 'mcp-server.js'), // Workspace-local runtime (preferred)
-            path.join(rootPath, 'src', 'mcp-server', 'mcp-server.js'), // Standard layout (preferred for live workflow edits)
-            path.join(rootPath, 'dist', 'mcp-server', 'mcp-server.js'), // Built output fallback
-            path.join(rootPath, 'mcp-server.js') // Flat fallback
-        ];
-
-        for (const candidate of candidates) {
-            if (await fileExists(candidate)) {
-                serverPath = candidate;
-                break;
-            }
-        }
-        if (serverPath) break;
-    }
-
-    // REMOVED: Automatic file copying removed. Files are only copied when user explicitly
-    // runs 'switchboard.setupMcp' or when 'switchboard.enableMcpAutoSetup' is true.
-    // The serverPath detection above (lines 3074-3091) still finds existing files.
-
-    // 2. Fallback: Manual File Picker
-    if (!serverPath) {
-        const selected = await vscode.window.showOpenDialog({
-            canSelectFiles: true,
-            canSelectFolders: false,
-            canSelectMany: false,
-            filters: { 'JavaScript': ['js'] },
-            title: 'Locate MCP Server Script (mcp-server.js)',
-            openLabel: 'Select Server Script'
-        });
-
-        if (selected && selected[0]) {
-            serverPath = selected[0].fsPath;
-        }
-    }
-
-    // 3. Abort if still no path
-    if (!serverPath) {
-        // Only show error if manual pick failed, silent otherwise? 
-        // Actually showing error is good feedback for the button click.
-        vscode.window.showErrorMessage('MCP Setup Cancelled: Could not locate mcp-server.js');
-        return;
-    }
-
-    // 4. Runtime Safety (Audit Finding 1.1)
-    // Always use absolute node path — IDEs launched from app launchers don't inherit
-    // the user's shell PATH, so bare 'node' fails when the MCP client spawns the process.
-    const nodeRuntime = resolveNodeRuntime();
-
-    // 5. Use absolute path with forward slashes (Windsurf MCP client doesn't resolve ${workspaceFolder})
-    const commandPath = serverPath.replace(/\\/g, '/');
-
-    // 6. Config Merge Safe (Audit Finding 2.1 & 2.2)
-    try {
-        // Read the workspace-level mcpServers config (preserves other server entries)
-        const currentWorkspaceConfig = vscode.workspace.getConfiguration().inspect<Record<string, any>>('mcpServers')?.workspaceValue || {};
-
-        // Preserve user-added env keys, but ALWAYS force SWITCHBOARD_WORKSPACE_ROOT
-        // to the current workspace root. Stale values (e.g. from a different machine or
-        // user home directory committed to version control) silently break MCP startup.
-        let existingEnv: Record<string, string> = {};
-        if (currentWorkspaceConfig['switchboard']?.env) {
-            existingEnv = { ...currentWorkspaceConfig['switchboard'].env };
-        }
-        const currentRoot = workspaceRoot ? normalizeEnvPath(workspaceRoot) : undefined;
-        const currentStateRoot = stateRoot ? normalizeEnvPath(stateRoot) : undefined;
-        if (currentRoot) {
-            existingEnv['SWITCHBOARD_WORKSPACE_ROOT'] = currentRoot;
-        }
-        if (currentStateRoot) {
-            existingEnv['SWITCHBOARD_STATE_ROOT'] = currentStateRoot;
-        }
-
-        const finalEntry = {
-            "command": nodeRuntime,
-            "args": [commandPath],
-            "env": existingEnv,
-            "disabled": false,
-            "alwaysAllow": []
-        };
-
-        const newAll = {
-            ...currentWorkspaceConfig,
-            "switchboard": finalEntry
-        };
-
-        await vscode.workspace.getConfiguration().update(
-            'mcpServers',
-            newAll,
-            vscode.ConfigurationTarget.Workspace
-        );
-
-        // 5. Construct Config & Portability Assurance (Audit Finding 1.2)
-        // 6. Config Merge Safe (Audit Finding 2.1 & 2.2)
-        // ... (Code omitted for brevity, logic remains)
-
-        // 7. Update connection status
-        if (workspaceRoot) {
-            const mcpStatus = await checkMcpConnection(context, workspaceRoot);
-            provider.sendMcpConnectionStatus(mcpStatus);
-        }
-
-        vscode.window.showInformationMessage(
-            `MCP Configured! Connected 'switchboard' server in workspace settings.`
-        );
-
-    } catch (error) {
-        const msg = error instanceof Error ? error.message : String(error);
-        vscode.window.showErrorMessage(`Failed to write settings: ${msg}`);
-        provider.sendMcpConnectionStatus({
-            serverRunning: false,
-            ideConfigured: false,
-            toolReachable: false,
-            diagnostic: 'Failed to write MCP settings'
-        });
-    }
 }
 
 async function fileExists(filePath: string): Promise<boolean> {
@@ -3367,20 +2267,11 @@ async function hasSwitchboardProtocolFiles(workspaceRoot: string): Promise<boole
     }
 }
 
-async function hasWorkspaceMcpRuntime(workspaceRoot: string): Promise<boolean> {
-    const runtimeScript = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
-    return fileExists(runtimeScript);
-}
-
 /**
- * Check if Switchboard configurations exist (protocol + MCP runtime)
+ * Check if Switchboard configurations exist (protocol)
  */
 async function hasSwitchboardConfigs(workspaceRoot: string): Promise<boolean> {
-    const hasProtocolFiles = await hasSwitchboardProtocolFiles(workspaceRoot);
-    if (!hasProtocolFiles) {
-        return false;
-    }
-    return hasWorkspaceMcpRuntime(workspaceRoot);
+    return hasSwitchboardProtocolFiles(workspaceRoot);
 }
 
 /**
@@ -3391,10 +2282,7 @@ async function detectIDEs(workspaceRoot: string): Promise<{ key: string; name: s
         { key: 'antigravity', name: 'Antigravity', path: '.agent' },
         { key: 'github', name: 'GitHub Copilot', path: '.github' },
         { key: 'cursor', name: 'Cursor (Composer)', path: '.cursorrules' },
-        { key: 'windsurf', name: 'Windsurf (Cascade)', path: '.codeium', globalPath: '.codeium/windsurf' },
-        { key: 'claude', name: 'Claude Code', path: '.mcp.json' },
-        { key: 'gemini', name: 'Gemini CLI', path: '.gemini' },
-        { key: 'kiro', name: 'Kiro', path: '.kiro' }
+        { key: 'windsurf', name: 'Windsurf (Cascade)', path: '.codeium', globalPath: '.codeium/windsurf' }
     ];
 
     const results = await Promise.all(ideConfigs.map(async ide => {
@@ -3677,7 +2565,7 @@ async function cleanupLegacyAgentRules(workspaceRoot: string): Promise<void> {
         try {
             await fs.promises.access(fullPath);
             await fs.promises.unlink(fullPath);
-            mcpOutputChannel?.appendLine(`[Switchboard] Removed legacy rule file: ${relativePath}`);
+            outputChannel?.appendLine(`[Switchboard] Removed legacy rule file: ${relativePath}`);
         } catch {
             // File does not exist or cannot be removed — non-fatal
         }
@@ -3745,8 +2633,6 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     // Migrate legacy plan subdirectories into unified .switchboard/plans/ root
     await migrateLegacyPlans(workspaceUri.fsPath);
 
-    await ensureWorkspaceMcpServerFiles(extensionUri.fsPath, workspaceUri.fsPath);
-
     // 2. Discover and Copy .agent assets (Recursive & Depth-Limited)
     const agentSourceUri = vscode.Uri.joinPath(extensionUri, '.agent');
     const agentFiles = await crawlDirectory(agentSourceUri);
@@ -3796,9 +2682,9 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     // Targets the same active workspace root used by setup flow; no multi-root fan-out.
     try {
         const agentsResult = await ensureAgentsProtocol(workspaceUri, extensionUri);
-        mcpOutputChannel?.appendLine(`[Setup] AGENTS.md scaffolding: ${agentsResult.status} — ${agentsResult.reason}`);
+        outputChannel?.appendLine(`[Setup] AGENTS.md scaffolding: ${agentsResult.status} — ${agentsResult.reason}`);
     } catch (e) {
-        mcpOutputChannel?.appendLine(`[Setup] AGENTS.md scaffolding error (non-fatal): ${e}`);
+        outputChannel?.appendLine(`[Setup] AGENTS.md scaffolding error (non-fatal): ${e}`);
     }
 
     // 3. Create README Stub
@@ -3828,88 +2714,6 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
             Buffer.from(JSON.stringify(defaultPolicy, null, 2), 'utf8')
         );
     }
-
-    // 4. VS Code workspace MCP config — always ensure the switchboard entry is current.
-    // Previous logic skipped if file existed, leaving stale paths from other machines intact.
-    const vscodeDirUri = vscode.Uri.joinPath(workspaceUri, '.vscode');
-    const mcpConfigUri = vscode.Uri.joinPath(vscodeDirUri, 'mcp.json');
-    try {
-        await vscode.workspace.fs.createDirectory(vscodeDirUri);
-    } catch { /* already exists */ }
-
-    const stateRootForConfig = normalizeEnvPath(workspaceRoot);
-    const expectedSwitchboardEntry = {
-        type: 'stdio',
-        command: 'node',
-        args: ['${workspaceFolder}/.switchboard/MCP/mcp-server.js'],
-        env: {
-            SWITCHBOARD_WORKSPACE_ROOT: normalizeEnvPath(workspaceRoot),
-            SWITCHBOARD_STATE_ROOT: stateRootForConfig
-        }
-    };
-
-    let mcpConfig: Record<string, any> = { servers: {} };
-    try {
-        const raw = Buffer.from(await vscode.workspace.fs.readFile(mcpConfigUri)).toString('utf8');
-        const parsed = JSON.parse(raw);
-        if (parsed && typeof parsed === 'object') {
-            mcpConfig = parsed;
-            if (!mcpConfig.servers) mcpConfig.servers = {};
-        }
-    } catch { /* file doesn't exist or isn't valid JSON — start fresh */ }
-
-    mcpConfig.servers['switchboard'] = expectedSwitchboardEntry;
-    await vscode.workspace.fs.writeFile(
-        mcpConfigUri,
-        Buffer.from(JSON.stringify(mcpConfig, null, 2), 'utf8')
-    );
-    mcpOutputChannel?.appendLine('[Setup] Ensured .vscode/mcp.json switchboard entry is current.');
-}
-
-/**
- * Auto-register all open VS Code terminals into the Switchboard registry.
- * Eliminates the manual PID resolution workflow for first-time setup.
- */
-async function autoRegisterTerminals(workspaceRoot: string) {
-    const openTerminals = vscode.window.terminals;
-    if (openTerminals.length === 0) return;
-
-    let registered = 0;
-    for (const terminal of openTerminals) {
-        const name = terminal.name;
-        // Skip already-registered terminals
-        if (registeredTerminals.has(name)) continue;
-
-        try {
-            // TODO: Remove PID resolution when MCP server is removed
-            const pid = await waitWithTimeout(terminal.processId, 5000, undefined);
-            if (!pid) continue;
-
-            registeredTerminals.set(name, terminal);
-
-            // Notify the MCP server via IPC so state.json is updated
-            if (mcpServerProcess) {
-                mcpServerProcess.send({
-                    type: 'registerTerminal',
-                    name,
-                    purpose: 'auto-detected',
-                    pid,
-                    friendlyName: name,
-                    skipParentResolution: true,
-                    ideName: vscode.env.appName
-                });
-            }
-
-            mcpOutputChannel?.appendLine(`[AutoReg] Registered terminal '${name}' (PID: ${pid})`);
-            registered++;
-        } catch (e) {
-            mcpOutputChannel?.appendLine(`[AutoReg] Failed to register '${name}': ${e}`);
-        }
-    }
-
-    if (registered > 0) {
-        mcpOutputChannel?.appendLine(`[AutoReg] Auto-registered ${registered} terminal(s)`);
-    }
 }
 
 /**
@@ -3932,11 +2736,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         { key: 'github', name: 'GitHub Copilot', description: 'Copilot instructions + agent config' },
         { key: 'antigravity', name: 'Antigravity', description: 'Core .agent workflows (auto-scaffolded)' },
         { key: 'windsurf', name: 'Windsurf (Cascade)', description: 'Windsurf/Codeium AI IDE configuration' },
-        { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' },
-        { key: 'claude', name: 'Claude Code', description: 'Claude Code MCP server configuration' },
-        { key: 'gemini', name: 'Gemini CLI', description: 'Gemini CLI MCP server configuration' },
-        { key: 'kiro', name: 'Kiro', description: 'Kiro IDE MCP server configuration' },
-        { key: 'mcp', name: 'MCP Server', description: 'Switchboard MCP server setup (copies files and configures)' }
+        { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' }
     ];
 
     // Build flattened quick pick — all options always visible
@@ -4004,7 +2804,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         await switchboardConfig.update('team.strictPrompts', false, vscode.ConfigurationTarget.Workspace);
         await switchboardConfig.update('planner.strictPrompts', false, vscode.ConfigurationTarget.Workspace);
         await switchboardConfig.update('review.strictPrompts', false, vscode.ConfigurationTarget.Workspace);
-        mcpOutputChannel?.appendLine(`[Setup] Team prompt rigor set to light (workspace).`);
+        outputChannel?.appendLine(`[Setup] Team prompt rigor set to light (workspace).`);
     };
 
     // Show progress
@@ -4043,7 +2843,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
                 if (token.isCancellationRequested) return;
                 await taskViewerProvider.seedBrainPlanBlacklistFromCurrentBrainSnapshot();
             } catch (e) {
-                mcpOutputChannel?.appendLine(`[Setup] Brain blacklist seeding failed (non-fatal): ${e}`);
+                outputChannel?.appendLine(`[Setup] Brain blacklist seeding failed (non-fatal): ${e}`);
             }
         }
 
@@ -4128,87 +2928,24 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
                             try {
                                 const templatePath = vscode.Uri.joinPath(templatesBaseUri, target, configFile.template);
                                 const destPath = vscode.Uri.file(absDestPath);
-                                if (configFile.isGlobal && configFile.destination.endsWith('.json')) {
-                                    // Global MCP JSON: merge to preserve other MCP server entries
-                                    let existingConfig: Record<string, any> = {};
-                                    try {
-                                        const existingRaw = Buffer.from(await vscode.workspace.fs.readFile(destPath)).toString('utf8');
-                                        existingConfig = JSON.parse(existingRaw);
-                                    } catch {
-                                        existingConfig = {};
-                                    }
-                                    let templateJson: Record<string, any> = {};
-                                    try {
-                                        await vscode.workspace.fs.stat(templatePath);
-                                        const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
-                                        const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
-                                        templateJson = JSON.parse(content);
-                                    } catch {
-                                        const defaultContent = getDefaultTemplate(target);
-                                        templateJson = JSON.parse(defaultContent);
-                                    }
-                                    const mcpKey = 'mcpServers';
-                                    const mergedConfig = {
-                                        ...existingConfig,
-                                        [mcpKey]: {
-                                            ...(existingConfig[mcpKey] || {}),
-                                            ...(templateJson[mcpKey] || {})
-                                        }
-                                    };
-                                    await vscode.workspace.fs.writeFile(destPath, Buffer.from(JSON.stringify(mergedConfig, null, 2) + '\n', 'utf8'));
-                                } else {
-                                    try {
-                                        await vscode.workspace.fs.stat(templatePath);
-                                        const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
-                                        const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
-                                        await vscode.workspace.fs.writeFile(destPath, Buffer.from(content, 'utf8'));
-                                    } catch {
-                                        const defaultContent = getDefaultTemplate(target);
-                                        await vscode.workspace.fs.writeFile(destPath, Buffer.from(defaultContent, 'utf8'));
-                                    }
+                                try {
+                                    await vscode.workspace.fs.stat(templatePath);
+                                    const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
+                                    const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
+                                    await vscode.workspace.fs.writeFile(destPath, Buffer.from(content, 'utf8'));
+                                } catch {
+                                    const defaultContent = getDefaultTemplate(target);
+                                    await vscode.workspace.fs.writeFile(destPath, Buffer.from(defaultContent, 'utf8'));
                                 }
                                 overwritten++;
                             } catch (e) {
-                                mcpOutputChannel?.appendLine(`[Setup] Overwrite failed for ${absDestPath}: ${e}`);
+                                outputChannel?.appendLine(`[Setup] Overwrite failed for ${absDestPath}: ${e}`);
                             }
                         }
                     }
                     vscode.window.showInformationMessage(`✅ Overwrote ${overwritten} configuration file(s)`);
                 }
             });
-        }
-
-        // Configure MCP only when user explicitly selects it
-        if (targets.includes('mcp')) {
-            if (token.isCancellationRequested) return;
-            progress.report({ message: 'Configuring MCP server...' });
-            try {
-                const stateRoot = workspaceRoot || undefined;
-                await handleMcpSetup(context, taskViewerProvider!, stateRoot);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[Setup] MCP configuration failed: ${e}`);
-            }
-        }
-
-        // Always attempt to configure global Antigravity MCP config when a workspace root
-        // is available. The function auto-creates ~/.gemini/antigravity/ if missing and
-        // is idempotent (no-op if already configured). This ensures new-machine clones
-        // do not require the user to manually select 'Gemini' as a setup target.
-        if (token.isCancellationRequested) return;
-        if (workspaceRoot) {
-            try {
-                const stateRoot = workspaceRoot;
-                await setupGlobalAntigravityMcpConfig(workspaceRoot, stateRoot);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[Setup] Global Antigravity config failed: ${e}`);
-            }
-        }
-
-        if (targets.includes('windsurf')) {
-            vscode.window.showInformationMessage(
-                '💡 Windsurf MCP Tip: To get Windsurf to recognise new MCP servers, you may need to install an official Windsurf Marketplace MCP server (we recommend GitHub MCP). Alternatively, disable then re-enable any official Windsurf MCP server in the Marketplace to trigger activation of non-official servers.',
-                'Got it'
-            );
         }
 
         // Hide status bar item if it exists
@@ -4228,155 +2965,21 @@ function getConfigFilesForIDE(ide: string): { template: string; destination: str
     const configs: Record<string, { template: string; destination: string; isGlobal?: boolean }[]> = {
         github: [
             { template: 'copilot-instructions.md.template', destination: '.github/copilot-instructions.md' },
-            { template: 'agents/switchboard.agent.md.template', destination: '.github/agents/switchboard.agent.md' },
-            { template: 'mcp.json.template', destination: '.vscode/mcp.json' }
+            { template: 'agents/switchboard.agent.md.template', destination: '.github/agents/switchboard.agent.md' }
         ],
         antigravity: [], // Handled by performSetup
         windsurf: [
-            { template: 'windsurf-instructions.md.template', destination: '.codeium/windsurf-instructions.md' },
-            { template: 'mcp_config.json.template', destination: '.codeium/windsurf/mcp_config.json', isGlobal: true }
+            { template: 'windsurf-instructions.md.template', destination: '.codeium/windsurf-instructions.md' }
         ],
         cursor: [
-            { template: 'cursor-instructions.md.template', destination: '.cursorrules' },
-            { template: 'mcp.json.template', destination: '.cursor/mcp.json' }
+            { template: 'cursor-instructions.md.template', destination: '.cursorrules' }
         ],
-        claude: [
-            { template: '.mcp.json.template', destination: '.mcp.json' }
-        ],
-        gemini: [
-            { template: 'settings.json.template', destination: '.gemini/settings.json' }
-        ],
-        kiro: [
-            { template: 'mcp.json.template', destination: '.kiro/settings/mcp.json' }
-        ]
+        claude: [],
+        gemini: [],
+        kiro: []
     };
 
     return configs[ide] || [];
-}
-
-/**
- * Get only the MCP config file entries (JSON configs, not instruction markdown) for each IDE.
- */
-function getMcpConfigFilesForIDE(ide: string): { template: string; destination: string; isGlobal?: boolean }[] {
-    const mcpConfigs: Record<string, { template: string; destination: string; isGlobal?: boolean }[]> = {
-        github: [{ template: 'mcp.json.template', destination: '.vscode/mcp.json' }],
-        windsurf: [{ template: 'mcp_config.json.template', destination: '.codeium/windsurf/mcp_config.json', isGlobal: true }],
-        cursor: [{ template: 'mcp.json.template', destination: '.cursor/mcp.json' }],
-        claude: [{ template: '.mcp.json.template', destination: '.mcp.json' }],
-        gemini: [{ template: 'settings.json.template', destination: '.gemini/settings.json' }],
-        kiro: [{ template: 'mcp.json.template', destination: '.kiro/settings/mcp.json' }]
-    };
-    return mcpConfigs[ide] || [];
-}
-
-/**
- * Write/update MCP config files for ALL supported IDEs.
- * Uses templates with {{WORKSPACE_ROOT}} replacement. Merges into existing configs
- * (preserves non-switchboard MCP server entries). Creates directories as needed.
- * Called from "Connect MCP" to ensure all IDE config files are current.
- */
-async function writeAllIdeMcpConfigs(
-    context: vscode.ExtensionContext,
-    workspaceRoot: string,
-    stateRoot: string = workspaceRoot
-): Promise<void> {
-    const serverPath = path.join(workspaceRoot, '.switchboard', 'MCP', 'mcp-server.js');
-    if (!fs.existsSync(serverPath)) {
-        mcpOutputChannel?.appendLine('[ConnectMCP] MCP server not found, skipping IDE config writes.');
-        return;
-    }
-
-    const templatesBaseUri = vscode.Uri.joinPath(context.extensionUri, 'templates');
-    const absWorkspaceRoot = normalizeEnvPath(workspaceRoot);
-    const absStateRoot = normalizeEnvPath(stateRoot);
-    const ideKeys = ['windsurf', 'cursor', 'claude', 'gemini', 'kiro', 'github'];
-    let written = 0;
-
-    for (const ide of ideKeys) {
-        const mcpFiles = getMcpConfigFilesForIDE(ide);
-        for (const configFile of mcpFiles) {
-            try {
-                const destPath = configFile.isGlobal
-                    ? path.join(os.homedir(), configFile.destination)
-                    : path.join(workspaceRoot, configFile.destination);
-                const destDir = path.dirname(destPath);
-
-                // Ensure destination directory exists
-                if (!fs.existsSync(destDir)) {
-                    fs.mkdirSync(destDir, { recursive: true });
-                }
-
-                // Build the correct MCP entry. GitHub Copilot uses a different schema.
-                const isGitHub = ide === 'github';
-                const resolvedNode = resolveNodeRuntime();
-                const newEntry = isGitHub
-                    ? {
-                        type: 'stdio' as const,
-                        command: resolvedNode,
-                        args: ['${workspaceFolder}/.switchboard/MCP/mcp-server.js'],
-                        env: {
-                            SWITCHBOARD_WORKSPACE_ROOT: absWorkspaceRoot,
-                            SWITCHBOARD_STATE_ROOT: absStateRoot
-                        }
-                    }
-                    : {
-                        command: resolvedNode,
-                        args: [path.join(absWorkspaceRoot, '.switchboard', 'MCP', 'mcp-server.js')],
-                        env: {
-                            SWITCHBOARD_WORKSPACE_ROOT: absWorkspaceRoot,
-                            SWITCHBOARD_STATE_ROOT: absStateRoot
-                        }
-                    };
-
-                // Read existing config to merge (preserve other MCP server entries)
-                let existingConfig: Record<string, any> = {};
-                if (fs.existsSync(destPath)) {
-                    try {
-                        const raw = fs.readFileSync(destPath, 'utf8');
-                        existingConfig = JSON.parse(raw);
-                    } catch {
-                        // Corrupt or non-JSON file — overwrite entirely
-                        existingConfig = {};
-                    }
-                }
-
-                const mcpKey = isGitHub ? 'servers' : 'mcpServers';
-                if (!existingConfig[mcpKey]) {
-                    existingConfig[mcpKey] = {};
-                }
-
-                const updatedConfig = {
-                    ...existingConfig,
-                    [mcpKey]: {
-                        ...existingConfig[mcpKey],
-                        switchboard: newEntry
-                    }
-                };
-
-                const newJson = JSON.stringify(updatedConfig, null, 2) + '\n';
-
-                // Check if update is needed
-                let currentJson = '';
-                if (fs.existsSync(destPath)) {
-                    currentJson = fs.readFileSync(destPath, 'utf8');
-                }
-                if (currentJson.trim() === newJson.trim()) {
-                    mcpOutputChannel?.appendLine(`[ConnectMCP] ${destPath} already up to date.`);
-                    continue;
-                }
-
-                fs.writeFileSync(destPath, newJson, 'utf8');
-                written++;
-                mcpOutputChannel?.appendLine(`[ConnectMCP] Wrote ${destPath}`);
-            } catch (e) {
-                mcpOutputChannel?.appendLine(`[ConnectMCP] Failed to write ${configFile.isGlobal ? path.join(os.homedir(), configFile.destination) : path.join(workspaceRoot, configFile.destination)}: ${e}`);
-            }
-        }
-    }
-
-    if (written > 0) {
-        mcpOutputChannel?.appendLine(`[ConnectMCP] Updated ${written} IDE MCP config(s).`);
-    }
 }
 
 /**
@@ -4414,15 +3017,8 @@ function getDefaultTemplate(target: string): string {
         return `# Switchboard Configuration for Windsurf (Cascade)
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-Windsurf's Cascade agent can participate via the Switchboard MCP server.
 
-## Setup
-
-1. Ensure the Switchboard MCP server is running (started by the VS Code extension).
-2. Connect Cascade to the MCP server endpoint.
-3. Use the workflow triggers below to coordinate with other agents.
-
-## Available MCP Tools
+## Available Skills
 
 - **send_message** — Send structured messages for workflow actions (\`execute\`, \`delegate_task\`).
 - **check_inbox** — Read messages from inbox/outbox (\`verbose=true\` for full payloads).
@@ -4452,15 +3048,8 @@ Windsurf's Cascade agent can participate via the Switchboard MCP server.
         return `# Switchboard Configuration for Cursor (Composer)
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-Cursor's Composer agent can participate via the Switchboard MCP server.
 
-## Setup
-
-1. Ensure the Switchboard MCP server is running (started by the VS Code extension).
-2. Connect Composer to the MCP server endpoint.
-3. Use the workflow triggers below to coordinate with other agents.
-
-## Available MCP Tools
+## Available Skills
 
 - **send_message** — Send structured messages for workflow actions (\`execute\`, \`delegate_task\`).
 - **check_inbox** — Read messages from inbox/outbox (\`verbose=true\` for full payloads).
@@ -4490,9 +3079,9 @@ Cursor's Composer agent can participate via the Switchboard MCP server.
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
 
-## Available MCP Tools
+## Available Skills
 
-When the Switchboard MCP server is connected, you have access to these tools:
+When the Switchboard protocol is active, you have access to these skills:
 
 ### Messaging (Cross-IDE)
 - **send_message** — Send structured messages to other agents. Actions: \`delegate_task\`, \`execute\`.
@@ -4531,128 +3120,7 @@ Messages are delivered via the filesystem:
 `;
 }
 
-interface McpStatus {
-    serverRunning: boolean;
-    ideConfigured: boolean;
-    toolReachable: boolean;
-    diagnostic: string;
-}
-
-/**
- * Check MCP connection status using static setup signals + IPC health probe.
- * Static checks (server file presence, IDE config) run first as a fast pre-flight.
- * If static checks pass and the MCP server process is alive, an IPC health probe
- * verifies actual connectivity. This replaces the old always-true static-only approach
- * while avoiding the per-second polling that was previously removed.
- */
-async function checkMcpConnection(context: vscode.ExtensionContext, workspaceRoot: string): Promise<McpStatus> {
-    const status: McpStatus = {
-        serverRunning: false,
-        ideConfigured: false,
-        toolReachable: false,
-        diagnostic: 'MCP: Checking...'
-    };
-    const hasActiveSwitchboardEntry = (servers: any): boolean => {
-        if (!servers || typeof servers !== 'object') return false;
-        return Object.entries(servers).some(([key, value]) => {
-            if (!key.toLowerCase().startsWith('switchboard')) return false;
-            return (value as any)?.disabled !== true;
-        });
-    };
-
-    // Static pre-flight: verify server file exists on disk.
-    const serverFileDetected = [
-        path.join(context.extensionPath, 'dist', 'mcp-server', 'mcp-server.js'),
-        path.join(context.extensionPath, 'src', 'mcp-server', 'mcp-server.js')
-    ].some(candidatePath => fs.existsSync(candidatePath));
-    if (serverFileDetected) {
-        status.serverRunning = true;
-    }
-
-    // Check VS Code workspace settings
-    let configReadFailed = false;
-    try {
-        const workspaceMcpServers = vscode.workspace.getConfiguration().get('mcpServers') as any;
-        if (hasActiveSwitchboardEntry(workspaceMcpServers)) {
-            status.ideConfigured = true;
-        }
-    } catch (error) {
-        configReadFailed = true;
-        const details = error instanceof Error ? error.message : String(error);
-        mcpOutputChannel?.appendLine(`[MCP] Failed to read mcpServers config: ${details}`);
-    }
-
-    // IPC health probe: if static checks pass and process is alive, verify actual connectivity.
-    if (status.serverRunning && mcpServerProcess && mcpServerProcess.connected) {
-        try {
-            const probeId = `probe_${Date.now()}`;
-            const probeOk = await new Promise<boolean>((resolve) => {
-                const timeout = setTimeout(() => {
-                    mcpServerProcess?.removeListener('message', handler);
-                    resolve(false);
-                }, 10_000);
-
-                const handler = (msg: any) => {
-                    if (msg?.type === 'healthProbeResponse' && msg?.id === probeId) {
-                        clearTimeout(timeout);
-                        mcpServerProcess?.removeListener('message', handler);
-                        resolve(msg.ok === true);
-                    }
-                };
-
-                mcpServerProcess!.on('message', handler);
-                mcpServerProcess!.send({ type: 'healthProbe', id: probeId });
-            });
-
-            status.toolReachable = probeOk;
-        } catch (err) {
-            status.toolReachable = false;
-            mcpOutputChannel?.appendLine(`[MCP] IPC health probe error: ${err instanceof Error ? err.message : String(err)}`);
-        }
-    } else if (status.serverRunning && mcpServerProcess && !mcpServerProcess.connected) {
-        // Process exists but IPC channel is broken
-        status.toolReachable = false;
-        mcpOutputChannel?.appendLine('[MCP] IPC channel disconnected — marking toolReachable = false');
-    } else if (status.serverRunning) {
-        // Server file exists but no process reference — may be externally managed
-        status.toolReachable = true;
-    }
-
-    if (configReadFailed) {
-        status.diagnostic = 'Unable to read IDE MCP config';
-    } else if (!status.ideConfigured) {
-        status.diagnostic = 'IDE MCP config not found or disabled';
-    } else if (!status.serverRunning) {
-        status.diagnostic = 'MCP server file not found';
-    } else if (!status.toolReachable) {
-        status.diagnostic = 'IPC health probe failed';
-    } else {
-        status.diagnostic = 'MCP server connected (IPC verified)';
-
-        // Check global Antigravity config for staleness (only when local MCP is healthy)
-        const globalConfigPath = getGlobalAntigravityMcpConfigPath();
-        if (fs.existsSync(globalConfigPath)) {
-            try {
-                const globalConfig = JSON.parse(fs.readFileSync(globalConfigPath, 'utf8'));
-                const serverEntry = globalConfig?.mcpServers?.switchboard;
-                const configuredPath = serverEntry?.args?.[0];
-                if (configuredPath && !fs.existsSync(configuredPath)) {
-                    status.diagnostic = 'Global Antigravity MCP config points to a missing server file. Re-run Switchboard setup.';
-                }
-            } catch { /* non-fatal */ }
-        }
-    }
-
-    return status;
-}
-
 export function deactivate() {
-    // Clear MCP health check interval
-    if (mcpHealthCheckInterval) {
-        clearInterval(mcpHealthCheckInterval);
-        mcpHealthCheckInterval = null;
-    }
-
     // Dispose ALL Switchboard-managed terminals so they don't persist as orphans
     activeTaskViewerProvider?.clearAllTerminalAgentInfo();
     for (const [name, terminal] of registeredTerminals) {
@@ -4664,50 +3132,12 @@ export function deactivate() {
     }
     registeredTerminals.clear();
 
-    // Kill bundled MCP server with process tree termination + force-kill fallback
-    if (mcpServerProcess && mcpServerProcess.pid) {
-        const pid = mcpServerProcess.pid;
-        mcpOutputChannel?.appendLine('[MCP] Shutting down server...');
-        if (process.platform === 'win32') {
-            // Windows: Use taskkill with /T to kill entire process tree
-            try {
-                execFileSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true });
-            } catch {
-                // Fallback if taskkill fails
-                try { mcpServerProcess.kill('SIGKILL'); } catch { }
-            }
-        } else {
-            // Unix: SIGTERM first, then SIGKILL after 3 seconds if still alive
-            try {
-                mcpServerProcess.kill('SIGTERM');
-                setTimeout(() => {
-                    try {
-                        process.kill(pid, 0); // Check if still alive
-                        process.kill(pid, 'SIGKILL');
-                    } catch {
-                        // Already dead — nothing to do
-                    }
-                }, 3000);
-            } catch {
-                try { mcpServerProcess.kill('SIGKILL'); } catch { }
-            }
-        }
-        mcpServerProcess = null;
-
-        // Clean up PID file
-        const workspaceRoot = kanbanProvider?.getCurrentWorkspaceRoot() ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-        if (workspaceRoot) {
-            persistMcpPid(workspaceRoot, null);
-        }
-    }
-
     // Cleanup other resources
     if (setupStatusBarItem) {
         setupStatusBarItem.dispose();
     }
-    if (mcpOutputChannel) {
-        mcpOutputChannel.dispose();
-        mcpOutputChannel = null;
+    if (outputChannel) {
+        outputChannel.dispose();
+        outputChannel = null;
     }
-
 }

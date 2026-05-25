@@ -1,17 +1,14 @@
 # Switchboard Configuration for Cursor (Composer)
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-Cursor's Composer agent can participate via the Switchboard MCP server.
 
 ## Setup
 
-1. Ensure the Switchboard MCP server is running (started by the VS Code extension).
-2. Connect Composer to the MCP server endpoint.
-3. Use the workflow triggers below to coordinate with other agents.
+1. Coordinate with other agents using the workflow triggers below.
 
-## Available MCP Tools (Workflow Coordination Only)
+## Available Workflow Tools (Workflow Coordination Only)
 
-The following MCP tools are used solely for workflow coordination and agent communication. Do not use them for API operations:
+The following tools are used solely for workflow coordination and agent communication. Do not use them for API operations:
 
 - **send_message** — Send structured messages for workflow actions (`execute`, `delegate_task`).
 - **check_inbox** — Read messages from inbox/outbox (`verbose=true` for full payloads).
@@ -24,16 +21,16 @@ The following MCP tools are used solely for workflow coordination and agent comm
 
 ## Available Skills (Preferred for API Operations)
 
-For API operations (ClickUp, Linear, diagram generation), use skill-based invocations rather than MCP API proxy tools:
+For API operations (ClickUp, Linear, diagram generation), use skill-based invocations:
 
-- **clickup_api** — Direct ClickUp API access via LocalApiServer proxy (replaces `call_clickup_api`).
-- **clickup_attach** — Attach files to ClickUp tasks via LocalApiServer (replaces `clickup_attach`).
-- **clickup_create_subpage** — Create doc pages in ClickUp via LocalApiServer (replaces `clickup_create_subpage`).
-- **clickup_create_task** — Create ClickUp tasks with optional subtasks via LocalApiServer (replaces `clickup_create_task`).
-- **clickup_fetch** — Fetch ClickUp tasks/lists with name resolution (replaces `clickup_fetch`).
-- **clickup_modify_task** — Update ClickUp task properties via LocalApiServer (replaces `clickup_modify_task`).
-- **linear_api** — Direct Linear API access via LocalApiServer proxy (replaces `call_linear_api`).
-- **generate_diagram** — Generate architectural diagrams via LocalApiServer (replaces `generate_architectural_diagram`).
+- **clickup_api** — Direct ClickUp API access via LocalApiServer proxy.
+- **clickup_attach** — Attach files to ClickUp tasks via LocalApiServer.
+- **clickup_create_subpage** — Create doc pages in ClickUp via LocalApiServer.
+- **clickup_create_task** — Create ClickUp tasks with optional subtasks via LocalApiServer.
+- **clickup_fetch** — Fetch ClickUp tasks/lists with name resolution.
+- **clickup_modify_task** — Update ClickUp task properties via LocalApiServer.
+- **linear_api** — Direct Linear API access via LocalApiServer proxy.
+- **generate_diagram** — Generate architectural diagrams via LocalApiServer.
 
 
 ## Workflow Triggers

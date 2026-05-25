@@ -7,7 +7,6 @@
     "switchboard",
     "ai agents",
     "orchestration",
-    "mcp",
     "multi-agent"
   ],
   "version": "1.5.9",
@@ -51,18 +50,7 @@
         "command": "switchboard.setup",
         "title": "Switchboard: Setup AI Protocol Files"
       },
-      {
-        "command": "switchboard.connectMcp",
-        "title": "Switchboard: Connect MCP"
-      },
-      {
-        "command": "switchboard.copyMcpConfig",
-        "title": "Switchboard: Copy MCP Config to Clipboard"
-      },
-      {
-        "command": "switchboard.recheckMcp",
-        "title": "Switchboard: Recheck MCP Connection"
-      },
+
       {
         "command": "switchboard.createAgentGrid",
         "title": "Switchboard: Open Agent Terminals"
@@ -329,18 +317,7 @@
           "description": "Require session token authentication for all inbox dispatch messages. Disable only for development.",
           "scope": "application"
         },
-        "switchboard.runtime.workspaceMode": {
-          "type": "boolean",
-          "default": false,
-          "description": "(Dev only) Allow MCP server to run from mutable workspace copy instead of immutable extension bundle.",
-          "scope": "application"
-        },
-        "mcpServers": {
-          "type": "object",
-          "default": {},
-          "description": "Configuration for Model Context Protocol (MCP) servers",
-          "scope": "resource"
-        },
+
         "switchboard.research.localFolderPath": {
           "type": "string",
           "default": "",
@@ -458,7 +435,7 @@
         "switchboard.planWatcher.periodicScanEnabled": {
           "type": "boolean",
           "default": true,
-          "description": "Enable periodic scanning for plan files created outside the editor (e.g., by MCP tools).",
+          "description": "Enable periodic scanning for plan files created outside the editor.",
           "scope": "resource"
         },
         "switchboard.planWatcher.scanIntervalMs": {
@@ -513,7 +490,7 @@
     "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
     "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
     "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
-    "test:regression:token-env": "node src/test/build-switchboard-mcp-env.test.js",
+
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
   },

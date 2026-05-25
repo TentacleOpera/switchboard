@@ -9,13 +9,11 @@ This document describes how the plugin currently works in code, not how older do
 Switchboard is a local orchestration stack with three main layers:
 
 1. VS Code extension host (`src/extension.ts`)
-2. Bundled MCP server child process (`src/mcp-server/mcp-server.js`)
-3. Workspace protocol/state surface (`.agent/` and `.switchboard/`)
+2. Workspace protocol/state surface (`.agent/` and `.switchboard/`)
 
 At runtime:
 
 - The extension owns UI, terminal references, startup/setup workflows, and file watchers.
-- The MCP server owns tool APIs (`send_message`, `start_workflow`, etc.), workflow enforcement, and persistent shared state updates.
 - Agents coordinate through filesystem artifacts and inbox messages under `.switchboard/`.
 
 ## 2) Persistent filesystem model
@@ -58,13 +56,7 @@ On startup, the extension does all of the following:
    - disposes likely orphaned Switchboard terminals
 5. Initializes `TaskViewerProvider` and sidebar webview.
 6. Starts `InboxWatcher`.
-7. Spawns bundled MCP server via `fork(..., stdio + ipc)` in workspace context.
-8. Starts health monitoring:
-   - initial delayed probe
-   - steady-state poll every 120s
-   - degraded poll every 15s
-   - auto-heal restart after repeated degraded checks
-9. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
+7. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
 
 Setup wizard behavior (current):
 
@@ -75,36 +67,13 @@ Setup wizard behavior (current):
   - `switchboard.review.strictPrompts = false`
 - Setup seeds `.switchboard/brain_plan_blacklist.json` by scanning `~/.gemini/antigravity/brain` using the same mirror-candidate rules and stable base-path normalization used by runtime mirroring.
 
-## 4) Extension <-> MCP IPC contract
-
-The extension handles MCP child-process IPC message types:
-
-- `createTerminal`
-- `focusTerminal`
-- `sendToTerminal`
-- `renameTerminal`
-- `registerTerminal`
-- `registerTerminalsBatch`
-- `pruneTerminal`
-- `healthProbe`
-
-Key safety behavior on `sendToTerminal`:
-
-- Requires valid terminal name and string payload.
-- Requires source metadata (`source.actor`, `source.tool`).
-- Blocks rapid fan-out broadcast to different targets unless `allowBroadcast=true`.
-- Falls back to live VS Code terminal lookup if registry is stale.
 
 ## 4.5) Agent Access to Integrations
 
-Agents can access Switchboard's Linear and ClickUp integrations through two primary mechanisms:
-1. **Skill-based Invocations (Preferred)**: Run curl commands against the LocalApiServer.
-2. **MCP Tools (Alternative / Required for Uncovered Operations)**: Call the `call_linear_api` and `call_clickup_api` MCP tools directly.
-
-Both patterns are fully supported, but **skill-based invocations are preferred** for consistency across IDEs and agents without native MCP clients.
+Agents can access Switchboard's Linear and ClickUp integrations through **Skill-based Invocations**: Run curl commands against the LocalApiServer.
 
 ### Smart Output (Default: Compact)
-By default, both tools/skills return **compact, AI-readable output**:
+By default, skills return **compact, AI-readable output**:
 - Issue/task lists are rendered as **markdown tables** with key fields only (no raw JSON dumps)
 - Descriptions are truncated to 500 chars
 - Custom fields and empty arrays are stripped
@@ -118,8 +87,8 @@ By default, both tools/skills return **compact, AI-readable output**:
 The integrations automatically cache frequently used IDs (team_id, space_id, list_id, project_id) in `api_state.json` under the Switchboard state root. This reduces the need to navigate the hierarchy on every call.
 
 ### Security Model
-- Both skills and MCP tools only work with Linear/ClickUp API tokens configured in VS Code settings.
-- For MCP tools, tokens are passed via environment variables. For skills, the client passes the API auth token configured in VS Code settings (`switchboard.apiToken`) in the `Authorization: Bearer <token>` header.
+- Skills only work with Linear/ClickUp API tokens configured in VS Code settings.
+- The client passes the API auth token configured in VS Code settings (`switchboard.apiToken`) in the `Authorization: Bearer <token>` header.
 - To prevent credentials exposure, there is no HTTP endpoint to retrieve the token from the LocalApiServer.
 - If no `switchboard.apiToken` is configured, read-only requests (`GET` and `/resolve` endpoints) are allowed without authentication for development convenience, while write operations (POST/PUT/DELETE) are strictly denied.
 
@@ -141,8 +110,6 @@ curl -s -X POST http://localhost:$PORT/api/linear \
   }'
 ```
 
-#### MCP Tool Example
-- `call_linear_api(query="query { issues(first: 10) { nodes { id title state { name } } } }")`
 
 ### ClickUp Integration Examples
 
@@ -165,22 +132,8 @@ curl -s -X POST http://localhost:$PORT/api/clickup \
   }'
 ```
 
-#### MCP Tool Examples
-- `call_clickup_api(method="GET", endpoint="/v2/list/123/task")`
-- `call_clickup_api(method="GET", endpoint="/v2/task/abc123", subtasks=true)`
 
-These tools and skills work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
-
-
-## 5) MCP server runtime internals
-
-`mcp-server.js` runs stdio MCP transport and registers tools from `register-tools.js`.
-
-Notable runtime behavior:
-
-- Lifecycle hooks for `SIGTERM`, `SIGINT`, `disconnect`, `uncaughtException`, `unhandledRejection`.
-- Hourly stale-terminal warning sweep ("ZombieReaper").
-- Internal IPC handler supports terminal registration, batch registration, prune, and health probe response.
+These skills work in standalone mode without requiring IPC bridging, providing a unified integration experience across all IDEs.
 
 ## 6) State management model (`state-manager.js`)
 
@@ -466,9 +419,6 @@ Key inbound messages from the Kanban webview:
 - `CODE REVIEWED` → `reviewer`
 - Custom agent columns → their role ID
 
-### MCP integration
-
-`handleMcpMove(sessionId, target)` is the entry point for conversational Kanban routing via the VS Code UI dispatch pipeline (formerly triggered by the `move_kanban_card` MCP tool, now removed). It resolves natural-language targets (e.g. "lead coder", "reviewer", column labels) through a normalized alias map built from built-in roles, column definitions, and custom agents. Complexity-routed targets (`team`, `coded`) resolve dynamically per-session based on plan complexity. Agents should use the `query_switchboard_kanban` skill instead.
 
 ## 15) Complexity classification and auto-routing
 
@@ -486,7 +436,6 @@ Auto-routing behavior:
 - `_targetColumnForDispatchRole()`: `intern` → `INTERN CODED`, `coder` → `CODER CODED`, `lead` → `LEAD CODED`, `team-lead` → `TEAM LEAD CODED`
 - Both `moveSelected` and `moveAll` use this partition when the source column is `PLAN REVIEWED`
 
-The same complexity classification logic is duplicated in `register-tools.js` for the `get_kanban_state` MCP tool (kept aligned via the `normalizeBandBLine` helper). Note: the `get_kanban_state` MCP tool was removed from agent-facing tool registrations; the helper logic remains for the Switchboard MCP server used by external clients.
 
 ### Team Lead routing override
 
@@ -601,9 +550,9 @@ The Review panel supports inline editing of plan metadata:
 - **Topic**: plan title
 - **Plan text**: full markdown editing with optimistic concurrency via `expectedMtimeMs`
 
-## 18) Kanban skills (replaces former MCP tools)
+## 18) Kanban skills
 
-The MCP tools `get_kanban_state`, `move_kanban_card`, `query_plan_archive`, and `search_archive` have been removed. Agents now use direct database access via skills.
+Agents use direct database access via skills.
 
 ### `query_switchboard_kanban` skill
 
@@ -616,9 +565,6 @@ Located at `.agent/skills/query_switchboard_kanban.md`. Provides direct SQL acce
 
 Located at `.agent/skills/query_archive/`. Documents direct DuckDB CLI commands for archive queries.
 
-### Internal MCP helpers still in `register-tools.js`
-
-The `readKanbanStateFromDb()`, `resolveRequestedKanbanColumn()`, and `KANBAN_COLUMN_ALIASES` helpers remain in `register-tools.js` for internal use. The `handleMcpMove()` dispatch pipeline in `KanbanProvider` also remains for VS Code UI-driven card movement. Agents should use the `kanban_operations` skill scripts for direct DB access.
 
 ## 19) Batch prompt builder (`agentPromptBuilder.ts`)
 
@@ -661,7 +607,7 @@ Audit and activity telemetry is local-only:
 
 - `.switchboard/sessions/activity.jsonl` for workflow/dispatch events
 - session run-sheet event streams
-- output channels for extension/MCP/Jules diagnostics
+- output channels for extension/Jules diagnostics
 
 Payload sanitization is applied to audit logs for sensitive keys.
 
@@ -696,7 +642,6 @@ Typical maintainer checks:
 
 1. Workflow registry drift:
    - `.agent/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
-   - `register-tools.js` still contains references to non-runtime workflows (`autoplan`, `julesplan` aliases/guards).
 2. Inbox/outbox semantic drift:
    - `send_message` is inbox-first with direct terminal push optimization.
    - `check_inbox` still defaults `box='outbox'` and retains stale `request_review` filtering logic.
@@ -705,32 +650,18 @@ Typical maintainer checks:
    - another in `services/terminalUtils.ts`
    - behavior is similar but not identical (newline pacing differences).
 4. Persona payload formatting drift:
-   - MCP `send_message` keeps raw payload + metadata/persona fields.
+   - `send_message` keeps raw payload + metadata/persona fields.
    - Sidebar local/remote execute helpers can still inline persona wrappers in payload text.
 5. Setup template drift:
    - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names.
 
-6. Complexity classification duplication:
-   - `KanbanProvider.getComplexityFromPlan()` and `register-tools.js` `getComplexityFromPlan()` implement the same logic independently.
+6. Complexity classification:
    - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
 7. Kanban DB vs file-derived state:
    - The SQLite DB is authoritative for column positions when available, but the file-derived fallback uses `deriveKanbanColumn()` which may disagree after manual DB column moves.
-   - The `get_kanban_state` MCP tool (now removed) had its own DB read path separate from `KanbanProvider._refreshBoard()`. The `query_switchboard_kanban` skill now provides direct DB access for agents.
+   - The `query_switchboard_kanban` skill provides direct DB access for agents.
 
 These drifts are maintenance risks and should be addressed before adding new protocol features.
 
-## 24) Future Work: Uncovered MCP Tools Migration
 
-The following ClickUp and Linear MCP tools are not yet covered by the skill-based LocalApiServer integration. If agents require these operations, they must continue to use the MCP server directly until skill-based endpoints are implemented:
-
-### Priority Migration Candidates
-1. **`resolve_assignees`**: Resolves user names/emails to ClickUp numeric IDs. Necessary for assignment operations during task creation/updating.
-2. **`filter_tasks`**: Performs multi-criteria task filtering. Necessary for task discovery workflows.
-3. **`search`**: Universal workspace search across tasks and documents.
-
-### Other Uncovered MCP Tools
-- **Task Relations**: `add_task_dependency`, `remove_task_dependency`, `add_task_link`, `remove_task_link`.
-- **Time Tracking**: `get_task_time_entries`, `start_time_tracking`, `stop_time_tracking`, `add_time_entry`, `get_current_time_entry`, `get_time_entries`, `get_task_time_in_status`.
-- **Workspace Hierarchy**: `clickup_get_workspace_hierarchy`, `clickup_create_list`, `clickup_create_list_in_folder`, `clickup_create_folder`, `clickup_get_folder`, `clickup_update_folder`.
-- **Chat & Reminders**: `clickup_get_chat_channels`, `clickup_send_chat_message`, `clickup_get_chat_channel_messages`, `clickup_get_chat_message_replies`, `clickup_create_reminder`, `clickup_search_reminders`, `clickup_update_reminder`.
 

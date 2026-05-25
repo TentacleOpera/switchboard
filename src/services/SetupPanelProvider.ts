@@ -448,12 +448,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'runSetup':
                     await vscode.commands.executeCommand('switchboard.setup');
                     break;
-                case 'connectMcp':
-                    await vscode.commands.executeCommand('switchboard.connectMcp');
-                    break;
-                case 'copyMcpConfig':
-                    await vscode.commands.executeCommand('switchboard.copyMcpConfig');
-                    break;
+
                 case 'openDocs':
                     await this._openDocs();
                     break;

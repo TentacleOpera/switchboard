@@ -1,15 +1,8 @@
 # Switchboard Configuration for Windsurf (Cascade)
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-Windsurf's Cascade agent can participate via the Switchboard MCP server.
 
-## Setup
-
-1. Ensure the Switchboard MCP server is running (started by the VS Code extension).
-2. Connect Cascade to the MCP server endpoint.
-3. Use the workflow triggers below to coordinate with other agents.
-
-## Available MCP Tools
+## Available Skills
 
 - **send_message** — Send structured messages for workflow actions (`execute`, `delegate_task`).
 - **check_inbox** — Read messages from inbox/outbox (`verbose=true` for full payloads).

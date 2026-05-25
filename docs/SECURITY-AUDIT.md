@@ -7,7 +7,7 @@
 
 ## Executive Summary
 
-This is a full security reassessment of the Switchboard extension, building on the prior audit by Codex 5.3 High. The codebase has grown significantly since that audit — introducing a Kanban board system, pipeline orchestration, autoban automation, review webview panels, custom agent configuration, and expanded MCP tooling. This reassessment covers all new and existing attack surfaces.
+This is a full security reassessment of the Switchboard extension, building on the prior audit by Codex 5.3 High. The codebase has grown significantly since that audit — introducing a Kanban board system, pipeline orchestration, autoban automation, review webview panels, and custom agent configuration. This reassessment covers all new and existing attack surfaces.
 
 Current result:
 
@@ -23,7 +23,6 @@ All previously resolved findings (F-01 through F-10) remain resolved. The core s
 - **Replay protection** (`nonce` + 5-minute freshness window) for `execute` dispatches — confirmed
 - **Recipient path-sink hardening** before supersede/archive scans — intact with `isPathWithinRoot` checks
 - **Security-critical settings** at application scope (no workspace override) — confirmed in `package.json`
-- **Workspace MCP config scaffolding** gated to explicit dev/runtime workspace mode — confirmed
 - **Content Security Policy** with per-render nonces on all webview panels — new finding, well-implemented
 - **Workflow enforcement** with action-to-workflow gating and phase-gate blocks — new, correctly enforced
 - **Brain leakage detection** preventing private planning paths from leaking to delegates — new, effective
@@ -33,12 +32,10 @@ All previously resolved findings (F-01 through F-10) remain resolved. The core s
 
 ### Reviewed surfaces
 
-- `src/extension.ts` — main extension activation, key management, terminal registry, MCP lifecycle
-- `src/mcp-server/register-tools.js` — all MCP tool registrations, validation, dispatch signing, workflow enforcement (note: skill-based operations bypass this tool layer, routing instead through the LocalApiServer in the extension host)
-- `src/mcp-server/mcp-server.js` — MCP server entry point, IPC handlers, lifecycle management
+- `src/extension.ts` — main extension activation, key management, terminal registry, lifecycle management
 - `src/services/InboxWatcher.ts` — inbox message processing, signature verification, replay protection, terminal execution
 - `src/services/TaskViewerProvider.ts` — sidebar webview, pipeline orchestration, autoban, session management, git/jules CLI integration
-- `src/services/KanbanProvider.ts` — Kanban board webview, card management, MCP move handling
+- `src/services/KanbanProvider.ts` — Kanban board webview, card management
 - `src/services/ReviewProvider.ts` — review panel webview (ticket view)
 - `src/webview/implementation.html` — sidebar webview UI (innerHTML patterns, CSP)
 - `src/webview/kanban.html` — Kanban board UI
@@ -53,7 +50,6 @@ All previously resolved findings (F-01 through F-10) remain resolved. The core s
 - Review of all file system operations for path traversal
 - Review of all `innerHTML` assignments for unsanitized input
 - Review of Content Security Policy configuration across all webview providers
-- Review of inter-process communication (IPC) patterns between extension and MCP server
 - Review of workflow enforcement and access control logic
 
 ## Previously Resolved Findings — Status Confirmed
@@ -67,7 +63,7 @@ No active `bridge.json` runtime processing path exists.
 Immutable bundled runtime is default; mutable workspace mode requires explicit application-scope opt-in.
 
 ### F-03: Shell-string command execution — Resolved
-All git operations use `cp.execFile(...)` with argument arrays. PID lookups in `register-tools.js` use `execFileAsync('powershell', [...args])` with parameterized arguments. The `normalizePid()` function validates PID values before subprocess usage.
+All git operations use `cp.execFile(...)` with argument arrays. The `normalizePid()` function validates PID values before subprocess usage.
 
 ### F-04: Registration ingress / path traversal — Resolved
 `isValidAgentName()` regex (`/^[a-zA-Z0-9 _-]+$/`) enforced at all ingress points: `handleInternalRegistration`, `set_agent_status`, `check_inbox`, `send_message` recipient, and inbox write path. `isPathWithinRoot()` enforced before supersede scans and archive operations.
@@ -134,13 +130,6 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 - Fix: Added `escapeHtml()` helper function and applied it consistently to all interpolated values in the `innerHTML` assignment (`displayTopic`, `plan.status`, `plan.sourceType`, `dateStr`, `plan.planId`, `btnLabel`).
 - Status: **Resolved.**
 
-### N-F02: Cooldown fail-open on filesystem error (Low)
-
-- Location: `src/mcp-server/register-tools.js`, `checkDispatchCooldown()`, line ~1308 (Note: skill-based integrations bypass cooldown limits as they are intended for direct execution rather than async workflow dispatch)
-- Detail: If the cooldown directory is inaccessible or `fs.statSync` / `fs.writeFileSync` throws, the function returns `{ inCooldown: false }` — failing open.
-- Impact: An attacker who can cause filesystem errors (e.g., by making the cooldowns directory read-only) can bypass the cooldown rate limit.
-- Risk: Low — cooldowns are a convenience guardrail against accidental rapid-fire dispatches, not a security-critical gate. The real security enforcement is in dispatch signing and workflow gating.
-- Recommendation: Acceptable as-is. If hardening is desired, log a warning on error and optionally fail-closed for `execute` actions.
 
 ### N-F03: Shell metacharacter leading character strip hardened — REMEDIATED
 
@@ -149,20 +138,6 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 - Fix: Extended the leading character strip regex from `/^[!/$]+/` to `/^[!/$;|&<>]+/` to also strip shell command separators and redirectors from the payload start. This only affects leading characters — payload body content is unchanged, preserving functionality for chat-mode CLIs.
 - Status: **Resolved.** The warning log for remaining interior shell metacharacters is retained as defense-in-depth.
 
-### N-F04: Signing key propagated via process environment variable (Low)
-
-- Location: `src/extension.ts`, line ~678; `src/mcp-server/register-tools.js`, `getDispatchSigningKey()` (Note: skills authenticate using the token configured in VS Code settings `switchboard.apiToken` via Bearer header, secured by token possession rather than dispatch signing)
-- Detail: The dispatch signing key is generated securely from `ExtensionContext.secrets` but then propagated to the MCP server child process via `process.env.SWITCHBOARD_DISPATCH_SIGNING_KEY`. Environment variables are visible to any process that can read `/proc/<pid>/environ` (Linux/macOS) or via process inspection tools (Windows).
-- Impact: A local attacker with access to the same user session could read the signing key from the MCP server's environment and forge dispatch messages.
-- Risk: Low — requires local user-session access, at which point the attacker already has significant capabilities. The signing key provides defense-in-depth against workspace file manipulation, not against a fully compromised user session.
-- Recommendation: Acceptable for the current threat model. If hardening is desired, pass the key via IPC message on MCP server startup rather than environment variable, and clear it from `process.env` after the child reads it.
-
-### N-F05: Brain leakage detector extended to cover additional AI tool directories — REMEDIATED
-
-- Location: `src/mcp-server/register-tools.js`, `isBrainLeakage()` (Note: skill-based invocations do not run through the MCP leakage detector; agents must exercise care when passing file contents to skills)
-- Detail: The leakage detector previously only checked for `.gemini/antigravity/brain/` paths.
-- Fix: Extended the detector with an array of private path patterns covering `.cursor/rules/`, `.kiro/memories/`, and `.codeium/memories/` (both forward and backslash variants). Uses `Array.some()` for clean extensibility.
-- Status: **Resolved.**
 
 ## Continuing Residual Findings
 
@@ -185,7 +160,7 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 ### Authentication and Authorization Flow
 
 ```
-Agent (AI) → MCP Tool Call (send_message)
+Agent (AI) → Tool Call (send_message)
   ├─ Workflow gating: ACTION_REQUIRED_WORKFLOWS check
   ├─ Phase-gate enforcement: minimum workflow step required
   ├─ Recipient validation: isValidAgentName() regex + resolveAgentName()
@@ -232,7 +207,7 @@ Workspace Root
 
 The Switchboard extension maintains a strong security posture. The core dispatch signing, session authentication, and replay protection mechanisms implemented in the prior audit cycle remain intact and correctly functioning. New features (Kanban board, pipeline orchestration, autoban, review panels) have been implemented with appropriate security controls including strict Content Security Policies, workflow enforcement gating, and brain leakage detection.
 
-The two medium-severity findings (N-F01: innerHTML escaping gaps, N-F03: shell metacharacter passthrough) represent the most actionable improvements. Neither is exploitable in default configuration without additional prerequisites (local file access or MCP session control), but addressing them would further harden the extension's defense-in-depth posture.
+The two medium-severity findings (N-F01: innerHTML escaping gaps, N-F03: shell metacharacter passthrough) represent the most actionable improvements. Neither is exploitable in default configuration without additional prerequisites (local file access), but addressing them would further harden the extension's defense-in-depth posture.
 
 No high or critical findings were identified. The extension is suitable for production use in its current state.
 
@@ -240,5 +215,4 @@ No high or critical findings were identified. The extension is suitable for prod
 
 - This audit is a static code review. No dynamic exploitation or penetration testing was performed.
 - Dependency vulnerability scan (`npm audit`) was not executed in this environment.
-- The audit covers the extension source code only; third-party MCP SDK and Node.js runtime vulnerabilities are out of scope.
 - Webview rendering of markdown content (via `renderedHtml` from the extension host) was not exhaustively fuzz-tested.

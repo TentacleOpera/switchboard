@@ -19,7 +19,7 @@ export class DiagramRenderer {
 
   /**
    * Render Mermaid text to SVG via webview and prepare data for upload.
-   * Upload is handled by the MCP tool handler, not this renderer.
+   * Upload is handled by the skill-based upload handler, not this renderer.
    */
   async render(options: RenderOptions): Promise<RenderResult> {
     const { mermaidText, preview = true, renderTimeout = 10000 } = options;
@@ -37,7 +37,7 @@ export class DiagramRenderer {
       this.showPreview(svg);
     }
 
-    // Step 3: Prepare base64-encoded data for upload by the MCP tool handler
+    // Step 3: Prepare base64-encoded data for upload by the skill-based upload handler
     const base64Svg = svg ? Buffer.from(svg).toString('base64') : null;
     const base64MermaidText = Buffer.from(mermaidText).toString('base64');
 

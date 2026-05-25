@@ -467,11 +467,7 @@
         </div>
 
         <div class="tab-content open" id="startup-fields" data-tab-content="setup">
-                <div class="flex gap-2">
-                    <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
-                    <button id="btn-connect-mcp" class="secondary-btn w-full">CONNECT MCP</button>
-                </div>
-                <button id="btn-copy-mcp-config" class="secondary-btn w-full">COPY MCP CONFIG</button>
+                <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
                 </div>
@@ -2665,8 +2661,6 @@
         }
 
         document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
-        document.getElementById('btn-connect-mcp')?.addEventListener('click', () => vscode.postMessage({ type: 'connectMcp' }));
-        document.getElementById('btn-copy-mcp-config')?.addEventListener('click', () => vscode.postMessage({ type: 'copyMcpConfig' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
         controlPlaneModeMigrateButton?.addEventListener('click', () => setControlPlaneSetupMode('migrate-existing'));
         controlPlaneModeFreshButton?.addEventListener('click', () => setControlPlaneSetupMode('fresh-setup'));

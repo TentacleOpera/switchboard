@@ -70,8 +70,8 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 > [!IMPORTANT]
 > **Tool Preference Guidance**:
-> - **Prefer skill-based invocations** over MCP API proxy tools for ClickUp, Linear, and diagram operations.
-> - **MCP workflow tools** (`send_message`, `check_inbox`, `get_team_roster`, `start_workflow`, `complete_workflow_phase`, etc.) remain the primary interface for workflow and messaging coordination.
+> - **Prefer skill-based invocations** for ClickUp, Linear, and diagram operations.
+> - **Workflow tools** (`send_message`, `check_inbox`, `get_team_roster`, `start_workflow`, `complete_workflow_phase`, etc.) remain the primary interface for workflow and messaging coordination.
 
 
 | Skill | When to Use |
@@ -84,7 +84,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `clickup_fetch` | Fetch ClickUp tasks/lists with name resolution (replaces clickup_fetch) |
 | `clickup_modify_task` | Update ClickUp task properties via LocalApiServer (replaces clickup_modify_task) |
 | `generate_diagram` | Generate architectural diagrams via LocalApiServer (replaces generate_architectural_diagram) |
-| `get_tickets` | Read-only cached ClickUp/Linear ticket access via LocalApiServer (no MCP round-trips) |
+| `get_tickets` | Read-only cached ClickUp/Linear ticket access via LocalApiServer |
 | `review` | User asks to review code changes, a PR, or specific files |
 | `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
 | `query_archive` | Query the DuckDB archive directly using duckdb CLI |

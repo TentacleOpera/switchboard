@@ -285,10 +285,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _isRefreshingJules: boolean = false;
     private readonly _julesDiagnosticsChannel = vscode.window.createOutputChannel('Switchboard Jules Diagnostics');
     private _needsSetup: boolean = false;
-    private _mcpServerRunning: boolean = false;
-    private _mcpIdeConfigured: boolean = false;
-    private _mcpToolReachable: boolean = false;
-    private _mcpDiagnostic: string = 'MCP: Checking...';
+
     private _registeredTerminals?: Map<string, vscode.Terminal>;
     // Cache: suffixed terminal name -> { role, displayName }
     // Populated at terminal creation time with the binary-derived display name.
@@ -4338,11 +4335,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._view?.webview.postMessage({
             type: 'initialState',
             needsSetup: this._needsSetup,
-            mcpServerRunning: this._mcpServerRunning,
-            mcpIdeConfigured: this._mcpIdeConfigured,
-            mcpToolReachable: this._mcpToolReachable,
-            mcpDiagnostic: this._mcpDiagnostic,
-            connected: this._mcpIdeConfigured && this._mcpToolReachable,
+
             currentIdeName: vscode.env.appName,
             activeTab,
             activeSubTab,
@@ -7712,15 +7705,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             vscode.commands.executeCommand('switchboard.toggleSilent', data.value);
                         }
                         break;
-                    case 'connectMcp':
-                        vscode.commands.executeCommand('switchboard.connectMcp');
-                        break;
-                    case 'recheckMcpConnection':
-                        vscode.commands.executeCommand('switchboard.recheckMcp');
-                        break;
-                    case 'copyMcpConfig':
-                        vscode.commands.executeCommand('switchboard.copyMcpConfig');
-                        break;
+
                     case 'setTerminalRole':
                         if (data.terminalName && data.role) {
                             await this._setTerminalRole(data.terminalName, data.role);
@@ -12477,7 +12462,7 @@ What would you like to find?`;
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
 
             // Use standard prompt generation
-            // Accuracy mode excluded from clipboard prompts — requires MCP tools only in CLI terminals
+
             let textToCopy: string;
             if (customAgent) {
                 textToCopy = this.buildCustomAgentPrompt([plan], customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot);
@@ -13824,7 +13809,7 @@ What would you like to find?`;
         // substring matches that could hit user terminals (e.g. "GitHub Copilot").
         const ORPHAN_PATTERNS = [
             /^Switchboard -/,
-            /^mcp-agent/,
+
             /^coder$/i,
             /^reviewer$/i,
             /^planner$/i,
@@ -15443,20 +15428,7 @@ Create this file exactly as specified, then continue your work.`);
         this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals });
     }
 
-    public sendMcpConnectionStatus(status: { serverRunning: boolean; ideConfigured: boolean; toolReachable?: boolean; diagnostic?: string }) {
-        this._mcpServerRunning = status.serverRunning;
-        this._mcpIdeConfigured = status.ideConfigured;
-        this._mcpToolReachable = status.toolReachable === true;
-        this._mcpDiagnostic = status.diagnostic || 'MCP status updated';
-        this._view?.webview.postMessage({
-            type: 'mcpStatus',
-            serverRunning: status.serverRunning,
-            ideConfigured: status.ideConfigured,
-            toolReachable: this._mcpToolReachable,
-            diagnostic: this._mcpDiagnostic,
-            connected: status.ideConfigured && this._mcpToolReachable
-        });
-    }
+
 
 
     private async _refreshSessionStatus() {

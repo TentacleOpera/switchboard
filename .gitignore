@@ -64,8 +64,6 @@ list_output.txt
 
 .web-ai/
 
-# Switchboard local MCP config (machine-specific absolute paths — do not commit)
-mcp_config.json
 
 # >>> Switchboard managed exclusions >>>
 # Switchboard runtime state (per-session, not shareable)

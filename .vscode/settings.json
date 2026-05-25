@@ -2,20 +2,6 @@
 	"switchboard.silentScaffolding": false,
 	"switchboard.archive.dbPath": ".switchboard/archive.duckdb",
 	"switchboard.archive.autoArchiveCompleted": true,
-	"mcpServers": {
-		"switchboard": {
-			"command": "/opt/homebrew/bin/node",
-			"args": [
-				"/Users/patrickvuleta/Documents/GitHub/switchboard/.switchboard/MCP/mcp-server.js"
-			],
-			"env": {
-				"SWITCHBOARD_WORKSPACE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard",
-				"SWITCHBOARD_STATE_ROOT": "/Users/patrickvuleta/Documents/GitHub/switchboard"
-			},
-			"disabled": false,
-			"alwaysAllow": []
-		}
-	},
 	"switchboard.accurateCoding.enabled": true,
 	"switchboard.review.strictPrompts": false,
 	"switchboard.planner.strictPrompts": false,

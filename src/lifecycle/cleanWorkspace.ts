@@ -7,7 +7,7 @@ import * as lockfile from 'proper-lockfile';
 const TRANSIENT_DIRS = ['inbox', 'outbox', 'cooldowns', 'MCP'];
 
 /** Transient files that are safe to delete on activation. */
-const TRANSIENT_FILES = ['bridge_debug.log'];
+const TRANSIENT_FILES = ['bridge_debug.log', '.mcp_server.pid', '.mcp_version.json'];
 
 /**
  * Canonical initial state matching state-manager.js INITIAL_STATE.

@@ -1,10 +1,10 @@
-# Switchboard Configuration for github
+# Switchboard Configuration for Github
 
 This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
 
-## Available MCP Tools
+## Available Workflow Tools
 
-When the Switchboard MCP server is connected, you have access to these tools:
+You have access to these tools:
 
 ### Messaging (Cross-IDE)
 - **send_message** — Send structured messages to other agents. Actions: `delegate_task`, `execute`.

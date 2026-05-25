@@ -693,14 +693,7 @@ export class ControlPlaneMigrationService {
             }
         }
 
-        const bundledMcpDir = this._resolveBundledMcpDirectory(extensionPath);
-        if (bundledMcpDir) {
-            await this._copyDirectoryRecursive(
-                bundledMcpDir,
-                path.join(parentDir, '.switchboard', 'MCP'),
-                { overwrite: false }
-            );
-        }
+
 
         // Update agent version tracking after successful copy
         if (extensionPath) {
@@ -711,13 +704,7 @@ export class ControlPlaneMigrationService {
         }
     }
 
-    private static _resolveBundledMcpDirectory(extensionPath: string): string | null {
-        const candidates = [
-            path.join(extensionPath, 'dist', 'mcp-server'),
-            path.join(extensionPath, 'src', 'mcp-server')
-        ];
-        return candidates.find((candidate) => fs.existsSync(path.join(candidate, 'mcp-server.js'))) || null;
-    }
+
 
     private static _getExtensionVersion(extensionPath: string): string | undefined {
         const packageJsonPath = path.join(extensionPath, 'package.json');
