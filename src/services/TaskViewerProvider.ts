@@ -59,7 +59,7 @@ import {
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
 import { LocalApiServer } from './LocalApiServer';
-import { KanbanDatabase, KanbanPlanRecord } from './KanbanDatabase';
+import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
@@ -655,7 +655,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const config = vscode.workspace.getConfiguration('switchboard');
             const cfg = config.get<any>('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: any[] } | undefined;
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
             if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
                 return allRoots;
@@ -679,6 +679,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
+                if (Array.isArray(m.dropdownWorkspaces)) {
+                    for (const f of m.dropdownWorkspaces) {
+                        if (typeof f === 'string') {
+                            const trimmed = f.trim();
+                            const expanded = trimmed.startsWith('~')
+                                ? path.join(os.homedir(), trimmed.slice(1))
+                                : trimmed;
+                            
+                            if (!path.isAbsolute(expanded)) {
+                                console.warn(`[TaskViewerProvider] Warning: Relative dropdownWorkspace "${f}" used in mapping. Please use absolute paths or ~.`);
+                            }
+                            
+                            mappedChildRoots.add(path.resolve(expanded));
+                        }
+                    }
+                }
             }
 
             return allRoots.filter(root => !mappedChildRoots.has(path.resolve(root)));
@@ -696,7 +712,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const allRoots = this._getWorkspaceRoots();
             const config = vscode.workspace.getConfiguration('switchboard');
             const cfg = config.get<any>('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: any[] } | undefined;
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
             if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
                 return;
@@ -714,6 +730,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             
                             if (!path.isAbsolute(expanded)) {
                                 console.warn(`[TaskViewerProvider] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
+                            }
+                            
+                            mappedChildRoots.add(path.resolve(expanded));
+                        }
+                    }
+                }
+                if (Array.isArray(m.dropdownWorkspaces)) {
+                    for (const f of m.dropdownWorkspaces) {
+                        if (typeof f === 'string') {
+                            const trimmed = f.trim();
+                            const expanded = trimmed.startsWith('~')
+                                ? path.join(os.homedir(), trimmed.slice(1))
+                                : trimmed;
+                            
+                            if (!path.isAbsolute(expanded)) {
+                                console.warn(`[TaskViewerProvider] Warning: Relative dropdownWorkspace "${f}" used in mapping. Please use absolute paths or ~.`);
                             }
                             
                             mappedChildRoots.add(path.resolve(expanded));
@@ -824,10 +856,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                              .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: any[] } | undefined;
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
-                    const parent = m.parentFolder || m.parentWorkspaceFolder;
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
                     if (typeof parent === 'string') {
                         const p = parent.trim();
                         const expanded = p.startsWith('~')
@@ -839,6 +871,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         for (const wf of m.workspaceFolders) {
                             if (typeof wf === 'string') {
                                 const p = wf.trim();
+                                const expanded = p.startsWith('~')
+                                    ? path.join(os.homedir(), p.slice(1))
+                                    : p;
+                                allowedRoots.add(path.resolve(expanded));
+                            }
+                        }
+                    }
+                    if (Array.isArray(m.dropdownWorkspaces)) {
+                        for (const dw of m.dropdownWorkspaces) {
+                            if (typeof dw === 'string') {
+                                const p = dw.trim();
                                 const expanded = p.startsWith('~')
                                     ? path.join(os.homedir(), p.slice(1))
                                     : p;
@@ -1660,17 +1703,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private async _updateKanbanColumnForSession(workspaceRoot: string, sessionId: string, column: string | null): Promise<boolean> {
         if (!column) return false;
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (!db) return false;
-        const updated = await db.updateColumn(sessionId, column);
-        if (!updated) return false;
-
-        const plan = await db.getPlanBySessionId(sessionId);
-        const planFile = typeof plan?.planFile === 'string' ? plan.planFile.trim() : '';
-        if (!planFile) return false;
-
-        // File-based state writes are disabled. KanbanDatabase is the sole source of truth.
-        return true;
+        if (!this._kanbanProvider) {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (!db) return false;
+            return !!(await db.updateColumn(sessionId, column));
+        }
+        return this._kanbanProvider.moveCardToColumn(workspaceRoot, sessionId, column);
     }
 
     /** Triggers a debounced Kanban board refresh after an Agents-tab dispatch. */
@@ -2404,6 +2442,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             );
         }
         await vscode.commands.executeCommand('switchboard.refreshUI');
+    }
+
+    /**
+     * Record a runsheet event for a column transition triggered from KanbanProvider.
+     * This replaces the runsheet updates that were previously handled by the
+     * kanbanForwardMove/kanbanBackwardMove command chain, which is no longer called
+     * from handlers that use moveCardToColumn directly.
+     */
+    public async recordRunSheetForColumnMove(
+        sessionId: string,
+        targetColumn: string,
+        direction: 'forward' | 'backward',
+        workspaceRoot: string
+    ): Promise<void> {
+        const normalizedTarget = String(targetColumn || '').trim().toLowerCase().replace(/\s+/g, '-');
+        if (!normalizedTarget) return;
+        const workflowName = direction === 'forward'
+            ? `move-to-${normalizedTarget}`
+            : `reset-to-${normalizedTarget}`;
+        const outcome = direction === 'forward'
+            ? 'User manually moved plan forwards'
+            : 'User manually moved plan backwards';
+        await this._updateSessionRunSheet(sessionId, workflowName, outcome, true, workspaceRoot);
     }
 
     private _workflowForForwardMove(targetColumn: string): string | null {
@@ -5871,7 +5932,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
         const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? true;
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
-        const ticketUpdateEnabled = roleConfig?.addons?.ticketUpdateEnabled ?? true;
+        const ticketUpdateMode = roleConfig?.addons?.ticketUpdateMode
+            ?? (roleConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
+                : roleConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
+                : 'disabled');
         const complexityScoringSkill = roleConfig?.addons?.complexityScoringSkill ?? true;
 
         return buildKanbanBatchPrompt(role, plans, {
@@ -5895,7 +5959,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             saveToLocalDocs: role === 'researcher' ? (roleConfig?.saveToLocalDocs ?? false) : undefined,
             localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string | undefined>('research.localFolderPath', undefined) : undefined,
             routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
-            ticketUpdateEnabled,
+            ticketUpdateMode,
             complexityScoringSkill,
         });
     }
@@ -5911,6 +5975,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
         `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
         `Do not modify the ticket description. Only add a comment. ` +
+        `If no ticket number is found, skip the ticket update and notify the user.`;
+
+    private static readonly TICKET_REFINE_DIRECTIVE =
+        `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+        `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+        `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
+        `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
+        `If no ticket number is found, skip the ticket update and notify the user.`;
+
+    private static readonly TICKET_RESEARCH_REFINE_DIRECTIVE =
+        `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
+        `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
+        `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
+        `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+        `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+        `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
+        `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
         `If no ticket number is found, skip the ticket update and notify the user.`;
 
     private buildCustomAgentPrompt(
@@ -5960,8 +6041,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
         if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
         if (addons?.dependencyCheckEnabled) prompt += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
-        if (addons?.ticketUpdateEnabled) {
-            prompt += `\n\n${TaskViewerProvider.TICKET_UPDATE_DIRECTIVE}`;
+        if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
+            const directive = addons.ticketUpdateMode === 'refine-ticket'
+                ? TaskViewerProvider.TICKET_REFINE_DIRECTIVE
+                : addons.ticketUpdateMode === 'research-and-refine'
+                    ? TaskViewerProvider.TICKET_RESEARCH_REFINE_DIRECTIVE
+                    : TaskViewerProvider.TICKET_UPDATE_DIRECTIVE;
+            prompt += `\n\n${directive}`;
         }
         if (addons?.complexityScoringSkill) {
             prompt += `\n\n${TaskViewerProvider.COMPLEXITY_SCORING_DIRECTIVE}`;
@@ -8207,6 +8293,9 @@ What would you like to find?`;
                         break;
                     }
                     case 'sendToTerminal': {
+                        // NOTE: The webview also sends a `source` field (actor, tool, allowBroadcast)
+                        // but source validation is unnecessary in the trusted webview context,
+                        // so it is intentionally not destructured here.
                         const { name, input, paced } = data;
                         if (typeof name !== 'string' || !name.trim()) {
                             console.error('[TaskViewer] sendToTerminal rejected: invalid terminal name');
@@ -8368,7 +8457,7 @@ What would you like to find?`;
         try {
             const cfg = vscode.workspace.getConfiguration('switchboard')
                 .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: any[] } | undefined;
+                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
             if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
                 const expandHome = (p: string): string => {
@@ -8379,8 +8468,9 @@ What would you like to find?`;
                 };
                 for (const mapping of cfg.mappings) {
                     // Watch the PARENT workspace folder where .switchboard/ lives
-                    if (typeof mapping.parentWorkspaceFolder === 'string') {
-                        const resolved = path.resolve(expandHome(mapping.parentWorkspaceFolder));
+                    const parent = mapping.parentFolder || (mapping as any).parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const resolved = path.resolve(expandHome(parent));
                         if (!foldersToWatch.includes(resolved)) {
                             foldersToWatch.push(resolved);
                         }
@@ -9864,7 +9954,11 @@ What would you like to find?`;
                     }]);
                 }
                 await db.updateStatus(sessionId, 'active');
-                await db.updateColumn(sessionId, 'CREATED');
+                if (this._kanbanProvider) {
+                    await this._kanbanProvider.moveCardToColumn(workspaceRoot, sessionId, 'CREATED');
+                } else {
+                    await db.updateColumn(sessionId, 'CREATED');
+                }
             }
 
             // Update run sheet to mark as not completed
@@ -12655,7 +12749,11 @@ What would you like to find?`;
             if (db) {
                 // Belt-and-suspenders: also update the raw sessionId in case it differs from registry-derived IDs.
                 await db.updateStatus(sessionId, 'completed');
-                await db.updateColumn(sessionId, 'COMPLETED');
+                if (this._kanbanProvider) {
+                    await this._kanbanProvider.moveCardToColumn(resolvedWorkspaceRoot, sessionId, 'COMPLETED');
+                } else {
+                    await db.updateColumn(sessionId, 'COMPLETED');
+                }
             }
             await this._logEvent('plan_management', {
                 operation: 'mark_complete',
@@ -13328,7 +13426,7 @@ What would you like to find?`;
             }
             console.log(`[refreshRunSheets] DB returned ${activeRows.length} active, ${completedRows.length} completed for workspace ${workspaceId}. Column distribution:`, JSON.stringify(colDist));
 
-            const projects = await db.getProjects(workspaceId);
+            const projects = workspaceId ? await db.getProjects(workspaceId) : [];
 
             // Feed kanban board from the SAME snapshot (always, even without sidebar)
             console.log(`[refreshRunSheets] kanbanProvider=${!!this._kanbanProvider}, calling refreshWithData`);
@@ -14458,45 +14556,25 @@ What would you like to find?`;
             return false;
         }
 
-        const gitWorktreesEnabled = await this._getGitWorktreesEnabled(resolvedWorkspaceRoot);
-
-        if (gitWorktreesEnabled && ['coder', 'lead', 'intern'].includes(role)) {
-            // Pre-check: is this a git repo?
-            const isGit = await this._isGitRepo(resolvedWorkspaceRoot);
-            if (!isGit) {
-                vscode.window.showWarningMessage(
-                    'Git worktrees enabled but workspace is not a git repository. Dispatching without worktree.'
-                );
-            } else {
-                try {
-                    // Auto-commit any dirty working directory before creating worktree.
-                    // This ensures the worktree starts from a clean HEAD and prevents
-                    // merge conflicts caused by uncommitted changes drifting in main.
-                    await this._autoCommitDirtyMain(resolvedWorkspaceRoot);
-
-                    const { worktreePath, worktreeBranch } = await this._createWorktree(resolvedWorkspaceRoot, sessionId);
-
-                    // Store metadata in kanban_meta
-                    const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-                    if (db) {
-                        await db.setWorktreeMeta(sessionId, { worktreePath, worktreeBranch });
-                        await db.updateHasWorktree(sessionId, true);
+        // Check if session has an existing worktree — use it as working directory
+        if (sessionId) {
+            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+            if (db) {
+                const worktreeMeta = await db.getWorktreeMeta(sessionId);
+                if (worktreeMeta && worktreeMeta.worktreePath) {
+                    // Verify worktree path still exists on disk
+                    if (fs.existsSync(worktreeMeta.worktreePath)) {
+                        options = {
+                            ...options,
+                            workingDirectory: worktreeMeta.worktreePath,
+                            gitProhibitionEnabled: false
+                        };
+                    } else {
+                        // Stale metadata — clear it
+                        console.warn(`[TaskViewerProvider] Worktree path ${worktreeMeta.worktreePath} no longer exists, using main tree`);
+                        await db.clearWorktreeMeta(sessionId);
+                        await db.updateHasWorktree(sessionId, false);
                     }
-
-                    // Override options
-                    options = {
-                        ...options,
-                        workingDirectory: worktreePath,
-                        gitProhibitionEnabled: false
-                    };
-
-                    vscode.window.showInformationMessage(
-                        `Created worktree at ${worktreePath} on branch ${worktreeBranch}`
-                    );
-                } catch (err: any) {
-                    vscode.window.showErrorMessage(
-                        `Failed to create worktree: ${err.message}. Dispatching without worktree.`
-                    );
                 }
             }
         }
@@ -16732,6 +16810,27 @@ Create this file exactly as specified, then continue your work.`);
         }
     }
 
+    public async autoCommitForCodeReview(workspaceRoot: string, planTopic: string): Promise<void> {
+        const execAsync = promisify(cp.exec);
+        try {
+            // git status --porcelain detects all change types (unstaged, staged, untracked)
+            // and always exits 0 — unlike git diff --exit-code which exits 1 on differences
+            // and causes promisify(exec) to throw, silently skipping the commit.
+            const { stdout: statusStdout } = await execAsync('git status --porcelain', { cwd: workspaceRoot });
+            if (!statusStdout.trim()) {
+                console.log(`[TaskViewerProvider] Working tree clean — skipping auto-commit for code review`);
+                return;
+            }
+            await execAsync('git add -A', { cwd: workspaceRoot });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            const safeTopic = planTopic.replace(/"/g, '').substring(0, 80);
+            await execAsync(`git commit -m "switchboard: auto-commit before code review (${safeTopic}, ${timestamp})"`, { cwd: workspaceRoot });
+            console.log(`[TaskViewerProvider] Auto-committed before code review for: ${safeTopic}`);
+        } catch (e: any) {
+            console.warn(`[TaskViewerProvider] Auto-commit before code review failed (non-fatal): ${e.message}`);
+        }
+    }
+
     private async _isGitRepo(workspaceRoot: string): Promise<boolean> {
         const execAsync = promisify(cp.exec);
         try {
@@ -16817,10 +16916,49 @@ Create this file exactly as specified, then continue your work.`);
         await db.updateHasWorktree(sessionId, false);
     }
 
-    private async _getGitWorktreesEnabled(workspaceRoot: string): Promise<boolean> {
-        if (!this._kanbanProvider) return false;
-        return this._kanbanProvider.getGitWorktreesEnabled(workspaceRoot);
+    public async createWorktreeForSession(
+        workspaceRoot: string,
+        sessionId: string
+    ): Promise<void> {
+        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
+        if (!resolvedWorkspaceRoot) return;
+
+        // Check if this is a git repo
+        const isGit = await this._isGitRepo(resolvedWorkspaceRoot);
+        if (!isGit) {
+            console.warn('[TaskViewerProvider] Worktree addon enabled but workspace is not a git repository.');
+            return;
+        }
+
+        // Check if worktree already exists for this session
+        const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+        if (db) {
+            const existingMeta = await db.getWorktreeMeta(sessionId);
+            if (existingMeta && existingMeta.worktreePath) {
+                console.log(`[TaskViewerProvider] Worktree already exists for session ${sessionId}`);
+                return;
+            }
+        }
+
+        try {
+            // Auto-commit any dirty working directory before creating worktree
+            await this._autoCommitDirtyMain(resolvedWorkspaceRoot);
+
+            const { worktreePath, worktreeBranch } = await this._createWorktree(resolvedWorkspaceRoot, sessionId);
+
+            // Store metadata in kanban_meta
+            if (db) {
+                await db.setWorktreeMeta(sessionId, { worktreePath, worktreeBranch });
+                await db.updateHasWorktree(sessionId, true);
+            }
+
+            console.log(`[TaskViewerProvider] Created worktree for session ${sessionId}: ${worktreePath}`);
+        } catch (e: any) {
+            console.error(`[TaskViewerProvider] Failed to create worktree for session ${sessionId}:`, e);
+        }
     }
+
+
 
     public dispose() {
         this._stopAutobanEngine();

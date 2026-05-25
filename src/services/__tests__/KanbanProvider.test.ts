@@ -24,7 +24,8 @@ suite('KanbanProvider', () => {
             complexity: 'medium',
             workspaceRoot,
             dependencies: [],
-            hasBlockingDependencies: false
+            hasBlockingDependencies: false,
+            hasWorktree: false
         }));
 
     setup(() => {

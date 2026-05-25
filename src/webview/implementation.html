@@ -2496,51 +2496,51 @@
             switch (message.type) {
                 case 'initialState':
                     setActiveTab(message.activeTab || 'agents', false);
-                    if (message.type === 'initialState') {
-                        if (message.activeSubTab) {
-                            const validSubTabs = ['agents', 'terminals', 'project'];
-                            currentAgentTab = validSubTabs.includes(message.activeSubTab) ? message.activeSubTab : 'terminals';
-                            switchAgentTab(currentAgentTab);
+                    {
+                        // Restore sub-tab selection from persisted state
+                        const validSubTabs = ['agents', 'terminals', 'project'];
+                        const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
+                        currentAgentTab = restoredSubTab;
+                        switchAgentTab(currentAgentTab);
+                    }
+                    toggleOnboarding(message.needsSetup === true);
+                    if (message.workspaceRoot) {
+                        currentWorkspaceRoot = String(message.workspaceRoot).trim();
+                    }
+                    // Restore ClickUp hierarchy state from persisted config
+                    if (message.clickupHierarchyState) {
+                        const hs = message.clickupHierarchyState;
+                        if (hs.selectedSpaceId) {
+                            clickUpSelectedSpaceId = hs.selectedSpaceId;
                         }
-                        toggleOnboarding(message.needsSetup === true);
-                        if (message.workspaceRoot) {
-                            currentWorkspaceRoot = String(message.workspaceRoot).trim();
+                        if (hs.selectedFolderId) {
+                            clickUpSelectedFolderId = hs.selectedFolderId;
                         }
-                        // Restore ClickUp hierarchy state from persisted config
-                        if (message.clickupHierarchyState) {
-                            const hs = message.clickupHierarchyState;
-                            if (hs.selectedSpaceId) {
-                                clickUpSelectedSpaceId = hs.selectedSpaceId;
-                            }
-                            if (hs.selectedFolderId) {
-                                clickUpSelectedFolderId = hs.selectedFolderId;
-                            }
-                            if (hs.selectedListId) {
-                                clickUpSelectedListId = hs.selectedListId;
-                            }
-                            // Flag to distinguish restore cascade from normal user navigation
-                            _hierarchyRestorePending = !!(clickUpSelectedSpaceId);
+                        if (hs.selectedListId) {
+                            clickUpSelectedListId = hs.selectedListId;
                         }
-                        // Restore Linear project picker value
-                        if (message.linearProjectPickerValue) {
-                            linearProjectPickerValue = message.linearProjectPickerValue;
-                            _restoredLinearProjectPickerValue = message.linearProjectPickerValue;
+                        // Flag to distinguish restore cascade from normal user navigation
+                        _hierarchyRestorePending = !!(clickUpSelectedSpaceId);
+                    }
+                    // Restore Linear project picker value
+                    if (message.linearProjectPickerValue) {
+                        linearProjectPickerValue = message.linearProjectPickerValue;
+                        _restoredLinearProjectPickerValue = message.linearProjectPickerValue;
+                    }
+                    // Restore integration provider preference from initialState
+                    if (message.integrationProviderPreference !== undefined) {
+                        const newProvider = message.integrationProviderPreference;
+                        const providerChanged = lastIntegrationProvider !== null && lastIntegrationProvider !== newProvider;
+                        lastIntegrationProvider = newProvider;
+                        updateIntegrationTabLabel(newProvider);
+                    }
+                    // If hierarchy state was restored, trigger data loading cascade
+                    if (lastIntegrationProvider === 'clickup') {
+                        if (!clickUpSpacesLoadedOnce && !clickUpHierarchyLoading) {
+                            loadClickUpSpaces();
                         }
-                        // Restore integration provider preference from initialState
-                        if (message.integrationProviderPreference !== undefined) {
-                            const newProvider = message.integrationProviderPreference;
-                            const providerChanged = lastIntegrationProvider !== null && lastIntegrationProvider !== newProvider;
-                            lastIntegrationProvider = newProvider;
-                            updateIntegrationTabLabel(newProvider);
-                        }
-                        // If hierarchy state was restored, trigger data loading cascade
-                        if (lastIntegrationProvider === 'clickup') {
-                            if (!clickUpSpacesLoadedOnce && !clickUpHierarchyLoading) {
-                                loadClickUpSpaces();
-                            }
-                            if (!clickUpProjectLoadedOnce && !clickUpProjectLoading && clickUpSelectedListId) {
-                                loadClickUpProject(false);
-                            }
+                        if (!clickUpProjectLoadedOnce && !clickUpProjectLoading && clickUpSelectedListId) {
+                            loadClickUpProject(false);
                         }
                     }
                     break;

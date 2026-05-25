@@ -1282,11 +1282,6 @@
             border-color: color-mix(in srgb, var(--accent-teal) 35%, transparent);
         }
 
-        /* Controls strip spacer */
-        .controls-spacer {
-            flex: 1;
-        }
-
         /* CLI toggle inline label */
         .cli-toggle-inline {
             display: inline-flex;
@@ -1889,6 +1884,17 @@
             margin: 0;
         }
 
+        .addon-radio-group {
+            margin-bottom: 8px;
+            padding: 4px 0;
+            display: flex;
+            flex-direction: column;
+            gap: 6px;
+        }
+        .addon-radio-group .checkbox-item {
+            padding-left: 4px;
+        }
+
         .tooltip {
             font-size: 11px;
             color: var(--text-secondary);
@@ -1924,6 +1930,8 @@
     <!-- Kanban Tab Content -->
     <div id="kanban-tab-content" class="kanban-tab-content active">
         <div class="controls-strip">
+            <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
+            <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
             <label class="cli-toggle-inline" id="cli-toggle" data-tooltip="When OFF, moves and prompts do not trigger CLI agent actions">
                 <label class="toggle-switch">
                     <input type="checkbox" id="cli-triggers-toggle" checked>
@@ -1939,8 +1947,6 @@
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
             <button class="strip-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">⇥ COLLAPSE CODERS</button>
-            <button class="strip-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">▶ START AUTOMATION</button>
-            <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
         </div>
         <div class="project-strip" id="project-strip">
             <select id="workspace-select" class="workspace-select" data-tooltip="Select workspace" style="min-width:180px;"></select>
@@ -2120,12 +2126,13 @@
             <input id="agents-tab-jules-auto-sync" type="checkbox" style="width:auto;margin:0;">
             <span>Auto-sync repo before sending to Jules</span>
           </label>
+
           <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-            <input id="agents-tab-git-worktrees" type="checkbox" style="width:auto;margin:0;">
-            <span>Use git worktrees for coder agents</span>
+            <input id="agents-tab-auto-commit-code-review" type="checkbox" style="width:auto;margin:0;">
+            <span>Auto-commit when moving to Code Review</span>
           </label>
-          <div id="worktree-auto-commit-note" style="display:none;font-size:10px;color:var(--text-muted);margin-left:24px;margin-top:2px;">
-            Uncommitted changes are auto-committed to main before each worktree is created.
+          <div id="auto-commit-code-review-note" style="display:none;font-size:10px;color:var(--text-muted);margin-left:24px;margin-top:2px;">
+            Uncommitted changes are auto-committed before a plan enters Code Review, giving reviewers a clean diff.
           </div>
         </div>
 
@@ -2171,12 +2178,21 @@
                   <span>Apply Complexity Scoring (if plan lacks Complexity Audit)</span>
                 </label>
                 <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="ca-addon-ticket-update" style="width:auto;margin:0;">
-                  <span>Enable Ticket Update (add AI Analysis comment to ticket)</span>
+                  <span>Ticket Update Mode:</span>
+                  <select id="ca-addon-ticket-update-mode" style="background:#0a0a0a;color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:2px 4px;font-size:10px;font-family:var(--font-mono);">
+                    <option value="disabled">Disabled</option>
+                    <option value="comment-only">Comment Only</option>
+                    <option value="refine-ticket">Refine Ticket</option>
+                    <option value="research-and-refine">Research & Refine</option>
+                  </select>
                 </label>
                 <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
                   <input type="checkbox" id="ca-addon-research" style="width:auto;margin:0;">
                   <span>Enable Deep Research (50-100 sources, codebase + web)</span>
+                </label>
+                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
+                  <input type="checkbox" id="ca-addon-use-worktree" style="width:auto;margin:0;">
+                  <span>Use Worktree</span>
                 </label>
                 <p style="font-size:11px;color:var(--text-secondary);margin:2px 0 0 0;padding-left:22px;">
                   Triggers deep_planning skill protocol. Skips planning proposal phase.
@@ -2635,23 +2651,50 @@
             desc.textContent = `${role.charAt(0).toUpperCase() + role.slice(1)}-specific orchestration features:`;
 
             addons.forEach(addon => {
-                const isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
-                const label = document.createElement('label');
-                label.className = 'checkbox-item';
-                label.title = addon.tooltip;
-                label.innerHTML = `
-                    <input type="checkbox" id="addon_${addon.id}" ${isChecked ? 'checked' : ''}>
-                    <span>${addon.label}</span>
-                    <span class="tooltip">${addon.tooltip}</span>
-                `;
-                label.querySelector('input').addEventListener('change', (e) => {
-                    if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
-                    if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
-                    roleConfigs[role].addons[addon.id] = e.target.checked;
-                    saveRoleConfig(role);
-                    refreshPreview();
-                });
-                group.appendChild(label);
+                if (addon.type === 'radio' && addon.options) {
+                    // Render radio button group
+                    const currentValue = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'addon-radio-group';
+                    wrapper.innerHTML = `<span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">${addon.label}</span>`;
+                    addon.options.forEach(opt => {
+                        const label = document.createElement('label');
+                        label.className = 'checkbox-item';
+                        label.title = opt.tooltip || '';
+                        label.innerHTML = `
+                            <input type="radio" name="addon_${role}_${addon.id}" value="${opt.value}" ${currentValue === opt.value ? 'checked' : ''}>
+                            <span>${opt.label}</span>
+                        `;
+                        label.querySelector('input').addEventListener('change', (e) => {
+                            if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                            if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                            roleConfigs[role].addons[addon.id] = e.target.value;
+                            saveRoleConfig(role);
+                            refreshPreview();
+                        });
+                        wrapper.appendChild(label);
+                    });
+                    group.appendChild(wrapper);
+                } else {
+                    // Existing checkbox rendering
+                    const isChecked = roleConfigs[role]?.addons?.[addon.id] ?? addon.default;
+                    const label = document.createElement('label');
+                    label.className = 'checkbox-item';
+                    label.title = addon.tooltip;
+                    label.innerHTML = `
+                        <input type="checkbox" id="addon_${addon.id}" ${isChecked ? 'checked' : ''}>
+                        <span>${addon.label}</span>
+                        <span class="tooltip">${addon.tooltip}</span>
+                    `;
+                    label.querySelector('input').addEventListener('change', (e) => {
+                        if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                        if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                        roleConfigs[role].addons[addon.id] = e.target.checked;
+                        saveRoleConfig(role);
+                        refreshPreview();
+                    });
+                    group.appendChild(label);
+                }
             });
         }
 
@@ -2713,8 +2756,10 @@
           document.getElementById('ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
           document.getElementById('ca-addon-split-plan').checked = addons.splitPlan === true;
           document.getElementById('ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
-          document.getElementById('ca-addon-ticket-update').checked = addons.ticketUpdateEnabled === true;
+          const ticketUpdateMode = addons.ticketUpdateMode || (addons.ticketUpdateEnabled === true ? 'comment-only' : 'disabled');
+          document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
           document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
+          document.getElementById('ca-addon-use-worktree').checked = addons.useWorktree === true;
           document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
           document.getElementById('ca-addon-workflow-path').value = addons.customWorkflowPath || '';
 
@@ -2765,8 +2810,9 @@
                 dependencyCheckEnabled: document.getElementById('ca-addon-dependency-check').checked,
                 splitPlan: document.getElementById('ca-addon-split-plan').checked,
                 complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
-                ticketUpdateEnabled: document.getElementById('ca-addon-ticket-update').checked,
+                ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
                 researchEnabled: document.getElementById('ca-addon-research').checked,
+                useWorktree: document.getElementById('ca-addon-use-worktree').checked,
                 designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
                 customWorkflowPath: document.getElementById('ca-addon-workflow-path').value.trim() || undefined,
             }
@@ -2860,7 +2906,7 @@
           return {
             commands, visibleAgents,
             julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
-            gitWorktreesEnabled: document.getElementById('agents-tab-git-worktrees')?.checked ?? false,
+            autoCommitOnCodeReview: document.getElementById('agents-tab-auto-commit-code-review')?.checked ?? true,
           };
         }
         function agentsTabSaveConfig() {
@@ -2875,13 +2921,14 @@
           i.addEventListener('blur', agentsTabSaveConfig);
         });
 
-        // Toggle worktree auto-commit note visibility based on checkbox state
-        const worktreeCb = document.getElementById('agents-tab-git-worktrees');
-        const worktreeNote = document.getElementById('worktree-auto-commit-note');
-        if (worktreeCb && worktreeNote) {
-          worktreeNote.style.display = worktreeCb.checked ? 'block' : 'none';
-          worktreeCb.addEventListener('change', () => {
-            worktreeNote.style.display = worktreeCb.checked ? 'block' : 'none';
+
+
+        const autoCommitCb = document.getElementById('agents-tab-auto-commit-code-review');
+        const autoCommitNote = document.getElementById('auto-commit-code-review-note');
+        if (autoCommitCb && autoCommitNote) {
+          autoCommitNote.style.display = autoCommitCb.checked ? 'block' : 'none';
+          autoCommitCb.addEventListener('change', () => {
+            autoCommitNote.style.display = autoCommitCb.checked ? 'block' : 'none';
           });
         }
         // NOTE: Prompts tab autosave is handled by initPromptsTabListeners() and saveRoleConfig(),
@@ -2979,7 +3026,7 @@
         let cliTriggersEnabled = true;
         window.worktreeCounts = {};
         let dynamicComplexityRoutingEnabled = true;
-        let allowUnknownComplexityAutoMove = false;
+        let allowUnknownComplexityAutoMove = true;
         let clearTerminalBeforePrompt = false;
         let clearTerminalBeforePromptDelay = 1500;
 
@@ -5035,6 +5082,7 @@
                     showingBacklog = event.data.showing;
                     renderColumns();
                     renderBoard(currentCards);
+                    updateAllColumnAgents();
                     break;
                 case 'updateColumns':
                     if (Array.isArray(msg.columns) && msg.columns.length > 0) {
@@ -5084,7 +5132,7 @@
                     break;
                 case 'updateAgentNames':
                     lastAgentNames = msg.agentNames || {};
-                    // Defer to next microtask so any pending updateColumns
+                    // Defer to next tick so any pending updateColumns
                     // message is processed first, ensuring columnDefinitions
                     // includes custom agent columns before we resolve roles.
                     setTimeout(() => updateAllColumnAgents(), 0);
@@ -5309,11 +5357,13 @@
                   });
                   const julesSyncCb = document.getElementById('agents-tab-jules-auto-sync');
                   if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
-                  const gitWorktreesCb = document.getElementById('agents-tab-git-worktrees');
-                  if (gitWorktreesCb) gitWorktreesCb.checked = !!msg.gitWorktreesEnabled;
-                  // Show/hide the auto-commit note based on checkbox state
-                  const worktreeHydrateNote = document.getElementById('worktree-auto-commit-note');
-                  if (worktreeHydrateNote) worktreeHydrateNote.style.display = !!msg.gitWorktreesEnabled ? 'block' : 'none';
+
+                  
+                  const autoCommitCb = document.getElementById('agents-tab-auto-commit-code-review');
+                  if (autoCommitCb) autoCommitCb.checked = msg.autoCommitOnCodeReview !== false;
+                  const autoCommitNote = document.getElementById('auto-commit-code-review-note');
+                  if (autoCommitNote) autoCommitNote.style.display = msg.autoCommitOnCodeReview !== false ? 'block' : 'none';
+                  
                   // Sync lastVisibleAgents and column/Jules visibility.
                   // Unlike the visibleAgents handler (which receives defaults-merged data
                   // and uses a truthiness guard), startupCommands sends raw state.visibleAgents
@@ -5337,17 +5387,19 @@
                   if (el) el.checked = msg.enabled === true;
                   break;
                 }
-                case 'gitWorktreesSetting': {
-                  const el = document.getElementById('agents-tab-git-worktrees');
-                  if (el) el.checked = msg.enabled === true;
-                  const noteEl = document.getElementById('worktree-auto-commit-note');
-                  if (noteEl) noteEl.style.display = msg.enabled === true ? 'block' : 'none';
+
+                case 'autoCommitOnCodeReviewSetting': {
+                  const el = document.getElementById('agents-tab-auto-commit-code-review');
+                  if (el) el.checked = msg.enabled !== false;
+                  const noteEl = document.getElementById('auto-commit-code-review-note');
+                  if (noteEl) noteEl.style.display = msg.enabled !== false ? 'block' : 'none';
                   break;
                 }
                 case 'worktreeCounts': {
                   window.worktreeCounts = msg.counts;
                   renderColumns();
                   renderBoard(currentCards);
+                  updateAllColumnAgents();
                   break;
                 }
                 case 'saveCustomAgentResult': {

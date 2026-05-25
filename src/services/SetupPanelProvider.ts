@@ -698,6 +698,13 @@ export class SetupPanelProvider implements vscode.Disposable {
                         if (m.parentFolder && !fs.existsSync(m.parentFolder)) {
                             warnings.push(`Mapping "${m.name}": parent folder not found at ${m.parentFolder}`);
                         }
+                        if (Array.isArray(m.dropdownWorkspaces)) {
+                            for (const dw of m.dropdownWorkspaces) {
+                                if (typeof dw === 'string' && !fs.existsSync(dw)) {
+                                    warnings.push(`Mapping "${m.name}": dropdown workspace folder not found at ${dw}`);
+                                }
+                            }
+                        }
                     }
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappings',

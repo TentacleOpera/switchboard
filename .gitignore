@@ -64,7 +64,6 @@ list_output.txt
 
 .web-ai/
 
-
 # >>> Switchboard managed exclusions >>>
 # Switchboard runtime state (per-session, not shareable)
 .switchboard/*

@@ -218,3 +218,70 @@ document.querySelectorAll('.card-btn.copy').forEach(btn => {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass — Completed
+
+**Reviewer**: Grumpy Principal Engineer (inline review)
+**Date**: 2026-05-25
+**Verdict**: **PASS — No code fixes required**
+
+### Stage 1: Grumpy Findings
+
+| # | Finding | Severity | Details |
+|---|---------|----------|---------|
+| 1 | `backendColumn`/`nextColSource` init diverges from column header pattern | NIT | Card handler initializes `nextColSource = column` (raw) then overwrites in `if` block; column header initializes `nextColSource = backendColumn` (pre-resolved). Functionally equivalent — produces identical results. |
+| 2 | `moveCardsOptimistically` called with raw `column` | — | No issue. Both handlers pass raw `column`; `moveCardsOptimistically` resolves actual source from `currentCards` internally (line 3460-3461). |
+| 3 | `backendColumn` only set inside coded-column branch | — | No issue. For non-coded columns, `backendColumn` stays as `column` (correct). For coded columns, it's set inside the `if` (correct). For `CODED_AUTO`, it resolves to first coded def (correct). |
+| 4 | No `selectedCards.delete()` call | NIT | Intentional — card-level buttons don't use selection model. Column header buttons operate on selected cards. |
+| 5 | Plan references stale line numbers | NIT | Plan says "lines 3815-3820" for column header resolution; actual code is at lines 3858-3863. Documentation drift only. |
+| 6 | `btn.closest()` fallback added (not in plan) | NIT | Positive deviation — adds robustness if `data-column` is missing on button. |
+| 7 | Empty `column` guard | — | Pre-existing risk, not introduced by this plan. |
+| 8 | Duplicate `CODED_IDS` definitions | NIT | Pre-existing (5+ locations), out of scope. |
+
+### Stage 2: Balanced Synthesis
+
+**No CRITICAL or MAJOR findings.** All findings are NIT-level or non-issues.
+
+- **Keep**: Implementation as-is. The coded-column resolution produces identical results to the column header handler (verified by automated equivalence test).
+- **Keep**: `btn.closest()` fallback (positive deviation from plan).
+- **Defer**: Structural alignment of `backendColumn`/`nextColSource` initialization with column header pattern (cosmetic, risk of regression outweighs benefit).
+- **Defer**: Extracting `CODED_IDS` to a constant (pre-existing, out of scope).
+
+### Code Fixes Applied
+
+None. No CRITICAL or MAJOR findings required code changes.
+
+### Verification Results
+
+1. **Syntax check**: Script section parses without errors ✓
+2. **Structural checks** (all PASS):
+   - `getNextColumn` call found ✓
+   - `moveCardsOptimistically` call found ✓
+   - `highlight` class addition found ✓
+   - `animationend` listener found ✓
+   - `CODED_IDS` definition found ✓
+   - `CODED_AUTO` handling found ✓
+   - `backendColumn` variable found ✓
+   - `promptSelected` message type found ✓
+3. **Equivalence test** (all PASS):
+   - `CREATED` → backendColumn=CREATED, nextCol=PLAN REVIEWED ✓
+   - `PLAN REVIEWED` → backendColumn=PLAN REVIEWED, nextCol=LEAD CODED ✓
+   - `LEAD CODED` → backendColumn=LEAD CODED, nextCol=CODE REVIEWED ✓
+   - `CODER CODED` → backendColumn=CODER CODED, nextCol=CODE REVIEWED ✓
+   - `CODE REVIEWED` → backendColumn=CODE REVIEWED, nextCol=COMPLETED ✓
+   - `CODED_AUTO` → backendColumn=LEAD CODED, nextCol=CODE REVIEWED ✓
+
+### Implementation Location
+
+- **File modified**: `src/webview/kanban.html`
+- **Handler location**: Lines 4225-4263 (`.card-btn.copy` click handler)
+- **Key logic**: Coded-column resolution at lines 4237-4243, highlight at lines 4247-4251, optimistic move at line 4252, backend message at lines 4256-4261
+
+### Remaining Risks
+
+Same as documented in original plan (no new risks introduced):
+1. Error revert path deferred — `_refreshBoard()` reconciles
+2. Coded column resolution — verified correct via equivalence test
+3. Rapid double-click — accepted risk, identical to column header buttons

@@ -558,4 +558,40 @@ node src/test/agent-prompt-builder-ticket-updater-modes.test.js
 
 ---
 
-**Recommendation: Send to Coder**
+## Review Results (Post-Implementation Pass)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | File | Finding |
+|---|----------|------|---------|
+| 1 | **MAJOR** | TaskViewerProvider.ts | `TICKET_UPDATE_DIRECTIVE` was hardcoded as comment-only but applied to ALL non-disabled modes in `buildCustomAgentPrompt`. Custom agents with `refine-ticket` or `research-and-refine` mode would receive the wrong directive ("Only add a comment" instead of "Refine the ticket description"). |
+| 2 | **MAJOR** | test file | Migration test was misleading — comment claimed to test `ticketUpdateEnabled=true` migration but actually tested `ticketUpdateMode: undefined` fallback. The real migration logic lives in `parseCustomAgentAddons()`, not in the prompt builder. |
+| 3 | NIT | agentPromptBuilder.ts | `analysisTemplate()` closure recreated per call (micro-opt, deferred) |
+| 4 | NIT | test file | Test requires compiled `out/` but verification step assumed `src/` runnable (structural constraint, deferred) |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix #1 (MAJOR)**: Applied. Added `TICKET_REFINE_DIRECTIVE` and `TICKET_RESEARCH_REFINE_DIRECTIVE` static constants to `TaskViewerProvider`. Updated `buildCustomAgentPrompt` to select the correct directive based on `addons.ticketUpdateMode`.
+- **Fix #2 (MAJOR)**: Applied. Corrected the misleading test comment. Added actual migration tests using `parseCustomAgentAddons()` that verify `ticketUpdateEnabled: true` → `'comment-only'`, `ticketUpdateEnabled: false` → `'disabled'`, and `ticketUpdateMode: 'refine-ticket'` passthrough.
+- **NIT #3-4**: Deferred. Not worth the churn.
+
+### Files Changed by Review
+
+- `src/services/TaskViewerProvider.ts` — Added `TICKET_REFINE_DIRECTIVE` and `TICKET_RESEARCH_REFINE_DIRECTIVE` static constants; updated `buildCustomAgentPrompt` to select mode-appropriate directive
+- `src/test/agent-prompt-builder-ticket-updater-modes-test.js` — Fixed misleading comment; added `parseCustomAgentAddons` import; added 3 actual migration tests
+
+### Validation Results
+
+- **TypeScript check**: Zero new type errors introduced. Pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated import path issues) remain unchanged.
+- **Compilation**: Skipped per session directives.
+- **Automated tests**: Skipped per session directives.
+
+### Remaining Risks
+
+- **Low risk**: Migration logic is now properly tested via `parseCustomAgentAddons()`.
+- **Custom agent directive consistency**: The `buildCustomAgentPrompt` path now has mode-aware directives matching the `buildKanbanBatchPrompt` ticket_updater path. Both paths produce consistent directives for the same mode.
+- **No CRITICAL findings remain.**
+
+---
+
+**Status: Review Complete — Ready for Commit**

@@ -158,3 +158,79 @@ function switchAgentTab(tab) {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass — Completed
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | Dead code guard `if (message.type === 'initialState')` — already inside `case 'initialState':`, leftover from removed `mcpStatus` fallthrough | implementation.html:2499 |
+| 2 | MAJOR→NIT | Double data-request on most common restore path: `switchAgentTab('terminals')` sends `getStartupCommands`/`getVisibleAgents`, then `toggleOnboarding(false)` sends them again. Idempotent so no visible glitch, but wasteful. | implementation.html:2503 + 5547-5548 |
+| 3 | NIT | Missing else branch for falsy `activeSubTab` — when no persisted state exists, `switchAgentTab` is never called, leaving DOM state to rely on HTML defaults. Fragile but currently correct. | implementation.html:2500-2504 |
+| 4 | NIT | Redundant `setActiveSubTab` persist-on-restore — writes back the same value just read from workspaceState. Harmless extra round-trip. | implementation.html:3307 |
+| 5 | NIT | `validSubTabs` array triplicated across 3 locations (initialState handler, switchAgentTab tabs object, TaskViewerProvider handler). Maintenance risk if new sub-tabs are added. | implementation.html:2501, 3308; TaskViewerProvider.ts:8034 |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| Dead `if` guard | **Fixed** | One-line removal, eliminates confusion for next reader |
+| Missing else branch / always call `switchAgentTab` | **Fixed** | Merged with guard removal — now always calls `switchAgentTab` with resolved value, making restore logic robust regardless of HTML defaults |
+| Double data-request | **Deferred** | Idempotent messages, no visible glitch. Fixing requires refactoring `toggleOnboarding` data bootstrap (called from both `initialState` and `setupStatus`), which is outside plan scope |
+| Redundant persist-on-restore | **Deferred** | Harmless extra message; adding a `persist` flag to `switchAgentTab` is a larger refactor than warranted |
+| `validSubTabs` triplication | **Deferred** | No runtime impact; extracting a constant is a separate cleanup PR |
+
+### Code Fixes Applied
+
+**File: `src/webview/implementation.html`** (initialState handler, ~line 2497)
+
+Before (with issues):
+```javascript
+case 'initialState':
+    setActiveTab(message.activeTab || 'agents', false);
+    if (message.type === 'initialState') {       // ← dead guard
+        if (message.activeSubTab) {               // ← missing else for falsy case
+            const validSubTabs = ['agents', 'terminals', 'project'];
+            currentAgentTab = validSubTabs.includes(message.activeSubTab) ? message.activeSubTab : 'terminals';
+            switchAgentTab(currentAgentTab);       // ← not called when activeSubTab is falsy
+        }
+        toggleOnboarding(message.needsSetup === true);
+        // ... rest of handler with extra indent from removed if-block
+    }
+```
+
+After (fixed):
+```javascript
+case 'initialState':
+    setActiveTab(message.activeTab || 'agents', false);
+    {
+        // Restore sub-tab selection from persisted state
+        const validSubTabs = ['agents', 'terminals', 'project'];
+        const restoredSubTab = (message.activeSubTab && validSubTabs.includes(message.activeSubTab)) ? message.activeSubTab : 'terminals';
+        currentAgentTab = restoredSubTab;
+        switchAgentTab(currentAgentTab);           // ← always called, even for default 'terminals'
+    }
+    toggleOnboarding(message.needsSetup === true);
+    // ... rest of handler at correct indent level (no orphaned if-block)
+```
+
+Changes:
+- Removed dead `if (message.type === 'initialState')` guard
+- Always call `switchAgentTab` with the resolved sub-tab value (even when it's the default `'terminals'`)
+- Validation now handles both falsy `activeSubTab` AND invalid values in a single expression
+- Fixed indentation of subsequent code that was nested inside the removed guard
+
+### Verification Results
+
+- **TypeScript typecheck**: PASS — no new errors introduced. Two pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated import path issues).
+- **Automated tests**: Skipped per instructions (no webview UI test infrastructure).
+- **Manual verification**: Required — follow steps in Verification Plan above.
+
+### Remaining Risks
+
+1. **Double data-request on terminals restore** (NIT): When persisted sub-tab is `'terminals'` and `needsSetup` is false, `getStartupCommands`/`getVisibleAgents` are sent twice (once from `switchAgentTab`, once from `toggleOnboarding`). Idempotent, no visible glitch. Fix requires refactoring `toggleOnboarding` data bootstrap to be aware of `switchAgentTab`'s prior calls.
+2. **`validSubTabs` triplication** (NIT): Array `['agents', 'terminals', 'project']` appears in 3 locations. Adding a new sub-tab requires updating all three. Should be extracted to a shared constant in a follow-up.
+3. **Redundant persist-on-restore** (NIT): `switchAgentTab` sends `setActiveSubTab` on every call including restore, writing back the same value just read. Could be optimized with a `persist` parameter but impact is negligible.

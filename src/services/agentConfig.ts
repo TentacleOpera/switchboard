@@ -16,10 +16,11 @@ export interface CustomAgentAddons {
     splitPlan?: boolean;
     researchEnabled?: boolean; // NEW: enable deep research mode
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
-    ticketUpdateEnabled?: boolean;    // from ticket_updater_role.md
+    ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
     suppressWalkthrough?: boolean;
     cavemanOutput?: boolean;
     useSubagents?: boolean;
+    useWorktree?: boolean;
 
     // Design doc
     designDocLink?: string;
@@ -158,10 +159,18 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.splitPlan === true) a.splitPlan = true;
     if (s.researchEnabled === true) a.researchEnabled = true;
     if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
-    if (s.ticketUpdateEnabled === true) a.ticketUpdateEnabled = true;
+    if (s.ticketUpdateMode && ['disabled', 'comment-only', 'refine-ticket', 'research-and-refine'].includes(s.ticketUpdateMode as string)) {
+        a.ticketUpdateMode = s.ticketUpdateMode as any;
+    } else if (s.ticketUpdateEnabled === true) {
+        // Migration: map old boolean to new enum
+        a.ticketUpdateMode = 'comment-only';
+    } else if (s.ticketUpdateEnabled === false) {
+        a.ticketUpdateMode = 'disabled';
+    }
     if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
     if (s.cavemanOutput === true) a.cavemanOutput = true;
     if (s.useSubagents === false) a.useSubagents = false;
+    if (s.useWorktree === true) a.useWorktree = true;
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();

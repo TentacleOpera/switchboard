@@ -1,6 +1,7 @@
 import * as path from 'path';
 import * as os from 'os';
 import * as vscode from 'vscode';
+import { WorkspaceDatabaseMapping } from '../services/KanbanDatabase';
 
 /**
  * Expand home directory shorthand (~) to absolute path.
@@ -34,15 +35,22 @@ export function isAllowedSwitchboardLocation(candidatePath: string, workspaceRoo
     try {
         const cfg = vscode.workspace.getConfiguration('switchboard')
                          .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string }> } | undefined;
+            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
 
         if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-            // 1a. Is candidate a mapped child workspaceFolder? → BLOCK
+            // 1a. Is candidate a mapped child workspaceFolder or dropdownWorkspace? → BLOCK
             for (const mapping of cfg.mappings) {
                 if (Array.isArray(mapping.workspaceFolders)) {
                     for (const wf of mapping.workspaceFolders) {
                         if (path.resolve(expandHome(wf)) === resolvedCandidate) {
                             return false; // Child workspace — NOT allowed
+                        }
+                    }
+                }
+                if (Array.isArray(mapping.dropdownWorkspaces)) {
+                    for (const dw of mapping.dropdownWorkspaces) {
+                        if (path.resolve(expandHome(dw)) === resolvedCandidate) {
+                            return false; // Dropdown workspace — NOT allowed (shares parent DB)
                         }
                     }
                 }

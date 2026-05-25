@@ -19,13 +19,13 @@ const DEFAULT_ROLE_CONFIG = {
         workflowFilePath: '.agent/workflows/improve-plan.md',
         addons: { switchboardSafeguards: true, dependencyCheck: false, designDoc: false, aggressivePairProgramming: false, gitProhibition: false, splitPlan: false, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false }
     },
-    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false } },
-    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false } },
+    lead: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, leadChallenge: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false, useWorktree: false } },
+    coder: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false, useWorktree: false } },
     reviewer: { prompt: '', addons: { switchboardSafeguards: true, advancedRegression: false, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, skipCompilation: true, skipTests: true, useSubagents: false } },
     tester: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
-    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false } },
+    intern: { prompt: '', addons: { switchboardSafeguards: true, pairProgramming: false, accurateCoding: false, gitProhibition: true, clearAntigravityContext: false, suppressWalkthrough: false, cavemanOutput: true, skipCompilation: true, skipTests: true, useSubagents: false, includeDependencyInstructions: false, useWorktree: false } },
     analyst: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
-    ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateEnabled: false, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
+    ticket_updater: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, ticketUpdateMode: 'disabled', clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
     researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, researchEnabled: true, useSubagents: false } },
     splitter: { prompt: '', addons: { switchboardSafeguards: true, gitProhibition: true, complexityScoringSkill: false, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
     code_researcher: { prompt: '', researchComplexity: 'deep', addons: { switchboardSafeguards: true, gitProhibition: true, clearAntigravityContext: false, cavemanOutput: false, useSubagents: false } },
@@ -81,6 +81,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         { id: 'includeDependencyInstructions', label: 'Include Dependency Instructions', tooltip: 'Include DEPENDENCY ORDER section in prompts when plans have dependencies. Disable only if you are certain plans have no dependencies.', default: false },
+        { id: 'useWorktree', label: 'Use Worktree', tooltip: 'Create isolated git worktree when plan enters this column', default: false },
         { id: 'useSubagents', label: 'Use Subagents for Multiple Plans', tooltip: 'When processing multiple plans, instruct platform to use parallel subagents (if supported)', default: false }
     ],
     coder: [
@@ -94,6 +95,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         { id: 'includeDependencyInstructions', label: 'Include Dependency Instructions', tooltip: 'Include DEPENDENCY ORDER section in prompts when plans have dependencies. Disable only if you are certain plans have no dependencies.', default: false },
+        { id: 'useWorktree', label: 'Use Worktree', tooltip: 'Create isolated git worktree when plan enters this column', default: false },
         { id: 'useSubagents', label: 'Use Subagents for Multiple Plans', tooltip: 'When processing multiple plans, instruct platform to use parallel subagents (if supported)', default: false }
     ],
     reviewer: [
@@ -124,6 +126,7 @@ const ROLE_ADDONS = {
         { id: 'skipCompilation', label: 'Do not recompile the project', tooltip: 'Skip project compilation step to save tokens', default: true },
         { id: 'skipTests', label: 'Do not run automated tests', tooltip: 'Skip automated test execution to save tokens', default: true },
         { id: 'includeDependencyInstructions', label: 'Include Dependency Instructions', tooltip: 'Include DEPENDENCY ORDER section in prompts when plans have dependencies. Disable only if you are certain plans have no dependencies.', default: false },
+        { id: 'useWorktree', label: 'Use Worktree', tooltip: 'Create isolated git worktree when plan enters this column', default: false },
         { id: 'useSubagents', label: 'Use Subagents for Multiple Plans', tooltip: 'When processing multiple plans, instruct platform to use parallel subagents (if supported)', default: false }
     ],
     analyst: [
@@ -136,7 +139,12 @@ const ROLE_ADDONS = {
     ticket_updater: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
-        { id: 'ticketUpdateEnabled', label: 'Ticket Update', tooltip: 'Update associated ticket with AI analysis', default: false },
+        { id: 'ticketUpdateMode', label: 'Ticket Update Mode', tooltip: 'Select how the agent should update the external ticket', type: 'radio', options: [
+            { value: 'disabled', label: 'Disabled', tooltip: 'No ticket update' },
+            { value: 'comment-only', label: 'Comment Only', tooltip: 'Add AI analysis as a comment to the ticket' },
+            { value: 'refine-ticket', label: 'Refine Ticket', tooltip: 'Refine the ticket description based on plan analysis' },
+            { value: 'research-and-refine', label: 'Research & Refine', tooltip: 'Research first, then refine the ticket with findings' }
+        ], default: 'disabled' },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
         { id: 'cavemanOutput', label: 'Caveman Output', tooltip: 'Compress responses to reduce tokens by 65-75% while maintaining accuracy', default: false },
         { id: 'useSubagents', label: 'Use Subagents for Multiple Plans', tooltip: 'When processing multiple plans, instruct platform to use parallel subagents (if supported)', default: false }

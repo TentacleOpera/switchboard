@@ -152,4 +152,71 @@ suite('Kanban Dropdown Workspaces Selection', () => {
         const resolved = provider.resolveEffectiveWorkspaceRoot('/path/to/dropdown-child');
         assert.strictEqual(resolved, path.resolve('/path/to/ws1'));
     });
+
+    test('6. _getAllowedRoots includes dropdown workspace paths', () => {
+        const mappings = [
+            {
+                id: '1',
+                name: 'Workspace A',
+                dbPath: '/db/a.db',
+                parentFolder: '/path/to/parent',
+                workspaceFolders: ['/path/to/ws1'],
+                dropdownWorkspaces: ['/path/to/dropdown-child']
+            }
+        ];
+        mockSwitchboardConfig({ enabled: true, mappings });
+        const provider = new KanbanProvider(vscode.Uri.file('/tmp'), mockContext);
+        (provider as any)._getWorkspaceRoots = () => ['/path/to/parent'];
+
+        const allowed = (provider as any)._getAllowedRoots();
+        assert.ok(allowed.has(path.resolve('/path/to/parent')), 'parentFolder should be in allowed set');
+        assert.ok(allowed.has(path.resolve('/path/to/ws1')), 'workspaceFolder should be in allowed set');
+        assert.ok(allowed.has(path.resolve('/path/to/dropdown-child')), 'dropdownWorkspace should be in allowed set');
+    });
+
+    test('7. _getAllowedRoots includes tilde-expanded dropdown workspace paths', () => {
+        const home = os.homedir();
+        const mappings = [
+            {
+                id: '1',
+                name: 'Workspace A',
+                dbPath: '/db/a.db',
+                parentFolder: '~/repos/parent',
+                workspaceFolders: ['~/repos/ws1'],
+                dropdownWorkspaces: ['~/repos/dropdown-child']
+            }
+        ];
+        mockSwitchboardConfig({ enabled: true, mappings });
+        const provider = new KanbanProvider(vscode.Uri.file('/tmp'), mockContext);
+        (provider as any)._getWorkspaceRoots = () => [path.join(home, 'repos', 'parent')];
+
+        const allowed = (provider as any)._getAllowedRoots();
+        assert.ok(allowed.has(path.resolve(path.join(home, 'repos', 'parent'))), 'expanded parentFolder should be in allowed set');
+        assert.ok(allowed.has(path.resolve(path.join(home, 'repos', 'ws1'))), 'expanded workspaceFolder should be in allowed set');
+        assert.ok(allowed.has(path.resolve(path.join(home, 'repos', 'dropdown-child'))), 'expanded dropdownWorkspace should be in allowed set');
+    });
+
+    test('8. setCurrentWorkspaceRoot accepts dropdown workspace from allowed set', () => {
+        const mappings = [
+            {
+                id: '1',
+                name: 'Workspace A',
+                dbPath: '/db/a.db',
+                parentFolder: '/path/to/parent',
+                workspaceFolders: ['/path/to/ws1'],
+                dropdownWorkspaces: ['/path/to/dropdown-child']
+            }
+        ];
+        mockSwitchboardConfig({ enabled: true, mappings });
+        const provider = new KanbanProvider(vscode.Uri.file('/tmp'), mockContext);
+        (provider as any)._getWorkspaceRoots = () => ['/path/to/parent'];
+
+        // First set to parent (baseline)
+        const parentResult = (provider as any).setCurrentWorkspaceRoot('/path/to/parent');
+        assert.strictEqual(parentResult, true, 'should accept parent workspace');
+
+        // Now try dropdown workspace
+        const dropdownResult = (provider as any).setCurrentWorkspaceRoot('/path/to/dropdown-child');
+        assert.strictEqual(dropdownResult, true, 'should accept dropdown workspace');
+    });
 });

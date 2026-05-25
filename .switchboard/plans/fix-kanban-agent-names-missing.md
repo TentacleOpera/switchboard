@@ -127,5 +127,58 @@ case 'updateAgentNames':
 6. Reload the VS Code window and verify names appear on first load
 7. Remove a custom agent and verify the column either disappears or shows "No agent assigned"
 
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|---|---|
+| 1 | **CRITICAL** | The `setTimeout` fix addresses a phantom race condition. All three backend refresh paths send `updateColumns` before `updateAgentNames`. VS Code `postMessage` delivers in FIFO order; the webview `message` handler processes them synchronously. No reordering occurs. The `setTimeout` defends against a ghost. |
+| 2 | **CRITICAL** | Two `renderColumns()` calls are missing subsequent `updateAllColumnAgents()`, causing agent names to vanish: `backlogViewState` handler (line 5097) and `worktreeCounts` handler (line 5423). `renderColumns()` replaces `kanbanBoard.innerHTML`, destroying all `agent-*` DOM elements and recreating them empty. Without `updateAllColumnAgents()`, names stay blank until the next backend message. |
+| 3 | **MAJOR** | Comment says "Defer to next microtask" but `setTimeout(fn, 0)` defers to a **macrotask**, not a microtask. The distinction doesn't affect correctness here, but the comment is factually wrong. |
+| 4 | **NIT** | `updateAllColumnAgents()` guard `if (!lastAgentNames) return;` is dead code — `lastAgentNames` is initialized to `{}` (truthy) and never set to null/undefined. The guard never fires. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---|---|---|
+| `setTimeout` targets phantom race | **Keep** — harmless safety net | Retain as defense-in-depth |
+| `backlogViewState` missing `updateAllColumnAgents()` | **Fix now** | Added `updateAllColumnAgents()` after `renderBoard(currentCards)` |
+| `worktreeCounts` missing `updateAllColumnAgents()` | **Fix now** | Added `updateAllColumnAgents()` after `renderBoard(currentCards)` |
+| Comment "microtask" → "macrotask" | **Fix now** | Changed to "next tick" (avoids the terminology debate) |
+| Dead guard `if (!lastAgentNames)` | **Defer** | Not causing a bug; low-priority cleanup |
+
+### Stage 3: Code Fixes Applied
+
+**File: `src/webview/kanban.html`**
+
+1. **`backlogViewState` handler (~line 5095-5100):** Added `updateAllColumnAgents()` after `renderBoard(currentCards)`.
+2. **`worktreeCounts` handler (~line 5422-5428):** Added `updateAllColumnAgents()` after `renderBoard(currentCards)`.
+3. **`updateAgentNames` handler (~line 5147-5152):** Fixed comment from "microtask" to "tick".
+
+### Stage 4: Verification
+
+- **Typecheck:** Ran `npx tsc --noEmit`. Two pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (import path extensions) — unrelated to this change. The modified file (`kanban.html`) is inline JavaScript and is not typechecked.
+- **Full audit of `renderColumns()` callers:** All 6 call sites now have a corresponding `updateAllColumnAgents()` call (5 explicit, 1 initial-load before data arrives which is correct).
+
+### Remaining Risks
+
+1. The `setTimeout` fix in `updateAgentNames` is a safety net for a race condition that doesn't manifest in practice. If VS Code's IPC layer ever reorders messages, it would help. Low risk either way.
+2. The `if (!lastAgentNames) return;` guard in `updateAllColumnAgents()` is dead code — it never actually prevents the "names not yet received" case because `lastAgentNames` is initialized to `{}`. This should be cleaned up separately.
+3. No automated test coverage for webview rendering — manual verification is required per the original plan.
+
+### Complete `renderColumns()` → `updateAllColumnAgents()` Audit (Post-Fix)
+
+| Location | `renderColumns()` | `updateAllColumnAgents()` | Status |
+|---|---|---|---|
+| Mode toggle click (3855) | YES | YES (3857) | OK |
+| `backlogViewState` (5097) | YES | YES (5099) | **FIXED** |
+| `updateColumns` (5107) | YES | YES (5109) | OK |
+| `updateAgentNames` (5152) | NO | YES (deferred) | OK (no DOM rebuild) |
+| `visibleAgents` (5254) | NO | YES (sync) | OK (no DOM rebuild) |
+| `worktreeCounts` (5424) | YES | YES (5426) | **FIXED** |
+| Collapse coders toggle (5825) | YES | YES (5827) | OK |
+| Initial load (5622) | YES | NO | OK (no data yet) |
+
 ## Recommendation
 Complexity 3 → **Send to Intern**

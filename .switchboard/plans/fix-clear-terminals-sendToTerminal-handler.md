@@ -150,3 +150,58 @@ No automated tests exist for webview UI. Manual verification required.
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Results (Grumpy Principal Engineer Pass)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | Details |
+|---|---------|----------|---------|
+| 1 | `paced` parameter not type-validated | NIT | `name` and `input` get `typeof` guards but `paced` does not. Safe in practice because `sendRobustText` defaults to `paced=true` for undefined, and HTML always sends `paced: false` (boolean). |
+| 2 | `source` field silently ignored without comment | NIT | HTML sends `source: { actor, tool, allowBroadcast }` but handler only destructures `{ name, input, paced }`. No comment explains why. Plan says "source validation unnecessary" — correct, but future readers may be confused. |
+| 3 | `/clear` via `sendText` vs clipboard paste | NIT | `_attemptDirectTerminalPush` uses `pasteTextViaClipboard` for `/clear` to avoid CLI slash-command concatenation. `sendRobustText` uses `terminal.sendText` for short inputs. However, concatenation risk only applies when `/clear` is followed by a subsequent prompt — which doesn't happen here. `/clear` is the sole payload. Safe. |
+| 4 | Spread overwrite risk on `type` field | NIT | `postMessage({ type: 'designDocSetting', ...setting })` — if `setting` ever contained a `type` key, it would overwrite. Currently safe because return type is explicitly `{ enabled: boolean; link: string }`. |
+
+**No CRITICAL or MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| `paced` not validated | Keep | `sendRobustText` has safe default; HTML always sends boolean |
+| `source` silently ignored | **Fix applied** | Added comment explaining intentional omission |
+| `/clear` via sendText | Keep | No concatenation risk for standalone clear command |
+| Spread overwrite risk | Keep | Return type contract prevents this; TypeScript would catch changes |
+
+### Code Fixes Applied
+
+**File:** `src/services/TaskViewerProvider.ts` (line 8277)
+- Added comment block explaining that the `source` field from the webview is intentionally not destructured, since source validation is unnecessary in the trusted webview context.
+
+### Verification
+
+- **TypeScript check:** `npx tsc --noEmit` — 2 pre-existing errors in unrelated files (ClickUpSyncService.ts, KanbanProvider.ts). No new errors introduced by this implementation.
+- **No compilation run** (per session skip-compilation directive).
+- **No test run** (per session skip-tests directive).
+
+### Implementation Verification Summary
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `sendToTerminal` case handler added | PASS | Lines 8277-8328, matches plan spec exactly |
+| `getDesignDocSetting` case handler added | PASS | Lines 8330-8333, calls existing method and posts response |
+| Terminal resolution: 4-step lookup | PASS | Exact → suffix-aware → case-insensitive → VS Code fallback, matches `_attemptDirectTerminalPush` |
+| `clearBeforePrompt` side effect avoided | PASS | Inline resolution, no `_attemptDirectTerminalPush` call |
+| `_logEvent` side effect avoided | PASS | No dispatch event logging |
+| `sendRobustText` called directly | PASS | With `paced` parameter forwarded |
+| Type guards on `name` and `input` | PASS | `typeof` checks with early break |
+| `handleGetDesignDocSetting` return spread | PASS | Produces `{ type: 'designDocSetting', enabled, link }` matching HTML handler expectations |
+| No new imports needed | PASS | All dependencies pre-existing |
+| Comment about ignored `source` field | PASS | Added during review |
+
+### Remaining Risks
+
+- **Low:** If `handleGetDesignDocSetting()` return type is extended to include a `type` field in the future, the spread pattern at line 8332 would silently overwrite the explicit `type: 'designDocSetting'`. Mitigated by TypeScript return type contract.
+- **Low:** `/clear` sent via `sendText` (not clipboard paste) to CLI agents. Currently safe because `/clear` is the sole payload with no subsequent prompt. If future use cases send non-clear commands to CLI agents via this handler, consider adding clipboard paste for slash commands.

@@ -122,8 +122,8 @@ export interface PromptBuilderOptions {
     useSubagentsEnabled?: boolean;
     /** When true (default), includes DEPENDENCY ORDER section in prompts when plans have dependencies. */
     includeDependencyInstructions?: boolean;
-    /** When false (explicitly), ticket_updater omits the ticket-update step. Defaults to enabled (undefined). */
-    ticketUpdateEnabled?: boolean;
+    /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
+    ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
     /** When false (explicitly), splitter omits the complexity-scoring step. Defaults to enabled (undefined). */
     complexityScoringSkill?: boolean;
     /** When true, researcher prompt includes instruction to save results to local docs folder (.switchboard/docs/). */
@@ -665,25 +665,36 @@ For each plan:
     }
 
     if (role === 'ticket_updater') {
-        const ticketUpdateDirective =
-            `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-            `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-            `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
-            `Do not modify the ticket description. Only add a comment. ` +
-            `If no ticket number is found, skip the ticket update and notify the user.`;
+        const ticketUpdateMode = options?.ticketUpdateMode ?? 'disabled';
 
-        const ticketUpdateEnabled = options?.ticketUpdateEnabled !== false;
+        // Shared analysis template
+        const analysisTemplate = (extraFields: string[] = []) => {
+            const fields = [
+                '- **Goal Summary**: Brief overview of what the plan aims to achieve',
+                '- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas',
+                '- **Key Dependencies**: Major dependencies or blockers',
+                '- **Implementation Notes**: Any notable implementation considerations',
+                '- **Estimated Effort**: Rough effort estimate (if discernible from complexity)',
+                ...extraFields
+            ];
+            return fields.join('\n');
+        };
 
-        const updaterBase = ticketUpdateEnabled
-            ? `You are a Ticket Updater Agent.
+        let updaterBase: string;
+
+        if (ticketUpdateMode === 'comment-only') {
+            const ticketUpdateDirective =
+                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+                `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
+                `Do not modify the ticket description. Only add a comment. ` +
+                `If no ticket number is found, skip the ticket update and notify the user.`;
+
+            updaterBase = `You are a Ticket Updater Agent.
 
 STEP 1: Analyze the Plan
 Generate a concise analysis covering:
-- **Goal Summary**: Brief overview of what the plan aims to achieve
-- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas
-- **Key Dependencies**: Major dependencies or blockers
-- **Implementation Notes**: Any notable implementation considerations
-- **Estimated Effort**: Rough effort estimate (if discernible from complexity)
+${analysisTemplate()}
 
 Keep the analysis under 500 words for readability in the ticket.
 
@@ -693,23 +704,66 @@ ${ticketUpdateDirective}
 Format the analysis as:
 ## AI Analysis
 
-[Your analysis content here]`
-            : `You are a Ticket Updater Agent.
+[Your analysis content here]`;
+        } else if (ticketUpdateMode === 'refine-ticket') {
+            const ticketUpdateDirective =
+                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+                `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
+                `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
+                `If no ticket number is found, skip the ticket update and notify the user.`;
+
+            updaterBase = `You are a Ticket Updater Agent.
+
+STEP 1: Analyze the Plan
+Generate a comprehensive analysis covering:
+${analysisTemplate(['- **Current Status**: What has been completed and what remains'])}
+
+STEP 2: Update the Ticket
+${ticketUpdateDirective}
+
+Format the refined description as a clear, structured ticket description that accurately reflects the plan's current state.`;
+        } else if (ticketUpdateMode === 'research-and-refine') {
+            const researchDirective =
+                `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
+                `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
+                `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.`;
+
+            const ticketUpdateDirective =
+                `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+                `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+                `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
+                `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
+                `If no ticket number is found, skip the ticket update and notify the user.`;
+
+            updaterBase = `You are a Ticket Updater Agent.
+
+STEP 1: Analyze the Plan
+Generate a comprehensive analysis covering:
+${analysisTemplate(['- **Current Status**: What has been completed and what remains'])}
+
+STEP 2: Research
+${researchDirective}
+
+STEP 3: Update the Ticket
+${ticketUpdateDirective}
+
+Format the refined description as a clear, structured ticket description that accurately reflects the plan's current state and incorporates your research findings.`;
+        } else {
+            // disabled mode (or unknown values) — analysis only, no ticket update
+            updaterBase = `You are a Ticket Updater Agent.
 
 STEP 1: Analyze the Plan
 Generate a concise analysis covering:
-- **Goal Summary**: Brief overview of what the plan aims to achieve
-- **Complexity Assessment**: Overall complexity (Low/Medium/High) and key risk areas
-- **Key Dependencies**: Major dependencies or blockers
-- **Implementation Notes**: Any notable implementation considerations
-- **Estimated Effort**: Rough effort estimate (if discernible from complexity)
+${analysisTemplate()}
 
-Keep the analysis under 500 words for readability in the ticket.
+Keep the analysis under 500 words for readability.
 
 Format the analysis as:
 ## AI Analysis
 
 [Your analysis content here]`;
+        }
 
         let baseInstructions = resolveBaseInstructions('ticket_updater', updaterBase, options);
         if (cavemanOutputEnabled) {
