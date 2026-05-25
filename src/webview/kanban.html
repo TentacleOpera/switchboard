@@ -4729,6 +4729,11 @@
                     card.column = resolvedTarget;
                 });
 
+                if (dispatchGroups.size > 0 && targetBody) {
+                    targetBody.classList.add('highlight');
+                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+                }
+
                 if (dispatchGroups.size === 0) return;
 
                 setTimeout(() => {
@@ -4794,6 +4799,10 @@
                 const completingIds = forwardIds.slice();
                 // Optimistic DOM move: relocate cards to COMPLETED column with animation
                 const targetBody = document.getElementById('col-' + targetColumn);
+                if (targetBody) {
+                    targetBody.classList.add('highlight');
+                    targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+                }
                 completingIds.forEach(id => {
                     const card = currentCards.find(c => c.sessionId === id);
                     const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
@@ -4864,6 +4873,10 @@
 
             // DOM target is the displayed column slot (targetColumn); logical target may differ (effectiveTargetColumn)
             const targetBody = document.getElementById('col-' + targetColumn);
+            if (targetBody) {
+                targetBody.classList.add('highlight');
+                targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
+            }
 
             validIds.forEach(id => {
                 const card = currentCards.find(c => c.sessionId === id);

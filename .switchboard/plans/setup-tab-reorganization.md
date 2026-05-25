@@ -368,3 +368,44 @@ The test at line 36 checks for `id="control-plane-fields"`. After the reorg, thi
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Pass — 2026-05-25
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | Control Plane modal had three overlapping description paragraphs. Lines 930-932 ("Move .switchboard/... to a parent folder") and 945-946 ("Move Switchboard into your shared parent projects folder so .switchboard/... live outside each repo") said the same thing in different words. Users read "move config to parent folder" twice before reaching controls. |
+| 2 | **NIT** | Four consecutive blank lines left at the site where the old Sources tab-content div was removed (lines 842-845). Should be one blank line like surrounding sections. |
+| 3 | **NIT** | "Document Caching" subsection header not inside a `db-subsection` wrapper, while "Enabled Sources" section is. Creates visual asymmetry. However, this is consistent with the plan's "existing sync content follows unchanged" directive. |
+
+### Stage 2: Balanced Synthesis
+
+- **Finding 1 (MAJOR) → FIX NOW**: Removed the redundant "Detection & Status" subsection description paragraph from the modal. Kept the two modal-level intros (feature overview + mode guidance). The subsection now goes straight from its header to the status grid.
+- **Finding 2 (NIT) → FIX NOW**: Reduced four blank lines to one. Zero-cost cleanup.
+- **Finding 3 (NIT) → DEFER**: Per plan spec ("existing sync content follows unchanged"). Wrapping sync content in `db-subsection` would be a visual improvement but deviates from the plan. Defer to a follow-up polish pass.
+
+### Files Changed by Review
+
+- `src/webview/setup.html` — Removed redundant description paragraph from Control Plane modal "Detection & Status" subsection; cleaned up extra blank lines
+
+### Validation Results
+
+- **Tab structure**: 5 tab buttons, 5 tab content divs, all `data-tab`/`data-tab-content` pairs match ✓
+- **Stale references**: No remaining references to `data-tab-content="workspace"`, `"sources"`, `"control"`, `"sync"` ✓
+- **No remaining references to old IDs**: `workspace-mapping-fields`, `planning-sources-fields`, `control-plane-fields` all absent ✓
+- **`openControlPlaneSetup()`**: Correctly activates `'multi-repo'` tab + opens modal + requests status ✓
+- **`openSetupSection` handler**: Correctly routes through updated `openControlPlaneSetup()` ✓
+- **Extension entry points**: `setupPanelProvider.open('control-plane')` and `setupPanelProvider.open('control-plane:fresh-setup')` still work via handler chain ✓
+- **`tabLoadCallbacks`**: `'planning-panel'` fires both `getPlanningSources` and `getPlanningPanelSyncMode` ✓
+- **Modal JS**: `openControlPlaneModal()`, `closeControlPlaneModal()`, button bindings, overlay-click-to-close all present ✓
+- **Test: `multi-repo-scaffolding-regression.test.js`**: PASSES ✓
+- **Test: `setup-panel-migration.test.js`**: Pre-existing failure at line 22 (checks `id="terminal-operations-fields"` in `implementation.html` — unrelated to this plan). Our changes do not affect this test's assertions about the modal structure. ⚠️ (pre-existing)
+
+### Remaining Risks
+
+1. **Pre-existing test failure**: `setup-panel-migration.test.js` line 22 asserts `id="terminal-operations-fields"` exists in `implementation.html`, but that ID was removed in a prior migration. This is unrelated to the Setup Tab Reorganization plan and should be tracked separately.
+2. **Visual asymmetry**: "Document Caching" section lacks `db-subsection` wrapper that "Enabled Sources" has. Low-impact visual inconsistency; defer to polish pass.
+3. **No automated test for modal open/close behavior**: The test suite only checks for element existence, not interactive behavior. Manual testing required per the Testing Checklist.
