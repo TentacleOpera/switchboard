@@ -9,7 +9,7 @@ Remove the "Active Plan" banner from the kanban plans tab, as it is misleading (
 - **Priority:** Medium
 - **Complexity:** 2
 - **Type:** UI Cleanup
-- **Status:** Created
+- **Status:** Implemented & Reviewed
 - **Tags:** [UI, UX, bugfix]
 
 ## User Review Required
@@ -116,3 +116,47 @@ Key risks: orphan HTML comment left behind after banner removal; someone might l
 - CSS styles for `.active-doc-banner` are shared and must NOT be removed
 
 **Recommendation:** Send to Intern (Complexity 2)
+
+---
+
+## Review Results (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | HTML banner + comment removed correctly from kanban section | — | PASS |
+| 2 | All 3 `getElementById` kanban references removed from planning.js | — | PASS |
+| 3 | `if (bannerKanban)` conditional block removed | — | PASS |
+| 4 | `if (btnDisableDocKanban)` event listener block removed | — | PASS |
+| 5 | `handleDisableDesignDoc` preserved — still used by local/online buttons | — | PASS |
+| 6 | CSS styles (`.active-doc-banner` lines 241-298) preserved — shared across local/online | — | PASS |
+| 7 | Local banner (`active-doc-banner-local` line 1374) intact with full structure | — | PASS |
+| 8 | Online banner (`active-doc-banner-online` line 1418) intact with full structure | — | PASS |
+| 9 | Zero orphan references to `active-doc-banner-kanban`, `btn-disable-doc-kanban`, `active-doc-name-kanban` in HTML/JS/TS | — | PASS |
+| 10 | Blank line remnant where banner was removed (between kanban-content opening and controls strip) | NIT | Defer |
+
+### Stage 2: Balanced Synthesis
+
+- **CRITICAL findings:** 0 — No code fixes needed.
+- **MAJOR findings:** 0 — No code fixes needed.
+- **NIT findings:** 1 — Blank line remnant at line 1598 in planning.html. Cosmetic only; not worth a code change.
+- **Verdict:** Implementation is correct and complete. All plan requirements met.
+
+### Verification Checks
+
+- **Orphan reference scan:** PASS — grep for `active-doc-banner-kanban|btn-disable-doc-kanban|active-doc-name-kanban` across `planning.html`, `planning.js`, and all `.ts` files returned zero hits.
+- **CSS preservation:** PASS — `.active-doc-banner` styles at lines 241-298 intact.
+- **Local banner integrity:** PASS — Full structure at line 1374 (label, name span, disable button).
+- **Online banner integrity:** PASS — Full structure at line 1418 (label, name span, disable button).
+- **JS handler integrity:** PASS — `updateActiveDocBanner` handles local+online; `handleDisableDesignDoc` shared function preserved; event listeners for local and online buttons intact.
+- **TypeScript side:** PASS — No TS changes needed or made.
+
+### Files Changed (Implementation)
+
+- `src/webview/planning.html` — Removed kanban banner HTML (comment + div block, formerly lines 1598-1605)
+- `src/webview/planning.js` — Removed 3 `getElementById` references, 1 conditional block, 1 event listener block for kanban banner
+
+### Remaining Risks
+
+- None. The implementation is a clean, minimal UI removal with no functional or data impact.

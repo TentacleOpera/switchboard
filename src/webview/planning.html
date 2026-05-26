@@ -727,8 +727,18 @@
             color: var(--vscode-editor-foreground, #cccccc);
         }
 
+        /* Kanban preview pane: inherits font/text styling but keeps its own layout */
+        #kanban-preview-pane {
+            font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+            font-size: var(--vscode-font-size, 14px);
+            line-height: var(--vscode-font-line-height, 22px);
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+        }
+
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
-        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6 {
+        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
             margin-top: 24px;
             margin-bottom: 16px;
             font-weight: 600;
@@ -737,7 +747,8 @@
         }
 
         #markdown-preview h1,
-        #markdown-preview-online h1 {
+        #markdown-preview-online h1,
+        #kanban-preview-pane h1 {
             font-size: 2em; /* VS Code default: 2em relative to 14px base = 28px */
             margin-top: 0;
             padding-bottom: 0.3em;
@@ -745,34 +756,40 @@
         }
 
         #markdown-preview h2,
-        #markdown-preview-online h2 {
+        #markdown-preview-online h2,
+        #kanban-preview-pane h2 {
             font-size: 1.5em; /* VS Code default: 1.5em = 21px */
             padding-bottom: 0.3em;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
         }
 
         #markdown-preview h3,
-        #markdown-preview-online h3 {
+        #markdown-preview-online h3,
+        #kanban-preview-pane h3 {
             font-size: 1.25em; /* VS Code default: 1.25em = 17.5px */
         }
 
         #markdown-preview h4,
-        #markdown-preview-online h4 {
+        #markdown-preview-online h4,
+        #kanban-preview-pane h4 {
             font-size: 1em;
         }
 
         #markdown-preview h5,
-        #markdown-preview-online h5 {
+        #markdown-preview-online h5,
+        #kanban-preview-pane h5 {
             font-size: 0.875em;
         }
 
         #markdown-preview h6,
-        #markdown-preview-online h6 {
+        #markdown-preview-online h6,
+        #kanban-preview-pane h6 {
             font-size: 0.85em;
         }
 
         #markdown-preview p,
-        #markdown-preview-online p {
+        #markdown-preview-online p,
+        #kanban-preview-pane p {
             margin-bottom: 0.7em; /* Match VS Code's markdown.css default */
             line-height: inherit; /* Inherits from container's var(--vscode-font-line-height, 22px) */
             color: var(--vscode-editor-foreground, #cccccc);
@@ -780,7 +797,8 @@
         }
 
         #markdown-preview li,
-        #markdown-preview-online li {
+        #markdown-preview-online li,
+        #kanban-preview-pane li {
             margin-bottom: 0.25em; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
@@ -788,12 +806,14 @@
         }
 
         #markdown-preview li p,
-        #markdown-preview-online li p {
+        #markdown-preview-online li p,
+        #kanban-preview-pane li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
         #markdown-preview pre,
-        #markdown-preview-online pre {
+        #markdown-preview-online pre,
+        #kanban-preview-pane pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
             border-radius: 3px;
@@ -803,7 +823,8 @@
         }
 
         #markdown-preview pre code,
-        #markdown-preview-online pre code {
+        #markdown-preview-online pre code,
+        #kanban-preview-pane pre code {
             background: none;
             padding: 0;
             border: none;
@@ -813,7 +834,8 @@
         }
 
         #markdown-preview code,
-        #markdown-preview-online code {
+        #markdown-preview-online code,
+        #kanban-preview-pane code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
@@ -823,7 +845,8 @@
         }
 
         #markdown-preview blockquote,
-        #markdown-preview-online blockquote {
+        #markdown-preview-online blockquote,
+        #kanban-preview-pane blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
             border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
@@ -833,21 +856,24 @@
         }
 
         #markdown-preview ul, #markdown-preview ol,
-        #markdown-preview-online ul, #markdown-preview-online ol {
+        #markdown-preview-online ul, #markdown-preview-online ol,
+        #kanban-preview-pane ul, #kanban-preview-pane ol {
             margin-bottom: 0.7em; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
 
         /* Table Styling */
         #markdown-preview table,
-        #markdown-preview-online table {
+        #markdown-preview-online table,
+        #kanban-preview-pane table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
             font-size: inherit; /* Inherits from container */
         }
 
         #markdown-preview th,
-        #markdown-preview-online th {
+        #markdown-preview-online th,
+        #kanban-preview-pane th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
             font-weight: 600;
@@ -855,45 +881,52 @@
         }
 
         #markdown-preview td,
-        #markdown-preview-online td {
+        #markdown-preview-online td,
+        #kanban-preview-pane td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
             color: var(--vscode-editor-foreground, var(--text-primary));
         }
 
         #markdown-preview tr:hover td,
-        #markdown-preview-online tr:hover td {
+        #markdown-preview-online tr:hover td,
+        #kanban-preview-pane tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
 
         /* Subtle, Interactive Links */
         #markdown-preview a,
-        #markdown-preview-online a {
+        #markdown-preview-online a,
+        #kanban-preview-pane a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
         }
 
         #markdown-preview a:hover,
-        #markdown-preview-online a:hover {
+        #markdown-preview-online a:hover,
+        #kanban-preview-pane a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
         }
 
         #markdown-preview hr,
-        #markdown-preview-online hr {
+        #markdown-preview-online hr,
+        #kanban-preview-pane hr {
             border: 0;
             height: 1px;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
         }
 
         #markdown-preview img,
-        #markdown-preview-online img {
+        #markdown-preview-online img,
+        #kanban-preview-pane img {
             max-width: 100%;
             max-height: 100%;
         }
 
         #markdown-preview .empty-state,
-        #markdown-preview-online .empty-state {
+        #markdown-preview-online .empty-state,
+        #kanban-preview-pane .empty-state {
             display: flex;
             align-items: center;
             justify-content: center;
