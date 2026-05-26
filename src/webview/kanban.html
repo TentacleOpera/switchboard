@@ -1967,12 +1967,12 @@
 
             <!-- Right Side: Automation and view controls -->
             <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                <img src="${ICON_AUTOBAN}" alt="Start Automation" style="width: 24px; height: 24px;">
+                <img src="{{ICON_22}}" alt="Start Automation" style="width: 24px; height: 24px;">
             </button>
             <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
 
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                <img src="${ICON_CLI_TRIGGERS}" alt="CLI Triggers" style="width: 24px; height: 24px;">
+                <img src="{{ICON_28}}" alt="CLI Triggers" style="width: 24px; height: 24px;">
             </button>
 
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
@@ -1984,7 +1984,7 @@
             </select>
 
             <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
-                <img src="${ICON_COLLAPSE_CODERS}" alt="Collapse Coders" style="width: 24px; height: 24px;">
+                <img src="{{ICON_41}}" alt="Collapse Coders" style="width: 24px; height: 24px;">
             </button>
 
             <!-- Hidden elements (unchanged) -->
@@ -2131,19 +2131,19 @@
           <div class="agent-description">Researches codebase context for plans and writes context briefs before planning review.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="planner" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Planner</label><input type="text" data-role="planner" id="agents-tab-cmd-planner" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Writes detailed step-by-step implementation plans and creates work checklists.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="code_researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Code Researcher</label><input type="text" data-role="code_researcher" id="agents-tab-cmd-code-researcher" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="code_researcher" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Code Researcher</label><input type="text" data-role="code_researcher" id="agents-tab-cmd-code-researcher" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Uses research to scope and improve coding plans with codebase exploration and external research.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="splitter" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Splitter Agent</label><input type="text" data-role="splitter" id="agents-tab-cmd-splitter" placeholder="e.g. claude" style="flex:1;"></div>
           <div class="agent-description">Segregates planned files into distinct routine and complex task batches.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="lead" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Lead Coder</label><input type="text" data-role="lead" id="agents-tab-cmd-lead" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Implements high-complexity files, complex refactors, and core architecture changes.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="coder" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Coder</label><input type="text" data-role="coder" id="agents-tab-cmd-coder" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Implements low-complexity boilerplate, routine functions, and minor enhancements.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="intern" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Intern</label><input type="text" data-role="intern" id="agents-tab-cmd-intern" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="intern" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Intern</label><input type="text" data-role="intern" id="agents-tab-cmd-intern" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Executes simple, repetitive code edits and heavily guided tasks at lowest cost.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="reviewer" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Reviewer</label><input type="text" data-role="reviewer" id="agents-tab-cmd-reviewer" placeholder="e.g. agy --approval-mode auto_edit" style="flex:1;"></div>
           <div class="agent-description">Evaluates completed implementations against plans, checking for regressions and scope creep.</div>
-          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. copilot --allow-all-tools" style="flex:1;"></div>
+          <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="tester" style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Acceptance Tester</label><input type="text" data-role="tester" id="agents-tab-cmd-tester" placeholder="e.g. agy" style="flex:1;"></div>
           <div class="agent-description">Validates implemented changes against the Design Doc/PRD, applies fixes for requirement gaps, and logs verification results.</div>
           <div class="startup-row"><input type="checkbox" class="agents-tab-visible-toggle" data-role="analyst" checked style="width:auto;margin:0;flex-shrink:0;"><label style="min-width:70px;">Analyst</label><input type="text" data-role="analyst" id="agents-tab-cmd-analyst" placeholder="e.g. qwen" style="flex:1;"></div>
           <div class="agent-description">Researches general-purpose technical queries and outlines plan dependencies.</div>
@@ -2158,13 +2158,7 @@
             <span>Auto-sync repo before sending to Jules</span>
           </label>
 
-          <label class="startup-row" style="display:flex;align-items:center;gap:8px;margin-top:6px;">
-            <input id="agents-tab-auto-commit-code-review" type="checkbox" style="width:auto;margin:0;">
-            <span>Auto-commit when moving to Code Review</span>
-          </label>
-          <div id="auto-commit-code-review-note" style="display:none;font-size:10px;color:var(--text-muted);margin-left:24px;margin-top:2px;">
-            Uncommitted changes are auto-committed before a plan enters Code Review, giving reviewers a clean diff.
-          </div>
+
         </div>
 
         <!-- Custom Agents -->
@@ -2221,13 +2215,7 @@
                   <input type="checkbox" id="ca-addon-research" style="width:auto;margin:0;">
                   <span>Enable Deep Research (50-100 sources, codebase + web)</span>
                 </label>
-                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="ca-addon-use-worktree" style="width:auto;margin:0;">
-                  <span>Use Worktree</span>
-                </label>
-                <p style="font-size:11px;color:var(--text-secondary);margin:2px 0 0 0;padding-left:22px;">
-                  Triggers deep_planning skill protocol. Skips planning proposal phase.
-                </p>
+
 
                 <div style="margin-top:8px;">                  <label class="modal-label" style="margin-bottom:4px;">Design Doc Link</label>
                   <input id="ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
@@ -2790,7 +2778,6 @@
           const ticketUpdateMode = addons.ticketUpdateMode || (addons.ticketUpdateEnabled === true ? 'comment-only' : 'disabled');
           document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
           document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
-          document.getElementById('ca-addon-use-worktree').checked = addons.useWorktree === true;
           document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
           document.getElementById('ca-addon-workflow-path').value = addons.customWorkflowPath || '';
 
@@ -2843,7 +2830,6 @@
                 complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
                 ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
                 researchEnabled: document.getElementById('ca-addon-research').checked,
-                useWorktree: document.getElementById('ca-addon-use-worktree').checked,
                 designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
                 customWorkflowPath: document.getElementById('ca-addon-workflow-path').value.trim() || undefined,
             }
@@ -2936,8 +2922,7 @@
           });
           return {
             commands, visibleAgents,
-            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false,
-            autoCommitOnCodeReview: document.getElementById('agents-tab-auto-commit-code-review')?.checked ?? true,
+            julesAutoSyncEnabled: document.getElementById('agents-tab-jules-auto-sync')?.checked ?? false
           };
         }
         function agentsTabSaveConfig() {
@@ -2954,14 +2939,7 @@
 
 
 
-        const autoCommitCb = document.getElementById('agents-tab-auto-commit-code-review');
-        const autoCommitNote = document.getElementById('auto-commit-code-review-note');
-        if (autoCommitCb && autoCommitNote) {
-          autoCommitNote.style.display = autoCommitCb.checked ? 'block' : 'none';
-          autoCommitCb.addEventListener('change', () => {
-            autoCommitNote.style.display = autoCommitCb.checked ? 'block' : 'none';
-          });
-        }
+
         // NOTE: Prompts tab autosave is handled by initPromptsTabListeners() and saveRoleConfig(),
         // which correctly read from actual element IDs (plannerAddon*, roleAddonsGroup, etc.).
         // The old promptsTabCollectConfig() was removed — it referenced non-existent element IDs
@@ -4723,7 +4701,7 @@
                 document.querySelectorAll('.kanban-card.selected').forEach(el => el.classList.remove('selected'));
                 selectedCards.clear();
                 updateReassignButtonVisibility();
-                const targetBody = document.getElementById('col-CODED_AUTO');
+                const targetBody = document.getElementById('col-' + targetColumn);
                 const dispatchGroups = new Map();
 
                 sessionIds.forEach(id => {
@@ -4770,7 +4748,7 @@
                             }
                             const srcCount = document.getElementById('count-' + sourceDomCol);
                             if (srcCount) srcCount.textContent = String(Math.max(0, parseInt(srcCount.textContent) - 1));
-                            const tgtCount = document.getElementById('count-CODED_AUTO');
+                            const tgtCount = document.getElementById('count-' + targetColumn);
                             if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
                         }
                         cardEl.classList.remove('card-dropped');
@@ -5004,6 +4982,15 @@
         window.addEventListener('message', (event) => {
             const msg = event.data;
             switch (msg.type) {
+                case 'switchToTab': {
+                    const tabName = msg.tab;
+                    if (!tabName) break;
+                    const targetBtn = document.querySelector(`.kanban-tab-btn[data-tab="${tabName}"]`);
+                    if (targetBtn) {
+                        targetBtn.click();
+                    }
+                    break;
+                }
                 case 'updateWorkspaceSelection': {
                     const previousRoot = currentWorkspaceRoot;
                     currentWorkspaceRoot = msg.workspaceRoot || '';
@@ -5425,10 +5412,7 @@
                   if (julesSyncCb) julesSyncCb.checked = !!msg.julesAutoSyncEnabled;
 
                   
-                  const autoCommitCb = document.getElementById('agents-tab-auto-commit-code-review');
-                  if (autoCommitCb) autoCommitCb.checked = msg.autoCommitOnCodeReview !== false;
-                  const autoCommitNote = document.getElementById('auto-commit-code-review-note');
-                  if (autoCommitNote) autoCommitNote.style.display = msg.autoCommitOnCodeReview !== false ? 'block' : 'none';
+
                   
                   // Sync lastVisibleAgents and column/Jules visibility.
                   // Unlike the visibleAgents handler (which receives defaults-merged data
@@ -5454,13 +5438,6 @@
                   break;
                 }
 
-                case 'autoCommitOnCodeReviewSetting': {
-                  const el = document.getElementById('agents-tab-auto-commit-code-review');
-                  if (el) el.checked = msg.enabled !== false;
-                  const noteEl = document.getElementById('auto-commit-code-review-note');
-                  if (noteEl) noteEl.style.display = msg.enabled !== false ? 'block' : 'none';
-                  break;
-                }
                 case 'worktreeCounts': {
                   window.worktreeCounts = msg.counts;
                   renderColumns();

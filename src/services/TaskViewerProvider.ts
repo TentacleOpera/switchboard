@@ -2986,13 +2986,54 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         commands: Record<string, string>;
         planIngestionFolder: string;
         visibleAgents: Record<string, boolean>;
+        autoCommitOnCodeReview: boolean;
+        openWorktreeForCoderAgents: boolean;
     }> {
         const [commands, planIngestionFolder, visibleAgents] = await Promise.all([
             this.getStartupCommands(workspaceRoot),
             this.getPlanIngestionFolder(workspaceRoot),
             this.getVisibleAgents(workspaceRoot)
         ]);
-        return { commands, planIngestionFolder, visibleAgents };
+        const statePath = this._resolveStateFilePath(workspaceRoot);
+        let autoCommitOnCodeReview = true;
+        let openWorktreeForCoderAgents = false;
+        if (statePath) {
+            try {
+                const content = await fs.promises.readFile(statePath, 'utf8');
+                const state = JSON.parse(content);
+                if (state.autoCommitOnCodeReview === false) autoCommitOnCodeReview = false;
+                if (state.openWorktreeForCoderAgents === true) openWorktreeForCoderAgents = true;
+            } catch {}
+        }
+        return { commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview, openWorktreeForCoderAgents };
+    }
+
+    public async handleGetOpenWorktreeForCoderAgentsSetting(workspaceRoot?: string): Promise<boolean> {
+        const statePath = this._resolveStateFilePath(workspaceRoot);
+        if (!statePath) return false;
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return state.openWorktreeForCoderAgents === true;
+        } catch {
+            return false;
+        }
+    }
+
+    public async handleGetAutoCommitOnCodeReviewSetting(workspaceRoot?: string): Promise<boolean> {
+        const root = this._resolveWorkspaceRoot(workspaceRoot);
+        if (this._kanbanProvider && root) {
+            return this._kanbanProvider.getAutoCommitOnCodeReview(root);
+        }
+        const statePath = this._resolveStateFilePath(workspaceRoot);
+        if (!statePath) return true;
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return state.autoCommitOnCodeReview !== false;
+        } catch {
+            return true;
+        }
     }
 
     public handleGetAccurateCodingSetting(): boolean {
@@ -6202,6 +6243,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 || sanitizedCustomAgents !== undefined
                 || sanitizedCustomKanbanColumns !== undefined
                 || (typeof data.planIngestionFolder === 'string' && !validationError)
+                || typeof data.autoCommitOnCodeReview === 'boolean'
+                || typeof data.openWorktreeForCoderAgents === 'boolean'
             ) {
                 await this.updateState(async (state: any) => {
                     if (data.commands) {
@@ -6246,6 +6289,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         } else {
                             delete state.planIngestionFolder;
                         }
+                    }
+
+                    if (typeof data.autoCommitOnCodeReview === 'boolean') {
+                        state.autoCommitOnCodeReview = data.autoCommitOnCodeReview;
+                    }
+
+                    if (typeof data.openWorktreeForCoderAgents === 'boolean') {
+                        state.openWorktreeForCoderAgents = data.openWorktreeForCoderAgents;
                     }
                 });
             }
@@ -7163,7 +7214,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         vscode.commands.executeCommand('switchboard.setupIDEs');
                         break;
                     case 'openKanban':
-                        vscode.commands.executeCommand('switchboard.openKanban');
+                        vscode.commands.executeCommand('switchboard.openKanban', data.tab);
                         break;
                     case 'openPlanningPanel':
                         vscode.commands.executeCommand('switchboard.openPlanningPanel');

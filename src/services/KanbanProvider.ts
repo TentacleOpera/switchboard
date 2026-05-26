@@ -98,6 +98,7 @@ export interface KanbanCard {
 export class KanbanProvider implements vscode.Disposable {
     private static readonly _AUTO_PULL_INTERVALS = new Set<number>([5, 15, 30, 60]);
     private _panel?: vscode.WebviewPanel;
+    private _pendingTab?: string;
     private _onWorkspaceChangeEmitter = new vscode.EventEmitter<string>();
     public readonly onWorkspaceChange = this._onWorkspaceChangeEmitter.event;
     private _disposables: vscode.Disposable[] = [];
@@ -796,11 +797,18 @@ export class KanbanProvider implements vscode.Disposable {
     /**
      * Open or reveal the Kanban panel in the editor area.
      */
-    public async open() {
+    public async open(tab?: string) {
+        if (tab) {
+            this._pendingTab = tab;
+        }
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
             // Trigger unified refresh so the board gets fresh data
             await vscode.commands.executeCommand('switchboard.fullSync');
+            if (this._pendingTab) {
+                this._panel.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                this._pendingTab = undefined;
+            }
             return;
         }
 
@@ -2252,10 +2260,11 @@ export class KanbanProvider implements vscode.Disposable {
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
-                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true
+                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true,
+                openWorktreeForCoderAgents: state.openWorktreeForCoderAgents ?? false
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true, openWorktreeForCoderAgents: false };
         }
     }
 
@@ -3988,6 +3997,10 @@ export class KanbanProvider implements vscode.Disposable {
                 // Initial load: trigger full file→DB sync to ensure DB is populated,
                 // then kanbanProvider.refresh() is called by fullSync after syncing.
                 await vscode.commands.executeCommand('switchboard.fullSync');
+                if (this._pendingTab) {
+                    this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
+                    this._pendingTab = undefined;
+                }
                 break;
             case 'selectPlan': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
@@ -6296,7 +6309,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (!targetRole) return;
 
         // Only consider worktree creation for coder roles and custom agents
-        const isCoderColumn = ['lead', 'coder', 'intern'].includes(targetRole) || targetRole.startsWith('custom_agent_');
+        const isCoderColumn = ['lead', 'coder', 'intern'].includes(targetRole);
         if (!isCoderColumn) return;
 
         // Check if useWorktree addon is enabled for the target role
@@ -6313,24 +6326,21 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         workspaceRoot: string,
         role: string
     ): Promise<boolean> {
-        // Custom agents store addons in state.json via _getCustomAgents, not in VS Code workspace state
-        if (role.startsWith('custom_agent_')) {
-            const customAgents = await this._getCustomAgents(workspaceRoot);
-            const agentId = role.replace('custom_agent_', '');
-            const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
-            return agentConfig?.addons?.useWorktree === true;
+        // Custom agents no longer support worktree (consolidated to global setting)
+        if (role.startsWith('custom_agent_')) return false;
+
+        // Only coder roles are eligible
+        if (!['lead', 'coder', 'intern'].includes(role)) return false;
+
+        // Check global workflow setting
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            return state.openWorktreeForCoderAgents === true;
+        } catch {
+            return false;
         }
-
-        // Built-in roles read from VS Code workspace state (same path as prompt building)
-        if (!this._taskViewerProvider) return false;
-
-        const roleConfig = this._taskViewerProvider.getRoleConfig(`roleConfig_${role}`) as
-            | { addons?: Record<string, boolean> }
-            | undefined;
-
-        if (roleConfig?.addons?.useWorktree === true) return true;
-
-        return false;
     }
 
     private _isAcceptanceTesterDesignDocConfigured(): boolean {

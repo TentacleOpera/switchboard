@@ -452,6 +452,9 @@ export class SetupPanelProvider implements vscode.Disposable {
                 case 'openDocs':
                     await this._openDocs();
                     break;
+                case 'openKanban':
+                    await vscode.commands.executeCommand('switchboard.openKanban');
+                    break;
                 case 'saveStartupCommands':
                     await this._taskViewerProvider.handleSaveStartupCommands(message);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
@@ -507,6 +510,22 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: this._taskViewerProvider.handleGetPreventAgentFileOpeningSetting()
                     });
                     break;
+                case 'getOpenWorktreeForCoderAgentsSetting': {
+                    const value = await this._taskViewerProvider.handleGetOpenWorktreeForCoderAgentsSetting();
+                    this._panel.webview.postMessage({
+                        type: 'openWorktreeForCoderAgentsSetting',
+                        enabled: value
+                    });
+                    break;
+                }
+                case 'getAutoCommitOnCodeReviewSetting': {
+                    const value = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting();
+                    this._panel.webview.postMessage({
+                        type: 'autoCommitOnCodeReviewSetting',
+                        enabled: value
+                    });
+                    break;
+                }
                 case 'setPreventAgentFileOpeningSetting':
                     await this._taskViewerProvider.handleSetPreventAgentFileOpeningSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');

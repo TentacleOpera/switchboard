@@ -458,10 +458,12 @@
         <!-- Tab Navigation -->
         <div class="tab-nav" role="tablist" aria-label="Setup sections">
             <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
+            <button class="tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
             <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
             <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
             <button class="tab-btn" data-tab="planning-panel" role="tab" aria-selected="false">Planning Panel</button>
+            <button class="tab-btn" data-tab="docs" role="tab" aria-selected="false">Docs</button>
         </div>
 
         <div class="tab-content open" id="startup-fields" data-tab-content="setup">
@@ -487,9 +489,7 @@
                 <div id="git-ignore-warning" style="font-size:10px; color:var(--text-secondary); line-height:1.4; font-family:var(--font-mono);">
                     Preset strategies are read-only. Switchboard updates only its fenced managed block and preserves unrelated rules. Cloud coders (e.g., Jules) require .switchboard/plans/ to be in the repository, so avoid blanket .switchboard/* rules unless you intentionally want to hide plans from git.
                 </div>
-                <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);">
-                    IDLE
-                </div>
+                <div id="setup-save-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--text-secondary); font-family:var(--font-mono);"></div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     WORKFLOW SETTINGS
                 </div>
@@ -500,8 +500,28 @@
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Auto-close any file that gets opened in the editor. Use "Override Open" right-click to bypass.</span>
                     </div>
                 </label>
-                <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="open-worktree-coder-agents-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Open Worktree for Coder Agents</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Automatically create isolated git worktree when a plan is sent to any coder agent (lead, coder, or intern).</span>
+                    </div>
+                </label>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="auto-commit-code-review-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Auto-commit When Moving to Code Review</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Automatically commit uncommitted changes before a plan enters Code Review, giving reviewers a clean diff.</span>
+                    </div>
+                </label>
             </div>
+
+        <div class="tab-content" id="kanban-fields" data-tab-content="kanban">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                Kanban setup is configured in the kanban panel.
+            </div>
+            <button id="btn-open-kanban" class="action-btn w-full">OPEN KANBAN VIEW</button>
+        </div>
 
         <div class="tab-content" id="db-sync-fields" data-tab-content="database">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
@@ -917,6 +937,13 @@
                     Status: <span id="planning-sync-status-text">Not configured</span>
                 </div>
             </div>
+
+        <div class="tab-content" id="docs-fields" data-tab-content="docs">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                Documentation
+            </div>
+            <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
+        </div>
     </div>
 
     <div id="control-plane-modal" class="modal-overlay hidden">
@@ -1305,6 +1332,8 @@
                 'setup': () => {
                     vscode.postMessage({ type: 'getGitIgnoreConfig' });
                     vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
+                    vscode.postMessage({ type: 'getOpenWorktreeForCoderAgentsSetting' });
+                    vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                 },
                 'database': () => {
                     vscode.postMessage({ type: 'getAllDbPaths' });
@@ -2672,6 +2701,7 @@
 
         document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
+        document.getElementById('btn-open-kanban')?.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
         controlPlaneModeMigrateButton?.addEventListener('click', () => setControlPlaneSetupMode('migrate-existing'));
         controlPlaneModeFreshButton?.addEventListener('click', () => setControlPlaneSetupMode('fresh-setup'));
         document.getElementById('btn-detect-control-plane')?.addEventListener('click', () => {
@@ -3161,6 +3191,14 @@
             vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
         });
  
+        document.getElementById('open-worktree-coder-agents-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveStartupCommands', openWorktreeForCoderAgents: e.target.checked });
+        });
+ 
+        document.getElementById('auto-commit-code-review-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'saveStartupCommands', autoCommitOnCodeReview: e.target.checked });
+        });
+ 
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
             vscode.postMessage({
                 type: 'setWorkspaceMappingEnabled',
@@ -3264,6 +3302,10 @@
                         if (input) {
                             input.value = lastPlanIngestionFolder;
                         }
+                        const worktreeToggle = document.getElementById('open-worktree-coder-agents-toggle');
+                        if (worktreeToggle) worktreeToggle.checked = message.openWorktreeForCoderAgents === true;
+                        const autoCommitToggle = document.getElementById('auto-commit-code-review-toggle');
+                        if (autoCommitToggle) autoCommitToggle.checked = message.autoCommitOnCodeReview !== false;
                     });
                     break;
                 }
@@ -3481,6 +3523,20 @@
                     runSetupHydration(() => {
                         const toggle = document.getElementById('prevent-agent-file-opening-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'openWorktreeForCoderAgentsSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('open-worktree-coder-agents-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'autoCommitOnCodeReviewSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('auto-commit-code-review-toggle');
+                        if (toggle) toggle.checked = message.enabled !== false;
                     });
                     break;
                 }

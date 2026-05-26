@@ -1812,9 +1812,9 @@
                 <div class="section-label">QUICK ACTIONS</div>
             </div>
             <div style="display:flex; gap:6px;">
-                <button id="btn-quick-kanban" class="secondary-btn is-teal" style="flex:1">OPEN AUTOBAN</button>
-                <button id="btn-quick-planning" class="secondary-btn is-cyan" style="flex:1">PLANNING</button>
-                <button id="btn-quick-setup" class="secondary-btn is-teal" style="flex:1">OPEN SETUP</button>
+                <button id="btn-quick-kanban" class="secondary-btn is-teal" style="flex:1">Kanban</button>
+                <button id="btn-quick-planning" class="secondary-btn is-cyan" style="flex:1">artifacts</button>
+                <button id="btn-quick-setup" class="secondary-btn is-teal" style="flex:1">setup</button>
             </div>
         </div>
 
@@ -1863,7 +1863,7 @@
                 <div class="terminals-tab-content" style="padding: 10px; display: flex; flex-direction: column; gap: 8px;">
                     <button id="createAgentGrid" class="secondary-btn is-teal w-full">OPEN AGENT TERMINALS</button>
                     <button id="btn-deregister-all" class="secondary-btn error w-full">RESET ALL AGENTS</button>
-                    <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">OPEN SETUP</button>
+                    <button id="btn-open-central-setup" class="secondary-btn is-teal w-full">AGENT SETUP</button>
                     <button id="btn-easter-egg" class="secondary-btn w-full" style="margin-top: 6px;">Access main program</button>
                 </div>
 
@@ -2131,7 +2131,7 @@
         const btnOpenCentralSetup = document.getElementById('btn-open-central-setup');
         if (btnOpenCentralSetup) {
             btnOpenCentralSetup.addEventListener('click', () => {
-                vscode.postMessage({ type: 'openSetupPanel' });
+                vscode.postMessage({ type: 'openKanban', tab: 'agents' });
             });
         }
 
@@ -4918,9 +4918,9 @@
                         setupOnboardBtn.id = 'btn-open-setup-onboarding';
                         setupOnboardBtn.className = 'secondary-btn w-full';
                         setupOnboardBtn.style.marginTop = '12px';
-                        setupOnboardBtn.textContent = 'OPEN SETUP';
+                        setupOnboardBtn.textContent = 'AGENT SETUP';
                         setupOnboardBtn.addEventListener('click', () => {
-                            vscode.postMessage({ type: 'openSetupPanel' });
+                            vscode.postMessage({ type: 'openKanban', tab: 'agents' });
                         });
                         agentListStandard.appendChild(setupOnboardBtn);
 
@@ -5052,7 +5052,7 @@
             if (agentListStandard.children.length === 0) {
                 const emptyMsg = document.createElement('div');
                 emptyMsg.style.cssText = 'text-align:center; padding:20px; color:var(--text-secondary); font-family:var(--font-mono); font-size:11px;';
-                emptyMsg.textContent = 'All agents hidden. Open Setup to configure.';
+                emptyMsg.textContent = 'All agents hidden. Open Agent Setup to configure.';
                 agentListStandard.appendChild(emptyMsg);
             }
 

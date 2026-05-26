@@ -212,7 +212,7 @@ export class PlanningPanelProvider {
 
         this._panel = vscode.window.createWebviewPanel(
             'switchboard-planning',
-            'Switchboard Planning',
+            'ARTIFACTS',
             vscode.ViewColumn.One,
             {
                 enableScripts: true,

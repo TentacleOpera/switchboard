@@ -666,8 +666,8 @@ export async function activate(context: vscode.ExtensionContext) {
     if (workspaceRoot) {
         await taskViewerProvider.initializeKanbanDbOnStartup();
     }
-    const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async () => {
-        await kanbanProvider!.open();
+    const openKanbanDisposable = vscode.commands.registerCommand('switchboard.openKanban', async (tab?: string) => {
+        await kanbanProvider!.open(tab);
     });
     context.subscriptions.push(openKanbanDisposable);
 

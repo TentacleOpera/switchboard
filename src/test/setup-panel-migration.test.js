@@ -11,6 +11,8 @@ function run() {
     const setupProviderPath = path.join(process.cwd(), 'src', 'services', 'SetupPanelProvider.ts');
     const extensionPath = path.join(process.cwd(), 'src', 'extension.ts');
     const packagePath = path.join(process.cwd(), 'package.json');
+    const kanbanHtmlPath = path.join(process.cwd(), 'src', 'webview', 'kanban.html');
+    const kanbanProviderPath = path.join(process.cwd(), 'src', 'services', 'KanbanProvider.ts');
 
     const implementationSource = fs.readFileSync(implementationPath, 'utf8');
     const setupSource = fs.readFileSync(setupPath, 'utf8');
@@ -18,6 +20,8 @@ function run() {
     const setupProviderSource = fs.readFileSync(setupProviderPath, 'utf8');
     const extensionSource = fs.readFileSync(extensionPath, 'utf8');
     const packageSource = fs.readFileSync(packagePath, 'utf8');
+    const kanbanHtmlSource = fs.readFileSync(kanbanHtmlPath, 'utf8');
+    const kanbanProviderSource = fs.readFileSync(kanbanProviderPath, 'utf8');
 
     assert.ok(
         implementationSource.includes('id="terminal-operations-fields"') &&
@@ -177,6 +181,19 @@ function run() {
         !packageSource.includes('switchboard.setupClickUp') &&
         !packageSource.includes('switchboard.setupLinear'),
         'Expected the unreleased ClickUp and Linear setup commands to be removed so the Setup panel is the only setup entry point.'
+    );
+
+    assert.ok(
+        implementationSource.includes("type: 'openKanban', tab: 'agents'"),
+        "Expected implementation.html source to contain { type: 'openKanban', tab: 'agents' }"
+    );
+    assert.ok(
+        kanbanProviderSource.includes('_pendingTab'),
+        "Expected KanbanProvider.ts to contain _pendingTab"
+    );
+    assert.ok(
+        kanbanHtmlSource.includes('switchToTab'),
+        "Expected kanban.html to contain switchToTab case"
     );
 
     console.log('setup panel migration test passed');
