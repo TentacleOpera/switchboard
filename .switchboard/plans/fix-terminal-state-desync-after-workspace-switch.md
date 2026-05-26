@@ -189,3 +189,52 @@ case 'selectWorkspace':
 
 ## Recommendation
 Complexity 4 → **Send to Coder**
+
+---
+
+## Reviewer Pass (2026-05-27)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| G-1 | NIT | `console.log` in `clearRegisteredTerminalsMap()` fires unconditionally on every workspace switch, polluting the developer console regardless of whether the map had any entries. Inconsistent with codebase logging conventions (no raw `console.log` for operational messages). |
+| G-2 | NIT | Subsumed by G-1: the log message says "Cleared" even when `_registeredTerminals` is `undefined` or empty — a misleading no-op. |
+| G-3 | NIT | Ordering `clearRegisteredTerminalsMap` → `_refreshBoard` is theoretically raceable if `_refreshBoard` ever auto-dispatches terminal commands mid-refresh. Examined `_refreshBoard`: it reads plan state and pushes UI data only — no dispatch. Theoretical concern only; ordering is correct. Defer. |
+| G-4 | **MAJOR** | No same-workspace guard: if the user re-selects the already-active workspace from the dropdown, `clearRegisteredTerminalsMap()` fires and wipes a valid dispatch map. User loses registered terminals and must re-register — a real, reproducible UX regression introduced by the implementation. |
+
+### Stage 2 — Balanced Synthesis
+
+- **G-1/G-2**: Fix — make `console.log` conditional on `hadEntries`. Eliminates misleading no-op message and reduces console noise during normal dropdown use.
+- **G-3**: Defer — no actual dispatch path in `_refreshBoard`; document as a known theoretical concern.
+- **G-4**: Fix now — capture `prevWorkspaceRoot` before calling `setCurrentWorkspaceRoot`, then guard the `clearRegisteredTerminalsMap` call behind `if (prevWorkspaceRoot !== this._currentWorkspaceRoot)`. `setCurrentWorkspaceRoot` itself already has this guard internally, but the clear was called unconditionally after it.
+
+### Fixes Applied
+
+**`src/services/KanbanProvider.ts`** (selectWorkspace handler, ~line 4152):
+- Added `const prevWorkspaceRoot = this._currentWorkspaceRoot;` before `setCurrentWorkspaceRoot`
+- Wrapped `clearRegisteredTerminalsMap()` call in `if (prevWorkspaceRoot !== this._currentWorkspaceRoot)` guard
+- Added clarifying comment explaining the same-workspace re-selection rationale
+
+**`src/services/TaskViewerProvider.ts`** (`clearRegisteredTerminalsMap()`, line 452):
+- Added `const hadEntries = (this._registeredTerminals?.size ?? 0) > 0;` guard
+- Made `console.log` conditional on `hadEntries` — no log emitted when map was already empty/undefined
+
+### Validation Results
+
+- **Static**: No compilation or type-check run per session policy (SKIP COMPILATION directive).
+- **Tests**: Not run per session policy (SKIP TESTS directive).
+- **Structural checks**:
+  - `clearRegisteredTerminalsMap` definition: 1 occurrence (TaskViewerProvider.ts:452) ✅
+  - Call sites: 1 occurrence (KanbanProvider.ts:4188, inside `prevWorkspaceRoot !== this._currentWorkspaceRoot` guard) ✅
+  - No accidental call in `resolveWebviewView` or any sidebar-reopen path ✅
+  - `_taskViewerProvider` field and setter at KanbanProvider lines 137/148 — unchanged ✅
+  - `setTaskViewerProvider` called in `extension.ts` line 666 — unchanged ✅
+  - `_registeredTerminals` and `_terminalAgentInfo` field declarations at lines 289/294 — unchanged ✅
+  - `_terminalAgentInfo` NOT touched by `clearRegisteredTerminalsMap` ✅
+
+### Remaining Risks
+
+- **Known gap (unchanged)**: Sidebar-reopen greyed-out buttons (original step 6) are not fixed by this change. This is documented in the plan and acknowledged as out of scope.
+- **Theoretical ordering risk (G-3)**: If `_refreshBoard` ever grows a dispatch path, the clear-before-refresh ordering could cause a brief window of no terminals. Low probability; document for future reviewers.
+- **Manual verification still required**: No automated test coverage for workspace-switch terminal state. The manual steps in the Verification Plan section above remain the definitive check.

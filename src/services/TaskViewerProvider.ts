@@ -450,8 +450,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * so that getActualTerminalAgentNames() remains correct for Kanban role badges.
      */
     public clearRegisteredTerminalsMap(): void {
+        const hadEntries = (this._registeredTerminals?.size ?? 0) > 0;
         this._registeredTerminals?.clear();
-        console.log('[TaskViewerProvider] Cleared _registeredTerminals dispatch map (workspace switch)');
+        if (hadEntries) {
+            console.log('[TaskViewerProvider] Cleared _registeredTerminals dispatch map (workspace switch)');
+        }
     }
 
     /**

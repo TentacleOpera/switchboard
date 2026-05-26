@@ -4151,6 +4151,7 @@ export class KanbanProvider implements vscode.Disposable {
             }
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
+                    const prevWorkspaceRoot = this._currentWorkspaceRoot;
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
                     this.setProjectFilter(null); // Reset project filter on workspace switch
 
@@ -4180,8 +4181,12 @@ export class KanbanProvider implements vscode.Disposable {
                     // Sync TaskViewerProvider's plan watcher to the new workspace
                     this._taskViewerProvider?.reinitializePlanWatcher(msg.workspaceRoot);
                     // Clear stale terminal dispatch references from the previous workspace.
+                    // Only clears when the workspace actually changes — same-workspace re-selection
+                    // must not wipe a valid dispatch map and force the user to re-register terminals.
                     // _terminalAgentInfo is intentionally preserved (workspace-agnostic).
-                    this._taskViewerProvider?.clearRegisteredTerminalsMap();
+                    if (prevWorkspaceRoot !== this._currentWorkspaceRoot) {
+                        this._taskViewerProvider?.clearRegisteredTerminalsMap();
+                    }
                     await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;
