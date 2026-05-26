@@ -27,6 +27,11 @@ Currently, the RESEARCH tab in planning.html provides a prompt template but requ
    - Save button
    - Status indicator showing configured/unconfigured state
    - Link to Google AI Studio for API key generation
+   - Security note explaining storage location and visibility:
+     - "Your API key is stored in VS Code's secure storage (SecretStorage API)"
+     - "The key is encrypted at rest and managed by VS Code's platform-specific secure storage"
+     - "The extension never sees or logs your API key in plain text"
+     - "The key is only sent directly to Google's Gemini API endpoints"
 
 2. Follow existing setup.html styling patterns
    - Use existing card/border styles

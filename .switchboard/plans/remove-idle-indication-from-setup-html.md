@@ -74,6 +74,17 @@ Edge Cases:
 5. Verify no "IDLE" text appears at any point during the interaction
 6. Reload the webview and verify the status area is still empty on fresh load
 
+## Reviewer Notes (Grumpy Principal Engineer)
+*   **setup.html `setup-save-status` Element**: "Bah, it looks like someone actually followed instructions for once! The `IDLE` text is gone and the `min-height:14px` style remains to prevent that infuriating layout shift. NIT: Would be nice if the div wasn't completely squished on one line, but it's HTML so it's fine." (Severity: NIT)
+
+### Synthesis
+*   The implementation in `src/webview/setup.html` is exactly as specified in the plan. The hardcoded "IDLE" text has been removed and all inline styles (importantly, `min-height:14px`) were preserved. No code changes were necessary.
+
+### Status
+- **Review**: COMPLETED
+- **Fixes Applied**: NONE REQUIRED
+- **Remaining Risks**: None.
+
 ## Impact
 - The status element will be empty by default
 - Users will only see status text when autosave is actively working
