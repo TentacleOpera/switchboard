@@ -104,7 +104,7 @@ suite('selectWorkspace filter reset', () => {
         assert.strictEqual(provider.getProjectFilter(), 'Project A');
 
         // Simulate workspace switch message
-        await (provider as any).handleMessage({
+        await (provider as any)._handleMessage({   // NOTE: private method name is _handleMessage
             type: 'selectWorkspace',
             workspaceRoot: '/path/to/workspaceB'
         });
@@ -129,4 +129,39 @@ suite('selectWorkspace filter reset', () => {
 
 ---
 
-**Recommendation:** Send to Coder
+## Code Review Results
+
+**Review Date:** 2026-05-27  
+**Status:** ✅ FIXED — two bugs corrected in test file
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/services/KanbanProvider.ts` | Core fix: `this.setProjectFilter(null)` added at line 4155 in `selectWorkspace` handler — **correct as implemented** |
+| `src/services/__tests__/KanbanProvider.test.ts` | Two bugs fixed by reviewer (see below) |
+
+### Reviewer Fixes Applied
+
+1. **CRITICAL — Wrong method name in test:** `(provider as any).handleMessage(...)` → `(provider as any)._handleMessage(...)`. The private method is `_handleMessage`; calling `handleMessage` (non-existent) via `as any` silently threw a `TypeError` at runtime, making the test non-functional.
+
+2. **MAJOR — Deleted assertion restored:** The coder inadvertently deleted the pre-existing `resolvedDw2` label assertion from the dropdown workspace test (`dropdownWorkspaces appear and are deduplicated...`) when rearranging closing brackets to make room for the new test suite. The assertion `assert.strictEqual(...resolvedDw2...label...)` has been restored.
+
+### Out-of-Scope Change (NIT — noted only)
+
+The commit also added `this._taskViewerProvider?.clearRegisteredTerminalsMap()` to the `selectWorkspace` handler. This was not described in this plan but is safe (optional-chained, no side effects if `_taskViewerProvider` is absent). It likely belongs to the terminal state desynchronization fix (separate plan). Not reverted; no action needed.
+
+### Validation Results
+
+- **Static analysis:** `KanbanProvider.ts` change is minimal and correct — `setProjectFilter(null)` is idempotent, called after `setCurrentWorkspaceRoot` ensures `_currentWorkspaceRoot` is set, and correctly notifies `GlobalPlanWatcherService` via its side effect.
+- **Test correctness:** After reviewer fixes, the new test properly exercises `_handleMessage` with `type: 'selectWorkspace'`, stubs `setCurrentWorkspaceRoot`, `_setupSessionWatcher`, and `_refreshBoard` to prevent I/O, and asserts `getProjectFilter() === null` after the handler runs.
+- **Compilation:** Skipped per session policy.
+- **Automated tests:** Skipped per session policy — to be run by user.
+
+### Remaining Risks
+
+- None material. The manual checklist above should be verified before shipping.
+
+---
+
+**Recommendation:** ✅ Ready to commit

@@ -492,6 +492,7 @@ Manual verification steps:
             
             // Verify labels
             assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw1)?.label, path.basename(resolvedDw1), 'Dropdown workspace label should be basename');
+            assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw2)?.label, path.basename(resolvedDw2), 'Dropdown workspace label should be basename');
         });
     });
 
@@ -507,7 +508,7 @@ Manual verification steps:
             assert.strictEqual(provider.getProjectFilter(), 'Project A');
 
             // Simulate workspace switch message
-            await (provider as any).handleMessage({
+            await (provider as any)._handleMessage({
                 type: 'selectWorkspace',
                 workspaceRoot: '/path/to/workspaceB'
             });
