@@ -159,3 +159,64 @@ After changes, the kanban preview pane should:
 
 ## Recommendation
 Complexity 2 → **Send to Intern**
+
+---
+
+## Review Pass — Completed 2026-05-26
+
+### Stage 1: Grumpy Principal Engineer Review
+
+| # | Finding | Severity | Verdict |
+|---|---------|----------|---------|
+| 1 | Plan line numbers stale (716-904 → now extends to 937; class at 1355 not 1322; HTML at 1655 not 1622) | NIT | Valid — cosmetic only, no code impact |
+| 2 | Specificity trap: `#kanban-preview-pane` ID (1,0,0) could override `.kanban-preview-pane` class (0,1,0) padding | FALSE ALARM | Base rule correctly excludes padding/max-width/margin |
+| 3 | Missing `font-weight: normal` on base rule | NIT | Speculative; consistent with `#markdown-preview` pattern; no parent sets bold |
+| 4 | Selector verbosity — 25 `#kanban-preview-pane` selectors | NIT | Correct; consistent with existing dual-selector pattern; refactor deferred |
+| 5 | h5/h6 missing from combined header rule | FALSE ALARM | All header levels present in combined and individual rules |
+| 6 | `renderMarkdown()` at line 2271 confirmed using same renderer | NIT | Verified correct; no JS changes needed |
+| 7 | Shorthand `padding: 12px` vs longhand conflict | FALSE ALARM | No conflict — ID rule doesn't set padding at all |
+
+**No CRITICAL or MAJOR findings survive scrutiny.**
+
+### Stage 2: Balanced Synthesis
+
+- **Keep:** All implementation as-is. The specificity analysis in the plan was precise and the code faithfully follows it.
+- **Fix now:** Nothing — no valid CRITICAL/MAJOR issues.
+- **Defer:** Selector consolidation refactor (use shared class instead of triple selectors) — low priority, consistent with existing pattern.
+
+### Code Fixes Applied
+
+None required. Implementation is correct.
+
+### Verification Results
+
+| Check | Result |
+|-------|--------|
+| CSS brace balance | ✅ 192 open / 192 close — balanced |
+| `#kanban-preview-pane` rule count | ✅ 25 rules found, 25 expected |
+| Empty CSS rules | ✅ None |
+| Base rule excludes `padding` | ✅ Confirmed absent |
+| Base rule excludes `max-width` | ✅ Confirmed absent |
+| Base rule excludes `margin` | ✅ Confirmed absent |
+| All 11 child element categories covered | ✅ Headers, paragraphs, list items, code blocks, blockquotes, lists, tables, links, horizontal rules, images, empty state |
+| `renderMarkdown()` same renderer | ✅ Line 2271 in planning.js |
+| ESLint | ⚠️ Pre-existing misconfiguration (v9 + legacy `.eslintrc.json`) — unrelated to this change |
+| Compilation | SKIP per session directive |
+| Automated tests | SKIP per session directive |
+
+### Updated Line References
+
+After implementation, line numbers shifted due to the inserted base rule:
+
+| Plan Reference | Original Line | Current Line |
+|----------------|---------------|--------------|
+| Base container rule (`#markdown-preview, #markdown-preview-online`) | 716-728 | 716-728 |
+| New `#kanban-preview-pane` base rule | — | 730-737 |
+| Child element rules (headers through empty-state) | 730-904 | 739-937 |
+| `.kanban-preview-pane` class | 1322 | 1355 |
+| HTML `id="kanban-preview-pane"` element | 1622 | 1655 |
+
+### Remaining Risks
+
+- **Low:** If a future change adds `padding`, `max-width`, or `margin` to the `#kanban-preview-pane` base rule, it will override the `.kanban-preview-pane` class values due to ID > class specificity. The comment on the base rule (`/* Kanban preview pane: inherits font/text styling but keeps its own layout */`) mitigates this risk.
+- **Low:** Selector consolidation refactor would reduce maintenance burden but is low priority.

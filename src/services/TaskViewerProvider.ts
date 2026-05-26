@@ -314,6 +314,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Blacklisted plans are never auto-registered and never shown in the run sheet dropdown.
     private _brainPlanBlacklist = new Set<string>();
     private _gitCommitDisposable?: vscode.Disposable;
+    private _pidCache = new WeakMap<vscode.Terminal, { pid: number; timestamp: number }>();
+    private readonly PID_CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes
+    private _terminalOpenDisposable?: vscode.Disposable;
     private _cachedDefaultPromptOverrides: Partial<Record<string, DefaultPromptOverride>> = {};
 
     // Hard workspace ownership scoping
@@ -420,6 +423,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Start local API server for agent access
         void this._startLocalApiServer();
         void this._validateNoSwitchboardPollution();
+
+        this._terminalOpenDisposable = vscode.window.onDidOpenTerminal((terminal) => {
+            void this._waitWithTimeout(terminal.processId, 1000, undefined).then(pid => {
+                if (pid) { this._setCachedPid(terminal, pid); }
+            });
+        });
     }
 
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
@@ -1029,6 +1038,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             timeoutId = setTimeout(() => resolve(defaultValue), timeoutMs);
         });
         return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
+    }
+
+    private _getCachedPid(terminal: vscode.Terminal): number | undefined {
+        const entry = this._pidCache.get(terminal);
+        if (entry && (Date.now() - entry.timestamp < this.PID_CACHE_TTL_MS)) {
+            return entry.pid;
+        }
+        return undefined;
+    }
+
+    private _setCachedPid(terminal: vscode.Terminal, pid: number | undefined): void {
+        if (pid) {
+            this._pidCache.set(terminal, { pid, timestamp: Date.now() });
+        }
     }
 
     private _normalizeAgentKey(value: string | undefined | null): string {
@@ -16432,9 +16455,37 @@ Create this file exactly as specified, then continue your work.`);
                     const creationName = (t.creationOptions as vscode.TerminalOptions)?.name;
                     if (creationName) { activeNames.add(creationName); }
                 }
-                const activeTerminalPids = await Promise.all(
-                    activeTerminals.map(t => this._waitWithTimeout(t.processId, 1000, undefined))
-                );
+                const activeTerminalPids: (number | undefined)[] = [];
+                const terminalsNeedingResolution: vscode.Terminal[] = [];
+
+                for (const t of activeTerminals) {
+                    const cached = this._getCachedPid(t);
+                    if (cached !== undefined) {
+                        activeTerminalPids.push(cached);
+                    } else {
+                        terminalsNeedingResolution.push(t);
+                        activeTerminalPids.push(undefined); // placeholder
+                    }
+                }
+
+                if (terminalsNeedingResolution.length > 0) {
+                    const resolvedPids = await Promise.all(
+                        terminalsNeedingResolution.map(t =>
+                            this._waitWithTimeout(t.processId, 1000, undefined)
+                        )
+                    );
+                    for (let i = 0; i < terminalsNeedingResolution.length; i++) {
+                        const pid = resolvedPids[i];
+                        if (pid) {
+                            this._setCachedPid(terminalsNeedingResolution[i], pid);
+                            const placeholderIdx = activeTerminals.indexOf(terminalsNeedingResolution[i]);
+                            if (placeholderIdx !== -1) {
+                                activeTerminalPids[placeholderIdx] = pid;
+                            }
+                        }
+                    }
+                }
+
                 const activePids = new Set<number>();
                 for (const pid of activeTerminalPids) {
                     if (pid) { activePids.add(pid); }
@@ -16570,15 +16621,11 @@ Create this file exactly as specified, then continue your work.`);
                     }
                 }
 
-                const allOpenTerminals = await Promise.all(activeTerminals.map(async t => {
-                    try {
-                        const pid = await this._waitWithTimeout(t.processId, 5000, undefined);
-                        const displayName = (pid && pidAliasMap.get(pid)) || nameAliasMap.get(t.name) || t.name;
-                        return { name: t.name, pid: pid || null, displayName };
-                    } catch {
-                        return { name: t.name, pid: null, displayName: nameAliasMap.get(t.name) || t.name };
-                    }
-                }));
+                const allOpenTerminals = activeTerminals.map(t => {
+                    const pid = this._getCachedPid(t);
+                    const displayName = (pid && pidAliasMap.get(pid)) || nameAliasMap.get(t.name) || t.name;
+                    return { name: t.name, pid: pid || null, displayName };
+                });
 
                 this._view.webview.postMessage({
                     type: 'terminalStatuses',
@@ -17092,6 +17139,8 @@ Create this file exactly as specified, then continue your work.`);
         try { this._brainFsWatcher?.close(); } catch { }
         this._disposeConfiguredPlanWatcher();
         this._gitCommitDisposable?.dispose();
+        this._terminalOpenDisposable?.dispose();
+        this._pidCache = new WeakMap();
         if (this._julesStatusPollTimer) {
             clearInterval(this._julesStatusPollTimer);
             this._julesStatusPollTimer = undefined;
