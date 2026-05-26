@@ -55,6 +55,7 @@ export class PlanningPanelProvider {
     private _activePreviewPath: string | null = null;
     private _activePreviewSourceId: string | null = null;
     private _activePreviewDocId: string | null = null;
+    private _activePreviewSourceFolder: string | null = null;
     private _watcherGeneration: number = 0;
 
     private _resolvedConfigCache: {
@@ -448,7 +449,7 @@ export class PlanningPanelProvider {
                     try {
                         if (this._activePreviewSourceId === 'local-folder') {
                             // Re-fetch local doc
-                            await this._handleFetchPreview(workspaceRoot, 'local-folder', this._activePreviewDocId!, -1);
+                            await this._handleFetchPreview(workspaceRoot, 'local-folder', this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
                         } else {
                             // Re-fetch imported doc via fetchDocsFile
                             await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
@@ -1510,6 +1511,7 @@ export class PlanningPanelProvider {
                     this._activePreviewPath = resolvedPath;
                     this._activePreviewSourceId = 'local-folder';
                     this._activePreviewDocId = docId;
+                    this._activePreviewSourceFolder = sourceFolder;
                     this._setupActiveDocWatcher(resolvedPath);
 
                     this._panel?.webview.postMessage({ 

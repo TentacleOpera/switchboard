@@ -2360,7 +2360,7 @@ export class KanbanProvider implements vscode.Disposable {
             },
             researchDepth: researcherConfig?.researchComplexity || 'deep',
             saveToLocalDocs: researcherConfig?.saveToLocalDocs ?? false,
-            localDocsPath: config.get<string | undefined>('research.localFolderPath', undefined),
+            localDocsPath: config.get<string[]>('research.localFolderPaths', [])[0] ?? undefined,
             gitProhibitionByRole: {
                 planner: plannerConfig?.addons?.gitProhibition ?? config.get<boolean>('planner.gitProhibitionEnabled', false),
                 lead: leadConfig?.addons?.gitProhibition ?? true,

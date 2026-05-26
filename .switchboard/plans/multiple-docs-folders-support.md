@@ -293,3 +293,56 @@ const saveLocation = configuredPaths.length > 0 ? configuredPaths[0] : '[CONFIGU
 ---
 
 **Recommendation**: Send to Coder
+
+---
+
+## Review Pass — 2026-05-26
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **CRITICAL** | `loadDocumentPreview()` references undefined `sourceFolder` variable — the function signature is `loadDocumentPreview(sourceId, docId, docName)` with no `sourceFolder` parameter, but lines 502/512 send `sourceFolder: sourceFolder` in `fetchPreview` messages. This is always `undefined`, causing the backend to return "sourceFolder is required" for every local-folder document click. | `planning.js:442-513` |
+| 2 | **CRITICAL** | Auto-refresh handler calls `_handleFetchPreview` without `sourceFolder` parameter — when a watched local-folder document changes on disk, the auto-refresh on line 451 calls `_handleFetchPreview(workspaceRoot, 'local-folder', this._activePreviewDocId!, -1)` with no 5th argument. The class stores `_activePreviewPath`, `_activePreviewSourceId`, `_activePreviewDocId` but has no `_activePreviewSourceFolder` field. Auto-refresh always fails with "sourceFolder is required". | `PlanningPanelProvider.ts:449-451` |
+| 3 | **MAJOR** | `setFolderPath()` is destructive to multi-folder config — it writes `[folderPath]` to `research.localFolderPaths`, replacing the entire array with a single entry. If the user has configured 3 folders and any code path calls `setFolderPath`, two folders silently vanish. No active code calls it, but it remains exported as a public method. | `LocalFolderService.ts:81-87` |
+| 4 | **MAJOR** | Empty state message says "Click Browse to select a folder" — the Browse button was retired in favor of "Add Folder". UX inconsistency. | `planning.js:652` |
+| 5 | **MAJOR** | `KanbanProvider.ts` and `TaskViewerProvider.ts` still read the old `research.localFolderPath` (singular string) setting which no longer exists in `package.json`. They will always get `undefined`. Migration regression. | `KanbanProvider.ts:2363`, `TaskViewerProvider.ts:6001` |
+| 6 | **NIT** | `listLocalFolders` handler `await`s synchronous `getFolderPaths()`. Harmless but misleading. | `PlanningPanelProvider.ts:667` |
+| 7 | **NIT** | Message field name drift: plan specifies `configuredFolderPaths` but implementation sends `folderPaths`. Works correctly, just differs from plan spec. | `PlanningPanelProvider.ts:1413` |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action Taken |
+|---------|---------|--------------|
+| CRITICAL-1: `loadDocumentPreview` undefined `sourceFolder` | **Fix now** | Extract `sourceFolder` from `wrapper.dataset.sourceFolder` after `findTreeNode` call |
+| CRITICAL-2: Auto-refresh missing `sourceFolder` | **Fix now** | Added `_activePreviewSourceFolder` field; store in `_handleFetchPreview`; pass in auto-refresh call |
+| MAJOR-1: `setFolderPath` destructive | **Fix now** | Removed the method entirely — no active code calls it |
+| MAJOR-2: Empty state says "Browse" | **Fix now** | Updated text to "Click Add Folder to get started." |
+| MAJOR-3: Stale `localFolderPath` references | **Fix now** | Updated `KanbanProvider.ts` and `TaskViewerProvider.ts` to read `research.localFolderPaths` (array) and take first element |
+| NIT-1: Spurious `await` | **Defer** | Harmless, cosmetic |
+| NIT-2: Field naming drift | **Defer** | Works correctly |
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/webview/planning.js` | Added `sourceFolder` extraction from `wrapper.dataset.sourceFolder` in `loadDocumentPreview()`; updated empty state message text |
+| `src/services/PlanningPanelProvider.ts` | Added `_activePreviewSourceFolder` field; stored `sourceFolder` in `_handleFetchPreview` success path; passed `_activePreviewSourceFolder` in auto-refresh call |
+| `src/services/LocalFolderService.ts` | Removed destructive `setFolderPath()` method |
+| `src/services/KanbanProvider.ts` | Updated `localDocsPath` to read `research.localFolderPaths` (array) with `[0]` fallback |
+| `src/services/TaskViewerProvider.ts` | Updated `localDocsPath` to read `research.localFolderPaths` (array) with `[0]` fallback |
+
+### Validation Results
+
+- **Stale setting check**: No active `.ts` files reference `research.localFolderPath` (singular). Only test file `planning-modal-contract.test.js` still uses the old key (3 occurrences) — tests deferred per session directive.
+- **`browseLocalFolder` check**: No active source files reference the retired `browseLocalFolder` message type.
+- **`setFolderPath` check**: No active source files reference the removed `setFolderPath` method.
+- **Compilation/tests**: Skipped per session directive.
+- **TypeScript syntax**: Field declarations and method signatures are consistent with existing patterns.
+
+### Remaining Risks
+
+1. **Test file stale references**: `src/test/planning-modal-contract.test.js` still sets `switchboard.research.localFolderPath` (singular) in mock config. These tests will fail when run — they need updating to use `research.localFolderPaths` (array).
+2. **`listLocalFolders` handler `await` on sync method**: Cosmetic, no functional impact. Can be cleaned up in a future pass.
+3. **`_handleFetchPreview` sourceFolder validation**: The method passes `sourceFolder` directly to `fetchDocContent`, which internally calls `resolveFolderPath()` and validates against `getFolderPaths()`. This works correctly for absolute paths (which is what `listFiles()` returns), but if a relative `sourceFolder` were ever sent from the webview, it would need to be resolved first. Currently safe because `listFiles()` always returns absolute paths in `sourceFolder`.
+4. **Auto-refresh with `_activePreviewSourceFolder!`**: The non-null assertion (`!`) is safe because auto-refresh only fires when `_activePreviewSourceId === 'local-folder'`, which means `_activePreviewSourceFolder` was set during the initial preview fetch. If the extension restarts between preview and auto-refresh, the field resets to `null` and the watcher is also disposed, so the assertion is never reached in a stale state.

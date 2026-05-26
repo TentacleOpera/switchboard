@@ -78,14 +78,6 @@ export class LocalFolderService {
         return paths[0] ?? '';
     }
 
-    async setFolderPath(folderPath: string): Promise<string> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-        await config.update('research.localFolderPaths', [folderPath], vscode.ConfigurationTarget.Workspace);
-        // Return the resolved path directly — config.get() may return stale value
-        // immediately after update, especially for unregistered settings.
-        return this.resolveFolderPath(folderPath);
-    }
-
     async addFolderPath(folderPath: string): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
         const currentPaths = config.get<string[]>('research.localFolderPaths', []);

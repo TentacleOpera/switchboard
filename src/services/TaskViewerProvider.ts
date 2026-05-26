@@ -5998,7 +5998,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             useSubagentsEnabled,
             researchDepth: roleConfig?.researchComplexity || 'deep',
             saveToLocalDocs: role === 'researcher' ? (roleConfig?.saveToLocalDocs ?? false) : undefined,
-            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string | undefined>('research.localFolderPath', undefined) : undefined,
+            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string[]>('research.localFolderPaths', [])[0] ?? undefined : undefined,
             routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
             ticketUpdateMode,
             complexityScoringSkill,

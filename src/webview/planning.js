@@ -446,6 +446,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // 100% safe DOM traversal fallback - no querySelector escaping issues
         const wrapper = findTreeNode(sourceId, docId);
+        // Extract sourceFolder from the DOM node's dataset (required for local-folder docs)
+        const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
         
         if (wrapper) {
             wrapper.classList.add('selected');
@@ -649,7 +651,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     // Don't show empty message - imported docs are displayed below
                     docList.innerHTML = '';
                 } else {
-                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">Folder not configured or empty. Click Browse to select a folder.</div>';
+                    docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No folders configured or all folders are empty. Click Add Folder to get started.</div>';
                 }
             } else {
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
