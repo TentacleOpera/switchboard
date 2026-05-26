@@ -1066,6 +1066,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 btnLinkToLocal.disabled = false;
             }
         } else {
+            state.activeDocFilePath = null;
+            if (btnEditLocal) btnEditLocal.disabled = true;
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = '';
                 btnImportFullDoc.disabled = false;
@@ -1130,6 +1132,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 setTimeout(() => { if (targetStatus.textContent === 'Externally updated — refreshed') targetStatus.textContent = ''; }, 2000);
             } else {
                 targetStatus.textContent = '';
+            }
+            return;
+        }
+
+        // If the user is actively editing this doc, don't clobber activeDocContent or the
+        // rendered preview — the edit-mode conflict detection baseline (editOriginalContent.local)
+        // was captured at edit-mode entry and must remain stable. On auto-refresh, just notify.
+        if (state.editMode.local && !isOnline) {
+            if (msg.isAutoRefreshed) {
+                const statusEl2 = document.getElementById('status');
+                if (statusEl2) {
+                    statusEl2.textContent = 'File changed externally — save to overwrite or cancel to reload';
+                    statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                    setTimeout(() => { statusEl2.textContent = ''; statusEl2.style.color = ''; }, 5000);
+                }
             }
             return;
         }
@@ -1869,6 +1886,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         exitEditMode('kanban', true);
                         if (kanbanPreviewContent) {
                             kanbanPreviewContent.innerHTML = renderMarkdown(state.editOriginalContent.kanban);
+                        }
+                        // Show save success feedback in kanban controls strip
+                        const kanbanStrip = document.querySelector('.kanban-controls-strip');
+                        if (kanbanStrip) {
+                            let statusKanban = kanbanStrip.querySelector('.kanban-save-status');
+                            if (!statusKanban) {
+                                statusKanban = document.createElement('span');
+                                statusKanban.className = 'kanban-save-status';
+                                statusKanban.style.cssText = 'font-size:11px; color:var(--accent-teal); margin-left:8px;';
+                                kanbanStrip.appendChild(statusKanban);
+                            }
+                            statusKanban.textContent = 'Saved successfully';
+                            setTimeout(() => { statusKanban.textContent = ''; }, 2000);
                         }
                     }
                 } else if (conflict) {

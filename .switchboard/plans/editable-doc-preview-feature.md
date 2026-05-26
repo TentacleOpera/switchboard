@@ -342,3 +342,61 @@ Implement a toggle-based edit mode:
 
 ## Recommendation
 **Send to Coder** — Complexity 5 (multi-file changes across HTML/CSS/JS/TS with moderate logic for dirty-state tracking and conflict detection, but reuses existing patterns throughout).
+
+---
+
+## Reviewer Pass — 2026-05-26
+
+### Status: COMPLETE WITH FIXES
+
+### Files Changed (Implementation)
+- `src/webview/planning.html` — Edit/Save/Cancel buttons added to local and kanban strips; disabled Edit button added to online strip; `.markdown-editor` CSS and `.edit-mode` toggle CSS added; textarea elements inserted in preview panes.
+- `src/webview/planning.js` — `state.editMode`, `state.editOriginalContent`, `state.dirtyFlags` added; `enterEditMode()`, `exitEditMode()`, `setupTextareaTabInterceptor()` implemented; all button wiring, dirty-state guards (tab switch, doc selection, kanban row click), and `saveFileContentResult` message handler implemented.
+- `src/services/PlanningPanelProvider.ts` — `case 'saveFileContent'` added with path validation, conflict detection, and file write.
+
+### Reviewer Findings
+
+#### CRITICAL-1 — Fixed ✅
+**Auto-refresh clobbered `state.activeDocContent` and the preview while user was in edit mode.**
+`handlePreviewReady` updated `state.activeDocContent` and replaced `markdownPreview.innerHTML` unconditionally — even when `state.editMode.local` was true. This corrupted the in-memory conflict-detection baseline (`state.editOriginalContent.local`) captured at edit-mode entry, creating a potential false-pass on next save.
+**Fix applied:** `planning.js` — Added guard before `state.activeDocContent = content`: if `state.editMode.local && !isOnline`, skip the state update and re-render. On auto-refresh, show a warning in the status bar instead.
+
+#### CRITICAL-2 — Fixed ✅
+**`btnEditLocal` was never re-disabled after switching away from a local-folder/antigravity source.**
+Only one line in the entire codebase ever set `btnEditLocal.disabled` (to `false`). The `else` branch of the `sourceId` check in `handlePreviewReady` never reset it. The HTML `disabled` attribute was the only guard; once cleared, it stayed cleared for any subsequent navigation.
+**Fix applied:** `planning.js` — Added `state.activeDocFilePath = null; if (btnEditLocal) btnEditLocal.disabled = true;` to the `else` branch of the `sourceId` check.
+
+#### MAJOR-1 — No code change (design sound)
+`exitEditMode()` return value is unused at call sites. Reviewed all call sites — all invocations with `discard=false` are preceded by a manual `confirm()` that already guards the control flow. The return value matters only for future callers. Deferred.
+
+#### MAJOR-2 — Deferred
+`state.editOriginalContent.kanban` is dual-purposed as both the conflict-detection baseline and the post-save re-render source for kanban. Functionally correct but semantically muddled. Refactor to a dedicated `state.activeKanbanContent` in a follow-up.
+
+#### MAJOR-3 — No action (CSS is correct)
+`.edit-mode #kanban-preview-content` (CSS) vs `#kanban-preview-pane.edit-mode` (JS) — the descendant selector works because `.edit-mode` is applied to the parent pane and `#kanban-preview-content` is its child. Differs from plan spec (which listed `#kanban-preview-pane` as the hidden target) but the child approach achieves the same effect without hiding the pane border/padding wrapper.
+
+#### MAJOR-4 — Deferred
+`enterEditMode` for kanban sources content from `state.editOriginalContent.kanban` rather than from a separate active-content store. Safe because `handleKanbanPlanPreviewReady` always writes that field before edit mode can be entered. Same root cause as MAJOR-2.
+
+#### NIT-1 — No action
+CSS `padding: 16px` (uniform) vs plan spec `padding: 0 26px`. The implementation choice (`box-sizing: border-box` + uniform padding) is superior and consistent with standard textarea styling.
+
+#### NIT-2 — Deferred
+`confirm()` used for conflict modal and dirty-discard confirmation instead of the plan's `.duplicate-modal` pattern. Works in webview context. Polish item for follow-up.
+
+#### NIT-3 — Fixed ✅
+**Kanban save-success showed no user feedback.**
+Local save showed "Saved successfully" in `#status`. Kanban save was silent.
+**Fix applied:** `planning.js` — Added a lazily-created `.kanban-save-status` span appended to `.kanban-controls-strip`, shown with `var(--accent-teal)` for 2 seconds after a successful kanban save.
+
+### Validation Results
+- No compilation step run (per session directive).
+- Static review: all three patches confirmed syntactically correct in context.
+- CRITICAL-1 guard correctly placed after the `pages.length > 0` early-return block, so paged docs are unaffected.
+- CRITICAL-2 `else` branch now mirrors the symmetry of the `if` branch.
+- NIT-3 span is lazily created (querySelector before createElement) — no DOM leaks on repeated saves.
+
+### Remaining Risks
+1. **`confirm()` dialogs** (NIT-2) — may be jarring in some VS Code webview themes or get blocked in stricter CSP configurations in future VS Code versions. Suggest migrating to the existing `.duplicate-modal` pattern in a follow-up.
+2. **Kanban `editOriginalContent` dual-purpose** (MAJOR-2/MAJOR-4) — if a future refactor fetches kanban preview content without going through `handleKanbanPlanPreviewReady` (e.g. inline refresh), `enterEditMode` for kanban will open a stale textarea. Add a dedicated `state.activeKanbanContent` field alongside the existing pattern.
+3. **`#btn-edit-local` not reset on doc-list clear/collapse** — if the sidebar is collapsed or the doc list is reset without triggering `handlePreviewReady`, the Edit button may remain enabled with a stale `state.activeDocFilePath`. Low likelihood but worth a targeted check when refactoring the sidebar collapse logic.

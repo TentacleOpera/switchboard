@@ -123,6 +123,10 @@ async function run() {
             buildRecord(workspaceId, 'sess-completed-unscoped', 'completed', '', '2026-04-14T00:00:06.000Z')
         ];
 
+        seedRecords[3].project = 'ProjA'; // sess-completed-be
+        seedRecords[4].project = 'ProjB'; // sess-completed-fe
+        seedRecords[5].project = 'ProjA'; // sess-completed-unscoped
+
         const upserted = await db.upsertPlans(seedRecords);
         assert.strictEqual(upserted, true, 'expected seeded plans to upsert successfully');
 
@@ -139,6 +143,21 @@ async function run() {
             ['sess-completed-be', 'sess-completed-unscoped'].sort(),
             'Expected getCompletedPlansFiltered to return matching and unscoped completed rows.'
         );
+
+        const filteredCompletedProjA = await db.getCompletedPlansFilteredByProject(workspaceId, 'ProjA', null, 100);
+        assert.deepStrictEqual(
+            filteredCompletedProjA.map((row) => row.sessionId).sort(),
+            ['sess-completed-be', 'sess-completed-unscoped'].sort(),
+            'Expected getCompletedPlansFilteredByProject to return ProjA rows.'
+        );
+
+        const filteredCompletedProjABe = await db.getCompletedPlansFilteredByProject(workspaceId, 'ProjA', 'be', 100);
+        assert.deepStrictEqual(
+            filteredCompletedProjABe.map((row) => row.sessionId).sort(),
+            ['sess-completed-be', 'sess-completed-unscoped'].sort(),
+            'Expected getCompletedPlansFilteredByProject to return ProjA rows matching repo scope.'
+        );
+
 
         assert.strictEqual(sanitizeRepoScope('be'), 'be', 'Expected sanitizeRepoScope to keep a simple repo name.');
         assert.strictEqual(sanitizeRepoScope('../be'), '', 'Expected sanitizeRepoScope to reject path traversal.');

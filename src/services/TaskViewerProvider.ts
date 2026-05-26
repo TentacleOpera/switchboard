@@ -444,6 +444,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /**
+     * Clears the in-memory terminal dispatch map (_registeredTerminals) only.
+     * NOTE: Does NOT clear _terminalAgentInfo — that map is intentionally
+     * workspace-agnostic (see field comment) and must survive workspace switches
+     * so that getActualTerminalAgentNames() remains correct for Kanban role badges.
+     */
+    public clearRegisteredTerminalsMap(): void {
+        this._registeredTerminals?.clear();
+        console.log('[TaskViewerProvider] Cleared _registeredTerminals dispatch map (workspace switch)');
+    }
+
+    /**
      * Returns a mapping of role -> agent display name for all alive terminals
      * that have cached agent info. This is workspace-agnostic - it reads from
      * the in-memory cache, not from any workspace's state.json.
@@ -13540,8 +13551,8 @@ What would you like to find?`;
             const activeRows = (repoScope || projectFilter)
                 ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                 : await db.getBoard(workspaceId);
-            const completedRows = repoScope
-                ? await db.getCompletedPlansFiltered(workspaceId, repoScope)
+            const completedRows = (repoScope || projectFilter)
+                ? await db.getCompletedPlansFilteredByProject(workspaceId, projectFilter, repoScope)
                 : await db.getCompletedPlans(workspaceId);
             // Log column distribution for debugging
             const colDist: Record<string, number> = {};

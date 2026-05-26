@@ -2148,6 +2148,7 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
+    /** @deprecated Superseded by getCompletedPlansFilteredByProject which also accepts a project filter. */
     public async getCompletedPlansFiltered(
         workspaceId: string,
         repoScope: string | null,
@@ -2166,6 +2167,33 @@ export class KanbanDatabase {
         );
         return this._readRows(stmt);
     }
+
+    public async getCompletedPlansFilteredByProject(
+        workspaceId: string,
+        project: string | null,
+        repoScope: string | null,
+        limit: number = 100
+    ): Promise<KanbanPlanRecord[]> {
+        if (!(await this.ensureReady()) || !this._db) return [];
+        if (!project && !repoScope) {
+            return this.getCompletedPlans(workspaceId, limit);
+        }
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'completed'`;
+        const params: unknown[] = [workspaceId];
+        if (project) {
+            sql += ' AND project = ?';
+            params.push(project);
+        }
+        if (repoScope) {
+            sql += " AND repo_scope IN (?, '')";
+            params.push(repoScope);
+        }
+        sql += ' ORDER BY updated_at DESC LIMIT ?';
+        params.push(limit);
+        const stmt = this._db.prepare(sql, params);
+        return this._readRows(stmt);
+    }
+
 
     /** @deprecated session_id is no longer the unique key; use getPlanByPlanFile instead. */
     public async getPlanBySessionId(sessionId: string): Promise<KanbanPlanRecord | null> {

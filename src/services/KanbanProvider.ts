@@ -4152,6 +4152,7 @@ export class KanbanProvider implements vscode.Disposable {
             case 'selectWorkspace':
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
+                    this.setProjectFilter(null); // Reset project filter on workspace switch
 
                     // Reset control plane action: always clear the filter to show all cards,
                     // regardless of which workspace root is currently active.
@@ -4178,6 +4179,9 @@ export class KanbanProvider implements vscode.Disposable {
                     this._setupSessionWatcher();
                     // Sync TaskViewerProvider's plan watcher to the new workspace
                     this._taskViewerProvider?.reinitializePlanWatcher(msg.workspaceRoot);
+                    // Clear stale terminal dispatch references from the previous workspace.
+                    // _terminalAgentInfo is intentionally preserved (workspace-agnostic).
+                    this._taskViewerProvider?.clearRegisteredTerminalsMap();
                     await this._refreshBoard(msg.workspaceRoot);
                 }
                 break;

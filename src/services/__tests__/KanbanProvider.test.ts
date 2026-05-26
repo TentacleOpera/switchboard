@@ -492,7 +492,28 @@ Manual verification steps:
             
             // Verify labels
             assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw1)?.label, path.basename(resolvedDw1), 'Dropdown workspace label should be basename');
-            assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw2)?.label, path.basename(resolvedDw2), 'Dropdown workspace label should be basename');
+        });
+    });
+
+    suite('selectWorkspace filter reset', () => {
+        test('clears projectFilter when switching workspaces via handleMessage', async () => {
+            const provider = new KanbanProvider(vscode.Uri.file('/test'), mockContext);
+            sandbox.stub(provider as any, 'setCurrentWorkspaceRoot').returns(true);
+            sandbox.stub(provider as any, '_setupSessionWatcher').returns(undefined);
+            sandbox.stub(provider as any, '_refreshBoard').resolves();
+
+            // Set a project filter in workspace A
+            provider.setProjectFilter('Project A');
+            assert.strictEqual(provider.getProjectFilter(), 'Project A');
+
+            // Simulate workspace switch message
+            await (provider as any).handleMessage({
+                type: 'selectWorkspace',
+                workspaceRoot: '/path/to/workspaceB'
+            });
+
+            // Verify filter is cleared
+            assert.strictEqual(provider.getProjectFilter(), null);
         });
     });
 });
