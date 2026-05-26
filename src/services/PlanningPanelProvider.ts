@@ -1134,6 +1134,15 @@ export class PlanningPanelProvider {
                 } catch {
                     docPath = null;
                 }
+            } else if (sourceId === 'antigravity') {
+                // For antigravity: docId is already an absolute path to the artifact
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const result = await localFolderService.fetchAntigravityArtifact(docId);
+                if (result.success) {
+                    docPath = docId;
+                } else {
+                    docPath = null;
+                }
             } else {
                 // For online sources: resolve through the import registry
                 if (this._cacheService) {
@@ -1193,6 +1202,15 @@ export class PlanningPanelProvider {
                 try {
                     await fs.promises.access(docPath, fs.constants.R_OK);
                 } catch {
+                    docPath = null;
+                }
+            } else if (sourceId === 'antigravity') {
+                // For antigravity: docId is already an absolute path to the artifact
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const result = await localFolderService.fetchAntigravityArtifact(docId);
+                if (result.success) {
+                    docPath = docId;
+                } else {
                     docPath = null;
                 }
             } else {
@@ -1676,6 +1694,14 @@ export class PlanningPanelProvider {
                 const fetchResult = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
                 if (!fetchResult.success) {
                     throw new Error(fetchResult.error || 'Failed to fetch local doc content');
+                }
+                finalContent = fetchResult.content;
+            } else if (sourceId === 'antigravity' && !finalContent) {
+                // For antigravity: docId is an absolute path to the artifact
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const fetchResult = await localFolderService.fetchAntigravityArtifact(docId);
+                if (!fetchResult.success) {
+                    throw new Error(fetchResult.error || 'Failed to fetch antigravity artifact content');
                 }
                 finalContent = fetchResult.content;
             }

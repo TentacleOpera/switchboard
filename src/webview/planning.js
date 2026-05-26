@@ -740,11 +740,25 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             section.appendChild(empty);
         } else {
             for (const session of sessions) {
-                // Session row (collapsed header)
+                // Session row (collapsed header) — use textContent to prevent XSS from filesystem filenames
                 const sessionRow = document.createElement('div');
                 sessionRow.className = 'tree-node folder-subheader';
-                sessionRow.innerHTML = `<span class="icon">🧠</span><span class="label">${session.name}…</span>
-                    <span class="antigravity-session-ts">${new Date(session.timestamp).toLocaleDateString()}</span>`;
+
+                const sessionIcon = document.createElement('span');
+                sessionIcon.className = 'icon';
+                sessionIcon.textContent = '🧠';
+
+                const sessionLabel = document.createElement('span');
+                sessionLabel.className = 'label';
+                sessionLabel.textContent = session.name + '…';
+
+                const sessionTs = document.createElement('span');
+                sessionTs.className = 'antigravity-session-ts';
+                sessionTs.textContent = new Date(session.timestamp).toLocaleDateString();
+
+                sessionRow.appendChild(sessionIcon);
+                sessionRow.appendChild(sessionLabel);
+                sessionRow.appendChild(sessionTs);
                 section.appendChild(sessionRow);
 
                 // Artifact rows under each session
@@ -752,10 +766,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const artifactRow = document.createElement('div');
                     artifactRow.className = 'tree-node antigravity-artifact-node';
                     artifactRow.dataset.artifactPath = artifact.id;
-                    artifactRow.innerHTML = `<span class="icon">📄</span><span class="label">${artifact.name}</span>`;
+
+                    const artifactIcon = document.createElement('span');
+                    artifactIcon.className = 'icon';
+                    artifactIcon.textContent = '📄';
+
+                    const artifactLabel = document.createElement('span');
+                    artifactLabel.className = 'label';
+                    artifactLabel.textContent = artifact.name;
+
+                    artifactRow.appendChild(artifactIcon);
+                    artifactRow.appendChild(artifactLabel);
                     artifactRow.addEventListener('click', () => {
                         document.querySelectorAll('.tree-node.selected').forEach(n => n.classList.remove('selected'));
                         artifactRow.classList.add('selected');
+                        // Track active state so buttons (Set as Active Context, etc.) work
+                        state.activeSource = 'antigravity';
+                        state.activeDocId = artifact.id;
+                        state.activeDocName = artifact.name;
                         vscode.postMessage({
                             type: 'fetchAntigravityArtifact',
                             artifactPath: artifact.id,
@@ -928,7 +956,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const btnSetActiveLocal = document.getElementById('btn-set-active-context-local');
         const btnLinkToLocal = document.getElementById('btn-link-to-doc-local');
 
-        if (sourceId === 'local-folder') {
+        if (sourceId === 'local-folder' || sourceId === 'antigravity') {
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = 'none';
                 btnImportFullDoc.disabled = true;
@@ -1036,7 +1064,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const targetBtnAppend = isOnline ? btnAppendToPromptsOnline : btnAppendToPrompts;
         const btnImportFullId = isOnline ? 'btn-import-full-doc-online' : 'btn-import-full-doc';
 
-        targetPreview.innerHTML = `<div class="error-state">Error: ${error}</div>`;
+        const errorDiv = document.createElement('div');
+        errorDiv.className = 'error-state';
+        errorDiv.textContent = 'Error: ' + error;
+        targetPreview.innerHTML = '';
+        targetPreview.appendChild(errorDiv);
         targetStatus.textContent = 'Error loading preview';
         
         targetBtnAppend.disabled = true;

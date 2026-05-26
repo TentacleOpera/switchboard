@@ -494,3 +494,52 @@ Add automatic detection and display of antigravity brain folder contents in the 
 - Allow exporting sessions to markdown
 - Link sessions to associated plan files if metadata exists
 - Show session duration or other metadata if available
+
+## Review Pass (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding | File |
+|----|----------|---------|------|
+| MAJOR-1 | MAJOR | XSS via `innerHTML` with unsanitized `artifact.name` and `session.name` — inconsistent with codebase convention of `textContent` (see `renderNode()`) | `src/webview/planning.js` lines 746-755 |
+| MAJOR-2 | MAJOR | Path traversal bypass via `startsWith` without path separator — sibling directories sharing a prefix could pass the check | `src/services/LocalFolderService.ts` line 352 |
+| MAJOR-3 | MAJOR | `handlePreviewReady` shows non-functional "Import" button for `antigravity` sourceId — `state.activeSource`/`state.activeDocId` not set by antigravity click handler, so Import/SetAsActiveContext/LinkToDocument buttons broken | `src/webview/planning.js` lines 931-958, 756-763 |
+| NIT-1 | NIT | Toggle always visible even when no brain path detected (plan edge case says "hide toggle") | `src/webview/planning.html` line 1359 |
+| NIT-2 | NIT | No debounce on antigravity watcher refresh (consistent with local folder watchers) | `src/services/PlanningPanelProvider.ts` line 393 |
+| NIT-3 | NIT | `_getLocalFolderService` creates throwaway instances per call (pre-existing pattern) | `src/services/PlanningPanelProvider.ts` line 1317 |
+| NIT-4 | NIT | Watcher only watches top-level `*`, not recursive (per plan spec) | `src/services/PlanningPanelProvider.ts` line 390 |
+| NIT-5 | NIT | Error path in `_sendLocalDocsReady` omits antigravity fields (webview handles undefined safely) | `src/services/PlanningPanelProvider.ts` lines 1400-1408 |
+
+### Stage 2: Balanced Synthesis — Fixes Applied
+
+| Finding | Action | Status |
+|---------|--------|--------|
+| MAJOR-1 | Replaced `innerHTML` with safe DOM construction using `textContent` for session rows and artifact rows | **FIXED** |
+| MAJOR-2 | Added `path.sep` separator check: `resolved !== brainResolved && !resolved.startsWith(brainResolved + path.sep)` | **FIXED** |
+| MAJOR-3 | (a) Added `state.activeSource`/`state.activeDocId`/`state.activeDocName` tracking in antigravity click handler; (b) Added `antigravity` to sourceId check in `handlePreviewReady` (hide Import, show SetAsActiveContext); (c) Added `antigravity` sourceId handling in `_handleSetActivePlanningContext`, `_handleLinkToDocument`, and `_handleAppendToPlannerPrompt` | **FIXED** |
+| NIT-1 | Kept as-is — always-visible toggle is acceptable UX | DEFERRED |
+| NIT-2 | Kept as-is — consistent with existing pattern | DEFERRED |
+| NIT-3 | Kept as-is — pre-existing pattern | DEFERRED |
+| NIT-4 | Kept as-is — per plan spec | DEFERRED |
+| NIT-5 | Kept as-is — webview handles undefined safely | DEFERRED |
+
+### Additional Fix (bonus)
+
+- Fixed `handlePreviewError` XSS: replaced `innerHTML` with `textContent` for error message rendering (`src/webview/planning.js` line 1063)
+
+### Files Changed
+
+- `src/services/LocalFolderService.ts` — path separator check in `fetchAntigravityArtifact`
+- `src/services/PlanningPanelProvider.ts` — `antigravity` sourceId handling in `_handleSetActivePlanningContext`, `_handleLinkToDocument`, `_handleAppendToPlannerPrompt`
+- `src/webview/planning.js` — safe DOM construction in `renderAntigravitySessions`, state tracking in antigravity click handler, sourceId routing in `handlePreviewReady`, XSS fix in `handlePreviewError`
+
+### Validation Results
+
+- **Typecheck**: Pass (0 new errors; 2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` unrelated to this feature)
+- **Tests**: Skipped per session directive (to be run separately)
+
+### Remaining Risks
+
+1. **Watcher non-recursive**: New `.md` artifacts within existing sessions won't trigger a tree refresh. User must close/reopen panel or toggle the antigravity switch to see new artifacts in existing sessions.
+2. **No debounce on watcher**: Rapid session create/delete events cause multiple full tree refreshes. Low-impact for typical usage.
+3. **Toggle always visible**: Users without Antigravity installed can enable the toggle and see "No sessions found" — acceptable but differs from plan's original edge case spec.

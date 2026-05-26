@@ -347,9 +347,10 @@ export class LocalFolderService {
         const brainPath = this.detectAntigravityBrainPath();
         if (!brainPath) { return { success: false, error: 'Antigravity brain not detected' }; }
 
-        // Security: validate path stays within brain directory
+        // Security: validate path stays within brain directory (use separator to prevent prefix bypass)
         const resolved = path.resolve(absolutePath);
-        if (!resolved.startsWith(path.resolve(brainPath))) {
+        const brainResolved = path.resolve(brainPath);
+        if (resolved !== brainResolved && !resolved.startsWith(brainResolved + path.sep)) {
             return { success: false, error: 'Invalid path' };
         }
 
