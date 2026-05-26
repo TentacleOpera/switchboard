@@ -23,6 +23,18 @@ export interface PlanningPanelAdapterFactories {
     getCacheService: (root: string) => PlanningPanelCacheService;
 }
 
+interface KanbanPlanSummary {
+    planId: string;
+    topic: string;
+    column: string;
+    workspaceRoot: string;  // full absolute path — used as filter key
+    workspaceLabel: string; // path.basename(workspaceRoot) — displayed in UI
+    project: string;        // '' if no project
+    repoScope: string;      // '' if no repo scope
+    mtime: number;
+    planFile: string;
+}
+
 export class PlanningPanelProvider {
     private _panel: vscode.WebviewPanel | undefined;
     private _disposables: vscode.Disposable[] = [];
@@ -35,6 +47,7 @@ export class PlanningPanelProvider {
     private _importInProgress = false;
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
     private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _antigravityWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _lastPanelWriteTimestamp: number = 0;
@@ -278,6 +291,7 @@ export class PlanningPanelProvider {
         // Watch the docs directory for changes and refresh imported docs list
         this._setupDocsFolderWatcher(workspaceRoot);
         this._setupLocalFolderWatchers();
+        this._setupAntigravityWatcher();
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
@@ -322,32 +336,64 @@ export class PlanningPanelProvider {
 
         for (const root of allRoots) {
             const localFolderService = this._getLocalFolderService(root);
-            const folderPath = localFolderService.getFolderPath();
+            const folderPaths = localFolderService.getFolderPaths();
 
-            if (!folderPath) continue;
-            // Deduplicate: skip if already watching this absolute path
-            if (watchedPaths.has(folderPath)) continue;
-            watchedPaths.add(folderPath);
+            for (const folderPath of folderPaths) {
+                if (!folderPath) continue;
+                // Deduplicate: skip if already watching this absolute path
+                if (watchedPaths.has(folderPath)) continue;
+                watchedPaths.add(folderPath);
 
-            const folderUri = vscode.Uri.file(folderPath);
+                const folderUri = vscode.Uri.file(folderPath);
 
-            // Create watcher for the local docs folder — recursive, all supported text extensions
-            const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(folderUri, '**/*.{md,txt,markdown,rst,adoc}')
-            );
+                // Create watcher for the local docs folder — recursive, all supported text extensions
+                const watcher = vscode.workspace.createFileSystemWatcher(
+                    new vscode.RelativePattern(folderUri, '**/*.{md,txt,markdown,rst,adoc}')
+                );
 
-            // Refresh local docs when files are created, deleted, or changed
-            const refreshLocalDocs = () => {
-                this._sendLocalDocsReady();
-            };
+                // Refresh local docs when files are created, deleted, or changed
+                const refreshLocalDocs = () => {
+                    this._sendLocalDocsReady();
+                };
 
-            watcher.onDidCreate(refreshLocalDocs);
-            watcher.onDidDelete(refreshLocalDocs);
-            watcher.onDidChange(refreshLocalDocs);
+                watcher.onDidCreate(refreshLocalDocs);
+                watcher.onDidDelete(refreshLocalDocs);
+                watcher.onDidChange(refreshLocalDocs);
 
-            this._localFolderWatchers.push(watcher);
-            this._disposables.push(watcher);
+                this._localFolderWatchers.push(watcher);
+                this._disposables.push(watcher);
+            }
         }
+    }
+
+    private _setupAntigravityWatcher(): void {
+        // Dispose existing
+        if (this._antigravityWatcher) {
+            this._antigravityWatcher.dispose();
+            const idx = this._disposables.indexOf(this._antigravityWatcher);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+            this._antigravityWatcher = undefined;
+        }
+
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const enabled = config.get<boolean>('research.antigravityBrainEnabled', false);
+        if (!enabled) { return; }
+
+        const allRoots = this._getWorkspaceRoots();
+        const service = this._getLocalFolderService(allRoots[0] || '');
+        const brainPath = service.detectAntigravityBrainPath();
+        if (!brainPath) { return; }
+
+        // CRITICAL: must use vscode.Uri.file for out-of-workspace paths
+        const brainUri = vscode.Uri.file(brainPath);
+        this._antigravityWatcher = vscode.workspace.createFileSystemWatcher(
+            new vscode.RelativePattern(brainUri, '*')  // Watch for new/deleted session directories
+        );
+
+        const refresh = () => this._sendLocalDocsReady();
+        this._antigravityWatcher.onDidCreate(refresh);
+        this._antigravityWatcher.onDidDelete(refresh);
+        this._disposables.push(this._antigravityWatcher);
     }
 
     private _setupActiveDocWatcher(filePath: string | null): void {
@@ -544,11 +590,11 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'fetchPreview': {
-                await this._handleFetchPreview(workspaceRoot, msg.sourceId, msg.docId, msg.requestId);
+                await this._handleFetchPreview(workspaceRoot, msg.sourceId, msg.docId, msg.requestId, msg.sourceFolder);
                 break;
             }
             case 'appendToPlannerPrompt': {
-                await this._handleAppendToPlannerPrompt(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.content);
+                await this._handleAppendToPlannerPrompt(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.content, msg.sourceFolder);
                 break;
             }
             case 'importFullDoc': {
@@ -559,40 +605,67 @@ export class PlanningPanelProvider {
                 await this._handleFetchPageContent(workspaceRoot, msg.sourceId, msg.docId, msg.pageId, msg.requestId);
                 break;
             }
-            case 'browseLocalFolder': {
+            case 'toggleAntigravityBrain': {
+                const enabled = Boolean(msg.enabled);
+                await vscode.workspace.getConfiguration('switchboard').update(
+                    'research.antigravityBrainEnabled',
+                    enabled,
+                    vscode.ConfigurationTarget.Global  // MUST be Global — user preference, not workspace
+                );
+                this._setupAntigravityWatcher();        // Re-setup watcher on toggle
+                await this._sendLocalDocsReady();       // Refresh tree
+                break;
+            }
+            case 'fetchAntigravityArtifact': {
+                const artifactPath = msg.artifactPath;
+                const requestId = msg.requestId || -1;
+                const allRoots = this._getWorkspaceRoots();
+                const service = this._getLocalFolderService(allRoots[0] || '');
+                const result = await service.fetchAntigravityArtifact(artifactPath);
+                if (result.success) {
+                    this._panel?.webview.postMessage({
+                        type: 'previewReady',
+                        sourceId: 'antigravity',
+                        requestId,
+                        content: result.content || '',
+                        docName: path.basename(artifactPath, '.md')
+                    });
+                } else {
+                    this._panel?.webview.postMessage({
+                        type: 'previewError',
+                        sourceId: 'antigravity',
+                        requestId,
+                        error: result.error || 'Failed to load artifact'
+                    });
+                }
+                break;
+            }
+            case 'addLocalFolder': {
                 const result = await vscode.window.showOpenDialog({
-                    openLabel: 'Select Planning Folder',
+                    openLabel: 'Add Docs Folder',
                     canSelectFiles: false,
                     canSelectFolders: true,
                     canSelectMany: false
                 });
                 if (result && result.length > 0) {
                     const service = this._getLocalFolderService(workspaceRoot);
-                    const folderPath = await service.setFolderPath(result[0].fsPath);
-                    const files = await service.listFiles();
-                    const nodes = this._mapLocalFilesToTreeNodes(files);
-                    this._panel?.webview.postMessage({
-                        type: 'localFolderPathUpdated',
-                        folderPath,
-                        nodes
-                    });
-                    // Recreate watchers for new folder path
+                    await service.addFolderPath(result[0].fsPath);
                     this._setupLocalFolderWatchers();
+                    await this._sendLocalDocsReady();
                 }
                 break;
             }
-            case 'setLocalFolderPath': {
+            case 'removeLocalFolder': {
                 const service = this._getLocalFolderService(workspaceRoot);
-                const folderPath = await service.setFolderPath(msg.folderPath || '');
-                const files = await service.listFiles();
-                const nodes = this._mapLocalFilesToTreeNodes(files);
-                this._panel?.webview.postMessage({
-                    type: 'localFolderPathUpdated',
-                    folderPath,
-                    nodes
-                });
-                // Recreate watchers for new folder path
+                await service.removeFolderPath(msg.folderPath);
                 this._setupLocalFolderWatchers();
+                await this._sendLocalDocsReady();
+                break;
+            }
+            case 'listLocalFolders': {
+                const service = this._getLocalFolderService(workspaceRoot);
+                const paths = service.getFolderPaths();
+                this._panel?.webview.postMessage({ type: 'localFoldersListed', paths });
                 break;
             }
             case 'refreshSource': {
@@ -735,6 +808,10 @@ export class PlanningPanelProvider {
                 await this._handleImportPlansFromClipboard(workspaceRoot);
                 break;
             }
+            case 'importResearchDoc': {
+                await this._handleImportResearchDoc(workspaceRoot, msg.docTitle);
+                break;
+            }
             case 'airlock_export': {
                 const result = await this._handleAirlockExport(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'airlock_exportComplete', ...result });
@@ -754,11 +831,11 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'setActivePlanningContext': {
-                await this._handleSetActivePlanningContext(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
+                await this._handleSetActivePlanningContext(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
                 break;
             }
             case 'linkToDocument': {
-                await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
+                await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
                 break;
             }
             case 'resolveDuplicate': {
@@ -770,6 +847,16 @@ export class PlanningPanelProvider {
                 const docId = msg.docId;
                 const docName = msg.docName || docId;
                 const docRoot = msg.workspaceRoot || workspaceRoot;
+                const sourceFolder = msg.sourceFolder;
+                if (!sourceFolder) {
+                    this._panel?.webview.postMessage({
+                        type: 'localDocDeleted',
+                        docId,
+                        success: false,
+                        error: 'sourceFolder is required'
+                    });
+                    break;
+                }
                 const confirm = await vscode.window.showWarningMessage(
                     `Move "${docName}" to trash?`,
                     { modal: true },
@@ -779,7 +866,7 @@ export class PlanningPanelProvider {
                     break;
                 }
                 const service = this._getLocalFolderService(docRoot);
-                const result = await service.deleteFile(docId);
+                const result = await service.deleteFile(docId, sourceFolder);
                 if (result.success) {
                     // Refresh the local docs list
                     await this._sendLocalDocsReady();
@@ -897,6 +984,92 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'fetchKanbanPlans': {
+                const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
+                const guardKey = 'kanban-plans';
+                if (requestId <= (this._latestRequestIds.get(guardKey) || 0)) { break; }
+                this._latestRequestIds.set(guardKey, requestId);
+                try {
+                    const allRoots = this._getWorkspaceRoots();
+                    const allPlans: any[] = [];
+                    const seenIds = new Set<string>();
+                    for (const root of allRoots) {
+                        try {
+                            const plans = await this._getKanbanPlans(root);
+                            for (const p of plans) {
+                                if (!seenIds.has(p.planId)) {
+                                    seenIds.add(p.planId);
+                                    allPlans.push(p);
+                                }
+                            }
+                        } catch (err) { /* root has no kanban DB, skip */ }
+                    }
+                    if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
+                    allPlans.sort((a, b) => b.mtime - a.mtime);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId });
+                } catch (err) {
+                    if (requestId === this._latestRequestIds.get(guardKey)) {
+                        this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], requestId, error: String(err) });
+                    }
+                }
+                break;
+            }
+            case 'openKanbanPlan': {
+                const filePath = msg.filePath;
+                if (!filePath || !fs.existsSync(filePath)) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found' });
+                    break;
+                }
+                try {
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                    await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: true });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: String(err) });
+                }
+                break;
+            }
+            case 'fetchKanbanPlanPreview': {
+                const filePath: string = msg.filePath || '';
+                const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
+                const allRoots = this._getWorkspaceRoots();
+                const resolved = path.resolve(filePath);
+                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
+                    this._panel?.webview.postMessage({
+                        type: 'kanbanPlanPreviewReady', requestId,
+                        content: '', error: 'File not found or not in workspace'
+                    });
+                    break;
+                }
+                try {
+                    const content = await fs.promises.readFile(resolved, 'utf8');
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanPreviewReady', requestId, content });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanPreviewReady', requestId, content: '', error: String(err) });
+                }
+                break;
+            }
+            case 'setKanbanPlanContext': {
+                const filePath: string = msg.filePath || '';
+                if (!filePath || !fs.existsSync(filePath)) {
+                    this._panel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: 'File not found' });
+                    break;
+                }
+                try {
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designDocLink', filePath, vscode.ConfigurationTarget.Workspace
+                    );
+                    await vscode.workspace.getConfiguration('switchboard').update(
+                        'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
+                    );
+                    await this._sendActiveDesignDocState();
+                    this._panel?.webview.postMessage({ type: 'kanbanContextSet', success: true });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: String(err) });
+                }
+                break;
+            }
         }
     }
 
@@ -930,22 +1103,28 @@ export class PlanningPanelProvider {
         workspaceRoot: string,
         sourceId: string,
         docId: string,
-        docName: string
+        docName: string,
+        sourceFolder?: string
     ): Promise<void> {
         try {
             let docPath: string | null = null;
 
             if (sourceId === 'local-folder') {
+                if (!sourceFolder) {
+                    throw new Error('sourceFolder is required');
+                }
                 // For local-folder: resolve the file path directly
                 const localFolderService = this._getLocalFolderService(workspaceRoot);
-                const folderPath = localFolderService.getFolderPath();
-                if (folderPath) {
-                    docPath = path.join(folderPath, docId);
-                    try {
-                        await fs.promises.access(docPath, fs.constants.R_OK);
-                    } catch {
-                        docPath = null;
-                    }
+                const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
+                if (!localFolderService.getFolderPaths().includes(resolvedSourceFolder)) {
+                    throw new Error('sourceFolder is not a configured folder path');
+                }
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                docPath = path.join(resolvedSourceFolder, cleanDocId);
+                try {
+                    await fs.promises.access(docPath, fs.constants.R_OK);
+                } catch {
+                    docPath = null;
                 }
             } else {
                 // For online sources: resolve through the import registry
@@ -986,21 +1165,27 @@ export class PlanningPanelProvider {
         workspaceRoot: string,
         sourceId: string,
         docId: string,
-        docName: string
+        docName: string,
+        sourceFolder?: string
     ): Promise<void> {
         try {
             let docPath: string | null = null;
 
             if (sourceId === 'local-folder') {
+                if (!sourceFolder) {
+                    throw new Error('sourceFolder is required');
+                }
                 const localFolderService = this._getLocalFolderService(workspaceRoot);
-                const folderPath = localFolderService.getFolderPath();
-                if (folderPath) {
-                    docPath = path.join(folderPath, docId);
-                    try {
-                        await fs.promises.access(docPath, fs.constants.R_OK);
-                    } catch {
-                        docPath = null;
-                    }
+                const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
+                if (!localFolderService.getFolderPaths().includes(resolvedSourceFolder)) {
+                    throw new Error('sourceFolder is not a configured folder path');
+                }
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                docPath = path.join(resolvedSourceFolder, cleanDocId);
+                try {
+                    await fs.promises.access(docPath, fs.constants.R_OK);
+                } catch {
+                    docPath = null;
                 }
             } else {
                 if (this._cacheService) {
@@ -1125,38 +1310,43 @@ export class PlanningPanelProvider {
         return new LocalFolderService(workspaceRoot);
     }
 
-    private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }>): TreeNode[] {
+    private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string }>): TreeNode[] {
         return files.map(f => ({
-            id: f.relativePath || f.id,
+            id: f.id,
             name: f.name,
             kind: f.isFolder ? 'folder' : 'document',
             parentId: f.parentId,
             hasChildren: f.isFolder === true,
-            metadata: f._root ? { root: f._root } : undefined
+            metadata: {
+                ...(f._root ? { root: f._root } : {}),
+                sourceFolder: f.sourceFolder
+            }
         }));
     }
 
     private async _sendLocalDocsReady(): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
-            const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string }> = [];
+            const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string }> = [];
             const scannedPaths = new Set<string>();
             const activeRoot = this._getWorkspaceRoot();
-            let configuredFolderPath: string | null = null; // Track the active root's folder path for webview
+            let configuredFolderPaths: string[] = []; // Track configured folder paths for webview
 
             for (const root of allRoots) {
                 try {
                     const localFolderService = this._getLocalFolderService(root);
-                    const folderPath = localFolderService.getFolderPath();
+                    const folderPaths = localFolderService.getFolderPaths();
 
-                    if (folderPath && scannedPaths.has(folderPath)) {
-                        continue;
-                    }
-                    if (folderPath) {
-                        scannedPaths.add(folderPath);
-                        // Prioritize the active root's folder path for the webview
-                        if (!configuredFolderPath && (root === activeRoot || !activeRoot)) {
-                            configuredFolderPath = folderPath;
+                    for (const folderPath of folderPaths) {
+                        if (folderPath && scannedPaths.has(folderPath)) {
+                            continue;
+                        }
+                        if (folderPath) {
+                            scannedPaths.add(folderPath);
+                            // Prioritize the active root's folder paths for the webview
+                            if (root === activeRoot || !activeRoot) {
+                                configuredFolderPaths.push(folderPath);
+                            }
                         }
                     }
 
@@ -1173,19 +1363,38 @@ export class PlanningPanelProvider {
                 throw new Error('[PlanningPanel] _panel is undefined — cannot send localDocsReady');
             }
 
+            // Antigravity sessions
+            let antigravitySessions: Array<{
+                id: string; name: string; timestamp: string;
+                artifacts: Array<{ id: string; name: string; relativePath: string }>;
+            }> = [];
+
+            const agConfig = vscode.workspace.getConfiguration('switchboard');
+            const agEnabled = agConfig.get<boolean>('research.antigravityBrainEnabled', false);
+            if (agEnabled && allRoots.length > 0) {
+                try {
+                    const agService = this._getLocalFolderService(allRoots[0]);
+                    antigravitySessions = await agService.listAntigravitySessions();
+                } catch (err) {
+                    console.debug('[PlanningPanel] Failed to list antigravity sessions:', err);
+                }
+            }
+
             console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPath: configuredFolderPath || '', // Send active root's folder path, not workspace root
-                nodes: this._mapLocalFilesToTreeNodes(allFiles)
+                folderPaths: configuredFolderPaths, // Send active root's folder paths, not workspace root
+                nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                antigravitySessions,           // NEW — undefined-safe in webview
+                antigravityEnabled: agEnabled  // NEW — tells webview whether to show toggle as checked
             });
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
             this._panel?.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPath: '',
+                folderPaths: [],
                 nodes: [],
                 error: String(err)
             });
@@ -1254,20 +1463,24 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number): Promise<void> {
+    private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number, sourceFolder?: string): Promise<void> {
         // Race guard — track latest request per source
         this._latestRequestIds.set(sourceId, requestId);
 
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
+            if (!sourceFolder) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
+                return;
+            }
             const localFolderService = this._getLocalFolderService(workspaceRoot);
             try {
                 console.log('[PlanningPanel] Fetching local doc content:', { docId, requestId });
-                const result = await localFolderService.fetchDocContent(docId);
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                const result = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
                 console.log('[PlanningPanel] Local doc fetch result:', { success: result.success, error: result.error, hasContent: !!result.content });
                 if (result.success) {
-                    const folderPath = localFolderService.getFolderPath();
-                    const resolvedPath = path.join(folderPath, docId.endsWith('.md') ? docId : docId + '.md');
+                    const resolvedPath = path.resolve(path.join(sourceFolder, cleanDocId));
                     this._activePreviewPath = resolvedPath;
                     this._activePreviewSourceId = 'local-folder';
                     this._activePreviewDocId = docId;
@@ -1441,13 +1654,26 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _handleAppendToPlannerPrompt(workspaceRoot: string, sourceId: string, docId: string, docName: string, content?: string): Promise<void> {
+    private async _handleAppendToPlannerPrompt(workspaceRoot: string, sourceId: string, docId: string, docName: string, content?: string, sourceFolder?: string): Promise<void> {
         try {
             let result;
             this._lastPanelWriteTimestamp = Date.now();
-            if (content) {
+            let finalContent = content;
+            if (sourceId === 'local-folder' && !finalContent) {
+                if (!sourceFolder) {
+                    throw new Error('sourceFolder is required');
+                }
+                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                const fetchResult = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
+                if (!fetchResult.success) {
+                    throw new Error(fetchResult.error || 'Failed to fetch local doc content');
+                }
+                finalContent = fetchResult.content;
+            }
+            if (finalContent) {
                 // Use provided content directly (for pages that aren't cached)
-                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, content, docName, sourceId, { skipDesignDocLink: true });
+                result = await this._plannerPromptWriter.writeContentToDocsDir(workspaceRoot, finalContent, docName, sourceId, { skipDesignDocLink: true });
             } else {
                 result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName, { skipDesignDocLink: true });
             }
@@ -1948,6 +2174,66 @@ export class PlanningPanelProvider {
         await vscode.commands.executeCommand('switchboard.importPlanFromClipboard');
     }
 
+    private async _handleImportResearchDoc(workspaceRoot: string, docTitle?: string): Promise<void> {
+        if (this._importInProgress) {
+            this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Import already in progress' });
+            return;
+        }
+
+        this._importInProgress = true;
+        try {
+            const content = await vscode.env.clipboard.readText();
+
+            if (!content || !content.trim()) {
+                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Clipboard is empty. Copy research markdown first.' });
+                return;
+            }
+            if (content.length > 200_000) {
+                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Clipboard content is too large (>200 KB). Aborting import.' });
+                return;
+            }
+
+            let finalDocTitle = docTitle ? docTitle.trim() : '';
+            if (!finalDocTitle) {
+                const h1Match = content.match(/^#\s+(.+)$/m);
+                if (h1Match) {
+                    finalDocTitle = h1Match[1].trim();
+                } else {
+                    const timestamp = new Date().toISOString().split('.')[0].replace(/:/g, '-');
+                    finalDocTitle = `Research-${timestamp}`;
+                }
+            }
+
+            const writeResult = await this._plannerPromptWriter.writeContentToDocsDir(
+                workspaceRoot,
+                content,
+                finalDocTitle,
+                'research-clipboard',
+                { skipDesignDocLink: true }
+            );
+
+            this._lastPanelWriteTimestamp = Date.now();
+
+            if (writeResult.error) {
+                this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: writeResult.error });
+                return;
+            }
+
+            this._panel?.webview.postMessage({ 
+                type: 'importResearchDocResult', 
+                success: true, 
+                docTitle: finalDocTitle 
+            });
+
+            await this._handleFetchImportedDocs(workspaceRoot);
+
+        } catch (err) {
+            this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: String(err) });
+        } finally {
+            this._importInProgress = false;
+        }
+    }
+
     private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {
         try {
             const integrationDir = path.join(workspaceRoot, '.switchboard', 'integration');
@@ -2126,6 +2412,10 @@ export class PlanningPanelProvider {
             try { this._activeDocWatcher.dispose(); } catch (e) {}
             this._activeDocWatcher = undefined;
         }
+        if (this._antigravityWatcher) {
+            try { this._antigravityWatcher.dispose(); } catch (e) {}
+            this._antigravityWatcher = undefined;
+        }
         for (const watcher of this._localFolderWatchers) {
             try { watcher.dispose(); } catch (e) {}
         }
@@ -2136,5 +2426,23 @@ export class PlanningPanelProvider {
             this._panel.dispose();
             this._panel = undefined;
         }
+    }
+
+    private async _getKanbanPlans(workspaceRoot: string): Promise<KanbanPlanSummary[]> {
+        const { KanbanDatabase } = require('./KanbanDatabase');
+        const db = KanbanDatabase.forWorkspace(workspaceRoot);
+        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+        const records = await db.getBoard(workspaceId);
+        return records.map((r: any) => ({
+            planId: r.planId,
+            topic: r.topic || path.basename(r.planFile || '') || 'Untitled',
+            column: r.kanbanColumn,
+            workspaceRoot: path.resolve(workspaceRoot),
+            workspaceLabel: path.basename(workspaceRoot),
+            project: r.project || '',
+            repoScope: r.repoScope || '',
+            mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,
+            planFile: r.planFile || ''
+        }));
     }
 }

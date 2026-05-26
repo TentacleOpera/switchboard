@@ -318,11 +318,17 @@
           "scope": "application"
         },
 
-        "switchboard.research.localFolderPath": {
-          "type": "string",
-          "default": "",
-          "description": "Path to the local folder containing research files (.md, .txt, .markdown, .rst, .adoc). Used by the Research panel's Cowork/local source.",
+        "switchboard.research.localFolderPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Paths to local folders containing research files (.md, .txt, .markdown, .rst, .adoc). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "resource"
+        },
+        "switchboard.research.antigravityBrainEnabled": {
+          "type": "boolean",
+          "default": false,
+          "description": "Show Antigravity session artifacts in the LOCAL DOCS panel."
         },
         "switchboard.kanban.completedLimit": {
           "type": "integer",

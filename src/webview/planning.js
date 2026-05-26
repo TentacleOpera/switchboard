@@ -17,7 +17,7 @@
         selectedEl: null,
         filterRequestIds: {},
         researchMode: persistedState.researchMode || 'web',
-        localFolderPath: '',
+        localFolderPaths: [],
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false
     };
@@ -68,6 +68,10 @@
 
             btn.classList.add('active');
             document.getElementById(`${tabName}-content`).classList.add('active');
+
+            if (tabName === 'kanban') {
+                vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+            }
         });
     });
 
@@ -102,6 +106,41 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         importPlansBtn.addEventListener('click', () => {
             vscode.postMessage({ type: 'importPlansFromClipboard' });
         });
+    }
+
+    const importResearchDocBtn = document.getElementById('btn-import-research-doc');
+    const importResearchDocClipboardBtn = document.getElementById('btn-import-research-doc-clipboard');
+
+    const handleResearchImportClick = () => {
+        const docTitleInput = document.getElementById('research-doc-title');
+        const docTitle = docTitleInput ? docTitleInput.value.trim() : '';
+        
+        if (importResearchDocBtn) {
+            importResearchDocBtn.disabled = true;
+            importResearchDocBtn.innerText = 'IMPORTING...';
+        }
+        if (importResearchDocClipboardBtn) {
+            importResearchDocClipboardBtn.disabled = true;
+            importResearchDocClipboardBtn.innerText = 'IMPORTING...';
+        }
+        
+        const statusEl = document.getElementById('research-import-status');
+        if (statusEl) {
+            statusEl.style.color = '';
+            statusEl.textContent = 'Import in progress...';
+        }
+
+        vscode.postMessage({
+            type: 'importResearchDoc',
+            docTitle: docTitle || undefined
+        });
+    };
+
+    if (importResearchDocBtn) {
+        importResearchDocBtn.addEventListener('click', handleResearchImportClick);
+    }
+    if (importResearchDocClipboardBtn) {
+        importResearchDocClipboardBtn.addEventListener('click', handleResearchImportClick);
     }
 
     // Research Tab: Unified Copy Button
@@ -315,8 +354,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         wrapper.dataset.nodeId = node.id;
         wrapper.dataset.kind = node.kind || '';
         wrapper.dataset.name = node.name;
-        if (node.metadata && node.metadata.root) {
-            wrapper.dataset.root = node.metadata.root;
+        if (node.metadata) {
+            if (node.metadata.root) {
+                wrapper.dataset.root = node.metadata.root;
+            }
+            if (node.metadata.sourceFolder) {
+                wrapper.dataset.sourceFolder = node.metadata.sourceFolder;
+            }
         }
         wrapper.style.marginLeft = `${depth * 16}px`;
 
@@ -370,7 +414,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         type: 'deleteLocalDoc',
                         docId: node.id,
                         docName: node.name,
-                        workspaceRoot: node.metadata ? node.metadata.root : undefined
+                        workspaceRoot: node.metadata ? node.metadata.root : undefined,
+                        sourceFolder: node.metadata ? node.metadata.sourceFolder : undefined
                     });
                 });
                 deleteBtnRef = deleteBtn;
@@ -446,7 +491,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     type: 'fetchPreview',
                     sourceId,
                     docId: docId,
-                    requestId: state.previewRequestId
+                    requestId: state.previewRequestId,
+                    sourceFolder: sourceFolder
                 });
             }
         } else {
@@ -455,7 +501,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 type: 'fetchPreview',
                 sourceId,
                 docId: docId,
-                requestId: state.previewRequestId
+                requestId: state.previewRequestId,
+                sourceFolder: sourceFolder
             });
         }
         
@@ -472,8 +519,44 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const LOCAL_SOURCES = ['local-folder'];
     const ONLINE_SOURCES = ['clickup', 'linear', 'notion'];
 
+    function renderFolderList(paths) {
+        const folderList = document.getElementById('local-folders-list');
+        if (!folderList) return;
+        folderList.innerHTML = '';
+
+        if (!paths || paths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            folderList.appendChild(empty);
+            return;
+        }
+
+        paths.forEach(path => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = path;
+            pathSpan.title = path;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path });
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            folderList.appendChild(row);
+        });
+    }
+
     function renderLocalDocs(rootEntry) {
-        const { sourceId, nodes, folderPath } = rootEntry;
+        const { sourceId, nodes, folderPaths } = rootEntry;
         
         // Clear only local pane
         treePane.innerHTML = '';
@@ -491,31 +574,56 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         
         if (sourceId === 'local-folder') {
             const configRow = document.createElement('div');
-            configRow.className = 'folder-config';
-            const pathInput = document.createElement('input');
-            pathInput.type = 'text';
-            pathInput.readOnly = true;
-            pathInput.placeholder = 'No folder set';
-            pathInput.id = 'local-folder-path';
-            
-            // Add a manual refresh button for the local folder
+            configRow.className = 'folder-config-container';
+            configRow.style.display = 'flex';
+            configRow.style.flexDirection = 'column';
+            configRow.style.gap = '8px';
+            configRow.style.padding = '8px';
+            configRow.style.borderBottom = '1px solid var(--border-color)';
+
+            const controlsRow = document.createElement('div');
+            controlsRow.style.display = 'flex';
+            controlsRow.style.alignItems = 'center';
+            controlsRow.style.justifyContent = 'space-between';
+            controlsRow.style.gap = '8px';
+
+            const sectionTitle = document.createElement('span');
+            sectionTitle.textContent = 'Local Docs Folders';
+            sectionTitle.style.fontWeight = 'bold';
+            sectionTitle.style.fontSize = '11px';
+            sectionTitle.style.textTransform = 'uppercase';
+            sectionTitle.style.color = 'var(--text-secondary)';
+
+            const buttonsContainer = document.createElement('div');
+            buttonsContainer.style.display = 'flex';
+            buttonsContainer.style.gap = '6px';
+
             const refreshLocalBtn = document.createElement('button');
             refreshLocalBtn.textContent = '↻';
-            refreshLocalBtn.title = 'Refresh Local Folder';
+            refreshLocalBtn.title = 'Refresh Local Folders';
             refreshLocalBtn.style.padding = '2px 6px';
             refreshLocalBtn.addEventListener('click', () => {
                 vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
             });
 
-            const browseBtn = document.createElement('button');
-            browseBtn.textContent = 'Browse';
-            browseBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'browseLocalFolder' });
+            const addFolderBtn = document.createElement('button');
+            addFolderBtn.textContent = 'Add Folder';
+            addFolderBtn.style.padding = '2px 8px';
+            addFolderBtn.addEventListener('click', () => {
+                vscode.postMessage({ type: 'addLocalFolder' });
             });
-            
-            configRow.appendChild(pathInput);
-            configRow.appendChild(refreshLocalBtn);
-            configRow.appendChild(browseBtn);
+
+            buttonsContainer.appendChild(refreshLocalBtn);
+            buttonsContainer.appendChild(addFolderBtn);
+            controlsRow.appendChild(sectionTitle);
+            controlsRow.appendChild(buttonsContainer);
+            configRow.appendChild(controlsRow);
+
+            const folderList = document.createElement('div');
+            folderList.id = 'local-folders-list';
+            folderList.className = 'folder-list';
+            configRow.appendChild(folderList);
+
             treePane.appendChild(configRow);
 
             // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
@@ -524,10 +632,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             docList.dataset.sourceId = sourceId;
             treePane.appendChild(docList);
 
-            // Set path input value from folderPath attached by backend
-            if (folderPath) {
-                pathInput.value = folderPath;
-            }
+            // Render list
+            renderFolderList(folderPaths || []);
 
             if (!nodes || nodes.length === 0) {
                 // Check if there are imported docs from other sources (clickup, linear, notion)
@@ -601,6 +707,60 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Fetch imported docs on initial load
         vscode.postMessage({ type: 'fetchImportedDocs' });
+    }
+
+    function renderAntigravitySessions(sessions, enabled) {
+        if (!treePane) { return; }
+
+        // Remove existing section
+        const existing = document.getElementById('antigravity-section');
+        if (existing) { existing.remove(); }
+
+        if (!enabled) { return; }
+
+        const section = document.createElement('div');
+        section.id = 'antigravity-section';
+
+        const header = document.createElement('div');
+        header.className = 'source-header';
+        header.textContent = 'ANTIGRAVITY SESSIONS';
+        section.appendChild(header);
+
+        if (sessions.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'tree-placeholder';
+            empty.textContent = 'No sessions found in brain directory';
+            section.appendChild(empty);
+        } else {
+            for (const session of sessions) {
+                // Session row (collapsed header)
+                const sessionRow = document.createElement('div');
+                sessionRow.className = 'tree-node folder-subheader';
+                sessionRow.innerHTML = `<span class="icon">🧠</span><span class="label">${session.name}…</span>
+                    <span class="antigravity-session-ts">${new Date(session.timestamp).toLocaleDateString()}</span>`;
+                section.appendChild(sessionRow);
+
+                // Artifact rows under each session
+                for (const artifact of session.artifacts) {
+                    const artifactRow = document.createElement('div');
+                    artifactRow.className = 'tree-node antigravity-artifact-node';
+                    artifactRow.dataset.artifactPath = artifact.id;
+                    artifactRow.innerHTML = `<span class="icon">📄</span><span class="label">${artifact.name}</span>`;
+                    artifactRow.addEventListener('click', () => {
+                        document.querySelectorAll('.tree-node.selected').forEach(n => n.classList.remove('selected'));
+                        artifactRow.classList.add('selected');
+                        vscode.postMessage({
+                            type: 'fetchAntigravityArtifact',
+                            artifactPath: artifact.id,
+                            requestId: ++state.previewRequestId
+                        });
+                    });
+                    section.appendChild(artifactRow);
+                }
+            }
+        }
+
+        treePane.appendChild(section);
     }
 
     function renderOnlineDocs(roots, enabledSources) {
@@ -682,13 +842,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleLocalDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
-        state.localFolderPath = msg.folderPath || '';
+        state.localFolderPaths = msg.folderPaths || [];
         renderLocalDocs({
             sourceId: msg.sourceId || 'local-folder',
             nodes: msg.nodes || [],
-            folderPath: msg.folderPath || '',
+            folderPaths: msg.folderPaths || [],
             error: msg.error
         });
+
+        // Handle antigravity sessions section
+        renderAntigravitySessions(msg.antigravitySessions || [], msg.antigravityEnabled || false);
+
+        // Sync toggle state
+        const agToggle = document.getElementById('antigravity-toggle');
+        if (agToggle) { agToggle.checked = msg.antigravityEnabled || false; }
     }
 
     function handleOnlineDocsReady(msg) {
@@ -1029,12 +1196,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handleLocalFolderPathUpdated(msg) {
-        const { folderPath, nodes } = msg;
-        state.localFolderPath = folderPath || '';
-        const pathInput = document.getElementById('local-folder-path');
-        if (pathInput) {
-            pathInput.value = folderPath || '';
+        const { folderPath, folderPaths, nodes } = msg;
+        if (folderPaths) {
+            state.localFolderPaths = folderPaths;
+        } else if (folderPath) {
+            state.localFolderPaths = [folderPath];
         }
+        renderFolderList(state.localFolderPaths);
 
         const docList = treePane?.querySelector('.source-doc-list[data-source-id="local-folder"]');
         if (docList) {
@@ -1365,6 +1533,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 alert('Planning Panel Error: ' + msg.message);
                 break;
+            case 'kanbanPlansReady':
+                handleKanbanPlansReady(msg);
+                break;
+            case 'kanbanPlanPreviewReady':
+                handleKanbanPlanPreviewReady(msg);
+                break;
+            case 'kanbanContextSet':
+                handleKanbanContextSet(msg);
+                break;
+            case 'kanbanPlanOpenResult':
+                handleKanbanPlanOpenResult(msg);
+                break;
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
@@ -1424,6 +1604,37 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const btnImportFullDocOnline = document.getElementById('btn-import-full-doc-online');
                 if (btnImportFullDocOnline) btnImportFullDocOnline.disabled = false;
                 break;
+            case 'importResearchDocResult':
+                const docTitleInput = document.getElementById('research-doc-title');
+                const researchStatusEl = document.getElementById('research-import-status');
+                
+                const btnResearch = document.getElementById('btn-import-research-doc');
+                const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
+                
+                if (btnResearch) {
+                    btnResearch.disabled = false;
+                    btnResearch.innerText = 'IMPORT RESEARCH DOC';
+                }
+                if (btnResearchClipboard) {
+                    btnResearchClipboard.disabled = false;
+                    btnResearchClipboard.innerText = 'IMPORT RESEARCH DOC';
+                }
+                
+                if (msg.success) {
+                    if (researchStatusEl) {
+                        researchStatusEl.style.color = 'var(--accent-teal)';
+                        researchStatusEl.textContent = `Imported: ${msg.docTitle || 'Research Doc'}`;
+                    }
+                    if (docTitleInput) {
+                        docTitleInput.value = '';
+                    }
+                } else {
+                    if (researchStatusEl) {
+                        researchStatusEl.style.color = '#f14c4c';
+                        researchStatusEl.textContent = `Error: ${msg.error || 'Failed to import'}`;
+                    }
+                }
+                break;
             case 'themeChanged':
                 handleThemeChanged();
                 break;
@@ -1438,6 +1649,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'localFolderPathUpdated':
                 handleLocalFolderPathUpdated(msg);
+                break;
+            case 'localFoldersListed':
+                state.localFolderPaths = msg.paths || [];
+                renderFolderList(state.localFolderPaths);
                 break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
@@ -1547,12 +1762,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     // Active Design Doc Banner handlers
     const btnDisableDocLocal = document.getElementById('btn-disable-doc-local');
     const btnDisableDocOnline = document.getElementById('btn-disable-doc-online');
+    const btnDisableDocKanban = document.getElementById('btn-disable-doc-kanban');
 
     function updateActiveDocBanner(msg) {
         const bannerLocal = document.getElementById('active-doc-banner-local');
         const bannerOnline = document.getElementById('active-doc-banner-online');
+        const bannerKanban = document.getElementById('active-doc-banner-kanban');
         const nameLocal = document.getElementById('active-doc-name-local');
         const nameOnline = document.getElementById('active-doc-name-online');
+        const nameKanban = document.getElementById('active-doc-name-kanban');
 
         const isActive = msg.enabled && msg.docName;
         const docName = msg.docName || 'None';
@@ -1564,6 +1782,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (bannerOnline) {
             bannerOnline.classList.toggle('inactive', !isActive);
             if (nameOnline) nameOnline.textContent = docName;
+        }
+        if (bannerKanban) {
+            bannerKanban.classList.toggle('inactive', !isActive);
+            if (nameKanban) nameKanban.textContent = docName;
         }
     }
 
@@ -1577,6 +1799,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     if (btnDisableDocOnline) {
         btnDisableDocOnline.addEventListener('click', handleDisableDesignDoc);
     }
+    if (btnDisableDocKanban) {
+        btnDisableDocKanban.addEventListener('click', handleDisableDesignDoc);
+    }
 
     // Button handlers
     if (btnAppendToPrompts) {
@@ -1586,11 +1811,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             btnAppendToPrompts.disabled = true;
             statusEl.textContent = 'Appending to planning prompts...';
 
+        const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+        const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
         const payload = {
             type: 'appendToPlannerPrompt',
             sourceId: state.activeSource,
             docId: state.activeDocId,
-            docName: state.activeDocName || state.activeDocId
+            docName: state.activeDocName || state.activeDocId,
+            sourceFolder
         };
         if (state.activeDocContent) {
             payload.content = state.activeDocContent;
@@ -1674,11 +1902,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (!state.activeSource || !state.activeDocId) return;
             btnSetActiveLocal.disabled = true;
             statusEl.textContent = 'Setting as active planning context...';
+            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
             vscode.postMessage({
                 type: 'setActivePlanningContext',
                 sourceId: state.activeSource,
                 docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId
+                docName: state.activeDocName || state.activeDocId,
+                sourceFolder
             });
         });
     }
@@ -1687,11 +1918,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     if (btnLinkToLocal) {
         btnLinkToLocal.addEventListener('click', () => {
             if (!state.activeSource || !state.activeDocId) return;
+            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
             vscode.postMessage({
                 type: 'linkToDocument',
                 sourceId: state.activeSource,
                 docId: state.activeDocId,
-                docName: state.activeDocName || state.activeDocId
+                docName: state.activeDocName || state.activeDocId,
+                sourceFolder
             });
         });
     }
@@ -1733,7 +1967,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const depthLabel = 'Research depth';
 
         // Use configured local docs folder path with fallback
-        const configuredPath = state.localFolderPath;
+        const configuredPaths = state.localFolderPaths || [];
+        const configuredPath = configuredPaths.length > 0 ? configuredPaths[0] : '';
         const saveLocation = configuredPath || '[CONFIGURE LOCAL DOCS FOLDER]';
         const saveAction = 'save the results';
         const protocolAction = 'proposing a research plan';
@@ -1760,8 +1995,371 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return prompt;
     }
 
+    // =========================================================================
+    // KANBAN PLANS UI LOGIC
+    // =========================================================================
+    let _kanbanPlansCache = [];
+    let _kanbanSelectedPlan = null;
+    let _kanbanPreviewRequestId = 0;
+    
+    const kanbanFilters = {
+        column: '',
+        workspaceRoot: '',
+        project: '',
+        repoScope: '',
+        search: ''
+    };
+
+    const kanbanColumnFilter = document.getElementById('kanban-column-filter');
+    const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
+    const kanbanProjectFilter = document.getElementById('kanban-project-filter');
+    const kanbanRepoFilter = document.getElementById('kanban-repo-filter');
+    const kanbanSearch = document.getElementById('kanban-search');
+    const kanbanRefreshBtn = document.getElementById('kanban-refresh-btn');
+    const kanbanListPane = document.getElementById('kanban-list-pane');
+    const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
+
+    // Initial message in preview pane
+    if (kanbanPreviewPane) {
+        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
+    }
+
+    function renderKanbanPlans(plans, filters) {
+        if (!kanbanListPane) return;
+        
+        let filtered = plans.filter(plan => {
+            // Column filter
+            if (filters.column && plan.column !== filters.column) return false;
+            // Workspace filter (uses full workspaceRoot path internally)
+            if (filters.workspaceRoot && plan.workspaceRoot !== filters.workspaceRoot) return false;
+            // Project filter
+            if (filters.project) {
+                if (filters.project === '__none__') {
+                    if (plan.project !== '') return false;
+                } else if (plan.project !== filters.project) {
+                    return false;
+                }
+            }
+            // Repo scope filter
+            if (filters.repoScope) {
+                if (filters.repoScope === '__none__') {
+                    if (plan.repoScope !== '') return false;
+                } else if (plan.repoScope !== filters.repoScope) {
+                    return false;
+                }
+            }
+            // Search filter
+            if (filters.search) {
+                const searchLower = filters.search.toLowerCase();
+                if (!plan.topic.toLowerCase().includes(searchLower)) return false;
+            }
+            return true;
+        });
+
+        // Already sorted by mtime descending from backend, but can double check
+        filtered.sort((a, b) => b.mtime - a.mtime);
+
+        if (filtered.length === 0) {
+            kanbanListPane.innerHTML = '<div class="kanban-empty-state">No matching kanban plans</div>';
+            return;
+        }
+
+        kanbanListPane.innerHTML = '';
+        filtered.forEach(plan => {
+            const itemDiv = document.createElement('div');
+            itemDiv.className = 'kanban-plan-item';
+            if (_kanbanSelectedPlan && _kanbanSelectedPlan.planId === plan.planId) {
+                itemDiv.classList.add('selected');
+            }
+
+            const badgeClass = {
+                'CREATED': 'kanban-col-created',
+                'CODED': 'kanban-col-coded',
+                'PLAN REVIEWED': 'kanban-col-reviewed',
+                'COMPLETED': 'kanban-col-completed'
+            }[plan.column] || 'kanban-col-created';
+
+            const metaParts = [plan.workspaceLabel];
+            if (plan.project) metaParts.push(plan.project);
+            if (plan.repoScope) metaParts.push(plan.repoScope);
+
+            const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
+
+            itemDiv.innerHTML = `
+                <div style="width: 100%;">
+                    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;">
+                        <span class="kanban-plan-topic">${escapeHtml(plan.topic)}</span>
+                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(plan.column)}</span>
+                    </div>
+                    <div class="kanban-plan-meta" style="margin-top: 4px;">
+                        ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
+                    </div>
+                    <div class="kanban-plan-actions">
+                        <button class="kanban-action-open" data-path="${escapeHtml(plan.planFile)}">Open File</button>
+                        <button class="kanban-action-context" data-path="${escapeHtml(plan.planFile)}">Set Context</button>
+                    </div>
+                </div>
+            `;
+
+            // Row selection
+            itemDiv.addEventListener('click', (e) => {
+                // If they clicked on buttons, don't trigger row click preview
+                if (e.target.tagName === 'BUTTON') return;
+
+                document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
+                itemDiv.classList.add('selected');
+                _kanbanSelectedPlan = plan;
+
+                if (plan.planFile) {
+                    if (kanbanPreviewPane) {
+                        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                    }
+                    _kanbanPreviewRequestId++;
+                    vscode.postMessage({
+                        type: 'fetchKanbanPlanPreview',
+                        filePath: plan.planFile,
+                        requestId: _kanbanPreviewRequestId
+                    });
+                } else {
+                    if (kanbanPreviewPane) {
+                        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">No plan file linked</div>';
+                    }
+                }
+            });
+
+            // Action buttons
+            const btnOpen = itemDiv.querySelector('.kanban-action-open');
+            const btnContext = itemDiv.querySelector('.kanban-action-context');
+
+            if (btnOpen) {
+                btnOpen.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const path = btnOpen.dataset.path;
+                    if (path) {
+                        vscode.postMessage({ type: 'openKanbanPlan', filePath: path });
+                    }
+                });
+            }
+
+            if (btnContext) {
+                btnContext.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const path = btnContext.dataset.path;
+                    if (path) {
+                        btnContext.disabled = true;
+                        btnContext.innerText = 'Setting...';
+                        vscode.postMessage({ type: 'setKanbanPlanContext', filePath: path });
+                    }
+                });
+            }
+
+            kanbanListPane.appendChild(itemDiv);
+        });
+    }
+
+    function populateKanbanFilters(plans) {
+        if (!kanbanWorkspaceFilter || !kanbanProjectFilter || !kanbanRepoFilter) return;
+
+        // Workspace filter
+        const uniqueWorkspaces = [];
+        const seenWorkspaces = new Set();
+        plans.forEach(p => {
+            if (p.workspaceRoot && !seenWorkspaces.has(p.workspaceRoot)) {
+                seenWorkspaces.add(p.workspaceRoot);
+                uniqueWorkspaces.push({ root: p.workspaceRoot, label: p.workspaceLabel });
+            }
+        });
+        const currentWS = kanbanFilters.workspaceRoot;
+        kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
+        uniqueWorkspaces.forEach(ws => {
+            const opt = document.createElement('option');
+            opt.value = ws.root;
+            opt.textContent = ws.label;
+            if (ws.root === currentWS) opt.selected = true;
+            kanbanWorkspaceFilter.appendChild(opt);
+        });
+
+        // Project filter
+        const uniqueProjects = new Set();
+        let hasEmptyProject = false;
+        plans.forEach(p => {
+            if (p.project) {
+                uniqueProjects.add(p.project);
+            } else {
+                hasEmptyProject = true;
+            }
+        });
+        const currentProj = kanbanFilters.project;
+        kanbanProjectFilter.innerHTML = '<option value="">All Projects</option>';
+        if (hasEmptyProject) {
+            const optNone = document.createElement('option');
+            optNone.value = '__none__';
+            optNone.textContent = '(No Project)';
+            if (currentProj === '__none__') optNone.selected = true;
+            kanbanProjectFilter.appendChild(optNone);
+        }
+        Array.from(uniqueProjects).sort().forEach(proj => {
+            const opt = document.createElement('option');
+            opt.value = proj;
+            opt.textContent = proj;
+            if (proj === currentProj) opt.selected = true;
+            kanbanProjectFilter.appendChild(opt);
+        });
+
+        // Repo filter
+        const uniqueRepos = new Set();
+        let hasEmptyRepo = false;
+        plans.forEach(p => {
+            if (p.repoScope) {
+                uniqueRepos.add(p.repoScope);
+            } else {
+                hasEmptyRepo = true;
+            }
+        });
+        const currentRepo = kanbanFilters.repoScope;
+        kanbanRepoFilter.innerHTML = '<option value="">All Repos</option>';
+        if (hasEmptyRepo) {
+            const optNone = document.createElement('option');
+            optNone.value = '__none__';
+            optNone.textContent = '(No Repo Scope)';
+            if (currentRepo === '__none__') optNone.selected = true;
+            kanbanRepoFilter.appendChild(optNone);
+        }
+        Array.from(uniqueRepos).sort().forEach(repo => {
+            const opt = document.createElement('option');
+            opt.value = repo;
+            opt.textContent = repo;
+            if (repo === currentRepo) opt.selected = true;
+            kanbanRepoFilter.appendChild(opt);
+        });
+    }
+
+    function handleKanbanPlansReady(msg) {
+        if (msg.error) {
+            if (kanbanListPane) {
+                kanbanListPane.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error loading plans: ${escapeHtml(msg.error)}</div>`;
+            }
+            return;
+        }
+
+        _kanbanPlansCache = msg.plans || [];
+        populateKanbanFilters(_kanbanPlansCache);
+        renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+    }
+
+    function handleKanbanPlanPreviewReady(msg) {
+        if (msg.requestId !== _kanbanPreviewRequestId) return;
+        if (!kanbanPreviewPane) return;
+
+        if (msg.error) {
+            kanbanPreviewPane.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
+            return;
+        }
+
+        if (msg.content) {
+            kanbanPreviewPane.innerHTML = renderMarkdown(msg.content);
+        } else {
+            kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Plan file is empty</div>';
+        }
+    }
+
+    function handleKanbanContextSet(msg) {
+        // Re-enable "Set Context" button
+        if (kanbanListPane) {
+            kanbanListPane.querySelectorAll('.kanban-action-context').forEach(btn => {
+                btn.disabled = false;
+                btn.innerText = 'Set Context';
+            });
+        }
+        
+        if (!msg.success) {
+            alert('Failed to set active context: ' + (msg.error || 'Unknown error'));
+        }
+    }
+
+    function handleKanbanPlanOpenResult(msg) {
+        if (!msg.success) {
+            alert('Failed to open plan file: ' + (msg.error || 'Unknown error'));
+        }
+    }
+
+    // Helper functions
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    function formatRelativeTime(mtime) {
+        const diff = Date.now() - mtime;
+        const secs = Math.floor(diff / 1000);
+        if (secs < 60) return 'just now';
+        const mins = Math.floor(secs / 60);
+        if (mins < 60) return `${mins}m ago`;
+        const hours = Math.floor(mins / 60);
+        if (hours < 24) return `${hours}h ago`;
+        const days = Math.floor(hours / 24);
+        return `${days}d ago`;
+    }
+
+    // Event listeners
+    if (kanbanColumnFilter) {
+        kanbanColumnFilter.addEventListener('change', () => {
+            kanbanFilters.column = kanbanColumnFilter.value;
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+
+    if (kanbanWorkspaceFilter) {
+        kanbanWorkspaceFilter.addEventListener('change', () => {
+            kanbanFilters.workspaceRoot = kanbanWorkspaceFilter.value;
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+
+    if (kanbanProjectFilter) {
+        kanbanProjectFilter.addEventListener('change', () => {
+            kanbanFilters.project = kanbanProjectFilter.value;
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+
+    if (kanbanRepoFilter) {
+        kanbanRepoFilter.addEventListener('change', () => {
+            kanbanFilters.repoScope = kanbanRepoFilter.value;
+            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+        });
+    }
+
+    let searchDebounceTimeout;
+    if (kanbanSearch) {
+        kanbanSearch.addEventListener('input', () => {
+            clearTimeout(searchDebounceTimeout);
+            searchDebounceTimeout = setTimeout(() => {
+                kanbanFilters.search = kanbanSearch.value;
+                renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+            }, 200);
+        });
+    }
+
+    if (kanbanRefreshBtn) {
+        kanbanRefreshBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+        });
+    }
+
     // Initialize
     console.log('[PlanningPanel Webview] Initializing, sending fetchRoots');
+    const agToggle = document.getElementById('antigravity-toggle');
+    if (agToggle) {
+        agToggle.addEventListener('change', () => {
+            vscode.postMessage({ type: 'toggleAntigravityBrain', enabled: agToggle.checked });
+        });
+    }
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'fetchImportedDocs' });
 })();
