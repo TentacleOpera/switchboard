@@ -250,5 +250,48 @@ Key risks: (1) The original plan referenced the wrong folder (`.switchboard/loca
 - Batch import for multiple research documents
 - Integration with other AI studio interfaces
 
+## Review Pass Results (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|:--|:--------|:---------|:-------|
+| 1 | Google AI Studio link used `<a href="https://aistudio.google.com">` which is dead in VS Code webview (CSP: `default-src 'none'`). Must use `airlock` message pattern → `vscode.env.openExternal()` like NotebookLM does. | MAJOR | **Fixed** |
+| 2 | `research-clipboard` sourceId missing from `_sourceDisplayName()` map — would display raw string if ever used without `skipDesignDocLink: true` | NIT | **Fixed** |
+| 3 | No duplicate detection prompt for research imports (unlike `_handleImportFullDoc`). Re-import is idempotent via content-hash filenames + `INSERT OR REPLACE`, but different content with same title creates orphaned files. | NIT | **Deferred** (per plan scope) |
+| 4 | CLIPBOARD IMPORT tab button has no visible title input — user must switch to RESEARCH tab to set custom title | NIT | **Deferred** (by design) |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now**: Finding #1 (dead link) and #2 (trivial one-liner). Both are zero-risk, high-value fixes.
+- **Defer**: Finding #3 (duplicate detection) and #4 (UX of title input). Acceptable for v1 per plan spec.
+
+### Code Fixes Applied
+
+| File | Change |
+|:-----|:-------|
+| `src/webview/planning.html` | Replaced `<a href="https://aistudio.google.com">` with `<span id="btn-open-ai-studio">` (clickable, cursor:pointer) |
+| `src/webview/planning.js` | Added click handler for `btn-open-ai-studio` that sends `airlock_openAIStudio` message |
+| `src/services/PlanningPanelProvider.ts` | Added `case 'airlock_openAIStudio'` that calls `vscode.env.openExternal(vscode.Uri.parse('https://aistudio.google.com'))` |
+| `src/services/PlannerPromptWriter.ts` | Added `'research-clipboard': 'Research'` to `_sourceDisplayName()` map |
+
+### Verification Results
+
+- **Message chain integrity**: `btn-open-ai-studio` → JS handler → `airlock_openAIStudio` message → TS case → `vscode.env.openExternal()` ✅
+- **No remaining `<a href>` external links** in planning.html ✅
+- **`importResearchDoc` / `importResearchDocResult` message chain**: HTML buttons → JS handlers → TS case → `_handleImportResearchDoc()` → result messages → JS result handler ✅
+- **`_importInProgress` guard**: Properly checked on entry, set to true, reset in `finally` block ✅
+- **`writeContentToDocsDir` call**: Correct args (`workspaceRoot, content, finalDocTitle, 'research-clipboard', { skipDesignDocLink: true }`) ✅
+- **Doc title derivation**: Custom input → H1 regex → timestamp fallback ✅
+- **Import registry**: Handled inside `writeContentToDocsDir()` via `cacheService.registerImport()` ✅
+- **Sidebar refresh**: `_handleFetchImportedDocs()` called on success ✅
+- **Compilation**: Skipped per session directive
+- **Tests**: Skipped per session directive
+
+### Remaining Risks
+
+1. **Orphaned files on re-import with different content**: If user imports different content with the same title, a new file is created (different content hash) while the old file remains on disk. The DB entry is updated via `INSERT OR REPLACE`. Low risk — the old file is harmless and the sidebar shows the latest import.
+2. **No duplicate prompt**: Unlike `_handleImportFullDoc`, research import doesn't check for existing docs with the same name. Acceptable for v1.
+
 ## Recommendation
 **Send to Coder** — Complexity 4: routine multi-file changes that extend existing patterns with no architectural risk.

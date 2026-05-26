@@ -126,7 +126,7 @@ parentDocName: ${options.parentDocName || docTitle}
     }
 
     private _sourceDisplayName(sourceId: string): string {
-        const names: Record<string, string> = { notion: 'Notion', 'local-folder': 'Local Folder', linear: 'Linear Docs', clickup: 'ClickUp Docs' };
+        const names: Record<string, string> = { notion: 'Notion', 'local-folder': 'Local Folder', linear: 'Linear Docs', clickup: 'ClickUp Docs', 'research-clipboard': 'Research' };
         return names[sourceId] || sourceId;
     }
 

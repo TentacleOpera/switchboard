@@ -821,6 +821,10 @@ export class PlanningPanelProvider {
                 await vscode.env.openExternal(vscode.Uri.parse('https://notebooklm.google.com'));
                 break;
             }
+            case 'airlock_openAIStudio': {
+                await vscode.env.openExternal(vscode.Uri.parse('https://aistudio.google.com'));
+                break;
+            }
             case 'airlock_openFolder': {
                 const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'integration'));
                 await vscode.commands.executeCommand('revealFileInOS', folderUri);
@@ -1319,7 +1323,7 @@ export class PlanningPanelProvider {
             hasChildren: f.isFolder === true,
             metadata: {
                 ...(f._root ? { root: f._root } : {}),
-                sourceFolder: f.sourceFolder
+                ...(f.sourceFolder ? { sourceFolder: f.sourceFolder } : {})
             }
         }));
     }

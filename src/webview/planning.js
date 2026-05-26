@@ -217,6 +217,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    const openAIStudioBtn = document.getElementById('btn-open-ai-studio');
+    if (openAIStudioBtn) {
+        openAIStudioBtn.addEventListener('click', () => {
+            vscode.postMessage({ type: 'airlock_openAIStudio' });
+        });
+    }
+
     if (copySprintPromptBtn) {
         copySprintPromptBtn.addEventListener('click', () => {
             const prompt = `Please analyze the uploaded codebase and generate sprint plans. Output each plan separated by this exact format:
