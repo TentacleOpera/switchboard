@@ -1019,13 +1019,15 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'openKanbanPlan': {
-                const filePath = msg.filePath;
-                if (!filePath || !fs.existsSync(filePath)) {
-                    this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found' });
+                const filePath: string = msg.filePath || '';
+                const resolved = path.resolve(filePath);
+                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: false, error: 'File not found or not in workspace' });
                     break;
                 }
                 try {
-                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(filePath));
+                    const doc = await vscode.workspace.openTextDocument(vscode.Uri.file(resolved));
                     await vscode.window.showTextDocument(doc, vscode.ViewColumn.Beside);
                     this._panel?.webview.postMessage({ type: 'kanbanPlanOpenResult', success: true });
                 } catch (err) {
@@ -1056,8 +1058,10 @@ export class PlanningPanelProvider {
             }
             case 'setKanbanPlanContext': {
                 const filePath: string = msg.filePath || '';
-                if (!filePath || !fs.existsSync(filePath)) {
-                    this._panel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: 'File not found' });
+                const resolved = path.resolve(filePath);
+                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
+                    this._panel?.webview.postMessage({ type: 'kanbanContextSet', success: false, error: 'File not found or not in workspace' });
                     break;
                 }
                 try {

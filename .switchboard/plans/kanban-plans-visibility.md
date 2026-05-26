@@ -462,4 +462,37 @@ case 'setKanbanPlanContext': {
 
 ---
 
+## Review Pass Results (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | `openKanbanPlan` handler missing path-traversal guard. Only checked `!filePath \|\| !fs.existsSync(filePath)` — no `path.resolve()` + `startsWith` workspace root validation. A corrupted DB entry with `planFile: '/etc/passwd'` would open it in the editor. Plan explicitly requires this guard under Security section. |
+| MAJOR-1 | MAJOR | `setKanbanPlanContext` also missing path-traversal guard. Same class of issue — sets `planner.designDocLink` to arbitrary path, which the planner subsequently reads. |
+| MAJOR-2 | MAJOR | `openKanbanPlan` used raw `filePath` from message without `path.resolve()`, inconsistent with `fetchKanbanPlanPreview` which correctly resolves. Relative paths like `../../etc/passwd` would pass through. |
+| NIT-1 | NIT | `handleKanbanContextSet` re-enables ALL `.kanban-action-context` buttons on success/failure, not just the clicked one. Minor UX issue; defer. |
+
+### Stage 2: Balanced Synthesis
+
+- **Fixed**: CRITICAL-1 + MAJOR-2 → Added `path.resolve()` + `startsWith` workspace root guard to `openKanbanPlan`, matching `fetchKanbanPlanPreview` pattern exactly.
+- **Fixed**: MAJOR-1 → Added same path-traversal guard to `setKanbanPlanContext`.
+- **Deferred**: NIT-1 (context button re-enable scope) — low impact, existing pattern.
+
+### Files Changed
+
+- `src/services/PlanningPanelProvider.ts` — Added path-traversal guard (`path.resolve()` + `allRoots.some(r => resolved.startsWith(path.resolve(r)))`) to `openKanbanPlan` and `setKanbanPlanContext` handlers. Both now use `resolved` path consistently.
+
+### Validation Results
+
+- TypeScript: `npx tsc --noEmit` — 0 new errors in modified file. 2 pre-existing errors in unrelated files (`ClickUpSyncService.ts`, `KanbanProvider.ts`).
+- All three kanban file-access handlers (`fetchKanbanPlanPreview`, `openKanbanPlan`, `setKanbanPlanContext`) now have identical path-traversal guards.
+
+### Remaining Risks
+
+- NIT-1: Context button re-enable is broader than necessary. No functional impact.
+- No automated tests exist yet for path-traversal guards (noted in plan's Automated Tests section as "Unit test for path-traversal guard in fetchKanbanPlanPreview" — should be expanded to cover `openKanbanPlan` and `setKanbanPlanContext` as well).
+
+---
+
 **Recommendation: Send to Coder** (Complexity 7 — multi-file, moderate logic, reuses existing patterns; slight uplift from multi-dimensional filter state and workspace-mapping edge cases)
