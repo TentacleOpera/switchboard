@@ -1612,8 +1612,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     statusEl.textContent = msg.message || 'Link copied to clipboard';
                     statusElOnline.textContent = msg.message || 'Link copied to clipboard';
                     
-                    // Quiet refresh
-                    vscode.postMessage({ type: 'fetchImportedDocs' });
+                    // Quiet refresh — refreshSource:local-folder triggers renderLocalDocs
+                    // which dispatches fetchImportedDocs internally, so no standalone call needed
                     vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
                     
                 } else if (msg.error) {

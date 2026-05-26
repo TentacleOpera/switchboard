@@ -3061,6 +3061,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('preventAgentFileOpening', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetExcludeReviewedBacklogSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', false);
+    }
+
+    public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetJulesAutoSyncSetting(): boolean {
         return this._isJulesAutoSyncEnabled();
     }
@@ -3404,6 +3413,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'preventAgentFileOpeningSetting',
             enabled: this.handleGetPreventAgentFileOpeningSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'excludeReviewedBacklogSetting',
+            enabled: this.handleGetExcludeReviewedBacklogSetting()
         });
 
         const designDocSetting = this.handleGetDesignDocSetting();
@@ -13510,12 +13523,19 @@ What would you like to find?`;
                     return fs.existsSync(planPath);
                 });
 
+                const excludeReviewedBacklog = this.handleGetExcludeReviewedBacklogSetting();
+                const filterByColumn = (row: any) => {
+                    if (!excludeReviewedBacklog) return true;
+                    const col = (row.kanbanColumn || '').toLowerCase();
+                    return col !== 'reviewed' && col !== 'backlog';
+                };
+
                 const visibleActiveRows = repoScope
-                    ? filterGhostPlans(activeRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(activeRows);
+                    ? filterGhostPlans(activeRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(activeRows).filter(filterByColumn);
                 const visibleCompletedRows = repoScope
-                    ? filterGhostPlans(completedRows).filter((row) => !row.repoScope || row.repoScope === repoScope)
-                    : filterGhostPlans(completedRows);
+                    ? filterGhostPlans(completedRows).filter(filterByColumn).filter((row) => !row.repoScope || row.repoScope === repoScope)
+                    : filterGhostPlans(completedRows).filter(filterByColumn);
                 const toSheet = (row: import('./KanbanDatabase').KanbanPlanRecord) => ({
                     sessionId: row.sessionId,
                     topic: row.topic || row.planFile || 'Untitled',

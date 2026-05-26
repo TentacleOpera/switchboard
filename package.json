@@ -438,6 +438,11 @@
           "default": false,
           "description": "Auto-close any file that gets opened in the editor."
         },
+        "switchboard.excludeReviewedBacklogFromDropdown": {
+          "type": "boolean",
+          "default": false,
+          "description": "Hide plans in 'reviewed' and 'backlog' kanban columns from the sidebar dropdown."
+        },
         "switchboard.planWatcher.periodicScanEnabled": {
           "type": "boolean",
           "default": true,

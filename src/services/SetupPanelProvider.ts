@@ -526,8 +526,18 @@ export class SetupPanelProvider implements vscode.Disposable {
                     });
                     break;
                 }
+                case 'getExcludeReviewedBacklogSetting':
+                    this._panel.webview.postMessage({
+                        type: 'excludeReviewedBacklogSetting',
+                        enabled: this._taskViewerProvider.handleGetExcludeReviewedBacklogSetting()
+                    });
+                    break;
                 case 'setPreventAgentFileOpeningSetting':
                     await this._taskViewerProvider.handleSetPreventAgentFileOpeningSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'setExcludeReviewedBacklogSetting':
+                    await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 case 'getDesignDocSetting': {

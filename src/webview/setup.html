@@ -462,7 +462,7 @@
             <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
             <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
-            <button class="tab-btn" data-tab="planning-panel" role="tab" aria-selected="false">Planning Panel</button>
+            <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
             <button class="tab-btn" data-tab="docs" role="tab" aria-selected="false">Docs</button>
         </div>
 
@@ -512,6 +512,13 @@
                     <div style="display:flex; flex-direction:column; gap:4px;">
                         <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Auto-commit When Moving to Code Review</span>
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Automatically commit uncommitted changes before a plan enters Code Review, giving reviewers a clean diff.</span>
+                    </div>
+                </label>
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                    <input id="exclude-reviewed-backlog-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                    <div style="display:flex; flex-direction:column; gap:4px;">
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Exclude Reviewed & Backlog from Sidebar</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Hide plans in 'reviewed' and 'backlog' columns from the sidebar dropdown to reduce clutter.</span>
                     </div>
                 </label>
             </div>
@@ -867,9 +874,9 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="planning-panel-fields" data-tab-content="planning-panel">
+        <div class="tab-content" id="artifacts-panel-fields" data-tab-content="artifacts-panel">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    Select which research sources to show in the Planning panel.
+                    Select which research sources to show in the Artifacts panel.
                 </div>
                 <div class="db-subsection">
                     <div class="subsection-header">
@@ -901,7 +908,7 @@
                     <span>Document Caching</span>
                 </div>
                 <div class="setup-section-description" style="margin-bottom: 12px; font-size: 11px; color: var(--text-secondary);">
-                    Choose how Planning Panel documents are cached locally for AI collaboration.
+                    Choose how Artifacts Panel documents are cached locally for AI collaboration.
                 </div>
                 
                 <!-- Sync mode options -->
@@ -911,7 +918,7 @@
                             <input type="radio" name="planning-sync-mode" value="no-sync" checked>
                             <span class="setup-label-text" style="font-size: 11px; color: var(--text-primary);">No Sync (Manual Only)</span>
                         </div>
-                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Only documents you view in Planning Panel are cached. Minimal disk usage.</span>
+                        <span class="setup-label-desc" style="font-size: 10px; color: var(--text-secondary);">Only documents you view in Artifacts Panel are cached. Minimal disk usage.</span>
                     </label>
                     
                     <label class="setup-radio-option" style="display: flex; flex-direction: column; gap: 4px; padding: 8px; border: 1px solid var(--border-color); border-radius: 4px; cursor: pointer;">
@@ -1343,6 +1350,7 @@
                     vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
                     vscode.postMessage({ type: 'getOpenWorktreeForCoderAgentsSetting' });
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
+                    vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                 },
                 'database': () => {
                     vscode.postMessage({ type: 'getAllDbPaths' });
@@ -3207,6 +3215,10 @@
         document.getElementById('auto-commit-code-review-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'saveStartupCommands', autoCommitOnCodeReview: e.target.checked });
         });
+
+        document.getElementById('exclude-reviewed-backlog-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setExcludeReviewedBacklogSetting', enabled: e.target.checked });
+        });
  
         document.getElementById('workspace-mapping-enabled')?.addEventListener('change', (e) => {
             vscode.postMessage({
@@ -3275,7 +3287,7 @@
         setControlPlaneSetupMode(controlPlaneSetupMode);
  
  
-        // Planning Panel sync mode selection
+        // Artifacts Panel sync mode selection
         const syncModeRadios = document.querySelectorAll('input[name="planning-sync-mode"]');
         const selectedContainersDiv = document.getElementById('planning-sync-selected-containers');
  
@@ -3546,6 +3558,13 @@
                     runSetupHydration(() => {
                         const toggle = document.getElementById('auto-commit-code-review-toggle');
                         if (toggle) toggle.checked = message.enabled !== false;
+                    });
+                    break;
+                }
+                case 'excludeReviewedBacklogSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('exclude-reviewed-backlog-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;
                 }
@@ -3894,7 +3913,7 @@
         setMultiRepoBusy(false);
         vscode.postMessage({ type: 'ready' });
 
-        // Load initial Planning Panel sync mode state
+        // Load initial Artifacts Panel sync mode state
         vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
     </script>
 </body>

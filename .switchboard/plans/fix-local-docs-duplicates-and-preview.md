@@ -150,3 +150,62 @@ function handleImportedDocsReady(msg) {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Review
+
+**CRITICAL:** None.
+
+**MAJOR-1: Redundant `fetchImportedDocs` in `importAndCopyLinkState` handler (line 1616).**
+The `importAndCopyLinkState` success handler dispatched both `fetchImportedDocs` AND `refreshSource: local-folder`. The `refreshSource: local-folder` call triggers `_sendLocalDocsReady()` → `renderLocalDocs()` → `fetchImportedDocs` (line 721). This creates a double-dispatch of `fetchImportedDocs` that can race with `renderLocalDocs`, recreating the exact race condition that Change 2 was designed to fix. The second `handleImportedDocsReady` callback may arrive while `renderLocalDocs` has cleared `treePane.innerHTML` but hasn't yet rebuilt the `imported-docs-list` container, causing the imported docs to be silently lost for that cycle.
+
+**NIT-1: Existence check in `renderLocalDocs` (lines 712-718) is dead code.**
+The `if (!importedSection)` guard always evaluates to true because `treePane.innerHTML = ''` at line 571 destroys the container first. The plan acknowledges this ("redundant-but-harmless"). Keeping it as defensive coding is acceptable — if `innerHTML = ''` is ever removed, this guard prevents a regression.
+
+**NIT-2: Standalone `fetchImportedDocs` calls in `handlePlannerPromptState` (line 1093), `importFullDocResult` (line 1632), and `duplicateResolved` (line 1719).**
+These are safe — they fire in contexts where `renderLocalDocs` is NOT concurrently being called, so no race condition exists.
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Action | Rationale |
+|---------|----------|--------|-----------|
+| Redundant `fetchImportedDocs` in `importAndCopyLinkState` | MAJOR | **Fix now** | Double-dispatch recreates the race that Change 2 was meant to eliminate. Removing the standalone call is consistent with the same pattern applied in Change 2. |
+| Existence check is dead code | NIT | **Defer** | Harmless defensive coding. Provides future-proofing if `innerHTML = ''` is removed. |
+| Other standalone `fetchImportedDocs` calls | NIT | **Defer** | No concurrent `renderLocalDocs` call in those code paths. Safe as-is. |
+
+### Code Fixes Applied
+
+**Fix: Remove redundant `fetchImportedDocs` from `importAndCopyLinkState` handler**
+
+File: `src/webview/planning.js`, lines 1615-1617
+
+Before:
+```javascript
+// Quiet refresh
+vscode.postMessage({ type: 'fetchImportedDocs' });
+vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
+```
+
+After:
+```javascript
+// Quiet refresh — refreshSource:local-folder triggers renderLocalDocs
+// which dispatches fetchImportedDocs internally, so no standalone call needed
+vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
+```
+
+Rationale: `refreshSource: local-folder` → `_sendLocalDocsReady()` → `renderLocalDocs()` → `fetchImportedDocs` (line 721). The standalone call was redundant and created a race window.
+
+### Verification Results
+
+- **Lint/Typecheck:** Project ESLint config targets TypeScript only (`@typescript-eslint/parser`). The `planning.js` webview file is plain JS and is not covered by the lint config. No lint errors introduced.
+- **Syntax validation:** Change is a single-line removal + comment update. Surrounding code context verified — no syntax issues.
+- **Diff review:** Only change in `planning.js` is the removal of the redundant `fetchImportedDocs` dispatch in `importAndCopyLinkState`. Clean and minimal.
+
+### Remaining Risks
+
+1. **Residual race window:** Even with the fix, a narrow race window exists when file watcher triggers fire during `renderLocalDocs` execution (between `treePane.innerHTML = ''` and the `imported-docs-list` container creation). This is the same edge case documented in the plan's Edge-Case section. Probability is low (requires file watcher event during the ~10ms render window) and self-corrects on the next trigger. A proper fix would require debouncing `_sendLocalDocsReady` or using a request-ID-based deduplication pattern similar to `fetchFilteredDocs`, but that's a separate improvement beyond the scope of this bugfix plan.
+
+2. **No local folders configured:** If no local folders are configured, `renderLocalDocs` still dispatches `fetchImportedDocs` (line 721), so imported docs from online sources will still load. No regression from the original Change 2.

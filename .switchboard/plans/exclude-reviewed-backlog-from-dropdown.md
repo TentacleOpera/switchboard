@@ -6,7 +6,7 @@ Add a workflow setting option in setup.html to exclude plans in 'reviewed' and '
 
 ## Metadata
 
-- **Tags:** UI, UX, workflow-settings
+- **Tags:** UI, UX, workflow
 - **Complexity:** 3
 
 ## User Review Required
@@ -18,9 +18,12 @@ No — this is a straightforward UI setting addition with a simple filter in the
 ### Routine
 
 - Add checkbox UI element in setup.html under WORKFLOW SETTINGS section
-- Add VSCode configuration setting with default value `true`
+- Add VSCode configuration setting in package.json with default value `false`
 - Add getter/setter methods in TaskViewerProvider following existing pattern
-- Add message handlers in setup.html to get/set the setting
+- Add message handlers in SetupPanelProvider.ts to get/set the setting
+- Add message handlers in setup.html to receive the setting value
+- Add change event listener in setup.html for the new checkbox
+- Add broadcast in `postSetupPanelState()` for initialization consistency
 - Modify `_refreshRunSheets` to filter out plans with `kanbanColumn` matching 'reviewed' or 'backlog' when setting is enabled
 
 ### Complex / Risky
@@ -30,7 +33,7 @@ No — this is a straightforward UI setting addition with a simple filter in the
 ## Edge-Case & Dependency Audit
 
 **Race Conditions**
-- Setting change while dropdown is open: The dropdown will refresh on next `_refreshRunSheets` call (triggered by plan mutations or manual refresh). This is acceptable.
+- Setting change while dropdown is open: The dropdown will refresh on next `_refreshRunSheets` call (triggered by `switchboard.refreshUI`). This is acceptable.
 - Plan column change while setting is enabled: Plan will be filtered out on next refresh. Acceptable.
 
 **Security**
@@ -39,12 +42,17 @@ No — this is a straightforward UI setting addition with a simple filter in the
 **Side Effects**
 - When enabled, plans in 'reviewed' or 'backlog' columns will not appear in dropdown. Users can still access these plans via the kanban board.
 - If a user tries to select a plan that was just filtered out, the dropdown will default to the first available plan. Acceptable.
+- Default is `false` (setting off) to preserve existing behavior — existing users will not see plans disappear unexpectedly.
 
 **Dependencies & Conflicts**
-- `_refreshRunSheets` (line 13556 in TaskViewerProvider.ts): Must add filter logic before mapping to sheets.
-- setup.html WORKFLOW SETTINGS section (line 493): Must add new checkbox.
-- setup.html tab switch handler (line 1342): Must add message to fetch the new setting.
+- `_refreshRunSheets` (line 13456 in TaskViewerProvider.ts): Must add filter logic before mapping to sheets (around lines 13513-13518).
+- setup.html WORKFLOW SETTINGS section (line 493): Must add new checkbox after line 516.
+- setup.html tab switch handler (line 1341): Must add message to fetch the new setting.
 - setup.html event listeners (line 3199): Must add change handler for the new checkbox.
+- setup.html message handlers (line 3531): Must add handler to receive setting value.
+- SetupPanelProvider.ts (line 507): Must add get/set case handlers.
+- TaskViewerProvider.ts `postSetupPanelState()` (line 3404): Must add broadcast for initialization.
+- package.json configuration section (line 436): Must add new setting declaration.
 - No ClickUp/Linear integration touched.
 
 ## Dependencies
@@ -53,17 +61,33 @@ None — this is a self-contained workflow settings feature.
 
 ## Adversarial Synthesis
 
-Key risks: (1) The filter must be case-insensitive since kanban column labels may vary in casing. (2) The filter should apply to both active and completed sheets. (3) If all plans are filtered out, the dropdown should show an appropriate empty state message. Mitigations: Use case-insensitive comparison, apply filter to both arrays, rely on existing empty state handling in `renderRunSheetDropdown`.
+Key risks: (1) The filter must be case-insensitive since kanban column labels may vary in casing. (2) The message handlers must be placed in SetupPanelProvider.ts (not TaskViewerProvider.ts) to match the existing architecture. (3) Defaulting to `true` would surprise existing users whose plans vanish; default `false` preserves current behavior. Mitigations: Use case-insensitive comparison, place handlers in correct file, default to `false`.
 
 ## Proposed Changes
 
+### `package.json`
+
+**Context:** VS Code configuration declarations are in `contributes.configuration.properties` (lines 156-465). The `switchboard.preventAgentFileOpening` entry at lines 436-440 is the closest analog.
+
+**Logic:** Declare the new boolean setting so it appears in VS Code Settings UI and `getConfiguration().get()` works correctly.
+
+**Implementation:** Add after line 440 (after `preventAgentFileOpening` entry):
+
+```json
+"switchboard.excludeReviewedBacklogFromDropdown": {
+  "type": "boolean",
+  "default": false,
+  "description": "Hide plans in 'reviewed' and 'backlog' kanban columns from the sidebar dropdown."
+},
+```
+
 ### `src/webview/setup.html`
 
-**Context:** WORKFLOW SETTINGS section (lines 493-516) contains checkboxes for workflow-related settings.
+**Context:** WORKFLOW SETTINGS section (lines 493-516) contains three existing checkboxes: `prevent-agent-file-opening-toggle` (line 497), `open-worktree-coder-agents-toggle` (line 504), `auto-commit-code-review-toggle` (line 511).
 
 **Logic:** Add a new checkbox for excluding reviewed/backlog plans from the sidebar dropdown.
 
-**Implementation:** Add the following after the existing workflow settings checkboxes (after line 516):
+**Implementation:** Add the following after line 516 (after the `auto-commit-code-review-toggle` label):
 
 ```html
 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
@@ -77,7 +101,7 @@ Key risks: (1) The filter must be case-insensitive since kanban column labels ma
 
 **JavaScript Changes:**
 
-1. Add message to fetch the setting in the 'setup' tab switch handler (around line 1342):
+1. Add message to fetch the setting in the 'setup' tab switch handler (line 1345, after `getAutoCommitOnCodeReviewSetting`):
 ```javascript
 'setup': () => {
     vscode.postMessage({ type: 'getGitIgnoreConfig' });
@@ -88,17 +112,18 @@ Key risks: (1) The filter must be case-insensitive since kanban column labels ma
 },
 ```
 
-2. Add message handler to receive the setting value (around line 3406, after the existing setting handlers):
+2. Add message handler to receive the setting value (after line 3550, after the existing setting handlers, using the `runSetupHydration()` wrapper pattern):
 ```javascript
-case 'excludeReviewedBacklogSetting':
-    const excludeToggle = document.getElementById('exclude-reviewed-backlog-toggle');
-    if (excludeToggle) {
-        excludeToggle.checked = message.enabled;
-    }
+case 'excludeReviewedBacklogSetting': {
+    runSetupHydration(() => {
+        const toggle = document.getElementById('exclude-reviewed-backlog-toggle');
+        if (toggle) toggle.checked = message.enabled === true;
+    });
     break;
+}
 ```
 
-3. Add change event listener (around line 3209, after the existing workflow setting listeners):
+3. Add change event listener (after line 3209, after the existing workflow setting listeners, following the `setPreventAgentFileOpeningSetting` pattern):
 ```javascript
 document.getElementById('exclude-reviewed-backlog-toggle')?.addEventListener('change', (e) => {
     vscode.postMessage({ type: 'setExcludeReviewedBacklogSetting', enabled: e.target.checked });
@@ -107,15 +132,15 @@ document.getElementById('exclude-reviewed-backlog-toggle')?.addEventListener('ch
 
 ### `src/services/TaskViewerProvider.ts`
 
-**Context:** Workflow settings are stored in VSCode configuration and accessed via getter/setter methods (e.g., `handleGetPreventAgentFileOpeningSetting` at line 3055).
+**Context:** Workflow settings are stored in VSCode configuration and accessed via getter/setter methods. The `handleGetPreventAgentFileOpeningSetting` getter is at line 3055 and its setter at line 3059.
 
 **Logic:** Add getter and setter methods for the new setting, following the existing pattern.
 
-**Implementation:** Add the following methods after `handleSetPreventAgentFileOpeningSetting` (around line 3062):
+**Implementation:** Add the following methods after `handleSetPreventAgentFileOpeningSetting` (after line 3062):
 
 ```typescript
 public handleGetExcludeReviewedBacklogSetting(): boolean {
-    return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', true);
+    return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', false);
 }
 
 public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {
@@ -124,7 +149,7 @@ public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<v
 }
 ```
 
-**Context:** `_refreshRunSheets` (line 13556) builds `visibleActiveRows` and `visibleCompletedRows` from the database.
+**Context:** `_refreshRunSheets` (line 13456) builds `visibleActiveRows` and `visibleCompletedRows` from the database. The filter logic is at lines 13513-13518.
 
 **Logic:** Apply an additional filter to exclude plans with `kanbanColumn` matching 'reviewed' or 'backlog' when the setting is enabled.
 
@@ -155,25 +180,42 @@ const visibleCompletedRows = repoScope
     : filterGhostPlans(completedRows).filter(filterByColumn);
 ```
 
-**Context:** Webview message handler for setup panel messages (around line 3406).
+**Context:** `postSetupPanelState()` (line 3350) broadcasts setting values to the setup panel. The `preventAgentFileOpeningSetting` broadcast is at lines 3404-3407.
 
-**Logic:** Add handler for the new get/set messages.
+**Logic:** Add broadcast for the new setting so the checkbox initializes correctly when the setup panel opens.
 
-**Implementation:** Add the following cases in the message handler:
+**Implementation:** Add after line 3407 (after the `preventAgentFileOpeningSetting` broadcast):
+
+```typescript
+this._setupPanelProvider.postMessage({
+    type: 'excludeReviewedBacklogSetting',
+    enabled: this.handleGetExcludeReviewedBacklogSetting()
+});
+```
+
+### `src/services/SetupPanelProvider.ts`
+
+**Context:** Message handlers for setup panel settings are in SetupPanelProvider.ts, NOT TaskViewerProvider.ts. The getter handlers are at lines 507-528 and the setter handler at lines 529-532.
+
+**Logic:** Add get and set case handlers for the new setting, following the existing pattern.
+
+**Implementation:** Add getter case after `getAutoCommitOnCodeReviewSetting` handler (after line 528):
 
 ```typescript
 case 'getExcludeReviewedBacklogSetting':
-    this._setupPanelProvider.postMessage({
+    this._panel.webview.postMessage({
         type: 'excludeReviewedBacklogSetting',
-        enabled: this.handleGetExcludeReviewedBacklogSetting()
+        enabled: this._taskViewerProvider.handleGetExcludeReviewedBacklogSetting()
     });
     break;
+```
 
+Add setter case after `setPreventAgentFileOpeningSetting` handler (after line 532):
+
+```typescript
 case 'setExcludeReviewedBacklogSetting':
-    if (typeof data.enabled === 'boolean') {
-        await this.handleSetExcludeReviewedBacklogSetting(data.enabled);
-        await this._refreshRunSheets();  // Refresh dropdown to apply filter
-    }
+    await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
+    await vscode.commands.executeCommand('switchboard.refreshUI');
     break;
 ```
 
@@ -181,18 +223,20 @@ case 'setExcludeReviewedBacklogSetting':
 
 ### Manual Testing
 
-1. Open setup.html → Setup tab → verify new checkbox "Exclude Reviewed & Backlog from Sidebar" is visible and checked by default.
+1. Open setup.html → Setup tab → verify new checkbox "Exclude Reviewed & Backlog from Sidebar" is visible and unchecked by default.
 2. Create plans in different kanban columns: 'Created', 'In Progress', 'Reviewed', 'Backlog', 'Completed'.
-3. With checkbox checked (default):
+3. With checkbox unchecked (default):
+   - Open sidebar dropdown → verify ALL plans appear including 'reviewed' and 'backlog'.
+4. Check the checkbox:
    - Open sidebar dropdown → verify plans in 'reviewed' and 'backlog' columns do NOT appear.
    - Verify plans in other columns appear normally.
-4. Uncheck the checkbox:
+5. Uncheck the checkbox:
    - Open sidebar dropdown → verify ALL plans appear including 'reviewed' and 'backlog'.
-5. Re-check the checkbox:
-   - Verify 'reviewed' and 'backlog' plans are again hidden.
 6. Move a plan from 'reviewed' to 'in progress':
    - Verify it appears in dropdown after refresh.
 7. Test case-insensitivity: ensure column labels 'REVIEWED', 'Reviewed', 'reviewed' are all filtered.
+8. Verify the setting persists across VS Code restarts (stored in workspace settings).
+9. Verify the setting appears in VS Code Settings UI under "Switchboard" section.
 
 ### Automated Tests
 
@@ -200,4 +244,4 @@ case 'setExcludeReviewedBacklogSetting':
 
 ---
 
-**Send to Intern** (Complexity: 3 — straightforward UI setting addition with simple filter logic)
+**Send to Intern** (Complexity: 3 — straightforward UI setting addition with simple filter logic, changes across 4 files following well-established patterns)
