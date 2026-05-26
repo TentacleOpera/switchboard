@@ -414,3 +414,31 @@ The markdown preview in `planning.html` looks significantly different from VS Co
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Results (2026-05-26)
+
+### Implementation Assessment
+All 11 changes from the plan were implemented correctly in `src/webview/planning.html`. The implementation matches the plan specification letter-for-letter across all changes (dot-pattern removal, container styling, heading em-scale, paragraph/list, code blocks, blockquote, lists, tables, links, hr/img, empty state).
+
+### Review Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Heading fallback color `#e0e0e0` inconsistent with body text fallback `#cccccc` — contradicts stated design principle that headings = body text color | NIT | **Fixed** — changed to `#cccccc` on line 716 |
+| 2 | Nested scrolling contexts: both `#preview-pane` and `#markdown-preview` have `overflow-y: auto` | NIT | Deferred — pre-existing, not introduced by this plan |
+| 3 | Kanban preview pane (`#kanban-preview-pane`) also renders markdown but doesn't use `#markdown-preview` selectors, so it doesn't get VS Code-consistent styling | NIT | Deferred — out of scope for this plan |
+
+### Files Changed
+- `src/webview/planning.html` line 716: Changed heading fallback from `#e0e0e0` to `#cccccc` for consistency with body text fallback and stated design principle
+
+### Verification
+- All `--vscode-editor-foreground` hardcoded fallbacks now consistently use `#cccccc` (lines 707, 716, 758, 783)
+- `:root` variables (lines 9-45) remain untouched — kanban chrome styling preserved
+- All 11 plan changes verified present and correct in implementation
+- No compilation or test suite applicable (CSS-only changes)
+
+### Remaining Risks
+- **Light theme fallbacks**: All hardcoded fallback values are dark-theme defaults (`#cccccc`, `rgba(255,255,255,0.18)`, etc.). If VS Code fails to inject `--vscode-*` variables in a light theme, the preview would render dark text on dark backgrounds. This is an extremely unlikely edge case since VS Code webviews always inject these variables.
+- **Kanban preview inconsistency**: The kanban Plans tab preview pane does not use the VS Code-consistent markdown styling, creating a visual inconsistency between tabs. This should be addressed in a follow-up plan.

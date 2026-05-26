@@ -708,11 +708,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             });
         }
 
-        // Add separate imported docs section
-        const importedSection = document.createElement('div');
-        importedSection.className = 'imported-docs-section';
-        importedSection.id = 'imported-docs-list';
-        treePane.appendChild(importedSection);
+        // Add separate imported docs section (only if it doesn't exist)
+        let importedSection = document.getElementById('imported-docs-list');
+        if (!importedSection) {
+            importedSection = document.createElement('div');
+            importedSection.className = 'imported-docs-section';
+            importedSection.id = 'imported-docs-list';
+            treePane.appendChild(importedSection);
+        }
 
         // Fetch imported docs on initial load
         vscode.postMessage({ type: 'fetchImportedDocs' });
@@ -2402,5 +2405,4 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
     vscode.postMessage({ type: 'fetchRoots' });
-    vscode.postMessage({ type: 'fetchImportedDocs' });
 })();
