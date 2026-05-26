@@ -27,6 +27,7 @@ export interface PlanMetadata {
     complexity: string;
     tags: string;
     dependencies: string;
+    project?: string;
 }
 
 /**
@@ -108,11 +109,18 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         dependencies = [...new Set(deps)].join(', ');
     }
 
+    let project: string | undefined;
+    const projectMatch = content.match(/^\*\*Project:\*\*\s*(.+)$/im);
+    if (projectMatch) {
+        project = projectMatch[1].trim() || undefined;
+    }
+
     return {
         topic,
         kanbanColumn: columnMatch?.[1],
         complexity,
         tags,
-        dependencies
+        dependencies,
+        project
     };
 }

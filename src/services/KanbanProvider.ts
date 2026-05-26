@@ -3735,6 +3735,9 @@ export class KanbanProvider implements vscode.Disposable {
 
     public setProjectFilter(filter: string | null): void {
         this._projectFilter = filter;
+        if (this._currentWorkspaceRoot) {
+            this._globalPlanWatcher?.setCurrentProject(this._currentWorkspaceRoot, filter);
+        }
     }
     public async queueIntegrationSyncForSession(
         workspaceRoot: string,
@@ -4218,6 +4221,7 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
                     this.setProjectFilter(msg.project || null);
+                    this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null);
                     await this._refreshBoard(workspaceRoot);
                 }
                 break;

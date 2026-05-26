@@ -1303,54 +1303,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
         renderFolderList(state.localFolderPaths);
 
-        const docList = treePane?.querySelector('.source-doc-list[data-source-id="local-folder"]');
-        if (docList) {
-            docList.innerHTML = '';
-            if (!nodes || nodes.length === 0) return;
-
-            const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
-            const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
-
-            const folderNameMap = new Map();
-            folderNodes.forEach(f => folderNameMap.set(f.id, f.name));
-
-            const docsByFolder = new Map();
-            const rootDocs = [];
-            docNodes.forEach(d => {
-                const docPath = d.id || d.relativePath || '';
-                const lastSlashIdx = docPath.lastIndexOf('/');
-                const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
-                if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                    if (!docsByFolder.has(parentFolderId)) {
-                        docsByFolder.set(parentFolderId, []);
-                    }
-                    docsByFolder.get(parentFolderId).push(d);
-                } else {
-                    rootDocs.push(d);
-                }
-            });
-
-            folderNodes.forEach(folder => {
-                const folderDocs = docsByFolder.get(folder.id) || [];
-                if (folderDocs.length === 0) return;
-
-                const subheader = document.createElement('div');
-                subheader.className = 'folder-subheader';
-                subheader.textContent = folder.name;
-                docList.appendChild(subheader);
-
-                folderDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, 'local-folder');
-                    docList.appendChild(wrapper);
-                });
-            });
-
-            rootDocs.forEach(doc => {
-                const { wrapper } = renderNode(doc, 'local-folder');
-                docList.appendChild(wrapper);
-            });
-        }
+        // Delegate to renderLocalDocs to ensure consistent source-folder grouping
+        renderLocalDocs({
+            sourceId: 'local-folder',
+            nodes: nodes || [],
+            folderPaths: state.localFolderPaths
+        });
     }
 
     function handleDocPagesReady(msg) {

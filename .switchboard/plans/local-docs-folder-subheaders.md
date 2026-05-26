@@ -195,3 +195,43 @@ sourceFolders.forEach(sourceFolder => {
 - Test with a single configured folder — subheader should still appear
 - Test with two folders sharing the same basename — subheaders look identical but tooltips differentiate them
 - Test with an empty configured folder — no subheader should appear for it
+
+## Review Results
+
+### Reviewer: Grumpy Principal Engineer pass (2026-05-26)
+
+#### Stage 1: Adversarial Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | `handleLocalFolderPathUpdated` (planning.js:1297-1354) used OLD flat folder-hierarchy rendering without source-folder grouping. This registered message handler would produce inconsistent UI (no subheaders) if ever triggered. Currently dead code (TypeScript side calls `_sendLocalDocsReady()` instead), but a maintenance landmine. |
+| 2 | **MAJOR** | `.folder-subheader:first-of-type` CSS rule (planning.html:530-533) became dead code after this change. `:first-of-type` matches by tag name (`div`), not class. Since source-folder headers (also `div`) now precede folder subheaders in the DOM, no folder-subheader will ever be the first `div` child. First folder-subheader after a source-folder header gets 8px top margin instead of 0 — visual regression. |
+| 3 | NIT | `.source-folder-header:first-of-type` (planning.html:545-547) is fragile — depends on source-folder-header being the first `div` child. Works today but could silently break if DOM structure changes. Deferred. |
+
+#### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| #1 Dead `handleLocalFolderPathUpdated` rendering | Fix now | Refactored to delegate to `renderLocalDocs` instead of duplicating incorrect logic |
+| #2 Dead `.folder-subheader:first-of-type` | Fix now | Added `.source-folder-header + .folder-subheader` adjacent sibling rule to reset margin |
+| #3 Fragile `:first-of-type` | Defer | Works correctly today; low risk |
+
+#### Stage 3: Code Fixes Applied
+
+**File: `src/webview/planning.js`**
+- Replaced 48-line `handleLocalFolderPathUpdated` body with 5-line delegation to `renderLocalDocs`, ensuring consistent source-folder grouping across all rendering paths.
+
+**File: `src/webview/planning.html`**
+- Added `.source-folder-header + .folder-subheader` CSS rule (margin-top: 0, padding-top: 8px) to reset spacing on the first folder-subheader immediately after a source-folder header.
+
+#### Stage 4: Validation
+
+- `node -c planning.js` — syntax check passed (exit code 0)
+- Compilation skipped per review instructions
+- Automated tests skipped per review instructions
+- `git diff` confirms exactly 2 files changed, 12 insertions, 48 deletions — no unintended modifications
+
+#### Remaining Risks
+
+- `.source-folder-header:first-of-type` is fragile but functional; could be replaced with `:first-child` or a JS-added class in a future refactor
+- `handleLocalFolderPathUpdated` is currently dead code (no TypeScript sender); the delegation fix ensures correctness if it's ever re-wired

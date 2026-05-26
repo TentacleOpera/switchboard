@@ -29,11 +29,20 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     private _lastScanTime = new Map<string, number>(); // Track last scan per workspace
     private _scanInProgress = false; // Guard against overlapping scans
     private _recentRenames = new Set<string>();
+    private _currentProjects = new Map<string, string>();
 
     public registerRename(oldRelativePath: string): void {
         const normalized = oldRelativePath.replace(/\\/g, '/');
         this._recentRenames.add(normalized);
         setTimeout(() => this._recentRenames.delete(normalized), 2000);
+    }
+
+    public setCurrentProject(workspaceRoot: string, project: string | null): void {
+        if (project) {
+            this._currentProjects.set(workspaceRoot, project);
+        } else {
+            this._currentProjects.delete(workspaceRoot);
+        }
     }
 
     constructor(
@@ -413,6 +422,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
 
             if (!plan) {
+                const project = metadata.project || this._currentProjects.get(workspaceRoot) || '';
                 // New plan - parse and insert (sessionId left empty; plan_file+workspace_id is the unique key)
                 const newRecord: KanbanPlanRecord = {
                     planId: uuidv4(),
@@ -425,6 +435,7 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     tags: metadata.tags,
                     dependencies: metadata.dependencies,
                     repoScope: '',
+                    project,
                     workspaceId: workspaceId,
                     createdAt: fileBirthtime,
                     updatedAt: fileMtime,
