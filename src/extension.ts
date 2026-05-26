@@ -2559,6 +2559,7 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
 async function cleanupLegacyAgentRules(workspaceRoot: string): Promise<void> {
     const legacyFiles = [
         '.agent/rules/no_git_for_agents.md',
+        '.agent/rules/switchboard_modes.md',
     ];
     for (const relativePath of legacyFiles) {
         const fullPath = path.join(workspaceRoot, relativePath);
@@ -2670,7 +2671,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     }
 
     // 2b. Blocklist: remove files that should never be distributed even if present in source
-    const blocklist = ['.agent/rules/no_git_for_agents.md'];
+    const blocklist = ['.agent/rules/no_git_for_agents.md', '.agent/rules/switchboard_modes.md'];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
         try {

@@ -20,7 +20,6 @@ export interface CustomAgentAddons {
     suppressWalkthrough?: boolean;
     cavemanOutput?: boolean;
     useSubagents?: boolean;
-    useWorktree?: boolean;
 
     // Design doc
     designDocLink?: string;
@@ -170,7 +169,6 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
     if (s.cavemanOutput === true) a.cavemanOutput = true;
     if (s.useSubagents === false) a.useSubagents = false;
-    if (s.useWorktree === true) a.useWorktree = true;
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();

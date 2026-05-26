@@ -19,7 +19,6 @@ description: Implement with high accuracy and self-review (optimized for per-pro
    - MUST read ALL files that will be modified or depend on changes.
    - MUST read existing tests, types, and interfaces related to the task.
    - MUST identify every dependency and side-effect BEFORE writing any code.
-   - Read `.agent/rules/switchboard_modes.md` for the "Lead Engineer" persona.
    - **WHY**: Missing context causes mistakes. Mistakes cause rework. Rework costs extra prompts.
    - Mark Phase 1 complete in your task tracking (e.g., update task.md or use Kanban UI if available).
 

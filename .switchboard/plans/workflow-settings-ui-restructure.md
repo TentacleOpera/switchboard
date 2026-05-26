@@ -443,6 +443,39 @@ Add message handlers for the new workflow settings:
 - Handle loading of `autoCommitOnCodeReview` from backend (moved from kanban.html)
 - Send save events when checkboxes are toggled
 
+## Review Pass Results (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|:--|:--------|:---------|:-------|
+| 1 | Stale comment in `_handleWorktreeForColumnTransition` line 6311: "coder roles and custom agents" — custom agents excluded now | MAJOR | **Fixed** |
+| 2 | Stale comment line 6315: "Check if useWorktree addon is enabled" — now checks global setting | MAJOR | **Fixed** |
+| 3 | `useWorktree` still in `CustomAgentAddons` interface (`agentConfig.ts:23`) and sanitizer (`agentConfig.ts:173`) — type-level lie advertising retired feature | MAJOR | **Fixed** |
+| 4–16 | All other plan items (sharedDefaults removal, kanban.html auto-commit removal, setup.html checkboxes/listeners/handlers, TaskViewerProvider guard/getters, SetupPanelProvider handlers, KanbanProvider `_isWorktreeAddonEnabled`/`_getStartupCommands`, split-brain prevention) | — | **PASS** |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Stale comments (misleading), `useWorktree` in agentConfig.ts (type-level dead code)
+- **Keep:** All other implementation matches plan requirements correctly
+- **Defer:** Nothing remaining
+
+### Files Changed During Review
+
+1. `src/services/KanbanProvider.ts` — Updated comments at lines 6311 and 6315 to reflect new global-setting behavior
+2. `src/services/agentConfig.ts` — Removed `useWorktree?: boolean` from `CustomAgentAddons` interface (line 23) and `if (s.useWorktree === true) a.useWorktree = true;` from sanitizer (line 173)
+
+### Validation
+
+- **TypeScript check:** `npx tsc --noEmit` — no new errors introduced. Pre-existing errors (import path extensions, PlanningPanelProvider type mismatch) are unrelated.
+- **Grep verification:** `useWorktree` is now completely absent from `src/` directory (both `.ts` and `.js` files).
+- **Split-brain verification:** `agentsTabCollectConfig()` in kanban.html no longer includes `autoCommitOnCodeReview` — only setup.html writes this setting.
+
+### Remaining Risks
+
+- **Backward compatibility:** Existing state.json files with `useWorktree` in custom agent addons will have that field silently dropped by the sanitizer on next load (since the type no longer includes it). This is the desired behavior — the field is inert dead data.
+- **Concurrent panel scenario:** If both kanban.html and setup.html are open simultaneously, only setup.html writes `autoCommitOnCodeReview` and `openWorktreeForCoderAgents`. Kanban.html's `agentsTabCollectConfig()` only sends `commands`, `visibleAgents`, and `julesAutoSyncEnabled` — no overlap. Safe.
+
 ## Recommendation
 
 Complexity 5 → **Send to Coder**

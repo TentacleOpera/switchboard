@@ -6308,11 +6308,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const targetRole = this._columnToRole(targetColumn);
         if (!targetRole) return;
 
-        // Only consider worktree creation for coder roles and custom agents
+        // Only consider worktree creation for built-in coder roles
         const isCoderColumn = ['lead', 'coder', 'intern'].includes(targetRole);
         if (!isCoderColumn) return;
 
-        // Check if useWorktree addon is enabled for the target role
+        // Check if global worktree workflow setting is enabled
         const addonEnabled = await this._isWorktreeAddonEnabled(workspaceRoot, targetRole);
         if (!addonEnabled) return;
 
