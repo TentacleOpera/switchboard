@@ -203,3 +203,55 @@ if (pid && selectedCards.has(pid)) {
 
 ## Recommendation
 Complexity 3 → **Send to Coder**
+
+---
+
+## Review Results
+
+### Stage 1: Grumpy Principal Engineer Review
+
+Reviewed all 4 proposed changes against actual committed code (commit `041a8cc`):
+
+| Change | Location | Status | Notes |
+|---|---|---|---|
+| Change 1: `new Set()` → `new Map()` | Line 3070 | ✅ Correct | Comment `// sessionId → workspaceRoot` present |
+| Change 2: `.add(pid)` → `.set(pid, workspaceRoot)` | Line 4220 | ✅ Correct | Defensive fallback to `currentWorkspaceRoot` |
+| Change 3: `Array.from(selectedCards)` → `Array.from(selectedCards.keys())` | Line 5550 | ✅ Correct | Necessary for Map compatibility |
+| Change 4: `isSameWorkspace` logic | Lines 5566-5567 | ✅ Correct | Core bug fix; uses `selectedCards.values()` instead of `currentWorkspaceRoot` |
+
+**API Compatibility Audit (all 19 usage sites):**
+- `selectedCards.has(pid)` — 3 sites (4216, 4232, 4616) — ✅ Map-compatible
+- `selectedCards.delete(id)` — 7 sites (3915, 3936, 3952, 3973, 3980, 4021, 4028) — ✅ Map-compatible
+- `selectedCards.clear()` — 3 sites (4702, 4952, 5599) — ✅ Map-compatible
+- `selectedCards.size` — 2 sites (5538, 4616) — ✅ Map-compatible
+- `selectedCards.set()` — 1 site (4220) — ✅ New Map API
+- `selectedCards.keys()` — 1 site (5550) — ✅ New Map API
+- `selectedCards.values()` — 1 site (5566) — ✅ New Map API
+
+**Findings:**
+- **NIT**: Plan file had stale "Send to Coder" recommendation — updated below.
+- **MAJOR (pre-existing, out of scope)**: `rePlanSelected` handler (line 3983-3990) does not delete from `selectedCards` after dispatching, leaving stale entries. Same pattern in `codeMapSelected`, `chatCopyPrompt`, `testingFailed`. These are pre-existing bugs not introduced by this change.
+- **No CRITICAL or MAJOR findings in the implemented changes.**
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Severity | Action | Rationale |
+|---|---|---|---|
+| All 4 changes | — | ✅ Keep | Correctly implemented per plan |
+| API compat (19 sites) | — | ✅ Keep | All verified Map-compatible |
+| Pre-existing: rePlanSelected no delete | MAJOR | Defer | Out of scope for this bugfix |
+| Pre-existing: codeMap/chatCopy/testing no delete | NIT | Defer | Out of scope |
+| Stale "Send to Coder" | NIT | Fixed | Updated in plan file |
+
+**Verdict: Implementation is correct. No code fixes required.**
+
+### Verification
+
+- **TypeScript check**: Ran `npx tsc --noEmit`. 2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (import path extension issues) — unrelated to this change. The kanban.html file is not TypeScript.
+- **Git diff**: Confirmed commit `041a8cc` contains exactly the 4 changes specified in the plan, with no extraneous modifications to kanban.html.
+- **No automated tests**: Webview UI has no test infrastructure. Manual verification per the Verification Plan above is required.
+
+### Remaining Risks
+
+1. **Pre-existing stale selection bug**: `rePlanSelected`, `codeMapSelected`, `chatCopyPrompt`, and `testingFailed` column action handlers do not clean up `selectedCards` entries. With the Map change, these stale entries now also carry a `workspaceRoot` value. If a user triggers one of these actions and then clicks ASSIGN, the stale entries could cause an unexpected cross-workspace reassignment attempt. **Recommendation**: Track as a separate bugfix to add `selectedCards.delete(id)` calls in those handlers.
+2. **Backend assumption**: The mixed-workspace selection case sends all sessionIds through `reassignPlansWorkspace`, even if some are already in the target workspace. This relies on the backend treating same-workspace reassignment as a no-op. If the backend doesn't handle this gracefully, it could error or duplicate. **Recommendation**: Verify backend behavior for same-workspace reassignment edge case.

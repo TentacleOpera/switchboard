@@ -510,7 +510,7 @@ export class KanbanProvider implements vscode.Disposable {
         return result;
     }
 
-    private _showTemporaryNotification(message: string, durationMs: number = 2000): void {
+    private _showTemporaryNotification(message: string, durationMs: number = 1000): void {
         void vscode.window.withProgress(
             {
                 location: vscode.ProgressLocation.Notification,

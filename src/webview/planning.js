@@ -666,44 +666,90 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const folderNodes = (nodes || []).filter(n => n.kind === 'folder' || n.isDirectory);
                 const docNodes = (nodes || []).filter(n => n.kind === 'document' && !n.isDirectory);
 
-                const folderNameMap = new Map();
-                folderNodes.forEach(f => folderNameMap.set(f.id, f.name));
+                // Group nodes by sourceFolder first
+                const docsBySourceFolder = new Map();
+                const foldersBySourceFolder = new Map();
 
-                const docsByFolder = new Map();
-                const rootDocs = [];
                 docNodes.forEach(d => {
-                    const docPath = d.id || d.relativePath || '';
-                    const lastSlashIdx = docPath.lastIndexOf('/');
-                    const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
-
-                    if (parentFolderId && folderNameMap.has(parentFolderId)) {
-                        if (!docsByFolder.has(parentFolderId)) {
-                            docsByFolder.set(parentFolderId, []);
-                        }
-                        docsByFolder.get(parentFolderId).push(d);
-                    } else {
-                        rootDocs.push(d);
+                    const sourceFolder = d.metadata?.sourceFolder;
+                    if (!sourceFolder) return; // skip docs without sourceFolder (shouldn't happen)
+                    if (!docsBySourceFolder.has(sourceFolder)) {
+                        docsBySourceFolder.set(sourceFolder, []);
                     }
+                    docsBySourceFolder.get(sourceFolder).push(d);
                 });
 
-                folderNodes.forEach(folder => {
-                    const folderDocs = docsByFolder.get(folder.id) || [];
-                    if (folderDocs.length === 0) return;
+                folderNodes.forEach(f => {
+                    const sourceFolder = f.metadata?.sourceFolder;
+                    if (!sourceFolder) return;
+                    if (!foldersBySourceFolder.has(sourceFolder)) {
+                        foldersBySourceFolder.set(sourceFolder, []);
+                    }
+                    foldersBySourceFolder.get(sourceFolder).push(f);
+                });
 
-                    const subheader = document.createElement('div');
-                    subheader.className = 'folder-subheader';
-                    subheader.textContent = folder.name;
-                    docList.appendChild(subheader);
+                // Iterate over source folders (use folderPaths for consistent ordering)
+                const sourceFolders = [...new Set([
+                    ...(folderPaths || []),
+                    ...docsBySourceFolder.keys()
+                ])];
 
-                    folderDocs.forEach(doc => {
+                sourceFolders.forEach(sourceFolder => {
+                    const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
+                    const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
+
+                    // Skip source folders with no documents AND no subfolders
+                    if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+
+                    // Source-folder subheader (basename of the full path)
+                    const sourceHeader = document.createElement('div');
+                    sourceHeader.className = 'folder-subheader source-folder-header';
+                    // Browser-safe basename extraction (no Node path module in webview)
+                    const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
+                    sourceHeader.textContent = folderName;
+                    sourceHeader.title = sourceFolder; // full path as tooltip for disambiguation
+                    docList.appendChild(sourceHeader);
+
+                    // Within this source folder, apply existing folder-hierarchy grouping
+                    const folderNameMap = new Map();
+                    sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
+
+                    const docsByFolder = new Map();
+                    const rootDocs = [];
+                    folderDocs.forEach(d => {
+                        const docPath = d.id || d.relativePath || '';
+                        const lastSlashIdx = docPath.lastIndexOf('/');
+                        const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
+
+                        if (parentFolderId && folderNameMap.has(parentFolderId)) {
+                            if (!docsByFolder.has(parentFolderId)) {
+                                docsByFolder.set(parentFolderId, []);
+                            }
+                            docsByFolder.get(parentFolderId).push(d);
+                        } else {
+                            rootDocs.push(d);
+                        }
+                    });
+
+                    sourceFolderNodes.forEach(folder => {
+                        const folderDocsInSource = docsByFolder.get(folder.id) || [];
+                        if (folderDocsInSource.length === 0) return;
+
+                        const subheader = document.createElement('div');
+                        subheader.className = 'folder-subheader';
+                        subheader.textContent = folder.name;
+                        docList.appendChild(subheader);
+
+                        folderDocsInSource.forEach(doc => {
+                            const { wrapper } = renderNode(doc, sourceId);
+                            docList.appendChild(wrapper);
+                        });
+                    });
+
+                    rootDocs.forEach(doc => {
                         const { wrapper } = renderNode(doc, sourceId);
                         docList.appendChild(wrapper);
                     });
-                });
-
-                rootDocs.forEach(doc => {
-                    const { wrapper } = renderNode(doc, sourceId);
-                    docList.appendChild(wrapper);
                 });
             }
         } else {
