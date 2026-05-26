@@ -191,3 +191,54 @@ After implementing the fix:
 ## Recommendation
 
 Complexity 4 → **Send to Coder**
+
+---
+
+## Review Pass — 2026-05-26
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | N+1 DB query regression: `_buildKanbanRecordFromSheet` now calls `db.getPlanByPlanFile()` unconditionally, including from `_syncKanbanDbFromSheetsSnapshot` which calls it in a loop over all sheets. The `_syncKanbanDbFromSheetsSnapshot` path doesn't need DB field preservation — `KanbanMigration.syncPlansMetadata` already handles existing plans correctly via `updateMetadataBatchByPlanFile` (which doesn't touch `project`). Adding a DB read per sheet in the bulk sync path is an unnecessary performance hit. |
+| 2 | NIT | `project` is declared optional (`project?: string`) in `KanbanPlanRecord` but the overlay always sets it to a string. Inconsistency between interface and runtime behavior. Harmless since `upsertPlans` does `record.project \|\| ''` anyway. |
+| 3 | NIT | `tags` and `dependencies` fallback logic (`existing.tags \|\| baseRecord.tags`) is semantically correct but the plan's clarification suggests sheet-derived values could exist in the future. If tags ever come from the runsheet, the current fallback would silently prefer the (possibly stale) DB value over the fresh sheet value. |
+| 4 | NIT | `KanbanMigration._toKanbanPlanRecords` drops `project` from input records, but this only matters during `bootstrapIfNeeded` which runs when there are no existing DB records — so there's nothing to preserve. False alarm. |
+| 5 | **CRITICAL** (process) | `KanbanProvider.ts` changes (using `setProjectFilter(null)` instead of direct `_projectFilter = null`, removing redundant `setCurrentProject` call) are valid bug fixes but are **not mentioned in this plan**. The plan's "Files to Modify" section only lists `TaskViewerProvider.ts`. These are scope creep and should have been in a separate plan/commit. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| 1. N+1 DB query | **Fix now** | Add `preserveExistingFields` parameter (default `true`), pass `false` from `_syncKanbanDbFromSheetsSnapshot` |
+| 2. Optional vs required `project` | Defer | Harmless, cosmetic |
+| 3. Tags/dependencies fallback | Defer | Correct today, revisit if sheet-derived tags become a thing |
+| 4. Bootstrap drops project | No action | False alarm |
+| 5. Unrelated KanbanProvider.ts changes | Document | Fixes are correct but belong in separate plan |
+
+### Code Fixes Applied
+
+1. **Added `preserveExistingFields: boolean = true` parameter** to `_buildKanbanRecordFromSheet` (line 1762 of `src/services/TaskViewerProvider.ts`). The DB read and field overlay are now gated behind this flag.
+2. **Updated `_syncKanbanDbFromSheetsSnapshot` call site** (line 1855) to pass `false` for `preserveExistingFields`, eliminating the N+1 DB query during bulk sync operations.
+3. **`_updateSessionRunSheet` call site** (line 13460) uses the default `true`, preserving the bug fix for single-record upserts.
+
+### Files Changed (Review Pass)
+
+- `src/services/TaskViewerProvider.ts` — Added `preserveExistingFields` parameter to `_buildKanbanRecordFromSheet`; updated `_syncKanbanDbFromSheetsSnapshot` call site to pass `false`
+
+### Unrelated Changes in Same Commit (Not Part of This Plan)
+
+- `src/services/KanbanProvider.ts` — Two changes:
+  - Line 4208: `deleteProject` handler now uses `this.setProjectFilter(null)` instead of `this._projectFilter = null` (ensures `GlobalPlanWatcher` is notified when the filtered project is deleted)
+  - Line 4223: `setProjectFilter` handler removed redundant `this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null)` call (already handled by `setProjectFilter()` method)
+  - These are valid fixes but should be tracked separately.
+
+### Validation Results
+
+- **Typecheck**: Passes (2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` unrelated to this change — import path extension issues)
+- **Automated tests**: Skipped per session instructions (to be run separately)
+
+### Remaining Risks
+
+- **Race condition**: The read-then-upsert pattern in `_updateSessionRunSheet` has a small window where another write could occur between the DB read and the upsert. This is pre-existing and the window is extremely small.
+- **`KanbanMigration._toKanbanPlanRecords`**: Still drops `project`, `clickupTaskId`, `linearIssueId` from input records during bootstrap. Only affects the initial bootstrap scenario (no existing plans), so this is acceptable.

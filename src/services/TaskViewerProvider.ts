@@ -1758,7 +1758,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         workspaceId: string,
         sheet: any,
-        customAgents: CustomAgentConfig[]
+        customAgents: CustomAgentConfig[],
+        preserveExistingFields: boolean = true
     ): Promise<KanbanPlanRecord | undefined> {
         const planId = this._getPlanIdForRunSheet(sheet);
         if (!planId || typeof sheet?.sessionId !== 'string' || !sheet.sessionId.trim()) {
@@ -1813,22 +1814,24 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             hasWorktree: 0
         };
 
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (db) {
-            const existing = await db.getPlanByPlanFile(rawPlanFile, workspaceId);
-            if (existing) {
-                return {
-                    ...baseRecord,
-                    project: existing.project || '',
-                    clickupTaskId: existing.clickupTaskId || '',
-                    linearIssueId: existing.linearIssueId || '',
-                    routedTo: existing.routedTo || '',
-                    dispatchedAgent: existing.dispatchedAgent || '',
-                    dispatchedIde: existing.dispatchedIde || '',
-                    hasWorktree: existing.hasWorktree ?? 0,
-                    tags: existing.tags || baseRecord.tags,
-                    dependencies: existing.dependencies || baseRecord.dependencies,
-                };
+        if (preserveExistingFields) {
+            const db = await this._getKanbanDb(workspaceRoot);
+            if (db) {
+                const existing = await db.getPlanByPlanFile(rawPlanFile, workspaceId);
+                if (existing) {
+                    return {
+                        ...baseRecord,
+                        project: existing.project || '',
+                        clickupTaskId: existing.clickupTaskId || '',
+                        linearIssueId: existing.linearIssueId || '',
+                        routedTo: existing.routedTo || '',
+                        dispatchedAgent: existing.dispatchedAgent || '',
+                        dispatchedIde: existing.dispatchedIde || '',
+                        hasWorktree: existing.hasWorktree ?? 0,
+                        tags: existing.tags || baseRecord.tags,
+                        dependencies: existing.dependencies || baseRecord.dependencies,
+                    };
+                }
             }
         }
 
@@ -1849,7 +1852,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const records: KanbanPlanRecord[] = [];
 
         for (const sheet of sheets) {
-            const record = await this._buildKanbanRecordFromSheet(workspaceRoot, workspaceId, sheet, customAgents);
+            const record = await this._buildKanbanRecordFromSheet(workspaceRoot, workspaceId, sheet, customAgents, false);
             if (!record) continue;
             if (record.status === 'active') {
                 if (!this._isOwnedActiveRunSheet(sheet)) continue;

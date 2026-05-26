@@ -380,6 +380,25 @@ export async function activate(context: vscode.ExtensionContext) {
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
     const workspaceRoot = kanbanProvider!.getCurrentWorkspaceRoot();
 
+    // Version-gated AGENTS.md migration: when the extension version changes,
+    // ensure the workspace AGENTS.md is updated to the latest bundled version.
+    // This handles the transition from full-protocol to skills-only AGENTS.md.
+    if (workspaceRoot) {
+        try {
+            if (shouldRefreshAgentWorkspaceFiles(context.extensionUri.fsPath, workspaceRoot)) {
+                const agentsResult = await ensureAgentsProtocol(
+                    vscode.Uri.file(workspaceRoot),
+                    context.extensionUri
+                );
+                outputChannel?.appendLine(
+                    `[Migration] AGENTS.md: ${agentsResult.status} — ${agentsResult.reason}`
+                );
+            }
+        } catch (err) {
+            console.error('[Switchboard] AGENTS.md migration failed, continuing activation:', err);
+        }
+    }
+
     const globalPlanWatcher = new GlobalPlanWatcherService(
         (workspaceRoot: string) => (kanbanProvider as any)._getClickUpService(workspaceRoot),
         outputChannel
@@ -2439,7 +2458,14 @@ async function ensureAgentsProtocol(
     }
 
     if (hasProtocolHeaderLine(targetContent)) {
-        return { status: 'skipped', reason: 'Switchboard protocol block already present' };
+        // Legacy markerless AGENTS.md — replace entire content with managed block.
+        // The old file was fully scaffolded by the extension, so this is safe.
+        try {
+            await vscode.workspace.fs.writeFile(targetUri, Buffer.from(managedBlock + '\n', 'utf8'));
+            return { status: 'updated', reason: 'Legacy markerless AGENTS.md replaced with managed block' };
+        } catch (e) {
+            return { status: 'failed', reason: `Failed to replace legacy AGENTS.md: ${getErrorMessage(e)}` };
+        }
     }
 
     // Append protocol block, preserving existing content

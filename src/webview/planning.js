@@ -2063,14 +2063,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         column: '',
         workspaceRoot: '',
         project: '',
-        repoScope: '',
         search: ''
     };
 
     const kanbanColumnFilter = document.getElementById('kanban-column-filter');
     const kanbanWorkspaceFilter = document.getElementById('kanban-workspace-filter');
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
-    const kanbanRepoFilter = document.getElementById('kanban-repo-filter');
     const kanbanSearch = document.getElementById('kanban-search');
     const kanbanRefreshBtn = document.getElementById('kanban-refresh-btn');
     const kanbanListPane = document.getElementById('kanban-list-pane');
@@ -2097,14 +2095,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     return false;
                 }
             }
-            // Repo scope filter
-            if (filters.repoScope) {
-                if (filters.repoScope === '__none__') {
-                    if (plan.repoScope !== '') return false;
-                } else if (plan.repoScope !== filters.repoScope) {
-                    return false;
-                }
-            }
+
             // Search filter
             if (filters.search) {
                 const searchLower = filters.search.toLowerCase();
@@ -2138,7 +2129,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
             const metaParts = [plan.workspaceLabel];
             if (plan.project) metaParts.push(plan.project);
-            if (plan.repoScope) metaParts.push(plan.repoScope);
 
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
 
@@ -2215,7 +2205,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function populateKanbanFilters(plans) {
-        if (!kanbanWorkspaceFilter || !kanbanProjectFilter || !kanbanRepoFilter) return;
+        if (!kanbanWorkspaceFilter || !kanbanProjectFilter) return;
 
         // Workspace filter
         const uniqueWorkspaces = [];
@@ -2263,32 +2253,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             kanbanProjectFilter.appendChild(opt);
         });
 
-        // Repo filter
-        const uniqueRepos = new Set();
-        let hasEmptyRepo = false;
-        plans.forEach(p => {
-            if (p.repoScope) {
-                uniqueRepos.add(p.repoScope);
-            } else {
-                hasEmptyRepo = true;
-            }
-        });
-        const currentRepo = kanbanFilters.repoScope;
-        kanbanRepoFilter.innerHTML = '<option value="">All Repos</option>';
-        if (hasEmptyRepo) {
-            const optNone = document.createElement('option');
-            optNone.value = '__none__';
-            optNone.textContent = '(No Repo Scope)';
-            if (currentRepo === '__none__') optNone.selected = true;
-            kanbanRepoFilter.appendChild(optNone);
-        }
-        Array.from(uniqueRepos).sort().forEach(repo => {
-            const opt = document.createElement('option');
-            opt.value = repo;
-            opt.textContent = repo;
-            if (repo === currentRepo) opt.selected = true;
-            kanbanRepoFilter.appendChild(opt);
-        });
+
     }
 
     function handleKanbanPlansReady(msg) {
@@ -2381,13 +2346,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     if (kanbanProjectFilter) {
         kanbanProjectFilter.addEventListener('change', () => {
             kanbanFilters.project = kanbanProjectFilter.value;
-            renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
-        });
-    }
-
-    if (kanbanRepoFilter) {
-        kanbanRepoFilter.addEventListener('change', () => {
-            kanbanFilters.repoScope = kanbanRepoFilter.value;
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
         });
     }
