@@ -224,6 +224,8 @@ this._pidCache = new WeakMap();
 
 The `pidResolutionCandidates` block resolves PIDs for terminals with missing/null PIDs in state.json and writes them back via `updateState`. This is a one-time fixup, not a hot-path bottleneck. Leave it as-is — it already only resolves terminals that need it.
 
+**REVIEW FIX (MAJOR)**: Block 2 must also populate the PID cache when it successfully resolves a PID. Without this, if Block 1 times out on a terminal but Block 2 succeeds (same IPC call, process may have warmed up), the PID is written to state.json and `activePids` but NOT cached. Block 3's synchronous `_getCachedPid(t)` then returns `undefined`, causing `pid: null` in the dropdown — a regression from the original 5s-timeout fallback. Fix: add `this._setCachedPid(pidResolutionCandidates[i].matchingTerminal, resolvedPid)` in Block 2's resolution loop (after `activePids.add(resolvedPid)`).
+
 ## Verification Plan
 
 ### Automated Tests
@@ -239,3 +241,41 @@ The `pidResolutionCandidates` block resolves PIDs for terminals with missing/nul
 ### Recommendation
 
 **Send to Coder** (Complexity 5: multi-file-adjacent single-file changes with moderate logic, reusing existing patterns)
+
+## Review Results
+
+### Stage 1 — Grumpy Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Block 2 (pidResolutionCandidates) doesn't populate PID cache — PIDs resolved by Block 2 are invisible to Block 3's synchronous cache read, causing `pid: null` in dropdown when Block 1 times out but Block 2 succeeds | MAJOR | **Fixed** |
+| 2 | `activeTerminals.indexOf()` in Block 1 is O(n²) worst-case for placeholder fill | NIT | Deferred (negligible at scale) |
+| 3 | `onDidOpenTerminal` `.then()` callback could fire after `dispose()`, writing to fresh WeakMap | NIT | Deferred (harmless) |
+| 4 | Plan suggested `_context.subscriptions.push()` but implementation uses manual disposal via `_terminalOpenDisposable` | NIT | Keep current (consistent with codebase) |
+
+### Stage 2 — Balanced Synthesis
+
+Only finding #1 required a code fix. All other findings are cosmetic or consistent with existing codebase patterns.
+
+### Code Fixes Applied
+
+**File**: `src/services/TaskViewerProvider.ts`
+**Line 16534** (after `activePids.add(resolvedPid)` in Block 2's resolution loop):
+```typescript
+this._setCachedPid(pidResolutionCandidates[i].matchingTerminal, resolvedPid);
+```
+
+This ensures PIDs resolved by Block 2 are available to Block 3's cache read, closing the gap left by removing Block 3's 5s-timeout fallback.
+
+### Validation Results
+
+- **TypeScript typecheck**: PASS — no new errors introduced (2 pre-existing errors in unrelated files `ClickUpSyncService.ts` and `KanbanProvider.ts`)
+- **Cache population coverage**: All 3 PID resolution sites now populate cache (Block 1, Block 2, onDidOpenTerminal)
+- **Cache read coverage**: Both read sites (Block 1 cache-first, Block 3 synchronous) covered
+- **Dispose coverage**: `_terminalOpenDisposable?.dispose()` + `_pidCache = new WeakMap()` present
+
+### Remaining Risks
+
+1. **Stale PID after process exec**: If a terminal's process changes (e.g., shell execs a new program), the PID changes but the terminal object stays the same. The cache entry becomes stale for up to 5 minutes (TTL). This is an accepted trade-off per the plan's "User Review Required" section.
+2. **No fallback resolution in Block 3**: Block 3 is now purely cache-driven. If a PID isn't cached (Block 1 timeout + Block 2 timeout), Block 3 returns `pid: null`. The original code had a 5s fallback. This is the intended performance trade-off — the 5s timeout was the dominant latency source.
+3. **WeakMap GC timing**: Closed terminal objects are only GC'd when VS Code releases all references. Stale cache entries persist until GC or TTL expiry (5 min). Acceptable per plan.

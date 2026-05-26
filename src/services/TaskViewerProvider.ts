@@ -16531,6 +16531,7 @@ Create this file exactly as specified, then continue your work.`);
                         ti.pid = resolvedPid;
                         ti.childPid = resolvedPid;
                         activePids.add(resolvedPid);
+                        this._setCachedPid(pidResolutionCandidates[i].matchingTerminal, resolvedPid);
                     }
                 }
 

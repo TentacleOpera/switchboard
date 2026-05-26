@@ -10,6 +10,7 @@
         activeDocId: null,
         activeDocName: null,
         activeDocContent: null,
+        activeDocFilePath: null,
         activeContainers: new Map(),
         importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
         previewRequestId: 0,
@@ -19,7 +20,10 @@
         researchMode: persistedState.researchMode || 'web',
         localFolderPaths: [],
         analystAvailable: false,
-        docsListCollapsed: persistedState.docsListCollapsed || false
+        docsListCollapsed: persistedState.docsListCollapsed || false,
+        editMode: { local: false, kanban: false },
+        editOriginalContent: { local: null, kanban: null },
+        dirtyFlags: { local: false, kanban: false }
     };
 
     function toggleSidebarCollapsed() {
@@ -62,6 +66,28 @@
     tabButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const tabName = btn.dataset.tab;
+
+            // Check dirty flags
+            if (state.dirtyFlags.local && tabName !== 'local') {
+                if (!confirm('You have unsaved changes in Local Docs. Discard them?')) {
+                    return;
+                }
+                exitEditMode('local', true);
+            }
+            if (state.dirtyFlags.kanban && tabName !== 'kanban') {
+                if (!confirm('You have unsaved changes in Kanban Plans. Discard them?')) {
+                    return;
+                }
+                exitEditMode('kanban', true);
+            }
+
+            // If in edit mode but not dirty, auto-exit to clear editor state cleanly
+            if (state.editMode.local && tabName !== 'local') {
+                exitEditMode('local', true);
+            }
+            if (state.editMode.kanban && tabName !== 'kanban') {
+                exitEditMode('kanban', true);
+            }
 
             tabButtons.forEach(b => b.classList.remove('active'));
             tabContents.forEach(c => c.classList.remove('active'));
@@ -449,6 +475,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
+        if (state.dirtyFlags.local) {
+            if (!confirm('You have unsaved changes in Local Docs. Discard them?')) {
+                return;
+            }
+            exitEditMode('local', true);
+        }
+
         if (state.selectedEl) {
             state.selectedEl.classList.remove('selected');
         }
@@ -988,7 +1021,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handlePreviewReady(msg) {
-        const { sourceId, requestId, content, docName, pages, isAutoRefreshed } = msg;
+        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath } = msg;
 
         // Auto-refresh notification
         if (isAutoRefreshed) {
@@ -1015,8 +1048,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const btnImportFullDoc = document.getElementById(btnImportFullId);
         const btnSetActiveLocal = document.getElementById('btn-set-active-context-local');
         const btnLinkToLocal = document.getElementById('btn-link-to-doc-local');
+        const btnEditLocal = document.getElementById('btn-edit-local');
 
         if (sourceId === 'local-folder' || sourceId === 'antigravity') {
+            state.activeDocFilePath = filePath || null;
+            if (btnEditLocal) btnEditLocal.disabled = false;
             if (btnImportFullDoc) {
                 btnImportFullDoc.style.display = 'none';
                 btnImportFullDoc.disabled = true;
@@ -1813,6 +1849,57 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             }
+            case 'saveFileContentResult': {
+                const { success, conflict, diskContent, error, tab } = msg;
+                const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 'kanban-editor');
+                
+                if (success) {
+                    if (tab === 'local') {
+                        state.activeDocContent = textarea.value;
+                        exitEditMode('local', true);
+                        markdownPreview.innerHTML = renderMarkdown(state.activeDocContent);
+                        const statusLocal = document.getElementById('status');
+                        if (statusLocal) {
+                            statusLocal.textContent = 'Saved successfully';
+                            statusLocal.style.color = 'var(--accent-teal)';
+                            setTimeout(() => { statusLocal.textContent = ''; statusLocal.style.color = ''; }, 2000);
+                        }
+                    } else {
+                        state.editOriginalContent.kanban = textarea.value;
+                        exitEditMode('kanban', true);
+                        if (kanbanPreviewContent) {
+                            kanbanPreviewContent.innerHTML = renderMarkdown(state.editOriginalContent.kanban);
+                        }
+                    }
+                } else if (conflict) {
+                    const overwrite = confirm('Save Conflict! The file has been modified on disk by another process. Overwrite disk changes with your edits? (Click Cancel to reload from disk instead)');
+                    if (overwrite) {
+                        const filePath = tab === 'local' ? state.activeDocFilePath : (_kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null);
+                        vscode.postMessage({
+                            type: 'saveFileContent',
+                            filePath,
+                            content: textarea.value,
+                            originalContent: diskContent,
+                            tab
+                        });
+                    } else {
+                        if (tab === 'local') {
+                            state.activeDocContent = diskContent;
+                            textarea.value = diskContent;
+                            state.editOriginalContent.local = diskContent;
+                            state.dirtyFlags.local = false;
+                        } else {
+                            state.editOriginalContent.kanban = diskContent;
+                            textarea.value = diskContent;
+                            state.dirtyFlags.kanban = false;
+                        }
+                        alert('Reloaded from disk.');
+                    }
+                } else {
+                    alert('Error saving file: ' + (error || 'Unknown error'));
+                }
+                break;
+            }
         }
     });
 
@@ -2063,10 +2150,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const kanbanRefreshBtn = document.getElementById('kanban-refresh-btn');
     const kanbanListPane = document.getElementById('kanban-list-pane');
     const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
+    const kanbanPreviewContent = document.getElementById('kanban-preview-content');
 
     // Initial message in preview pane
-    if (kanbanPreviewPane) {
-        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
+    if (kanbanPreviewContent) {
+        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
     }
 
     function renderKanbanPlans(plans, filters) {
@@ -2143,13 +2231,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 // If they clicked on buttons, don't trigger row click preview
                 if (e.target.tagName === 'BUTTON') return;
 
+                if (state.dirtyFlags.kanban) {
+                    if (!confirm('You have unsaved changes in Kanban Plans. Discard them?')) {
+                        return;
+                    }
+                    exitEditMode('kanban', true);
+                }
+
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
                 itemDiv.classList.add('selected');
                 _kanbanSelectedPlan = plan;
 
                 if (plan.planFile) {
-                    if (kanbanPreviewPane) {
-                        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
+                    if (kanbanPreviewContent) {
+                        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Loading preview...</div>';
                     }
                     _kanbanPreviewRequestId++;
                     vscode.postMessage({
@@ -2158,8 +2253,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         requestId: _kanbanPreviewRequestId
                     });
                 } else {
-                    if (kanbanPreviewPane) {
-                        kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">No plan file linked</div>';
+                    if (kanbanPreviewContent) {
+                        kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">No plan file linked</div>';
                     }
                 }
             });
@@ -2260,17 +2355,26 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleKanbanPlanPreviewReady(msg) {
         if (msg.requestId !== _kanbanPreviewRequestId) return;
-        if (!kanbanPreviewPane) return;
+        if (!kanbanPreviewContent) return;
 
         if (msg.error) {
-            kanbanPreviewPane.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
+            kanbanPreviewContent.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
             return;
         }
 
+        // Store original content
+        state.editOriginalContent.kanban = msg.content || '';
+        state.dirtyFlags.kanban = false;
+
         if (msg.content) {
-            kanbanPreviewPane.innerHTML = renderMarkdown(msg.content);
+            kanbanPreviewContent.innerHTML = renderMarkdown(msg.content);
         } else {
-            kanbanPreviewPane.innerHTML = '<div class="kanban-empty-state">Plan file is empty</div>';
+            kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Plan file is empty</div>';
+        }
+
+        const btnEditKanban = document.getElementById('btn-edit-kanban');
+        if (btnEditKanban) {
+            btnEditKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
         }
     }
 
@@ -2354,6 +2458,143 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         kanbanRefreshBtn.addEventListener('click', () => {
             vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
         });
+    }
+
+    function setupTextareaTabInterceptor(textarea) {
+        textarea.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') {
+                e.preventDefault();
+                const start = textarea.selectionStart;
+                const end = textarea.selectionEnd;
+                const value = textarea.value;
+                textarea.value = value.substring(0, start) + '    ' + value.substring(end);
+                textarea.selectionStart = textarea.selectionEnd = start + 4;
+                textarea.dispatchEvent(new Event('input'));
+            }
+        });
+    }
+
+    function enterEditMode(tab) {
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
+        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 'kanban-editor');
+        
+        if (!previewPane || !textarea) return;
+        
+        let content = '';
+        if (tab === 'local') {
+            content = state.activeDocContent || '';
+            state.editOriginalContent.local = content;
+        } else {
+            content = state.editOriginalContent.kanban || '';
+        }
+        
+        textarea.value = content;
+        previewPane.classList.add('edit-mode');
+        
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnSave) btnSave.style.display = '';
+        if (btnCancel) btnCancel.style.display = '';
+        
+        state.editMode[tab] = true;
+        state.dirtyFlags[tab] = false;
+    }
+
+    function exitEditMode(tab, discard) {
+        if (!discard && state.dirtyFlags[tab]) {
+            if (!confirm('You have unsaved changes. Discard them?')) {
+                return false;
+            }
+        }
+        
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
+        if (previewPane) {
+            previewPane.classList.remove('edit-mode');
+        }
+        
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        
+        if (btnEdit) btnEdit.style.display = '';
+        if (btnSave) btnSave.style.display = 'none';
+        if (btnCancel) btnCancel.style.display = 'none';
+        
+        state.editMode[tab] = false;
+        state.dirtyFlags[tab] = false;
+        return true;
+    }
+
+    // Wire up edit buttons
+    const btnEditLocal = document.getElementById('btn-edit-local');
+    const btnSaveLocal = document.getElementById('btn-save-local');
+    const btnCancelLocal = document.getElementById('btn-cancel-local');
+    const markdownEditorLocal = document.getElementById('markdown-editor-local');
+
+    if (btnEditLocal) {
+        btnEditLocal.addEventListener('click', () => enterEditMode('local'));
+    }
+    if (btnSaveLocal) {
+        btnSaveLocal.addEventListener('click', () => {
+            const filePath = state.activeDocFilePath;
+            const content = markdownEditorLocal ? markdownEditorLocal.value : '';
+            const originalContent = state.editOriginalContent.local;
+            if (filePath) {
+                vscode.postMessage({
+                    type: 'saveFileContent',
+                    filePath,
+                    content,
+                    originalContent,
+                    tab: 'local'
+                });
+            }
+        });
+    }
+    if (btnCancelLocal) {
+        btnCancelLocal.addEventListener('click', () => exitEditMode('local', false));
+    }
+    if (markdownEditorLocal) {
+        markdownEditorLocal.addEventListener('input', () => {
+            state.dirtyFlags.local = true;
+        });
+        setupTextareaTabInterceptor(markdownEditorLocal);
+    }
+
+    const btnEditKanban = document.getElementById('btn-edit-kanban');
+    const btnSaveKanban = document.getElementById('btn-save-kanban');
+    const btnCancelKanban = document.getElementById('btn-cancel-kanban');
+    const kanbanEditor = document.getElementById('kanban-editor');
+
+    if (btnEditKanban) {
+        btnEditKanban.addEventListener('click', () => enterEditMode('kanban'));
+    }
+    if (btnSaveKanban) {
+        btnSaveKanban.addEventListener('click', () => {
+            const filePath = _kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null;
+            const content = kanbanEditor ? kanbanEditor.value : '';
+            const originalContent = state.editOriginalContent.kanban;
+            if (filePath) {
+                vscode.postMessage({
+                    type: 'saveFileContent',
+                    filePath,
+                    content,
+                    originalContent,
+                    tab: 'kanban'
+                });
+            }
+        });
+    }
+    if (btnCancelKanban) {
+        btnCancelKanban.addEventListener('click', () => exitEditMode('kanban', false));
+    }
+    if (kanbanEditor) {
+        kanbanEditor.addEventListener('input', () => {
+            state.dirtyFlags.kanban = true;
+        });
+        setupTextareaTabInterceptor(kanbanEditor);
     }
 
     // Initialize

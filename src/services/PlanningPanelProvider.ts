@@ -1079,6 +1079,35 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'saveFileContent': {
+                const filePath = String(msg.filePath || '');
+                const content = String(msg.content || '');
+                const originalContent = String(msg.originalContent || '');
+                const tab = String(msg.tab || '');
+                const allRoots = this._getWorkspaceRoots();
+                const resolved = path.resolve(filePath);
+                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+                if (!filePath || !isAllowed) {
+                    this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: 'Invalid file path', tab });
+                    break;
+                }
+                try {
+                    // Conflict detection: compare disk content with original
+                    let diskContent = '';
+                    if (fs.existsSync(resolved)) {
+                        diskContent = await fs.promises.readFile(resolved, 'utf8');
+                    }
+                    if (originalContent && diskContent !== originalContent) {
+                        this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
+                        break;
+                    }
+                    await fs.promises.writeFile(resolved, content, 'utf8');
+                    this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: true, tab });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
+                }
+                break;
+            }
         }
     }
 
@@ -1533,7 +1562,8 @@ export class PlanningPanelProvider {
                         requestId, 
                         content: result.content || '', 
                         docName: result.docTitle,
-                        isAutoRefreshed: this._isAutoRefreshing
+                        isAutoRefreshed: this._isAutoRefreshing,
+                        filePath: resolvedPath
                     });
                 } else {
                     this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: result.error || 'Failed to fetch document' });
