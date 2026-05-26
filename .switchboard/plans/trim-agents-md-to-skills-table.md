@@ -125,6 +125,45 @@ Key risks: (1) The `ensureAgentsProtocol()` markerless-skip bug silently prevent
 - SKIP compilation (per session directive)
 - SKIP automated tests (per session directive)
 
+## Review Results (Post-Implementation)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Activation hook never calls `setLastCopiedAgentVersion()` — migration runs on every activation forever because the version file is never updated after migration succeeds. `shouldRefreshAgentWorkspaceFiles()` always returns `true` on subsequent activations. | CRITICAL | **Fixed** |
+| 2 | `ensureAgentsProtocol()` docstring claims "Non-destructive: preserves all existing user content" but the markerless branch replaces entire file content — docstring is misleading for future maintainers. | MAJOR | **Fixed** |
+| 3 | Double blank line between `> [!IMPORTANT]` block and skills table in AGENTS.md (lines 11-12). Formatting inconsistency. | NIT | **Fixed** |
+| 4 | AGENTS.md is 51 lines, not the estimated ~45 lines. | NIT | Deferred — cosmetic, no functional impact |
+
+### Stage 2: Balanced Synthesis
+
+- **CRITICAL fix applied**: Added `setLastCopiedAgentVersion()` call after successful migration in the activation hook (lines 396-400 of extension.ts). This mirrors the pattern used in `performSetup()` at line 2696 and ensures the migration gate works correctly — migration runs once on version change, then skips on subsequent activations.
+- **MAJOR fix applied**: Updated `ensureAgentsProtocol()` docstring (lines 2381-2387) to accurately describe the markerless branch behavior: "Preserves user content outside boundary markers when markers are present. For legacy markerless files (header only, no markers), replaces the entire file content."
+- **NIT fix applied**: Removed double blank line in AGENTS.md between the `> [!IMPORTANT]` block and the skills table.
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/extension.ts` (lines 396-400) | Added `setLastCopiedAgentVersion()` call after successful AGENTS.md migration in activation hook |
+| `src/extension.ts` (lines 2381-2387) | Updated `ensureAgentsProtocol()` docstring to accurately describe markerless branch behavior |
+| `AGENTS.md` (line 11) | Removed double blank line between `> [!IMPORTANT]` block and skills table |
+
+### Validation Results
+
+- **TypeScript check**: `npx tsc --noEmit` shows 2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated import extension issues). No new errors introduced by review fixes.
+- **AGENTS.md line count**: 51 lines (trimmed from 116, containing header + skills table + workspace detection). Within acceptable range of the ~45 line estimate.
+- **package.json version**: `1.7.0` — correctly bumped from `1.6.0`.
+- **Markerless-skip bug**: Fixed — `hasProtocolHeaderLine` branch now replaces entire content with managed block instead of returning `{ status: 'skipped' }`.
+- **Activation hook version recording**: Fixed — `setLastCopiedAgentVersion()` now called after successful migration, preventing re-run on every activation.
+
+### Remaining Risks
+
+1. **`.cursorrules` inconsistency**: The `.cursorrules` file at repo root still contains the old full protocol (workflow registry, execution rules, etc.). Agents reading `.cursorrules` will see stale protocol info. This was explicitly deferred to a follow-up plan per the "User Review Required" section.
+2. **Markerless file user content loss**: If a user added custom content above/below the protocol block in a markerless AGENTS.md, that content will be lost during migration. This is an accepted trade-off documented in the plan. Mitigated by: (a) the file was scaffolded by the extension, (b) users can restore from git, (c) future updates preserve content via markers.
+3. **Multi-root workspace limitation**: The activation hook only migrates the primary workspace root. Other roots require manual setup. This matches existing behavior and is documented in the plan.
+
 ## Original Plan Content (Preserved)
 
 ### Background

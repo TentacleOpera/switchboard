@@ -1819,15 +1819,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     // Active Design Doc Banner handlers
     const btnDisableDocLocal = document.getElementById('btn-disable-doc-local');
     const btnDisableDocOnline = document.getElementById('btn-disable-doc-online');
-    const btnDisableDocKanban = document.getElementById('btn-disable-doc-kanban');
 
     function updateActiveDocBanner(msg) {
         const bannerLocal = document.getElementById('active-doc-banner-local');
         const bannerOnline = document.getElementById('active-doc-banner-online');
-        const bannerKanban = document.getElementById('active-doc-banner-kanban');
         const nameLocal = document.getElementById('active-doc-name-local');
         const nameOnline = document.getElementById('active-doc-name-online');
-        const nameKanban = document.getElementById('active-doc-name-kanban');
 
         const isActive = msg.enabled && msg.docName;
         const docName = msg.docName || 'None';
@@ -1840,10 +1837,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             bannerOnline.classList.toggle('inactive', !isActive);
             if (nameOnline) nameOnline.textContent = docName;
         }
-        if (bannerKanban) {
-            bannerKanban.classList.toggle('inactive', !isActive);
-            if (nameKanban) nameKanban.textContent = docName;
-        }
     }
 
     function handleDisableDesignDoc() {
@@ -1855,9 +1848,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
     if (btnDisableDocOnline) {
         btnDisableDocOnline.addEventListener('click', handleDisableDesignDoc);
-    }
-    if (btnDisableDocKanban) {
-        btnDisableDocKanban.addEventListener('click', handleDisableDesignDoc);
     }
 
     // Button handlers

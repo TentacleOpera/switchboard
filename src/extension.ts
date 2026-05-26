@@ -393,6 +393,11 @@ export async function activate(context: vscode.ExtensionContext) {
                 outputChannel?.appendLine(
                     `[Migration] AGENTS.md: ${agentsResult.status} — ${agentsResult.reason}`
                 );
+                // Record the version so the migration doesn't re-run on every activation.
+                const currentVersion = getExtensionVersion(context.extensionUri.fsPath);
+                if (currentVersion) {
+                    setLastCopiedAgentVersion(workspaceRoot, currentVersion);
+                }
             }
         } catch (err) {
             console.error('[Switchboard] AGENTS.md migration failed, continuing activation:', err);
@@ -2375,8 +2380,10 @@ function hasProtocolHeaderLine(content: string): boolean {
 
 /**
  * Ensure the workspace AGENTS.md contains the Switchboard protocol block.
- * Non-destructive: preserves all existing user content.
- * Idempotent: skips if protocol block is already present.
+ * Preserves user content outside boundary markers when markers are present.
+ * For legacy markerless files (header only, no markers), replaces the entire
+ * file content — see markerless branch below.
+ * Idempotent: skips if protocol block is already up-to-date.
  */
 async function ensureAgentsProtocol(
     workspaceUri: vscode.Uri,

@@ -9,7 +9,6 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 > - **Prefer skill-based invocations** for ClickUp, Linear, and diagram operations.
 > - **Workflow tools** (`send_message`, `check_inbox`, `get_team_roster`, `start_workflow`, `complete_workflow_phase`, etc.) remain the primary interface for workflow and messaging coordination.
 
-
 | Skill | When to Use |
 |-------|-------------|
 | `archive` | User asks to "search archives", "query archives", "find old plans", "export conversation" |
