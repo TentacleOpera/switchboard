@@ -61,7 +61,9 @@ Key risks: multi-workspace project bleed if using a scalar instead of per-worksp
   }
 
   // In _handlePlanFile, before newRecord construction (~line 416):
-  const project = this._currentProjects.get(workspaceRoot) || metadata.project || '';
+  // NOTE: metadata.project takes precedence over _currentProjects so that explicit
+  // **Project:** declarations in plan files override the implicit current filter.
+  const project = metadata.project || this._currentProjects.get(workspaceRoot) || '';
 
   // In newRecord object (~line 439), add:
   project,
@@ -94,8 +96,9 @@ Key risks: multi-workspace project bleed if using a scalar instead of per-worksp
 ### `src/services/KanbanProvider.ts`
 - **Context:** The `setProjectFilter` message handler (lines 4217-4223) receives project filter changes from the webview UI and calls `this.setProjectFilter(msg.project || null)`. The public `setProjectFilter` method (line 3736) only sets `this._projectFilter`.
 - **Logic:**
-  1. In the `setProjectFilter` message handler (line 4217-4223), after calling `this.setProjectFilter(msg.project || null)` and before `_refreshBoard`, also call `this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null)`.
+  1. In the `setProjectFilter` message handler (line 4217-4223), call `this.setProjectFilter(msg.project || null)` which internally propagates to the watcher, then call `_refreshBoard`. Do NOT call `setCurrentProject` directly — the public method already handles it.
   2. In the public `setProjectFilter` method (line 3736-3738), also propagate to the watcher for any programmatic callers: `this._globalPlanWatcher?.setCurrentProject(this._currentWorkspaceRoot || '', filter)`.
+  3. In the `deleteProject` handler (line 4204-4219), when clearing the project filter because the active project was deleted, use `this.setProjectFilter(null)` instead of directly setting `this._projectFilter = null`, so the watcher is also updated.
 - **Implementation:**
   ```typescript
   // In message handler 'setProjectFilter' (line 4217-4223):
@@ -103,7 +106,6 @@ Key risks: multi-workspace project bleed if using a scalar instead of per-worksp
       const workspaceRoot = this._currentWorkspaceRoot;
       if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
           this.setProjectFilter(msg.project || null);
-          this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null);
           await this._refreshBoard(workspaceRoot);
       }
       break;
@@ -148,3 +150,43 @@ Key risks: multi-workspace project bleed if using a scalar instead of per-worksp
 
 ## Recommendation
 Complexity 4 → **Send to Coder**
+
+---
+
+## Review Results (Post-Implementation)
+
+### Reviewer: Grumpy Principal Engineer In-Place Review
+### Date: 2026-05-26
+
+### Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Precedence order in plan spec contradicted implementation: plan said `_currentProjects \|\| metadata.project`, implementation had `metadata.project \|\| _currentProjects`. Implementation is correct (explicit metadata should override implicit filter, matching manual verification step 7). Plan spec updated. | MAJOR | **Fixed in plan spec** |
+| 2 | Redundant `setCurrentProject` call in `setProjectFilter` message handler — `setProjectFilter()` already propagates to watcher internally. | NIT | **Fixed in code** (KanbanProvider.ts line 4224 removed) |
+| 3 | `deleteProject` handler set `_projectFilter = null` directly, bypassing `setProjectFilter()`, so the watcher's `_currentProjects` map was not cleared. New plans would be auto-assigned to the deleted project. | MAJOR | **Fixed in code** (KanbanProvider.ts line 4208: now uses `this.setProjectFilter(null)`) |
+| 4 | `PlanFileImporter` missing `project` field — documented as known limitation. | NIT | **Deferred** (documented) |
+| 5 | `_handlePlanFile` only sets project on new plans, preserves on updates — correct behavior. | NONE | **No change needed** |
+
+### Files Changed During Review
+
+1. **`src/services/KanbanProvider.ts`** — Two fixes:
+   - Line 4208: Changed `this._projectFilter = null` → `this.setProjectFilter(null)` in `deleteProject` handler (ensures watcher's `_currentProjects` is also cleared)
+   - Line 4224: Removed redundant `this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null)` from `setProjectFilter` message handler (already handled by `setProjectFilter()` method internally)
+
+2. **`.switchboard/plans/auto-assign-new-plans-to-selected-project.md`** — Three updates:
+   - Corrected precedence order in code spec from `_currentProjects.get \|\| metadata.project` to `metadata.project \|\| _currentProjects.get` (matching implementation and manual verification intent)
+   - Updated KanbanProvider Logic section to remove redundant `setCurrentProject` call and add `deleteProject` handler guidance
+   - Added this review results section
+
+### Validation
+
+- **TypeScript check**: `npx tsc --noEmit` — 2 pre-existing errors (unrelated import path issues in `ClickUpSyncService.ts` and `KanbanProvider.ts` line 4591). Zero new errors from review fixes.
+- **Compilation**: Skipped per session directives.
+- **Automated tests**: Skipped per session directives.
+
+### Remaining Risks
+
+1. **Race condition with 300ms debounce** (documented in plan): The project filter active when `_handlePlanFile` fires may differ from when the file was created. Narrow window, negligible practical impact.
+2. **PlanFileImporter gap** (documented as known limitation): Plans imported at startup before any filter is set will have empty `project`. Can be addressed in a follow-up plan if needed.
+3. **No persistence of `_currentProjects`**: The watcher's `_currentProjects` map is in-memory only. If the extension host restarts, the map is empty until the user interacts with the project filter again. This is acceptable because the filter UI state is also not persisted across restarts.

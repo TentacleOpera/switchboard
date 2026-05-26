@@ -1789,7 +1789,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
-        return {
+        const baseRecord: KanbanPlanRecord = {
             planId,
             sessionId: sheet.sessionId,
             topic: String(sheet.topic || sheet.planFile || 'Untitled'),
@@ -1812,6 +1812,27 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             dispatchedIde: '',
             hasWorktree: 0
         };
+
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (db) {
+            const existing = await db.getPlanByPlanFile(rawPlanFile, workspaceId);
+            if (existing) {
+                return {
+                    ...baseRecord,
+                    project: existing.project || '',
+                    clickupTaskId: existing.clickupTaskId || '',
+                    linearIssueId: existing.linearIssueId || '',
+                    routedTo: existing.routedTo || '',
+                    dispatchedAgent: existing.dispatchedAgent || '',
+                    dispatchedIde: existing.dispatchedIde || '',
+                    hasWorktree: existing.hasWorktree ?? 0,
+                    tags: existing.tags || baseRecord.tags,
+                    dependencies: existing.dependencies || baseRecord.dependencies,
+                };
+            }
+        }
+
+        return baseRecord;
     }
 
     private async _syncKanbanDbFromSheetsSnapshot(

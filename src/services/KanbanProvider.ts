@@ -4205,7 +4205,7 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot && typeof msg.projectName === 'string') {
                     if (this._projectFilter === msg.projectName) {
-                        this._projectFilter = null;
+                        this.setProjectFilter(null);
                     }
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
@@ -4221,7 +4221,6 @@ export class KanbanProvider implements vscode.Disposable {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
                     this.setProjectFilter(msg.project || null);
-                    this._globalPlanWatcher?.setCurrentProject(workspaceRoot, msg.project || null);
                     await this._refreshBoard(workspaceRoot);
                 }
                 break;
