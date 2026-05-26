@@ -751,12 +751,20 @@
             font-size: 0.85em;
         }
 
-        #markdown-preview p, #markdown-preview li,
-        #markdown-preview-online p, #markdown-preview-online li {
-            margin-bottom: 16px;
+        #markdown-preview p,
+        #markdown-preview-online p {
+            margin-bottom: 0.7em; /* Match VS Code's markdown.css default */
             line-height: inherit; /* Inherits from container's var(--vscode-font-line-height, 22px) */
             color: var(--vscode-editor-foreground, #cccccc);
             font-size: inherit; /* Inherits from container's var(--vscode-font-size, 14px) */
+        }
+
+        #markdown-preview li,
+        #markdown-preview-online li {
+            margin-bottom: 0.25em; /* Tighter list item spacing */
+            line-height: inherit;
+            color: var(--vscode-editor-foreground, #cccccc);
+            font-size: inherit;
         }
 
         #markdown-preview li p,

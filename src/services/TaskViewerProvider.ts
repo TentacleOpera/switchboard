@@ -13524,10 +13524,10 @@ What would you like to find?`;
                 });
 
                 const excludeReviewedBacklog = this.handleGetExcludeReviewedBacklogSetting();
-                const filterByColumn = (row: any) => {
+                const filterByColumn = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
                     if (!excludeReviewedBacklog) return true;
                     const col = (row.kanbanColumn || '').toLowerCase();
-                    return col !== 'reviewed' && col !== 'backlog';
+                    return col !== 'code reviewed' && col !== 'backlog';
                 };
 
                 const visibleActiveRows = repoScope

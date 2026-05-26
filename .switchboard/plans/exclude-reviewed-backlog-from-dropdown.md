@@ -219,6 +219,61 @@ case 'setExcludeReviewedBacklogSetting':
     break;
 ```
 
+## Review Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **CRITICAL** | `filterByColumn` compared against `'reviewed'` but the actual kanban column ID is `'CODE REVIEWED'`. After `.toLowerCase()`, `'CODE REVIEWED'` becomes `'code reviewed'`, which never equals `'reviewed'`. The reviewed-column filter was dead code — it would never match any plan. |
+| 2 | **MAJOR** | `filterByColumn` was typed as `(row: any)` instead of `(row: import('./KanbanDatabase').KanbanPlanRecord)`. The `any` type silenced all type safety and contributed to Finding 1 — a proper type would have prompted the developer to inspect what `kanbanColumn` actually contains. |
+| 3 | NIT | Inconsistent truthiness check in setup.html: `excludeReviewedBacklogSetting` uses `=== true` while adjacent `autoCommitOnCodeReviewSetting` uses `!== false`. Both work; `=== true` is actually safer for `false`-default settings. Deferred. |
+| 4 | NIT | `filterByColumn` is applied to `completedRows` which will never contain `'CODE REVIEWED'` or `'BACKLOG'` plans. Harmless but unnecessary. Deferred. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| 1 (CRITICAL: wrong comparison string) | **Fixed** | Changed `'reviewed'` → `'code reviewed'` in filter comparison. The feature now actually filters reviewed plans. |
+| 2 (MAJOR: `any` type) | **Fixed** | Changed `(row: any)` → `(row: import('./KanbanDatabase').KanbanPlanRecord)` to match the `filterGhostPlans` and `toSheet` patterns in the same code block. |
+| 3 (NIT: truthiness inconsistency) | Deferred | `=== true` is the safer pattern; not worth the churn. |
+| 4 (NIT: filter on completedRows) | Deferred | Harmless defensive coding; not worth the churn. |
+
+### Stage 3: Code Fixes Applied
+
+**File:** `src/services/TaskViewerProvider.ts` (line 13527-13531)
+
+Before:
+```typescript
+const filterByColumn = (row: any) => {
+    if (!excludeReviewedBacklog) return true;
+    const col = (row.kanbanColumn || '').toLowerCase();
+    return col !== 'reviewed' && col !== 'backlog';
+};
+```
+
+After:
+```typescript
+const filterByColumn = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
+    if (!excludeReviewedBacklog) return true;
+    const col = (row.kanbanColumn || '').toLowerCase();
+    return col !== 'code reviewed' && col !== 'backlog';
+};
+```
+
+### Stage 4: Validation
+
+- **TypeScript check**: `npx tsc --noEmit` — 2 pre-existing errors (unrelated import path issues in ClickUpSyncService.ts and KanbanProvider.ts). No new errors introduced by the fix.
+- **Pattern consistency**: The `import('./KanbanDatabase').KanbanPlanRecord` type reference now matches the existing `filterGhostPlans` and `toSheet` functions in the same code block.
+- **Column ID verification**: Confirmed via `agentConfig.ts` DEFAULT_KANBAN_COLUMNS that the "Reviewed" column has `id: 'CODE REVIEWED'` (lowercases to `'code reviewed'`), and the "Backlog" column uses `id: 'BACKLOG'` (lowercases to `'backlog'`).
+
+### Remaining Risks
+
+1. **Custom kanban columns**: If a user creates a custom column with "reviewed" in its ID (e.g., `'CUSTOM REVIEWED'`), the current filter using exact match `!== 'code reviewed'` would NOT filter it. This is intentional — the plan targets the built-in "Reviewed" column only. If broader filtering is desired in the future, consider using `col.includes('reviewed')` or filtering by `kind === 'reviewed'` via a column-definition lookup.
+2. **`'PLAN REVIEWED'` column**: Plans in the `'PLAN REVIEWED'` column (labeled "Planned") are NOT filtered. This is correct — those plans are still active (awaiting coding) and should appear in the dropdown.
+
+---
+
 ## Verification Plan
 
 ### Manual Testing
@@ -228,13 +283,13 @@ case 'setExcludeReviewedBacklogSetting':
 3. With checkbox unchecked (default):
    - Open sidebar dropdown → verify ALL plans appear including 'reviewed' and 'backlog'.
 4. Check the checkbox:
-   - Open sidebar dropdown → verify plans in 'reviewed' and 'backlog' columns do NOT appear.
-   - Verify plans in other columns appear normally.
+   - Open sidebar dropdown → verify plans in 'CODE REVIEWED' and 'BACKLOG' columns do NOT appear.
+   - Verify plans in other columns (including 'PLAN REVIEWED') appear normally.
 5. Uncheck the checkbox:
-   - Open sidebar dropdown → verify ALL plans appear including 'reviewed' and 'backlog'.
-6. Move a plan from 'reviewed' to 'in progress':
+   - Open sidebar dropdown → verify ALL plans appear including 'CODE REVIEWED' and 'BACKLOG'.
+6. Move a plan from 'CODE REVIEWED' to 'LEAD CODED':
    - Verify it appears in dropdown after refresh.
-7. Test case-insensitivity: ensure column labels 'REVIEWED', 'Reviewed', 'reviewed' are all filtered.
+7. Test case-insensitivity: verify that column IDs 'CODE REVIEWED', 'Code Reviewed', 'code reviewed' are all filtered correctly.
 8. Verify the setting persists across VS Code restarts (stored in workspace settings).
 9. Verify the setting appears in VS Code Settings UI under "Switchboard" section.
 

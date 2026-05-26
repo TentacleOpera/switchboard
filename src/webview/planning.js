@@ -347,10 +347,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 return `<a href="${safeUrl}">${text}</a>`;
             })
             .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1')
-            .replace(/\n\n/g, '</p><p>')
-            .replace(/\n/g, '<br>');
+            .replace(/\n\n+/g, '</p><p>')
+            .replace(/\n/g, ' ');
 
-        return `<p>${html}</p>`;
+        html = `<p>${html}</p>`;
+        html = html.replace(/<p>\s*<\/p>/g, '');
+        return html;
     }
 
     function renderNode(node, sourceId, depth = 0) {
