@@ -3067,7 +3067,7 @@
             linear: { setupComplete: false, realTimeSyncEnabled: false, autoPullEnabled: false, pullIntervalMinutes: 60, syncError: false }
         };
         let activeIntegration = null;
-        const selectedCards = new Set();
+        const selectedCards = new Map();
         let testingFailSessionIds = [];
 
         let allWorkspaceProjects = {};
@@ -4217,7 +4217,7 @@
                         selectedCards.delete(pid);
                         el.classList.remove('selected');
                     } else {
-                        selectedCards.add(pid);
+                        selectedCards.set(pid, el.dataset.workspaceRoot || currentWorkspaceRoot);
                         el.classList.add('selected');
                         // Sync sidebar dropdown on unmodified single clicks
                         if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
@@ -5547,7 +5547,7 @@
         }
 
         document.getElementById('btn-assign-workspace-project')?.addEventListener('click', () => {
-            const sessionIds = Array.from(selectedCards);
+            const sessionIds = Array.from(selectedCards.keys());
 
             const select = document.getElementById('workspace-project-select');
             const selectedOption = select?.selectedOptions?.[0];
@@ -5560,7 +5560,11 @@
 
             // Build confirmation label
             const wsLabel = selectedOption.textContent || targetWorkspaceRoot;
-            const isSameWorkspace = targetWorkspaceRoot === (currentWorkspaceRoot || '');
+            // Determine if this is a same-workspace or cross-workspace operation
+            // by checking the source workspaces of the actually selected cards,
+            // not currentWorkspaceRoot (which may have been updated by a dropdown switch).
+            const sourceWorkspaces = new Set(selectedCards.values());
+            const isSameWorkspace = sourceWorkspaces.size === 1 && sourceWorkspaces.has(targetWorkspaceRoot);
 
             if (isSameWorkspace && !targetProject) {
                 // No-op: same workspace, no project

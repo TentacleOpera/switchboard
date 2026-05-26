@@ -161,5 +161,48 @@ After changes, the markdown preview should:
 - Apply identical styling to both LOCAL DOCS and ONLINE DOCS tabs
 - Render correctly in the kanban preview pane
 
+## Review Pass — 2026-05-26
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | `.replace(/\n/g, ' ')` operates on the entire HTML string including `<pre><code>` blocks. The original `<br>` replacement preserved code block line breaks inside `<pre>`; the new space replacement collapses all code block content onto a single line. This is a user-visible regression for any markdown with fenced code blocks. The plan's edge-case audit missed code blocks entirely. |
+| NIT-1 | NIT | Extra `li p` CSS rule (lines 770-773) was added during implementation but not specified in the plan. The comment claimed "tighter spacing" but the value `0.7em` was identical to the regular `p` rule — not tighter. Also, `renderMarkdown` never produces `<p>` inside `<li>`, making the rule effectively dead code with a misleading comment. |
+| NIT-2 | NIT | Unrelated color change `#e0e0e0` → `#cccccc` in header CSS (line 716) — from a different change set, not part of this plan. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| CRITICAL-1 | VALID — must fix now | Break the chained replacement before `\n` handling. Split HTML on `<pre><code>...</code></pre>` boundaries, apply `\n\n+` and `\n` replacements only to non-`<pre>` segments, rejoin. |
+| NIT-1 | Fix now | Changed `li p` margin-bottom from `0.7em` to `0` (since `<li>` already provides spacing via its own `0.25em` margin). Corrected comment. |
+| NIT-2 | Defer | Unrelated to this plan, no action. |
+
+### Stage 3: Code Fixes Applied
+
+**`src/webview/planning.js` — `renderMarkdown` function (lines 349-362):**
+- Broke the `.replace()` chain before the `\n` handling steps.
+- Added split-and-rejoin pattern: `html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/)` separates code blocks from other content.
+- `\n\n+` → `</p><p>` and `\n` → ` ` replacements now only apply to non-`<pre>` segments (even-indexed parts).
+- Odd-indexed parts (code blocks) are returned unchanged, preserving their newlines.
+
+**`src/webview/planning.html` — CSS (lines 770-773):**
+- Changed `li p` margin-bottom from `0.7em` to `0`.
+- Corrected comment from "Match VS Code's tighter spacing inside list items" to "Paragraphs inside list items: zero extra margin (li already spaced)".
+
+### Stage 4: Verification
+
+- **SKIP**: Compilation and automated tests per session directive.
+- **Manual verification needed**: Open planning.html in VS Code, view a markdown document containing fenced code blocks (````...````), confirm code lines render on separate lines (not collapsed to one line). Also verify paragraph spacing, list spacing, and header ghost-spacing behavior.
+
+### Files Changed (Review Pass)
+- `src/webview/planning.js` (lines 349-362) — added `<pre>` block protection for newline handling
+- `src/webview/planning.html` (lines 770-773) — fixed `li p` margin and comment
+
+### Remaining Risks
+- The `<p><pre>` auto-close pattern (when a code block follows a paragraph) still produces raw HTML like `<p><pre>...` which browsers auto-close to `<p></p><pre>...`. The empty `<p></p>` cleanup regex `/<p>\s*<\/p>/g` does NOT match this case because `<pre>` is not whitespace. This is a **pre-existing issue** (present in the original code too) and causes minor ghost spacing above code blocks. Could be addressed in a future iteration with a more aggressive cleanup regex like `/<p>(?=<\/p>|<(?:div|pre|ul|ol|h[1-6]|blockquote))/g`, but that's out of scope for this plan.
+- Ordered list items (`1. Item`) produce bare `<li>` elements not wrapped in `<ol>`. Also pre-existing, not a regression.
+
 ## Recommendation
 Complexity 3 → **Send to Intern**

@@ -346,9 +346,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const safeUrl = escapeAttr(sanitizeUrl(url));
                 return `<a href="${safeUrl}">${text}</a>`;
             })
-            .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1')
-            .replace(/\n\n+/g, '</p><p>')
-            .replace(/\n/g, ' ');
+            .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
+
+        // Protect <pre> blocks from newline-to-space conversion.
+        // Code blocks must preserve literal newlines for correct rendering;
+        // only non-code content should get soft-wrap (space) behavior.
+        const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
+        html = parts.map((part, i) => {
+            if (i % 2 === 1) return part; // pre block — preserve newlines
+            return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, ' ');
+        }).join('');
 
         html = `<p>${html}</p>`;
         html = html.replace(/<p>\s*<\/p>/g, '');

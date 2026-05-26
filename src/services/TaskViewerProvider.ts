@@ -3062,7 +3062,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public handleGetExcludeReviewedBacklogSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', false);
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', true);
     }
 
     public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {

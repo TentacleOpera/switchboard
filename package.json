@@ -440,7 +440,7 @@
         },
         "switchboard.excludeReviewedBacklogFromDropdown": {
           "type": "boolean",
-          "default": false,
+          "default": true,
           "description": "Hide plans in 'reviewed' and 'backlog' kanban columns from the sidebar dropdown."
         },
         "switchboard.planWatcher.periodicScanEnabled": {

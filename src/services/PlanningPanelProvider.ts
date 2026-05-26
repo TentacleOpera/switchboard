@@ -1359,10 +1359,15 @@ export class PlanningPanelProvider {
             const activeRoot = this._getWorkspaceRoot();
             let configuredFolderPaths: string[] = []; // Track configured folder paths for webview
 
+            const seenFilePaths = new Set<string>(); // Deduplicate files across roots
+
             for (const root of allRoots) {
                 try {
                     const localFolderService = this._getLocalFolderService(root);
                     const folderPaths = localFolderService.getFolderPaths();
+
+                    // Skip this root entirely if all its folder paths have already been scanned
+                    const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
 
                     for (const folderPath of folderPaths) {
                         if (folderPath && scannedPaths.has(folderPath)) {
@@ -1377,9 +1382,17 @@ export class PlanningPanelProvider {
                         }
                     }
 
-                    const files = await localFolderService.listFiles();
-                    // Tag files with their root for potential UI disambiguation
-                    allFiles.push(...files.map(f => ({ ...f, _root: root })));
+                    if (!allAlreadyScanned) {
+                        const files = await localFolderService.listFiles();
+                        // Tag files with their root, deduplicate by absolute path across roots
+                        for (const f of files) {
+                            const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                            if (!seenFilePaths.has(absPath)) {
+                                seenFilePaths.add(absPath);
+                                allFiles.push({ ...f, _root: root });
+                            }
+                        }
+                    }
                 } catch (err) {
                     // Log but continue — one bad root shouldn't break others
                     console.debug('[PlanningPanel] Failed to list files for root:', root, err);

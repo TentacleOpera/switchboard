@@ -42,7 +42,7 @@ No — this is a straightforward UI setting addition with a simple filter in the
 **Side Effects**
 - When enabled, plans in 'reviewed' or 'backlog' columns will not appear in dropdown. Users can still access these plans via the kanban board.
 - If a user tries to select a plan that was just filtered out, the dropdown will default to the first available plan. Acceptable.
-- Default is `false` (setting off) to preserve existing behavior — existing users will not see plans disappear unexpectedly.
+- Default is `true` (setting on) — reviewed and backlog plans are hidden from the sidebar dropdown by default. Users can toggle the setting off to show all plans.
 
 **Dependencies & Conflicts**
 - `_refreshRunSheets` (line 13456 in TaskViewerProvider.ts): Must add filter logic before mapping to sheets (around lines 13513-13518).
@@ -61,7 +61,7 @@ None — this is a self-contained workflow settings feature.
 
 ## Adversarial Synthesis
 
-Key risks: (1) The filter must be case-insensitive since kanban column labels may vary in casing. (2) The message handlers must be placed in SetupPanelProvider.ts (not TaskViewerProvider.ts) to match the existing architecture. (3) Defaulting to `true` would surprise existing users whose plans vanish; default `false` preserves current behavior. Mitigations: Use case-insensitive comparison, place handlers in correct file, default to `false`.
+Key risks: (1) The filter must be case-insensitive since kanban column labels may vary in casing. (2) The message handlers must be placed in SetupPanelProvider.ts (not TaskViewerProvider.ts) to match the existing architecture. (3) The filter must match the actual column ID `'CODE REVIEWED'` (not just `'reviewed'`). Mitigations: Use case-insensitive comparison, place handlers in correct file, match exact column IDs.
 
 ## Proposed Changes
 
@@ -76,7 +76,7 @@ Key risks: (1) The filter must be case-insensitive since kanban column labels ma
 ```json
 "switchboard.excludeReviewedBacklogFromDropdown": {
   "type": "boolean",
-  "default": false,
+  "default": true,
   "description": "Hide plans in 'reviewed' and 'backlog' kanban columns from the sidebar dropdown."
 },
 ```
@@ -140,7 +140,7 @@ document.getElementById('exclude-reviewed-backlog-toggle')?.addEventListener('ch
 
 ```typescript
 public handleGetExcludeReviewedBacklogSetting(): boolean {
-    return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', false);
+    return vscode.workspace.getConfiguration('switchboard').get<boolean>('excludeReviewedBacklogFromDropdown', true);
 }
 
 public async handleSetExcludeReviewedBacklogSetting(enabled: boolean): Promise<void> {
@@ -272,26 +272,35 @@ const filterByColumn = (row: import('./KanbanDatabase').KanbanPlanRecord) => {
 1. **Custom kanban columns**: If a user creates a custom column with "reviewed" in its ID (e.g., `'CUSTOM REVIEWED'`), the current filter using exact match `!== 'code reviewed'` would NOT filter it. This is intentional — the plan targets the built-in "Reviewed" column only. If broader filtering is desired in the future, consider using `col.includes('reviewed')` or filtering by `kind === 'reviewed'` via a column-definition lookup.
 2. **`'PLAN REVIEWED'` column**: Plans in the `'PLAN REVIEWED'` column (labeled "Planned") are NOT filtered. This is correct — those plans are still active (awaiting coding) and should appear in the dropdown.
 
+### UAT Fix: Default Value Changed to `true`
+
+**Issue:** UAT failed — the option was off by default (`false`), but the intended behavior is for it to be on by default (`true`).
+
+**Files changed:**
+- `package.json` (line 443): `"default": false` → `"default": true`
+- `src/services/TaskViewerProvider.ts` (line 3065): `.get<boolean>(..., false)` → `.get<boolean>(..., true)`
+- `.switchboard/plans/exclude-reviewed-backlog-from-dropdown.md`: Updated all references to the default value
+
 ---
 
 ## Verification Plan
 
 ### Manual Testing
 
-1. Open setup.html → Setup tab → verify new checkbox "Exclude Reviewed & Backlog from Sidebar" is visible and unchecked by default.
+1. Open setup.html → Setup tab → verify new checkbox "Exclude Reviewed & Backlog from Sidebar" is visible and **checked by default**.
 2. Create plans in different kanban columns: 'Created', 'In Progress', 'Reviewed', 'Backlog', 'Completed'.
-3. With checkbox unchecked (default):
-   - Open sidebar dropdown → verify ALL plans appear including 'reviewed' and 'backlog'.
-4. Check the checkbox:
+3. With checkbox checked (default):
    - Open sidebar dropdown → verify plans in 'CODE REVIEWED' and 'BACKLOG' columns do NOT appear.
    - Verify plans in other columns (including 'PLAN REVIEWED') appear normally.
-5. Uncheck the checkbox:
+4. Uncheck the checkbox:
    - Open sidebar dropdown → verify ALL plans appear including 'CODE REVIEWED' and 'BACKLOG'.
+5. Re-check the checkbox:
+   - Open sidebar dropdown → verify plans in 'CODE REVIEWED' and 'BACKLOG' columns are hidden again.
 6. Move a plan from 'CODE REVIEWED' to 'LEAD CODED':
    - Verify it appears in dropdown after refresh.
 7. Test case-insensitivity: verify that column IDs 'CODE REVIEWED', 'Code Reviewed', 'code reviewed' are all filtered correctly.
 8. Verify the setting persists across VS Code restarts (stored in workspace settings).
-9. Verify the setting appears in VS Code Settings UI under "Switchboard" section.
+9. Verify the setting appears in VS Code Settings UI under "Switchboard" section with default value `true`.
 
 ### Automated Tests
 
