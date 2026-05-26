@@ -2253,7 +2253,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             kanbanProjectFilter.appendChild(opt);
         });
 
-
     }
 
     function handleKanbanPlansReady(msg) {

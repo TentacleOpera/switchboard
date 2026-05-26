@@ -11,7 +11,7 @@ Remove the repos dropdown (`#kanban-repo-filter`) from the kanban plans tab in `
 - **Created:** 2026-05-26
 - **Priority:** Medium
 - **Type:** UI Cleanup
-- **Status:** Created
+- **Status:** Implemented ✓
 
 ## User Review Required
 
@@ -212,3 +212,40 @@ The repos dropdown in the kanban plans tab (`planning.html`) is redundant and pr
 ## Recommendation
 
 **Send to Intern** — Complexity 2. Single-purpose UI removal across two files with no architectural implications, no backend changes, and no edge cases beyond straightforward line deletion.
+
+## Review Results (2026-05-26)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | NIT | Double blank line in `populateKanbanFilters` (lines 2255-2256) — leftover artifact from block removal |
+
+No CRITICAL or MAJOR findings. All 7 plan requirements (2a–2g) plus the HTML removal were implemented correctly.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| NIT: Double blank line | Valid — trivial style artifact | Fix now |
+
+### Stage 3 — Code Fixes Applied
+
+- **`src/webview/planning.js` line 2255:** Removed extra blank line in `populateKanbanFilters` closing section.
+
+### Stage 4 — Verification Results
+
+- **Grep check:** Zero remaining references to `repoScope`, `kanbanRepoFilter`, or `kanban-repo-filter` in `src/webview/planning.js` and `src/webview/planning.html`. PASS.
+- **CSS check:** No CSS rules target `#kanban-repo-filter`. PASS.
+- **Backend integrity:** `repoScope` still present in `PlanningPanelProvider.ts` (interface + payload), `KanbanProvider.ts` (63 refs), `TaskViewerProvider.ts` (28 refs). Untouched. PASS.
+- **Compilation:** Skipped per session instructions.
+- **Tests:** Skipped per session instructions.
+
+### Files Changed (Review)
+
+- `src/webview/planning.html` — Removed `<select id="kanban-repo-filter">` block (3 lines)
+- `src/webview/planning.js` — Removed `repoScope` from `kanbanFilters`, removed `kanbanRepoFilter` element ref, removed repo scope filter logic from `renderKanbanPlans`, removed `repoScope` from metadata display, updated guard clause, removed repo filter population block, removed repo filter event listener, fixed double blank line (1 line)
+
+### Remaining Risks
+
+- None. The change is purely subtractive with no logic modifications. The backend `repoScope` data model is intact and can be re-exposed in the UI if future demand emerges.
