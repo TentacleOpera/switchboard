@@ -2552,9 +2552,9 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
 }
 
 /**
- * Remove legacy static rule files that are now dynamically injected via
- * agentPromptBuilder.ts so the Kanban "Git Prohibition" checkbox is the
- * sole control surface.
+ * Remove legacy static rule files that are either dynamically injected via
+ * agentPromptBuilder.ts (git prohibition) or superseded by the prompts tab
+ * checkbox system (mode triggers).
  */
 async function cleanupLegacyAgentRules(workspaceRoot: string): Promise<void> {
     const legacyFiles = [

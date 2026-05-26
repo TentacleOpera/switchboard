@@ -133,6 +133,44 @@ If issues arise:
 - Restore the source file `.agent/rules/switchboard_modes.md` if needed
 - Users can manually restore the file if needed (but this is unlikely to be necessary)
 
+## Review Pass Results (2026-05-26)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|:---|:--------|:---------|:-------|
+| 1 | Source file `.agent/rules/switchboard_modes.md` deleted — prevents re-copying to new workspaces | — | **PASS** |
+| 2 | `cleanupLegacyAgentRules()` array entry at line 2562 — follows `no_git_for_agents.md` pattern exactly, catch block handles non-existence | — | **PASS** |
+| 3 | `performSetup()` blocklist entry at line 2674 — safety net for accidental source restoration | — | **PASS** |
+| 4 | `accuracy.md` persona reference removed — workflow steps remain intact and self-contained | — | **PASS** |
+| 5 | Version bump `1.5.9` → `1.6.0` — triggers `shouldRefreshAgentWorkspaceFiles()` (confirmed at lines 164-178) to re-copy updated workflow files | — | **PASS** |
+| 6 | Stale reference in `fix_git_policy_file_circumvents_checkbox.md` line 43 still lists `switchboard_modes.md` as present in `.agent/rules/` — now factually incorrect | NIT | **DEFERRED** (historical plan artifact, not worth editing another plan) |
+| 7 | `cleanupLegacyAgentRules()` JSDoc only described git-prohibition removal reason, not mode-trigger removal — misleading for future maintainers | NIT | **Fixed** |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now:** Updated `cleanupLegacyAgentRules()` docstring to cover both removal reasons (git prohibition + mode triggers superseded by prompts tab)
+- **Defer:** Stale reference in other plan file (historical artifact, no runtime impact)
+- **Keep:** All five implementation changes are correct and complete
+
+### Files Changed During Review
+
+1. `src/extension.ts` — Updated JSDoc on `cleanupLegacyAgentRules()` (lines 2554-2558) to accurately describe both legacy file removal reasons
+
+### Validation
+
+- **Grep dependency check:** `grep -r "switchboard_modes" --include="*.ts" --include="*.js" --include="*.json" src/` — only the two intentional cleanup/blocklist entries remain. No stray references. **PASS**
+- **Source file deletion:** `.agent/rules/switchboard_modes.md` does not exist on disk. **PASS**
+- **accuracy.md reference:** `grep "switchboard_modes" .agent/workflows/accuracy.md` — zero matches. **PASS**
+- **Version bump:** `package.json` shows `"version": "1.6.0"`. **PASS**
+- **TypeScript check:** SKIP (per session directive, no compilation step)
+- **Automated tests:** SKIP (per session directive, tests run separately)
+
+### Remaining Risks
+
+- **IDE prompt-cache race condition:** As documented in the plan, the current IDE session may still have `switchboard_modes.md` cached. Only subsequent sessions are guaranteed clean. This is the same known limitation as the `no_git_for_agents.md` migration — no workaround without IDE restart.
+- **Stale plan reference:** `fix_git_policy_file_circumvents_checkbox.md` line 43 still lists `switchboard_modes.md` as present in `.agent/rules/`. This is a historical artifact with no runtime impact.
+
 ## Recommendation
 
 **Send to Intern** — Complexity 3: single-file deletions and 1-line array additions following established patterns already in the codebase.
