@@ -1359,11 +1359,23 @@
             gap: 10px;
             padding: 10px 12px;
             border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
+            /* Match kanban board card gradient */
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
             cursor: pointer;
-            transition: background 0.15s;
+            transition: all 0.15s;
         }
-        .kanban-plan-item:hover { background: rgba(255,255,255,0.04); }
-        .kanban-plan-item.selected { background: rgba(255,255,255,0.07); }
+        .kanban-plan-item:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .kanban-plan-item.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
         .kanban-plan-topic { font-size: 13px; font-weight: 500; flex: 1; }
         .kanban-column-badge {
             font-size: 10px;
@@ -1372,11 +1384,16 @@
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.04em;
+            /* Neutral grey/black for all status labels */
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
         }
-        .kanban-col-created  { background: rgba(99,  130, 190, 0.25); color: #8ab4f8; }
-        .kanban-col-coded    { background: rgba(255, 167,  38, 0.20); color: #ffc661; }
-        .kanban-col-reviewed { background: rgba(160, 100, 220, 0.25); color: #ce93d8; }
-        .kanban-col-completed{ background: rgba( 67, 160,  71, 0.25); color: #81c784; }
+        .kanban-badge-created   { background: rgba(99,  130, 190, 0.25); color: #8ab4f8; }
+        .kanban-badge-review    { background: rgba(160, 100, 220, 0.25); color: #ce93d8; }
+        .kanban-badge-coded     { background: rgba(255, 167,  38, 0.20); color: #ffc661; }
+        .kanban-badge-reviewed  { background: rgba(200, 120, 120, 0.25); color: #e0a0a0; }
+        .kanban-badge-completed { background: rgba( 67, 160,  71, 0.25); color: #81c784; }
         .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
         .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
         .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
@@ -1402,6 +1419,72 @@
         }
         .edit-mode .markdown-editor {
             display: block !important;
+        }
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel-bg, #1e1e2e);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .comment-popup.visible {
+            display: block;
+        }
+        .popup-label {
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin-bottom: 6px;
+            font-family: var(--font-mono, monospace);
+        }
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text-primary, #ccc);
+            background: rgba(61, 219, 217, 0.08);
+            border: 1px solid rgba(61, 219, 217, 0.22);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            color: var(--text-primary, #ccc);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family, sans-serif);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .popup-actions button {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: var(--text-secondary, #888);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .popup-actions button.primary {
+            background: var(--accent-teal, #3ddbd9);
+            color: #000;
+            border-color: var(--accent-teal, #3ddbd9);
+        }
+        .popup-actions button.primary:hover {
+            opacity: 0.85;
         }
     </style>
 </head>
@@ -1649,22 +1732,19 @@
 
             <!-- Controls strip -->
             <div class="kanban-controls-strip">
-                <select id="kanban-column-filter">
-                    <option value="">All Columns</option>
-                    <option value="CREATED">Created</option>
-                    <option value="CODED">Coded</option>
-                    <option value="PLAN REVIEWED">Plan Reviewed</option>
-                    <option value="COMPLETED">Completed</option>
-                </select>
                 <select id="kanban-workspace-filter">
                     <option value="">All Workspaces</option>
                 </select>
                 <select id="kanban-project-filter">
                     <option value="">All Projects</option>
                 </select>
+                <select id="kanban-column-filter">
+                    <option value="">All Columns</option>
+                </select>
                 <input type="text" id="kanban-search" placeholder="Search plans..." />
                 <button id="kanban-refresh-btn" title="Refresh">↻</button>
                 <button id="btn-edit-kanban" class="strip-btn" disabled>Edit</button>
+                <button id="btn-review-kanban" class="strip-btn" disabled title="Review plan - select text and submit comment to planner">Review</button>
                 <button id="btn-save-kanban" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-kanban" class="strip-btn" style="display:none;">Cancel</button>
             </div>
@@ -1680,6 +1760,15 @@
                     <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
                 </div>
             </div>
+        </div>
+    </div>
+    <div class="comment-popup" id="kanban-comment-popup">
+        <div class="popup-label">Comment on selection</div>
+        <div class="selected-preview" id="kanban-selected-preview"></div>
+        <textarea id="kanban-comment-input" placeholder="Add your contextual feedback..."></textarea>
+        <div class="popup-actions">
+            <button id="kanban-cancel-comment">Cancel</button>
+            <button class="primary" id="kanban-submit-comment">Submit Comment</button>
         </div>
     </div>
     <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>

@@ -23,7 +23,9 @@
         docsListCollapsed: persistedState.docsListCollapsed || false,
         editMode: { local: false, kanban: false },
         editOriginalContent: { local: null, kanban: null },
-        dirtyFlags: { local: false, kanban: false }
+        dirtyFlags: { local: false, kanban: false },
+        reviewMode: { kanban: false },
+        kanbanReviewSelectedText: ''
     };
 
     function toggleSidebarCollapsed() {
@@ -87,6 +89,9 @@
             }
             if (state.editMode.kanban && tabName !== 'kanban') {
                 exitEditMode('kanban', true);
+            }
+            if (state.reviewMode.kanban && tabName !== 'kanban') {
+                exitReviewMode('kanban', true);
             }
 
             tabButtons.forEach(b => b.classList.remove('active'));
@@ -1655,6 +1660,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'kanbanPlanOpenResult':
                 handleKanbanPlanOpenResult(msg);
                 break;
+            case 'commentResult': {
+                const { ok, message } = msg;
+                if (ok) {
+                    hideKanbanCommentPopup(true);
+                    const kanbanStrip = document.querySelector('.kanban-controls-strip');
+                    if (kanbanStrip) {
+                        const feedback = document.createElement('span');
+                        feedback.textContent = 'Comment sent';
+                        feedback.style.cssText = 'color: var(--accent-teal, #3ddbd9); font-size: 11px; margin-left: 8px;';
+                        kanbanStrip.appendChild(feedback);
+                        setTimeout(() => feedback.remove(), 2000);
+                    }
+                } else {
+                    const submitBtn = document.getElementById('kanban-submit-comment');
+                    if (submitBtn) {
+                        submitBtn.style.borderColor = '#ff6b6b';
+                        setTimeout(() => { submitBtn.style.borderColor = ''; }, 2000);
+                    }
+                }
+                break;
+            }
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
@@ -2163,8 +2189,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     // KANBAN PLANS UI LOGIC
     // =========================================================================
     let _kanbanPlansCache = [];
+    let _kanbanAllWorkspaceProjects = {};  // { [resolvedRoot]: string[] }
+    let _kanbanWorkspaceItems = [];         // { workspaceRoot, label }[]
     let _kanbanSelectedPlan = null;
     let _kanbanPreviewRequestId = 0;
+    let _kanbanAvailableColumns = [];  // { id, label, kind }[] — merged across workspaces
+
     
     const kanbanFilters = {
         column: '',
@@ -2185,6 +2215,143 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     // Initial message in preview pane
     if (kanbanPreviewContent) {
         kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
+    }
+
+    function enterReviewMode(tab) {
+        if (tab !== 'kanban') return;
+        if (state.editMode.kanban) {
+            exitEditMode('kanban', true);
+        }
+        state.reviewMode.kanban = true;
+        const btnEdit = document.getElementById('btn-edit-kanban');
+        const btnReview = document.getElementById('btn-review-kanban');
+        if (btnEdit) btnEdit.style.display = 'none';
+        if (btnReview) {
+            btnReview.textContent = 'EXIT REVIEW';
+            btnReview.title = 'Exit review mode';
+        }
+    }
+
+    function exitReviewMode(tab, clearPopup) {
+        if (tab !== 'kanban') return;
+        state.reviewMode.kanban = false;
+        state.kanbanReviewSelectedText = '';
+        if (clearPopup) {
+            hideKanbanCommentPopup(true);
+        }
+        const btnEdit = document.getElementById('btn-edit-kanban');
+        const btnReview = document.getElementById('btn-review-kanban');
+        if (btnEdit) btnEdit.style.display = '';
+        if (btnReview) {
+            btnReview.textContent = 'REVIEW';
+            btnReview.title = 'Review plan - select text and submit comment to planner';
+        }
+    }
+
+    function hideKanbanCommentPopup(clear) {
+        const popup = document.getElementById('kanban-comment-popup');
+        if (popup) popup.classList.remove('visible');
+        if (clear) {
+            const input = document.getElementById('kanban-comment-input');
+            if (input) input.value = '';
+            state.kanbanReviewSelectedText = '';
+        }
+    }
+
+    function showKanbanCommentPopup(rect, selectedText) {
+        const popup = document.getElementById('kanban-comment-popup');
+        if (!popup) return;
+        const maxLeft = window.innerWidth - popup.offsetWidth - 12;
+        const targetLeft = Math.max(12, Math.min(rect.left, maxLeft > 12 ? maxLeft : rect.left));
+        const targetTop = Math.min(window.innerHeight - 12, rect.bottom + 10);
+        popup.style.left = `${targetLeft}px`;
+        popup.style.top = `${targetTop}px`;
+        const preview = document.getElementById('kanban-selected-preview');
+        if (preview) preview.textContent = selectedText;
+        popup.classList.add('visible');
+        const input = document.getElementById('kanban-comment-input');
+        if (input) input.focus();
+    }
+
+    const kanbanCommentPopup = document.getElementById('kanban-comment-popup');
+
+    if (kanbanPreviewContent) {
+        kanbanPreviewContent.addEventListener('mouseup', () => {
+            if (!state.reviewMode.kanban) return;
+            setTimeout(() => {
+                const selection = window.getSelection();
+                if (!selection || selection.rangeCount === 0) {
+                    hideKanbanCommentPopup(false);
+                    return;
+                }
+                const text = selection.toString().trim();
+                if (!text) {
+                    hideKanbanCommentPopup(false);
+                    return;
+                }
+                const range = selection.getRangeAt(0);
+                const rect = range.getBoundingClientRect();
+                state.kanbanReviewSelectedText = text;
+                showKanbanCommentPopup(rect, text);
+            }, 0);
+        });
+
+        kanbanPreviewContent.addEventListener('mousedown', (event) => {
+            if (!state.reviewMode.kanban) return;
+            if (kanbanCommentPopup && !kanbanCommentPopup.contains(event.target)) {
+                const selection = window.getSelection();
+                const selectedText = selection ? selection.toString().trim() : '';
+                if (!selectedText) {
+                    hideKanbanCommentPopup(false);
+                }
+            }
+        });
+    }
+
+    const kanbanCancelComment = document.getElementById('kanban-cancel-comment');
+    if (kanbanCancelComment) {
+        kanbanCancelComment.addEventListener('click', () => hideKanbanCommentPopup(true));
+    }
+
+    const kanbanSubmitComment = document.getElementById('kanban-submit-comment');
+    if (kanbanSubmitComment) {
+        kanbanSubmitComment.addEventListener('click', () => {
+            const commentInput = document.getElementById('kanban-comment-input');
+            const comment = commentInput ? commentInput.value.trim() : '';
+            if (!state.kanbanReviewSelectedText) {
+                const preview = document.getElementById('kanban-selected-preview');
+                if (preview) preview.style.borderColor = '#ff6b6b';
+                setTimeout(() => { if (preview) preview.style.borderColor = ''; }, 2000);
+                return;
+            }
+            if (!comment) {
+                const commentInputEl = document.getElementById('kanban-comment-input');
+                if (commentInputEl) {
+                    commentInputEl.style.borderColor = '#ff6b6b';
+                    setTimeout(() => { commentInputEl.style.borderColor = ''; }, 2000);
+                }
+                return;
+            }
+            vscode.postMessage({
+                type: 'submitComment',
+                sessionId: _kanbanSelectedPlan ? _kanbanSelectedPlan.sessionId : '',
+                topic: _kanbanSelectedPlan ? _kanbanSelectedPlan.topic : '',
+                planFileAbsolute: _kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : '',
+                selectedText: state.kanbanReviewSelectedText,
+                comment
+            });
+        });
+    }
+
+    const btnReviewKanban = document.getElementById('btn-review-kanban');
+    if (btnReviewKanban) {
+        btnReviewKanban.addEventListener('click', () => {
+            if (state.reviewMode.kanban) {
+                exitReviewMode('kanban', true);
+            } else {
+                enterReviewMode('kanban');
+            }
+        });
     }
 
     function renderKanbanPlans(plans, filters) {
@@ -2228,17 +2395,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 itemDiv.classList.add('selected');
             }
 
-            const badgeClass = {
-                'CREATED': 'kanban-col-created',
-                'CODED': 'kanban-col-coded',
-                'PLAN REVIEWED': 'kanban-col-reviewed',
-                'COMPLETED': 'kanban-col-completed'
-            }[plan.column] || 'kanban-col-created';
-
             const metaParts = [plan.workspaceLabel];
             if (plan.project) metaParts.push(plan.project);
 
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
+
+            const columnDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
+            const kind = columnDef?.kind || 'created';
+            const badgeClass = {
+                created: 'kanban-badge-created',
+                gather: 'kanban-badge-created',
+                review: 'kanban-badge-review',
+                coded: 'kanban-badge-coded',
+                reviewed: 'kanban-badge-reviewed',
+                completed: 'kanban-badge-completed',
+                'custom-agent': 'kanban-badge-review',
+                'custom-user': 'kanban-badge-review'
+            }[kind] || 'kanban-badge-created';
 
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
@@ -2249,7 +2422,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
-                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(plan.column)}</span>
+                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
                     </div>
                 </div>
             `;
@@ -2261,6 +2434,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         return;
                     }
                     exitEditMode('kanban', true);
+                }
+                if (state.reviewMode.kanban) {
+                    exitReviewMode('kanban', true);
                 }
 
                 document.querySelectorAll('.kanban-plan-item').forEach(el => el.classList.remove('selected'));
@@ -2288,55 +2464,75 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
-    function populateKanbanFilters(plans) {
+    function populateKanbanFilters() {
         if (!kanbanWorkspaceFilter || !kanbanProjectFilter) return;
 
-        // Workspace filter
-        const uniqueWorkspaces = [];
-        const seenWorkspaces = new Set();
-        plans.forEach(p => {
-            if (p.workspaceRoot && !seenWorkspaces.has(p.workspaceRoot)) {
-                seenWorkspaces.add(p.workspaceRoot);
-                uniqueWorkspaces.push({ root: p.workspaceRoot, label: p.workspaceLabel });
-            }
-        });
+        // --- Workspace dropdown ---
         const currentWS = kanbanFilters.workspaceRoot;
         kanbanWorkspaceFilter.innerHTML = '<option value="">All Workspaces</option>';
-        uniqueWorkspaces.forEach(ws => {
+        _kanbanWorkspaceItems.forEach(ws => {
             const opt = document.createElement('option');
-            opt.value = ws.root;
+            opt.value = ws.workspaceRoot;
             opt.textContent = ws.label;
-            if (ws.root === currentWS) opt.selected = true;
+            if (ws.workspaceRoot === currentWS) opt.selected = true;
             kanbanWorkspaceFilter.appendChild(opt);
         });
 
-        // Project filter
-        const uniqueProjects = new Set();
-        let hasEmptyProject = false;
-        plans.forEach(p => {
-            if (p.project) {
-                uniqueProjects.add(p.project);
-            } else {
-                hasEmptyProject = true;
-            }
-        });
+        // --- Project dropdown ---
+        updateKanbanProjectFilter();
+    }
+
+    function updateKanbanProjectFilter() {
+        if (!kanbanProjectFilter) return;
+        const selectedRoot = kanbanFilters.workspaceRoot;
+        let projectSet;
+        if (selectedRoot) {
+            // Show only projects for selected workspace
+            projectSet = new Set(_kanbanAllWorkspaceProjects[selectedRoot] || []);
+        } else {
+            // Aggregate all projects across all workspaces
+            projectSet = new Set();
+            Object.values(_kanbanAllWorkspaceProjects).forEach(projs => {
+                projs.forEach(p => projectSet.add(p));
+            });
+        }
+
+        // Also include sentinel for plans with no project
+        const hasNoProject = _kanbanPlansCache.some(p =>
+            (!selectedRoot || p.workspaceRoot === selectedRoot) && !p.project
+        );
+
         const currentProj = kanbanFilters.project;
         kanbanProjectFilter.innerHTML = '<option value="">All Projects</option>';
-        if (hasEmptyProject) {
+        if (hasNoProject) {
             const optNone = document.createElement('option');
             optNone.value = '__none__';
             optNone.textContent = '(No Project)';
             if (currentProj === '__none__') optNone.selected = true;
             kanbanProjectFilter.appendChild(optNone);
         }
-        Array.from(uniqueProjects).sort().forEach(proj => {
+        Array.from(projectSet).sort().forEach(proj => {
             const opt = document.createElement('option');
             opt.value = proj;
             opt.textContent = proj;
             if (proj === currentProj) opt.selected = true;
             kanbanProjectFilter.appendChild(opt);
         });
+    }
 
+    function updateKanbanColumnFilter() {
+        if (!kanbanColumnFilter) return;
+
+        const currentColumn = kanbanFilters.column;
+        kanbanColumnFilter.innerHTML = '<option value="">All Columns</option>';
+
+        _kanbanAvailableColumns.forEach(col => {
+            const opt = document.createElement('option');
+            opt.value = col.id;       // Use backend ID for filtering
+            opt.textContent = col.label;  // Use frontend label for display
+            if (col.id === currentColumn) opt.selected = true;
+            kanbanColumnFilter.appendChild(opt);
+        });
     }
 
     function handleKanbanPlansReady(msg) {
@@ -2348,7 +2544,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         _kanbanPlansCache = msg.plans || [];
-        populateKanbanFilters(_kanbanPlansCache);
+        _kanbanWorkspaceItems = msg.workspaceItems || [];
+        _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
+        _kanbanAvailableColumns = msg.columns || [];  // NEW: store available columns
+
+        populateKanbanFilters();
+        updateKanbanColumnFilter();  // NEW: populate column dropdown
         renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
     }
 
@@ -2374,6 +2575,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const btnEditKanban = document.getElementById('btn-edit-kanban');
         if (btnEditKanban) {
             btnEditKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
+        }
+        const btnReviewKanban = document.getElementById('btn-review-kanban');
+        if (btnReviewKanban) {
+            btnReviewKanban.disabled = !_kanbanSelectedPlan || !_kanbanSelectedPlan.planFile;
         }
     }
 
@@ -2423,6 +2628,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     if (kanbanWorkspaceFilter) {
         kanbanWorkspaceFilter.addEventListener('change', () => {
             kanbanFilters.workspaceRoot = kanbanWorkspaceFilter.value;
+            // Reset project filter when workspace changes to avoid stale selection
+            kanbanFilters.project = '';
+            if (kanbanProjectFilter) kanbanProjectFilter.value = '';
+            updateKanbanProjectFilter();
             renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
         });
     }
@@ -2466,6 +2675,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function enterEditMode(tab) {
+        if (tab === 'kanban' && state.reviewMode.kanban) {
+            exitReviewMode('kanban', true);
+        }
         const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
         const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 'kanban-editor');
         

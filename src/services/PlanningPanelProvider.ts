@@ -14,6 +14,9 @@ import { LocalFolderService } from './LocalFolderService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
+import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig } from './agentConfig';
+import { ReviewCommentRequest, ReviewCommentResult } from './ReviewProvider';
+
 
 export interface PlanningPanelAdapterFactories {
     getNotionService: (root: string) => NotionFetchService;
@@ -25,6 +28,7 @@ export interface PlanningPanelAdapterFactories {
 
 interface KanbanPlanSummary {
     planId: string;
+    sessionId: string;
     topic: string;
     column: string;
     workspaceRoot: string;  // full absolute path — used as filter key
@@ -542,6 +546,43 @@ export class PlanningPanelProvider {
                 await this._handleFetchRoots();
                 break;
             }
+            case 'submitComment': {
+                try {
+                    const selectedText = typeof msg?.selectedText === 'string' ? msg.selectedText.trim() : '';
+                    const comment = typeof msg?.comment === 'string' ? msg.comment.trim() : '';
+                    const planFileAbsolute = typeof msg?.planFileAbsolute === 'string' ? msg.planFileAbsolute.trim() : '';
+
+                    if (!selectedText) {
+                        throw new Error('Please select text before submitting a comment.');
+                    }
+                    if (!comment) {
+                        throw new Error('Please enter a comment before submitting.');
+                    }
+
+                    const request: ReviewCommentRequest = {
+                        sessionId: msg.sessionId || '',
+                        topic: msg.topic || '',
+                        planFileAbsolute,
+                        selectedText,
+                        comment
+                    };
+
+                    const result = await vscode.commands.executeCommand<ReviewCommentResult>(
+                        'switchboard.sendReviewComment',
+                        request
+                    );
+
+                    const normalizedResult = result && typeof result.ok === 'boolean'
+                        ? result
+                        : { ok: false, message: 'Review comment dispatch failed (no response).' };
+
+                    this._panel?.webview.postMessage({ type: 'commentResult', ...normalizedResult });
+                } catch (error) {
+                    const message = error instanceof Error ? error.message : String(error);
+                    this._panel?.webview.postMessage({ type: 'commentResult', ok: false, message });
+                }
+                break;
+            }
             case 'savePlanningContainerSelection': {
                 const sourceId = String(msg.sourceId || '').trim();
                 const containerId = String(msg.containerId || '').trim();
@@ -998,6 +1039,22 @@ export class PlanningPanelProvider {
                     const allRoots = this._getWorkspaceRoots();
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
+                    const allWorkspaceProjects: Record<string, string[]> = {};
+                    const mergedColumns: { id: string; label: string; kind: string }[] = [];
+                    const seenColumnIds = new Set<string>();
+
+                    // Build workspaceItems using VSCode folder names (not path.basename)
+                    const workspaceItems = allRoots.map(root => {
+                        const resolvedRoot = path.resolve(root);
+                        const folder = (vscode.workspace.workspaceFolders || []).find(
+                            f => path.resolve(f.uri.fsPath) === resolvedRoot
+                        );
+                        return {
+                            workspaceRoot: resolvedRoot,
+                            label: folder ? folder.name : path.basename(root)
+                        };
+                    });
+
                     for (const root of allRoots) {
                         try {
                             const plans = await this._getKanbanPlans(root);
@@ -1007,14 +1064,36 @@ export class PlanningPanelProvider {
                                     allPlans.push(p);
                                 }
                             }
+                            // Fetch projects for this workspace
+                            const { KanbanDatabase } = require('./KanbanDatabase');
+                            const db = KanbanDatabase.forWorkspace(root);
+                            const workspaceId = await this._getWorkspaceId(root);
+                            allWorkspaceProjects[path.resolve(root)] = await db.getProjects(workspaceId);
+
+                            // Fetch column definitions for this workspace and merge
+                            const colDefs = await this._getKanbanColumnDefinitions(root);
+                            for (const col of colDefs) {
+                                if (!seenColumnIds.has(col.id)) {
+                                    seenColumnIds.add(col.id);
+                                    mergedColumns.push({ id: col.id, label: col.label, kind: col.kind });
+                                }
+                            }
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
                     if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
-                    this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: allPlans, requestId });
+                    mergedColumns.sort((a, b) => a.id.localeCompare(b.id));
+                    this._panel?.webview.postMessage({
+                        type: 'kanbanPlansReady',
+                        plans: allPlans,
+                        workspaceItems,
+                        allWorkspaceProjects,
+                        columns: mergedColumns,
+                        requestId
+                    });
                 } catch (err) {
                     if (requestId === this._latestRequestIds.get(guardKey)) {
-                        this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], requestId, error: String(err) });
+                        this._panel?.webview.postMessage({ type: 'kanbanPlansReady', plans: [], columns: [], requestId, error: String(err) });
                     }
                 }
                 break;
@@ -2514,14 +2593,40 @@ export class PlanningPanelProvider {
         const records = await db.getBoard(workspaceId);
         return records.map((r: any) => ({
             planId: r.planId,
+            sessionId: r.sessionId || '',
             topic: r.topic || path.basename(r.planFile || '') || 'Untitled',
             column: r.kanbanColumn,
             workspaceRoot: path.resolve(workspaceRoot),
-            workspaceLabel: path.basename(workspaceRoot),
+            workspaceLabel: (() => {
+                const resolvedRoot = path.resolve(workspaceRoot);
+                const folder = (vscode.workspace.workspaceFolders || []).find(
+                    f => path.resolve(f.uri.fsPath) === resolvedRoot
+                );
+                return folder ? folder.name : path.basename(workspaceRoot);
+            })(),
             project: r.project || '',
             repoScope: r.repoScope || '',
             mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,
             planFile: r.planFile || ''
         }));
+    }
+
+    private async _getKanbanColumnDefinitions(workspaceRoot: string): Promise<KanbanColumnDefinition[]> {
+        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
+        let customAgents: CustomAgentConfig[] = [];
+        let customKanbanColumns: CustomKanbanColumnConfig[] = [];
+        try {
+            const content = await fs.promises.readFile(statePath, 'utf8');
+            const state = JSON.parse(content);
+            if (Array.isArray(state.customAgents)) {
+                customAgents = state.customAgents.filter((a: any) => a && a.role && a.name);
+            }
+            if (Array.isArray(state.customKanbanColumns)) {
+                customKanbanColumns = state.customKanbanColumns.filter((c: any) => c && c.id && c.label);
+            }
+        } catch {
+            // No state file or parse error — use defaults
+        }
+        return buildKanbanColumns(customAgents, customKanbanColumns);
     }
 }
