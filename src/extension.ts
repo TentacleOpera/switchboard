@@ -8,7 +8,7 @@ import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { SessionActionLog } from './services/SessionActionLog';
 import { KanbanProvider } from './services/KanbanProvider';
 import { GlobalPlanWatcherService } from './services/GlobalPlanWatcherService';
-import { KanbanDatabase, WorkspaceDatabaseMapping } from './services/KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping } from './services/KanbanDatabase';
 import { SetupPanelProvider } from './services/SetupPanelProvider';
 import { ReviewProvider, ReviewCommentRequest, ReviewCommentResult, ReviewOpenPlanOption, ReviewPlanContext, ReviewTicketData, ReviewTicketUpdateRequest, ReviewTicketUpdateResult } from './services/ReviewProvider';
 import { sendRobustText } from './services/terminalUtils';
@@ -26,7 +26,6 @@ import { PlannerPromptWriter } from './services/PlannerPromptWriter';
 import { PlanningPanelCacheService } from './services/PlanningPanelCacheService';
 import { ResearchImportService } from './services/ResearchImportService';
 import { isAllowedSwitchboardLocation } from './utils/switchboardLocationGuard';
-import { clearMappingCache } from './services/WorkspaceIdentityService';
 
 // Status bar item for setup notification
 let setupStatusBarItem: vscode.StatusBarItem;
@@ -124,41 +123,89 @@ function setLastCopiedAgentVersion(workspaceRoot: string, version: string): void
     }
 }
 
-async function migrateWorkspaceDatabaseMappings(): Promise<void> {
-    const workspaceCfg = vscode.workspace.getConfiguration('switchboard');
-    const workspaceValue = workspaceCfg.get<any>('workspaceDatabaseMappings');
-    const isDefault = !workspaceValue?.enabled && (!workspaceValue?.mappings || workspaceValue.mappings.length === 0);
+/**
+ * One-shot bootstrap: if VS Code config has mappings but DB doesn't yet,
+ * copy them into the DB and write pointer files. Runs once, then sets a
+ * globalState flag so it never runs again. This is NOT a migration period —
+ * it's a single bridge for existing config → DB on first activation.
+ */
+async function bootstrapMappingsToDb(context: vscode.ExtensionContext): Promise<void> {
+    const bootstrapped = context.globalState.get<boolean>('mappings_db_bootstrapped', false);
+    if (bootstrapped) {
+        return;
+    }
 
-    // Check each open folder for folder-scoped values that may differ from workspace scope
-    let migrated = false;
-    const skippedFolders: string[] = [];
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const folderCfg = vscode.workspace.getConfiguration('switchboard', folder.uri);
-        const folderValue = folderCfg.get<any>('workspaceDatabaseMappings');
-        if (folderValue?.enabled || (Array.isArray(folderValue?.mappings) && folderValue.mappings.length > 0)) {
-            if (!migrated) {
-                // Lift first folder's data to workspace scope (overwriting whatever is there)
-                await workspaceCfg.update('workspaceDatabaseMappings', folderValue, vscode.ConfigurationTarget.Workspace);
-                console.log('[Switchboard] Migrated workspaceDatabaseMappings from folder scope to workspace scope');
-                migrated = true;
-            } else {
-                // Additional folders with folder-scoped data — cannot safely merge, log warning
-                skippedFolders.push(folder.uri.fsPath);
+    try {
+        const workspaceCfg = vscode.workspace.getConfiguration('switchboard');
+        const configValue = workspaceCfg.get<{ enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] }>('workspaceDatabaseMappings');
+        if (!configValue || !configValue.enabled || !Array.isArray(configValue.mappings) || configValue.mappings.length === 0) {
+            // Nothing to bootstrap
+            await context.globalState.update('mappings_db_bootstrapped', true);
+            return;
+        }
+
+        // If any DB already has workspace_mappings, skip — user has already saved from setup.html
+        for (const mapping of configValue.mappings) {
+            if (mapping.parentFolder && mapping.dbPath) {
+                try {
+                    const db = KanbanDatabase.forWorkspace(mapping.parentFolder, mapping.dbPath);
+                    const existing = await db.getWorkspaceMappings();
+                    if (existing.enabled && Array.isArray(existing.mappings) && existing.mappings.length > 0) {
+                        // DB already has mappings — bootstrap not needed
+                        await context.globalState.update('mappings_db_bootstrapped', true);
+                        return;
+                    }
+                } catch {}
             }
         }
+
+        console.log('[Switchboard] Bootstrapping workspaceDatabaseMappings from VS Code config to database...');
+
+        for (const mapping of configValue.mappings) {
+            if (mapping.parentFolder && mapping.dbPath) {
+                KanbanDatabase.writeDbPointer(mapping.parentFolder, mapping.dbPath);
+                const db = KanbanDatabase.forWorkspace(mapping.parentFolder, mapping.dbPath);
+                await db.setWorkspaceMappings({
+                    enabled: configValue.enabled ?? false,
+                    mappings: configValue.mappings
+                });
+            }
+        }
+
+        await context.globalState.update('mappings_db_bootstrapped', true);
+        console.log('[Switchboard] Bootstrap complete. Mappings now live in DB.');
+    } catch (err) {
+        console.error('[Switchboard] Error during one-time mapping bootstrap:', err);
     }
-    if (skippedFolders.length > 0) {
-        console.warn(
-            '[Switchboard] WARNING: workspaceDatabaseMappings found in multiple folder scopes during migration. ' +
-            'Only the first folder was migrated. The following folders were skipped and their mappings were NOT migrated: ' +
-            skippedFolders.join(', ') +
-            '. Please manually consolidate these into the workspace-level setting.'
-        );
+}
+
+async function initializeMappingIndex(): Promise<void> {
+    const dbs = new Map<string, KanbanDatabase>();
+    for (const folder of vscode.workspace.workspaceFolders ?? []) {
+        const folderPath = path.resolve(folder.uri.fsPath);
+        // Check for pointer file, then kanban.dbPath setting, then default path
+        let dbPath: string = KanbanDatabase.readDbPointer(folderPath) ?? '';
+        if (!dbPath) {
+            let settingValue = '';
+            try {
+                settingValue = String(vscode.workspace.getConfiguration('switchboard', folder.uri).get('kanban.dbPath') || '').trim();
+            } catch {}
+            if (settingValue) {
+                const expanded = (KanbanDatabase as any)._expandHome(settingValue);
+                dbPath = path.isAbsolute(expanded) ? expanded : path.join(folderPath, expanded);
+            } else {
+                dbPath = path.join(folderPath, '.switchboard', 'kanban.db');
+            }
+        }
+
+        // If the database file exists, open it and read mappings
+        if (dbPath && fs.existsSync(dbPath)) {
+            const db = KanbanDatabase.forWorkspace(folderPath, dbPath);
+            dbs.set(folderPath, db);
+        }
     }
-    // If no folder-scoped data was found but workspace scope was also default, nothing to do
-    if (!migrated && !isDefault) {
-        console.log('[Switchboard] workspaceDatabaseMappings already at workspace scope, no migration needed');
-    }
+    const { buildMappingIndexFromDbs } = require('./services/WorkspaceIdentityService');
+    await buildMappingIndexFromDbs(dbs);
 }
 
 function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
@@ -368,13 +415,12 @@ export async function activate(context: vscode.ExtensionContext) {
         outputChannel = vscode.window.createOutputChannel('Switchboard');
     }
 
-    // One-time migration: lift folder-scoped workspaceDatabaseMappings to workspace scope
-    // before the scope change to "window" makes them invisible. Must run before KanbanProvider
-    // or SetupPanel read the setting.
+    // One-shot bootstrap: copy VS Code config mappings to DB if DB is empty, then build index
     try {
-        await migrateWorkspaceDatabaseMappings();
+        await bootstrapMappingsToDb(context);
+        await initializeMappingIndex();
     } catch (err) {
-        console.error('[Switchboard] Migration failed, continuing activation:', err);
+        console.error('[Switchboard] Mapping index initialization failed, continuing activation:', err);
     }
 
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
@@ -444,18 +490,6 @@ export async function activate(context: vscode.ExtensionContext) {
                     || e.affectsConfiguration('switchboard.workspace.ignoreRules')
                 ) {
                     scheduleWorkspaceExcludeApply();
-                }
-                if (e.affectsConfiguration('switchboard.workspaceDatabaseMappings')) {
-                    // Invalidate cached database instances for all workspace folders
-                    (vscode.workspace.workspaceFolders || []).forEach(folder => {
-                        KanbanDatabase.invalidateWorkspace(folder.uri.fsPath).catch(err => {
-                            console.error(`[Switchboard] Failed to invalidate workspace ${folder.uri.fsPath}:`, err);
-                        });
-                    });
-                    // Clear the mapping resolution cache so subsequent lookups use fresh config
-                    clearMappingCache();
-                    // Refresh the Kanban UI
-                    kanbanProvider!._scheduleBoardRefresh();
                 }
             })
         );
@@ -966,6 +1000,21 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.refreshUI(workspaceRoot);
     });
     context.subscriptions.push(refreshUIDisposable);
+
+    const mappingsChangedDisposable = vscode.commands.registerCommand('switchboard.mappingsChanged', async () => {
+        // Clear mapping cache
+        const { clearMappingCache } = require('./services/WorkspaceIdentityService');
+        clearMappingCache();
+        // Rebuild index
+        await initializeMappingIndex();
+        // Refresh UI
+        kanbanProvider!._scheduleBoardRefresh();
+        // Tell watchers to refresh
+        if (globalPlanWatcher) {
+            await (globalPlanWatcher as any)._refreshWatchers();
+        }
+    });
+    context.subscriptions.push(mappingsChangedDisposable);
 
     // Helper commands for Kanban ↔ sidebar delegation
     const triggerFromKanbanDisposable = vscode.commands.registerCommand('switchboard.triggerAgentFromKanban', async (role: string, sessionId: string, instruction?: string, workspaceRoot?: string) => {

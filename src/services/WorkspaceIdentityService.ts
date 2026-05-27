@@ -6,6 +6,8 @@ import { KanbanDatabase, WorkspaceDatabaseMapping } from './KanbanDatabase';
 
 // Module-level cache for mapping lookups
 let _mappingCache: Map<string, string> | null = null;
+let _mappingIndex: Map<string, string> | null = null;
+let _mappingsDocument: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } | null = null;
 
 function getCachedMapping(workspaceRoot: string): string | undefined {
     return _mappingCache?.get(workspaceRoot);
@@ -19,10 +21,81 @@ function setCachedMapping(workspaceRoot: string, effectiveRoot: string): void {
 }
 
 /**
- * Clears the mapping cache. Should be called when workspaceDatabaseMappings config changes.
+ * Clears the mapping cache. Should be called when DB mappings change.
  */
 export function clearMappingCache(): void {
     _mappingCache = null;
+    _mappingIndex = null;
+    _mappingsDocument = null;
+}
+
+export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>): Promise<void> {
+    const index = new Map<string, string>();
+    const allMappings: WorkspaceDatabaseMapping[] = [];
+    let anyEnabled = false;
+
+    for (const [parentPath, db] of dbs.entries()) {
+        try {
+            const result = await db.getWorkspaceMappings();
+            if (result.enabled && Array.isArray(result.mappings)) {
+                anyEnabled = true;
+                for (const mapping of result.mappings) {
+                    // Avoid duplicates in the combined list
+                    if (!allMappings.some(m => m.id === mapping.id)) {
+                        allMappings.push(mapping);
+                    }
+                }
+            }
+        } catch (error) {
+            console.error(`[WorkspaceIdentityService] Error reading mappings from DB at ${parentPath}:`, error);
+        }
+    }
+
+    // Now populate the index
+    if (anyEnabled) {
+        for (const mapping of allMappings) {
+            const parentEntry = mapping.parentFolder || (Array.isArray(mapping.workspaceFolders) && mapping.workspaceFolders.length > 0 ? mapping.workspaceFolders[0] : undefined);
+            if (!parentEntry) continue;
+            
+            const resolvedParent = path.resolve(parentEntry.startsWith('~') ? path.join(os.homedir(), parentEntry.slice(1)) : parentEntry);
+
+            // Parent maps to itself
+            index.set(resolvedParent, resolvedParent);
+
+            // Children map to parent
+            if (Array.isArray(mapping.workspaceFolders)) {
+                for (const child of mapping.workspaceFolders) {
+                    const resolvedChild = path.resolve(child.startsWith('~') ? path.join(os.homedir(), child.slice(1)) : child);
+                    index.set(resolvedChild, resolvedParent);
+                }
+            }
+
+            // Dropdowns map to parent
+            if (Array.isArray(mapping.dropdownWorkspaces)) {
+                for (const dropdown of mapping.dropdownWorkspaces) {
+                    const resolvedDropdown = path.resolve(dropdown.startsWith('~') ? path.join(os.homedir(), dropdown.slice(1)) : dropdown);
+                    index.set(resolvedDropdown, resolvedParent);
+                }
+            }
+        }
+    }
+
+    _mappingIndex = index;
+    _mappingsDocument = { enabled: anyEnabled, mappings: allMappings };
+    
+    // Also update _mappingCache for compatibility
+    _mappingCache = new Map(index);
+    
+    console.log(`[WorkspaceIdentityService] Built mapping index with ${index.size} mappings from DBs. Enabled: ${anyEnabled}`);
+}
+
+export function getMappingsFromIndex(): { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } {
+    if (_mappingsDocument) {
+        return _mappingsDocument;
+    }
+    
+    // No index built yet — return empty defaults
+    return { enabled: false, mappings: [] };
 }
 
 /**
@@ -30,10 +103,7 @@ export function clearMappingCache(): void {
  */
 export function isDropdownWorkspace(workspaceRoot: string): boolean {
     try {
-        const vscode = require('vscode');
-        const cfg = vscode.workspace.getConfiguration('switchboard')
-                         .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+        const cfg = getMappingsFromIndex();
 
         if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
             return false;
@@ -58,9 +128,9 @@ export function isDropdownWorkspace(workspaceRoot: string): boolean {
 }
 
 /**
- * Resolves the effective workspace root based on workspaceDatabaseMappings configuration.
+ * Resolves the effective workspace root based on DB-stored mappings configuration.
  * If this workspace is part of a shared database mapping, returns the parent workspace root.
- * Uses memoization to avoid repeated VS Code config API calls.
+ * Uses memoization to avoid repeated lookups.
  */
 export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string): string {
     // Check cache first
@@ -70,10 +140,7 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
     }
 
     try {
-        const vscode = require('vscode');
-        const cfg = vscode.workspace.getConfiguration('switchboard')
-                         .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+        const cfg = getMappingsFromIndex();
 
         if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
             setCachedMapping(workspaceRoot, workspaceRoot);
@@ -93,10 +160,6 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
                     ? path.join(os.homedir(), mapping.parentFolder.slice(1))
                     : mapping.parentFolder;
                     
-                if (!path.isAbsolute(expandedParent)) {
-                    console.warn(`[WorkspaceIdentityService] Warning: Relative parentFolder "${mapping.parentFolder}" used in mapping. Please use absolute paths or ~.`);
-                }
-                
                 isParent = path.resolve(expandedParent) === workspaceRoot;
             }
 
@@ -105,10 +168,6 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
                 const expanded = f.startsWith('~')
                     ? path.join(os.homedir(), f.slice(1))
                     : f;
-                    
-                if (!path.isAbsolute(expanded)) {
-                    console.warn(`[WorkspaceIdentityService] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
-                }
                 
                 return path.resolve(expanded) === workspaceRoot;
             });

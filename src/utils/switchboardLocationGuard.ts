@@ -33,9 +33,8 @@ export function isAllowedSwitchboardLocation(candidatePath: string, workspaceRoo
 
     // 1. Check workspaceDatabaseMappings — child folders are NEVER allowed
     try {
-        const cfg = vscode.workspace.getConfiguration('switchboard')
-                         .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+        const { getMappingsFromIndex } = require('../services/WorkspaceIdentityService');
+        const cfg = getMappingsFromIndex();
 
         if (cfg?.enabled && Array.isArray(cfg.mappings)) {
             // 1a. Is candidate a mapped child workspaceFolder or dropdownWorkspace? → BLOCK

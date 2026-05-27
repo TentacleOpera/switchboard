@@ -452,9 +452,8 @@ export class KanbanProvider implements vscode.Disposable {
         const roots = this._getWorkspaceRoots();
         const allowedRoots = new Set<string>(roots);
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
                     const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
@@ -667,9 +666,8 @@ export class KanbanProvider implements vscode.Disposable {
         let mappings: WorkspaceDatabaseMapping[] = [];
         let enabled = false;
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 mappings = cfg.mappings;
                 enabled = true;
@@ -685,7 +683,7 @@ export class KanbanProvider implements vscode.Disposable {
             for (const root of openRoots) {
                 const resolvedRoot = path.resolve(root);
                 for (const m of mappings) {
-                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (m.workspaceFolders && m.workspaceFolders[0]);
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
                     if (parent) {
                         const expandedParent = parent.startsWith('~')
                             ? path.join(os.homedir(), parent.slice(1))
@@ -723,7 +721,7 @@ export class KanbanProvider implements vscode.Disposable {
             // Multi-root/mapped context: strictly display the custom configured parent mapping names
             const addedRoots = new Set<string>();
             for (const m of mappings) {
-                const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (m.workspaceFolders && m.workspaceFolders[0]);
+                const parent = m.parentFolder || (m as any).parentWorkspaceFolder || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
                 if (parent) {
                     const expanded = parent.startsWith('~')
                         ? path.join(os.homedir(), parent.slice(1))
@@ -884,9 +882,8 @@ export class KanbanProvider implements vscode.Disposable {
         };
 
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                .get('workspaceDatabaseMappings') as
-            { enabled?: boolean; mappings?: any[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
 
             if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
                 for (const mapping of cfg.mappings) {
@@ -977,14 +974,15 @@ export class KanbanProvider implements vscode.Disposable {
             const workspaceId = await db.getWorkspaceId();
             const projList = projects || (workspaceId ? await db.getProjects(workspaceId) : []);
 
-            // Filter out ghost plans: plan files that don't exist in this workspace or are outside the workspace root.
+            // Filter out ghost plans: plan files that no longer exist on disk.
             // Only filter ACTIVE plans — completed plans may have been archived (file moved)
             // and should still appear in the COMPLETED column; the DB is the source of truth.
+            // Note: plans reassigned from another workspace may have planFile paths outside
+            // the current workspaceRoot — those are legitimate and must NOT be filtered out.
             const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                 const planFile = row.planFile || '';
                 if (!planFile) return false;
                 const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
-                if (!planPath.startsWith(resolvedWorkspaceRoot)) return false;
                 return fs.existsSync(planPath);
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
@@ -3583,58 +3581,8 @@ export class KanbanProvider implements vscode.Disposable {
             return path.resolve(explicit.trim());
         }
 
-        // Check workspaceDatabaseMappings configuration (shared database mechanism)
-        const resolvedRoot = path.resolve(workspaceRoot);
-        try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: Array<{ workspaceFolders: string[]; parentFolder?: string; dropdownWorkspaces?: string[] }> } | undefined;
-
-            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                for (const mapping of cfg.mappings) {
-                    if (!Array.isArray(mapping.workspaceFolders)) continue;
-
-                    const matchingIndex = mapping.workspaceFolders.findIndex((f: string) => {
-                        const expanded = f.startsWith('~')
-                            ? path.join(os.homedir(), f.slice(1))
-                            : f;
-                        return path.resolve(expanded) === resolvedRoot;
-                    });
-
-                    const dropdownIndex = Array.isArray(mapping.dropdownWorkspaces)
-                        ? mapping.dropdownWorkspaces.findIndex((f: string) => {
-                            const expanded = f.startsWith('~')
-                                ? path.join(os.homedir(), f.slice(1))
-                                : f;
-                            return path.resolve(expanded) === resolvedRoot;
-                        })
-                        : -1;
-
-                    if (matchingIndex !== -1 || dropdownIndex !== -1) {
-                        // This root is in a mapping - use explicit parentFolder if set,
-                        // otherwise fall back to first entry for backward compatibility
-                        let parentEntry: string | undefined;
-                        if (mapping.parentFolder) {
-                            parentEntry = mapping.parentFolder;
-                        } else if (mapping.workspaceFolders.length > 0) {
-                            parentEntry = mapping.workspaceFolders[0];
-                        }
-
-                        if (!parentEntry) continue;
-
-                        return path.resolve(
-                            parentEntry.startsWith('~')
-                                ? path.join(os.homedir(), parentEntry.slice(1))
-                                : parentEntry
-                        );
-                    }
-                }
-            }
-        } catch {
-            // Outside extension host - can't read settings
-        }
-
-        return resolvedRoot;
+        // Check workspaceDatabaseMappings configuration via mapping index
+        return resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
     }
 
     public async ensureControlPlaneSelection(workspaceRoot: string): Promise<void> {
@@ -4048,8 +3996,10 @@ export class KanbanProvider implements vscode.Disposable {
                     break;
                 }
 
-                // Guard: source workspace must be known
-                const sourceWorkspaceRoot = this._currentWorkspaceRoot;
+                // Source workspace comes from the webview (derived from selected cards' workspaceRoot),
+                // NOT from this._currentWorkspaceRoot which may have changed when the user switched
+                // the dropdown to pick the target workspace.
+                const sourceWorkspaceRoot: string = msg.sourceWorkspaceRoot || this._currentWorkspaceRoot || '';
                 if (!sourceWorkspaceRoot) {
                     vscode.window.showWarningMessage('Cannot determine source workspace for reassignment.');
                     break;
@@ -4100,13 +4050,43 @@ export class KanbanProvider implements vscode.Disposable {
                     }
 
                     try {
-                        // Upsert full record into target DB, overriding only the workspaceId and timestamp.
-                        // Note: planFile remains relative to the source workspace root. The plan file
-                        // is NOT moved on disk — only the DB record is transferred. "Open Plan" on the
-                        // moved card in the target workspace will not resolve until the user also moves
-                        // the plan file to the target workspace directory.
+                        // Move the plan file from source to target workspace so the path stays
+                        // relative (portable across machines). Without this, the planFile would
+                        // be stored as an absolute path pointing to the source workspace, which
+                        // breaks on different machines and gets filtered out by ghost checks.
+                        const sourcePlanPath = path.isAbsolute(plan.planFile)
+                            ? plan.planFile
+                            : path.resolve(sourceWorkspaceRoot, plan.planFile);
+                        const planFileName = path.basename(sourcePlanPath);
+                        const targetPlansDir = path.join(targetWorkspaceRoot, '.switchboard', 'plans');
+                        const targetPlanPath = path.join(targetPlansDir, planFileName);
+                        let newPlanFile: string;
+
+                        if (fs.existsSync(sourcePlanPath)) {
+                            // Ensure target plans directory exists
+                            if (!fs.existsSync(targetPlansDir)) {
+                                fs.mkdirSync(targetPlansDir, { recursive: true });
+                            }
+                            // Move the file (rename is atomic on same filesystem, copy+delete fallback)
+                            try {
+                                fs.renameSync(sourcePlanPath, targetPlanPath);
+                            } catch (renameErr) {
+                                // Cross-filesystem rename fails — fall back to copy + delete
+                                fs.copyFileSync(sourcePlanPath, targetPlanPath);
+                                fs.unlinkSync(sourcePlanPath);
+                            }
+                            // Store as relative path — _ensureRelativePlanFile will strip the target root
+                            newPlanFile = targetPlanPath;
+                            console.log(`[KanbanProvider] reassignPlansWorkspace: moved plan file ${sourcePlanPath} -> ${targetPlanPath}`);
+                        } else {
+                            // File doesn't exist on disk — keep the original planFile (best effort)
+                            newPlanFile = plan.planFile;
+                            console.warn(`[KanbanProvider] reassignPlansWorkspace: plan file not found on disk: ${sourcePlanPath}, keeping original path`);
+                        }
+
                         const ok = await targetDb.upsertPlan({
                             ...plan,
+                            planFile: newPlanFile,
                             workspaceId: targetWorkspaceId,
                             project: msg.targetProject !== undefined ? msg.targetProject : plan.project,
                             updatedAt: new Date().toISOString()

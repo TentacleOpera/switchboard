@@ -2242,25 +2242,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
-                    <div style="display: flex; align-items: flex-start; justify-content: space-between; gap: 8px;">
+                    <div style="display: flex; align-items: flex-start; gap: 8px;">
                         <span class="kanban-plan-topic">${escapeHtml(plan.topic)}</span>
-                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(plan.column)}</span>
                     </div>
                     <div class="kanban-plan-meta" style="margin-top: 4px;">
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
-                        <button class="kanban-action-open" data-path="${escapeHtml(plan.planFile)}">Open File</button>
-                        <button class="kanban-action-context" data-path="${escapeHtml(plan.planFile)}">Set Context</button>
+                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(plan.column)}</span>
                     </div>
                 </div>
             `;
 
             // Row selection
             itemDiv.addEventListener('click', (e) => {
-                // If they clicked on buttons, don't trigger row click preview
-                if (e.target.tagName === 'BUTTON') return;
-
                 if (state.dirtyFlags.kanban) {
                     if (!confirm('You have unsaved changes in Kanban Plans. Discard them?')) {
                         return;
@@ -2288,32 +2283,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 }
             });
-
-            // Action buttons
-            const btnOpen = itemDiv.querySelector('.kanban-action-open');
-            const btnContext = itemDiv.querySelector('.kanban-action-context');
-
-            if (btnOpen) {
-                btnOpen.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const path = btnOpen.dataset.path;
-                    if (path) {
-                        vscode.postMessage({ type: 'openKanbanPlan', filePath: path });
-                    }
-                });
-            }
-
-            if (btnContext) {
-                btnContext.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    const path = btnContext.dataset.path;
-                    if (path) {
-                        btnContext.disabled = true;
-                        btnContext.innerText = 'Setting...';
-                        vscode.postMessage({ type: 'setKanbanPlanContext', filePath: path });
-                    }
-                });
-            }
 
             kanbanListPane.appendChild(itemDiv);
         });
@@ -2409,14 +2378,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handleKanbanContextSet(msg) {
-        // Re-enable "Set Context" button
-        if (kanbanListPane) {
-            kanbanListPane.querySelectorAll('.kanban-action-context').forEach(btn => {
-                btn.disabled = false;
-                btn.innerText = 'Set Context';
-            });
-        }
-        
         if (!msg.success) {
             alert('Failed to set active context: ' + (msg.error || 'Unknown error'));
         }

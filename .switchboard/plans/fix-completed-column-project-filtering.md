@@ -205,3 +205,41 @@ suite('getCompletedPlansFilteredByProject', () => {
 ---
 
 **Recommendation:** Send to Coder
+
+---
+
+## Reviewer Pass — 2026-05-27
+
+### Stage 1 — Adversarial Findings
+
+| # | Severity | Finding |
+|---|---|---|
+| 1 | **CRITICAL** | `control-plane-repo-scope.test.js:174` — regex assertion matched `getCompletedPlansFiltered` (the old call site). After this change, `_refreshRunSheets` calls `getCompletedPlansFilteredByProject`. The test would have **failed at runtime**. |
+| 2 | **MAJOR** (deferred) | `getCompletedPlansFilteredByProject` has no JSDoc block; the plan was silent on this. Deferred — low urgency. |
+| 3 | **NIT** | Extra blank line between `getCompletedPlansFilteredByProject` and `getPlanBySessionId` (double blank instead of single). |
+
+### Stage 2 — Balanced Synthesis
+
+Core implementation is **correct**: new method mirrors `getBoardFilteredByProject` exactly (uses `_readRows`, dual filter SQL, correct `LIMIT` propagation, `ensureReady` guard). `TaskViewerProvider` call site updated identically to the active-plans guard. `@deprecated` annotation on `getCompletedPlansFiltered` is present and correct.
+
+One material defect (Finding #1) was a test assertion left pointing at the old method name — corrected below.
+
+### Files Changed (by this reviewer)
+
+| File | Change |
+|---|---|
+| `src/test/control-plane-repo-scope.test.js:174` | Updated regex from `getCompletedPlansFiltered` → `getCompletedPlansFilteredByProject` |
+| `src/services/KanbanDatabase.ts:2196` | Removed extra blank line |
+
+### Validation Results
+
+- `git diff --stat HEAD` confirms exactly 2 files changed, 1 insertion, 2 deletions — correct scope.
+- Implementation in `KanbanDatabase.ts:2171–2194` structurally identical to plan's Step 1 spec.
+- `TaskViewerProvider.ts:13557–13559` matches plan's Step 3 spec verbatim.
+- `@deprecated` JSDoc on `getCompletedPlansFiltered` (line 2151) matches plan's Step 2 spec.
+- Tests skipped per SKIP TESTS directive; manual checklist items pending.
+
+### Remaining Risks
+
+- **Low:** `getCompletedPlansFilteredByProject` has no JSDoc. Deferred to a follow-up.
+- **Low:** `getCompletedPlansFiltered` is now deprecated but not removed; will remain until callers in other test files (e.g. `control-plane-repo-scope.test.js:140`) are migrated. Not urgent — no production call sites exist.

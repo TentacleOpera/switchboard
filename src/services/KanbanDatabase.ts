@@ -502,35 +502,73 @@ export class KanbanDatabase {
      */
     private static _redirectToParentIfMapped(resolvedRoot: string): string {
         try {
-            const vscode = require('vscode');
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                for (const mapping of cfg.mappings) {
-                    if (!Array.isArray(mapping.workspaceFolders)) continue;
-                    const isChild = mapping.workspaceFolders.some(
-                        (f: string) => path.resolve(KanbanDatabase._expandHome(f)) === resolvedRoot
-                    );
-                    const isDropdown = Array.isArray(mapping.dropdownWorkspaces) && mapping.dropdownWorkspaces.some(
-                        (f: string) => path.resolve(KanbanDatabase._expandHome(f)) === resolvedRoot
-                    );
-                    if (isChild || isDropdown) {
-                        // Use explicit parentFolder if set; otherwise fall back to first
-                        // workspaceFolders entry (same logic as resolveEffectiveWorkspaceRoot)
-                        const parentEntry = mapping.parentFolder || mapping.workspaceFolders[0];
-                        if (parentEntry) {
-                            const parentResolved = path.resolve(KanbanDatabase._expandHome(parentEntry));
-                            if (parentResolved !== resolvedRoot) {
-                                console.log(`[KanbanDatabase] Redirecting child/dropdown workspace ${resolvedRoot} -> parent ${parentResolved}`);
-                                return parentResolved;
-                            }
-                        }
+            // Require dynamically to avoid circular dependency
+            const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+            return resolveEffectiveWorkspaceRootFromMappings(resolvedRoot);
+        } catch { /* outside extension host */ }
+        return resolvedRoot;
+    }
+
+    public static writeDbPointer(parentFolder: string, dbPath: string): void {
+        try {
+            const resolvedParent = path.resolve(parentFolder);
+            const switchboardDir = path.join(resolvedParent, '.switchboard');
+            if (!fs.existsSync(switchboardDir)) {
+                fs.mkdirSync(switchboardDir, { recursive: true });
+            }
+            const pointerFile = path.join(switchboardDir, 'db-pointer');
+            fs.writeFileSync(pointerFile, `${path.resolve(dbPath)}\n`, 'utf8');
+            console.log(`[KanbanDatabase] Wrote db-pointer to ${pointerFile} pointing to ${dbPath}`);
+        } catch (error) {
+            console.error(`[KanbanDatabase] Failed to write db-pointer for parentFolder ${parentFolder}:`, error);
+        }
+    }
+
+    public static readDbPointer(workspaceRoot: string): string | null {
+        try {
+            const resolvedRoot = path.resolve(workspaceRoot);
+            const pointerFile = path.join(resolvedRoot, '.switchboard', 'db-pointer');
+            if (fs.existsSync(pointerFile)) {
+                const content = fs.readFileSync(pointerFile, 'utf8').trim();
+                if (content) {
+                    const expanded = KanbanDatabase._expandHome(content);
+                    if (fs.existsSync(expanded)) {
+                        return expanded;
                     }
                 }
             }
-        } catch { /* outside extension host */ }
-        return resolvedRoot;
+        } catch (error) {
+            console.warn(`[KanbanDatabase] Failed to read db-pointer for ${workspaceRoot}:`, error);
+        }
+        return null;
+    }
+
+    public async getWorkspaceMappings(): Promise<{ enabled: boolean; mappings: WorkspaceDatabaseMapping[] }> {
+        try {
+            const val = await this.getConfig('workspace_mappings');
+            if (val) {
+                const parsed = JSON.parse(val);
+                if (parsed && typeof parsed === 'object') {
+                    return {
+                        enabled: parsed.enabled ?? false,
+                        mappings: Array.isArray(parsed.mappings) ? parsed.mappings : []
+                    };
+                }
+            }
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to parse workspace_mappings from DB:', error);
+        }
+        return { enabled: false, mappings: [] };
+    }
+
+    public async setWorkspaceMappings(mappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] }): Promise<boolean> {
+        try {
+            const val = JSON.stringify(mappings);
+            return await this.setConfig('workspace_mappings', val);
+        } catch (error) {
+            console.error('[KanbanDatabase] Failed to stringify workspace_mappings:', error);
+            return false;
+        }
     }
 
     public static forWorkspace(workspaceRoot: string, customDbPath?: string): KanbanDatabase {
@@ -547,43 +585,20 @@ export class KanbanDatabase {
 
         let resolvedDbPath: string | undefined;
         
-        // Check workspace mappings if enabled
-        try {
-            const vscode = require('vscode');
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                             { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
-            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-                const mapping = cfg.mappings.find(m => {
-                    // Check if this is the parent folder
-                    const isParent = m.parentFolder && path.resolve(KanbanDatabase._expandHome(m.parentFolder)) === stable;
+        // Check for .switchboard/db-pointer in the workspace root
+        const pointerPath = KanbanDatabase.readDbPointer(stable);
+        if (pointerPath) {
+            resolvedDbPath = pointerPath;
+            console.log(`[KanbanDatabase] Resolved DB path from db-pointer: ${stable} -> ${resolvedDbPath}`);
+        }
 
-                    // Check if this is in the child folders list
-                    const isChild = Array.isArray(m.workspaceFolders) && m.workspaceFolders.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
-
-                    // Check if this is in the dropdown folders list
-                    const isDropdown = Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.some((f: string) => path.resolve(KanbanDatabase._expandHome(f)) === stable);
-
-                    return isParent || isChild || isDropdown;
-                });
-                if (mapping?.dbPath) {
-                    resolvedDbPath = path.resolve(KanbanDatabase._expandHome(mapping.dbPath));
-                    console.log(`[KanbanDatabase] Workspace mapping active: ${stable} -> ${resolvedDbPath}`);
-                } else if (mapping) {
-                    console.log(`[KanbanDatabase] Workspace '${stable}' found in mapping '${mapping.name}' but no dbPath configured; using default database location`);
-                } else {
-                    console.log(`[KanbanDatabase] Workspace '${stable}' not in any mapping; using default database location`);
-                }
-            }
-        } catch { /* outside extension host */ }
-
-        // Fallback to customDbPath, VS Code setting, or default
+        // Fallback to customDbPath, kanban.dbPath setting, or default
         if (!resolvedDbPath) {
             if (customDbPath !== undefined && customDbPath.trim() !== '') {
                 const expanded = KanbanDatabase._expandHome(customDbPath.trim());
                 resolvedDbPath = path.isAbsolute(expanded) ? expanded : path.join(stable, expanded);
             } else {
-                // Try reading from VS Code settings (safe to fail outside extension host)
+                // Check kanban.dbPath VS Code setting (per-workspace DB location override)
                 let settingValue = '';
                 try {
                     const vscode = require('vscode');
@@ -2193,7 +2208,6 @@ export class KanbanDatabase {
         const stmt = this._db.prepare(sql, params);
         return this._readRows(stmt);
     }
-
 
     /** @deprecated session_id is no longer the unique key; use getPlanByPlanFile instead. */
     public async getPlanBySessionId(sessionId: string): Promise<KanbanPlanRecord | null> {

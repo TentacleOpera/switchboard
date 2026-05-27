@@ -171,7 +171,7 @@ async function run() {
         );
         assert.match(
             taskViewerSource,
-            /const repoScope = this\._kanbanProvider\?\.getRepoScopeFilter\(\) \?\? null;[\s\S]*getBoardFiltered[\s\S]*getCompletedPlansFiltered/,
+            /const repoScope = this\._kanbanProvider\?\.getRepoScopeFilter\(\) \?\? null;[\s\S]*getBoardFiltered[\s\S]*getCompletedPlansFilteredByProject/,
             'Expected _refreshRunSheets to use filtered board and completed-plan queries.'
         );
         assert.match(

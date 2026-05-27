@@ -356,7 +356,7 @@
             "enabled": false,
             "mappings": []
           },
-          "description": "Workspace-to-database mapping configuration. When enabled, redirects configured workspace folders to shared kanban.db paths.",
+          "description": "(DEPRECATED - Mappings are now stored in the database) Workspace-to-database mapping configuration. When enabled, redirects configured workspace folders to shared kanban.db paths.",
           "properties": {
             "enabled": {
               "type": "boolean",

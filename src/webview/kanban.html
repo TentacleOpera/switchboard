@@ -5578,9 +5578,15 @@
 
             if (!isSameWorkspace) {
                 // Cross-workspace: reassign to target workspace first, optionally passing targetProject
+                // Include sourceWorkspaceRoot from the selected cards (not currentWorkspaceRoot,
+                // which may have changed when the user switched the dropdown to pick the target).
+                const sourceWorkspaceRoot = sourceWorkspaces.size === 1
+                    ? Array.from(sourceWorkspaces)[0]
+                    : '';
                 postKanbanMessage({
                     type: 'reassignPlansWorkspace',
                     sessionIds: sessionIds,
+                    sourceWorkspaceRoot: sourceWorkspaceRoot,
                     targetWorkspaceRoot: targetWorkspaceRoot,
                     targetProject: targetProject
                 });

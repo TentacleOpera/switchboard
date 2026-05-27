@@ -6,7 +6,7 @@ import * as vscode from 'vscode';
 import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import type { TaskViewerProvider } from './TaskViewerProvider';
-import { KanbanDatabase } from './KanbanDatabase';
+import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import type { KanbanProvider } from './KanbanProvider';
 
@@ -717,8 +717,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'getWorkspaceMappings': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    let mappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } = { enabled: false, mappings: [] };
+                    if (workspaceRoot) {
+                        try {
+                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                            mappings = await db.getWorkspaceMappings();
+                        } catch (err) {
+                            console.error('[SetupPanelProvider] Failed to read workspace mappings from DB:', err);
+                        }
+                    }
                     const warnings: string[] = [];
                     for (const m of mappings.mappings ?? []) {
                         if (m.mode === 'connect' && m.dbPath && !fs.existsSync(m.dbPath)) {
@@ -743,18 +751,39 @@ export class SetupPanelProvider implements vscode.Disposable {
                     break;
                 }
                 case 'setWorkspaceMappingEnabled': {
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
                     const enabled = typeof message.enabled === 'boolean' ? message.enabled : false;
-                    await config.update(
-                        'workspaceDatabaseMappings',
-                        { ...current, enabled },
-                        vscode.ConfigurationTarget.Workspace
-                    );
+                    
+                    // Read current mappings from DB (source of truth)
+                    const workspaceRoot = this._getCurrentWorkspaceRoot();
+                    let currentMappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } = { enabled: false, mappings: [] };
+                    if (workspaceRoot) {
+                        try {
+                            const db = KanbanDatabase.forWorkspace(workspaceRoot);
+                            currentMappings = await db.getWorkspaceMappings();
+                        } catch (err) {
+                            console.error('[SetupPanelProvider] Failed to read mappings from DB for setWorkspaceMappingEnabled:', err);
+                        }
+                    }
+
+                    // Write to DB for each mapping
+                    if (Array.isArray(currentMappings.mappings) && currentMappings.mappings.length > 0) {
+                        for (const m of currentMappings.mappings) {
+                            if (m.parentFolder && m.dbPath) {
+                                KanbanDatabase.writeDbPointer(m.parentFolder, m.dbPath);
+                                const db = KanbanDatabase.forWorkspace(m.parentFolder, m.dbPath);
+                                await db.setWorkspaceMappings({
+                                    enabled,
+                                    mappings: currentMappings.mappings
+                                });
+                            }
+                        }
+                    }
+
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappingEnabled',
                         enabled
                     });
+                    await vscode.commands.executeCommand('switchboard.mappingsChanged');
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
@@ -848,12 +877,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                         break;
                     }
  
-                    const config = vscode.workspace.getConfiguration('switchboard');
-                    await config.update(
-                        'workspaceDatabaseMappings',
-                        incoming,
-                        vscode.ConfigurationTarget.Workspace
-                    );
+                    // Write to DB
+                    if (Array.isArray(incoming.mappings)) {
+                        for (const m of incoming.mappings) {
+                            if (m.parentFolder && m.dbPath) {
+                                KanbanDatabase.writeDbPointer(m.parentFolder, m.dbPath);
+                                const db = KanbanDatabase.forWorkspace(m.parentFolder, m.dbPath);
+                                await db.setWorkspaceMappings({
+                                    enabled: incoming.enabled ?? false,
+                                    mappings: incoming.mappings
+                                });
+                            }
+                        }
+                    }
 
                     // Provision workspace identity files for dropdown workspaces immediately after saving
                     if (Array.isArray(incoming.mappings)) {
@@ -874,6 +910,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
  
                     this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: true });
+                    await vscode.commands.executeCommand('switchboard.mappingsChanged');
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
                 }
@@ -920,8 +957,13 @@ export class SetupPanelProvider implements vscode.Disposable {
                             break;
                         }
                         // Save the mapping config with dbPath pre-filled
-                        const config = vscode.workspace.getConfiguration('switchboard');
-                        const current = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+                        // Read current mappings from DB (source of truth), not VS Code config
+                        let currentMappings: { enabled: boolean; mappings: WorkspaceDatabaseMapping[] } = { enabled: false, mappings: [] };
+                        try {
+                            currentMappings = await db.getWorkspaceMappings();
+                        } catch {
+                            // New DB, no existing mappings
+                        }
                         const newMapping = {
                             id: message.mappingId || ('mapping-' + Date.now()),
                             name: message.name || path.basename(resolvedParent),
@@ -931,15 +973,28 @@ export class SetupPanelProvider implements vscode.Disposable {
                             dropdownWorkspaces,
                             mode: 'create'
                         };
-                        const existingIndex = (current.mappings || []).findIndex((m: any) => m.id === newMapping.id);
+                        const existingIndex = currentMappings.mappings.findIndex((m: any) => m.id === newMapping.id);
                         const updatedMappings = existingIndex >= 0
-                            ? current.mappings.map((m: any) => m.id === newMapping.id ? newMapping : m)
-                            : [...(current.mappings || []), newMapping];
-                        await config.update(
-                            'workspaceDatabaseMappings',
-                            { ...current, enabled: true, mappings: updatedMappings },
-                            vscode.ConfigurationTarget.Workspace
-                        );
+                            ? currentMappings.mappings.map((m: any) => m.id === newMapping.id ? newMapping : m)
+                            : [...currentMappings.mappings, newMapping];
+                        // Write pointer file
+                        KanbanDatabase.writeDbPointer(resolvedParent, derivedDbPath);
+
+                        // Save mapping config to database
+                        const updatedPayload = {
+                            enabled: true,
+                            mappings: updatedMappings
+                        };
+                        await db.setWorkspaceMappings(updatedPayload);
+
+                        // If there are other existing mappings, write this updated config to their DBs too
+                        for (const m of updatedMappings) {
+                            if (m.parentFolder && m.dbPath && m.parentFolder !== resolvedParent) {
+                                KanbanDatabase.writeDbPointer(m.parentFolder, m.dbPath);
+                                const otherDb = KanbanDatabase.forWorkspace(m.parentFolder, m.dbPath);
+                                await otherDb.setWorkspaceMappings(updatedPayload);
+                            }
+                        }
 
                         // Provision workspace identity files for dropdown workspaces immediately
                         for (const dw of dropdownWorkspaces) {
@@ -954,6 +1009,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         }
 
                         this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: true, dbPath: derivedDbPath });
+                        await vscode.commands.executeCommand('switchboard.mappingsChanged');
                         await vscode.commands.executeCommand('switchboard.refreshUI');
                     } catch (error) {
                         const errorMessage = error instanceof Error ? error.message : String(error);

@@ -52,6 +52,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._outputChannel = outputChannel;
     }
 
+    public async refreshWatchers(): Promise<void> {
+        await this._refreshWatchers();
+    }
+
     public async initialize(): Promise<void> {
         this._outputChannel?.appendLine('[GlobalPlanWatcher] Initializing...');
         await this._refreshWatchers();
@@ -59,10 +63,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         
         // Watch for configuration changes
         const configListener = vscode.workspace.onDidChangeConfiguration(async (e) => {
-            if (e.affectsConfiguration('switchboard.workspaceDatabaseMappings')) {
-                this._outputChannel?.appendLine('[GlobalPlanWatcher] Config changed, refreshing watchers...');
-                await this._refreshWatchers();
-            }
             if (e.affectsConfiguration('switchboard.planWatcher.periodicScanEnabled') || 
                 e.affectsConfiguration('switchboard.planWatcher.scanIntervalMs')) {
                 this._outputChannel?.appendLine('[GlobalPlanWatcher] Plan watcher config changed, restarting periodic scan...');
@@ -70,6 +70,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
             }
         });
         this._disposables.push(configListener);
+
+        // NOTE: switchboard.mappingsChanged is registered in extension.ts, which calls
+        // this._refreshWatchers() directly. Do NOT register a duplicate handler here,
+        // as the second registerCommand() call would override this one.
 
         // Watch for workspace folder additions/removals
         const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
@@ -201,9 +205,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         const folders: string[] = [];
         
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
 
             this._outputChannel?.appendLine(
                 `[GlobalPlanWatcher] Config: enabled=${cfg?.enabled}, mappings=${cfg?.mappings?.length ?? 0}`

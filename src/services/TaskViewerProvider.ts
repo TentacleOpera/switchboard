@@ -676,9 +676,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     private _filterMappedRoots(allRoots: string[]): string[] {
         try {
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const cfg = config.get<any>('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
 
             if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
                 return allRoots;
@@ -694,10 +693,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
                             
-                            if (!path.isAbsolute(expanded)) {
-                                console.warn(`[TaskViewerProvider] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
-                            }
-                            
                             mappedChildRoots.add(path.resolve(expanded));
                         }
                     }
@@ -709,10 +704,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const expanded = trimmed.startsWith('~')
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
-                            
-                            if (!path.isAbsolute(expanded)) {
-                                console.warn(`[TaskViewerProvider] Warning: Relative dropdownWorkspace "${f}" used in mapping. Please use absolute paths or ~.`);
-                            }
                             
                             mappedChildRoots.add(path.resolve(expanded));
                         }
@@ -733,9 +724,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private async _validateNoSwitchboardPollution(): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
-            const config = vscode.workspace.getConfiguration('switchboard');
-            const cfg = config.get<any>('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
 
             if (!cfg?.enabled || !Array.isArray(cfg.mappings)) {
                 return;
@@ -751,10 +741,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
                             
-                            if (!path.isAbsolute(expanded)) {
-                                console.warn(`[TaskViewerProvider] Warning: Relative workspaceFolder "${f}" used in mapping. Please use absolute paths or ~.`);
-                            }
-                            
                             mappedChildRoots.add(path.resolve(expanded));
                         }
                     }
@@ -766,10 +752,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             const expanded = trimmed.startsWith('~')
                                 ? path.join(os.homedir(), trimmed.slice(1))
                                 : trimmed;
-                            
-                            if (!path.isAbsolute(expanded)) {
-                                console.warn(`[TaskViewerProvider] Warning: Relative dropdownWorkspace "${f}" used in mapping. Please use absolute paths or ~.`);
-                            }
                             
                             mappedChildRoots.add(path.resolve(expanded));
                         }
@@ -877,9 +859,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const roots = this._getWorkspaceRoots();
         const allowedRoots = new Set<string>(roots);
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                             .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
             if (cfg?.enabled && Array.isArray(cfg.mappings)) {
                 for (const m of cfg.mappings) {
                     const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
@@ -3210,8 +3191,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         parentFolder?: string;
     }>> {
         const folders = vscode.workspace.workspaceFolders || [];
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const mappings = config.get<any>('workspaceDatabaseMappings', { enabled: false, mappings: [] });
+        const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+        const mappings = getMappingsFromIndex();
 
         // Map: dbPath -> { workspaceRoots: string[], isMapped, parentFolder }
         const dbMap = new Map<string, { workspaceRoots: string[]; isMapped: boolean; parentFolder?: string }>();
@@ -8593,9 +8574,8 @@ What would you like to find?`;
 
         const foldersToWatch: string[] = [];
         try {
-            const cfg = vscode.workspace.getConfiguration('switchboard')
-                .get('workspaceDatabaseMappings') as
-                { enabled?: boolean; mappings?: WorkspaceDatabaseMapping[] } | undefined;
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
 
             if (cfg?.enabled && Array.isArray(cfg.mappings) && cfg.mappings.length > 0) {
                 const expandHome = (p: string): string => {
