@@ -2410,17 +2410,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const displayTime = plan.mtime > 0 ? formatRelativeTime(plan.mtime) : 'unknown';
 
             const columnDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
-            const kind = columnDef?.kind || 'created';
-            const badgeClass = {
-                created: 'kanban-badge-created',
-                gather: 'kanban-badge-created',
-                review: 'kanban-badge-review',
-                coded: 'kanban-badge-coded',
-                reviewed: 'kanban-badge-reviewed',
-                completed: 'kanban-badge-completed',
-                'custom-agent': 'kanban-badge-review',
-                'custom-user': 'kanban-badge-review'
-            }[kind] || 'kanban-badge-created';
 
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
@@ -2431,7 +2420,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
-                        <span class="kanban-column-badge ${badgeClass}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                        <span class="kanban-column-badge">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
                     </div>
                 </div>
             `;

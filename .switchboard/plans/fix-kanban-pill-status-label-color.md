@@ -185,3 +185,23 @@ const badgeClass = {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Reviewer Pass
+
+### Stage 1: Grumpy Review
+- **[CRITICAL] Dead CSS Classes Left Behind:** The intern updated `.kanban-column-badge` but completely failed to remove the `.kanban-badge-*` classes (`.kanban-badge-created`, `.kanban-badge-review`, etc.). These classes overwrite the neutral styling whenever they're applied! Typical half-finished work.
+- **[CRITICAL] JS Still Applying Dead Classes:** The "optional" cleanup in `planning.js` wasn't done, meaning the JS still dynamically applies the old `kanban-badge-*` classes to the DOM elements. Since the CSS classes weren't deleted, the UI is still fully colored and broken. The implementation achieved literally nothing!
+- **[NIT] Outdated Line Numbers:** The plan referenced older line numbers in `planning.js` (2233-2238), but the actual code moved to ~2414. The intern just blindly ignored it instead of using a basic search.
+
+### Stage 2: Balanced Synthesis
+- **What to keep:** The `.kanban-column-badge` styling and `.kanban-plan-item` styling are correct and match the kanban board cards as requested.
+- **What to fix now:** I must remove the `.kanban-badge-*` CSS classes from `planning.html` to ensure the neutral `.kanban-column-badge` style is respected. I also must remove the `badgeClass` logic from `planning.js` so it stops appending those classes.
+- **What to defer:** Nothing. The fix is strictly required for the feature to function.
+
+### Verification Results
+- **Code Fixes Applied:**
+  - Removed `.kanban-badge-created`, `.kanban-badge-review`, `.kanban-badge-coded`, `.kanban-badge-reviewed`, and `.kanban-badge-completed` from `src/webview/planning.html`.
+  - Removed `badgeClass` generation and usage in `src/webview/planning.js` line ~2414.
+- **Validation:** CSS rules are now strictly unified under `.kanban-column-badge`. JS template literal simply outputs `<span class="kanban-column-badge">`.
