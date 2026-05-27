@@ -647,3 +647,47 @@ Key risks: (1) The original plan targeted the wrong JS file — all logic must g
 
 ## Recommendation
 **Send to Coder** — Complexity 5: Multi-file changes across HTML, JS, and TypeScript, but all changes follow existing patterns (edit mode toggle, strip-btn buttons, message handlers). The mutual exclusion logic is the only moderately risky aspect, and it's well-scoped.
+
+---
+
+## Review Pass (2026-05-27)
+
+### Stage 1: Adversarial Findings
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| F1 | **MAJOR** | `planFileAbsolute` receives a relative path — the JS sends `_kanbanSelectedPlan.planFile` (workspace-relative from DB) as `planFileAbsolute`, but `sendReviewComment` expects an absolute path. Works by accident when `process.cwd()` is the workspace root; silently fails in multi-root setups. |
+| F2 | NIT | `enterReviewMode` ignores `exitEditMode` return value — fragile if `exitEditMode` gains more failure paths. |
+| F3 | NIT | Error feedback in `commentResult` handler only flashes submit button red; the error `message` from backend is discarded, leaving user with no context for failure. |
+| F4 | NIT | Redundant Edit button visibility toggle in `enterReviewMode` → `exitEditMode` → `enterReviewMode` chain (no visual impact, same sync context). |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| F1 (MAJOR): relative planFileAbsolute | **Fix now** | Resolve relative path against workspace roots in TS handler before passing to `sendReviewComment` |
+| F2 (NIT): unchecked return value | **Fix now** (trivial) | Add `if (!exitEditMode(...)) return;` guard |
+| F3 (NIT): swallowed error message | **Fix now** (small UX win) | Show error message text in controls strip feedback span |
+| F4 (NIT): redundant toggle | **Defer** | No visual impact; refactoring `exitEditMode` for skip-restore flag not worth complexity |
+
+### Stage 3: Code Fixes Applied
+
+**File: `src/services/PlanningPanelProvider.ts`** (lines 549–566)
+- Changed `const planFileAbsolute` to `let planFileAbsolute`
+- Added resolution block: if `planFileAbsolute` is relative, iterate `allRoots`, resolve with `path.resolve(root, planFileAbsolute)`, check `fs.existsSync(candidate)`, use first match
+
+**File: `src/webview/planning.js`** (line 2223)
+- Changed `exitEditMode('kanban', true);` to `if (!exitEditMode('kanban', true)) return;`
+
+**File: `src/webview/planning.js`** (lines 1675–1690)
+- Added error message display in `commentResult` failure branch: creates feedback span with `message || 'Comment failed'` text, red color, 3-second auto-remove
+
+### Stage 4: Verification
+
+- **TypeScript compilation**: `npx tsc --noEmit` — 2 pre-existing errors in unrelated files (`ClickUpSyncService.ts`, `KanbanProvider.ts` about import extensions). Zero errors in `PlanningPanelProvider.ts`.
+- **JS syntax**: All edits verified in context; no structural issues.
+
+### Remaining Risks
+
+- **F4 (deferred)**: Redundant Edit button toggle in mode-switch chain — cosmetic only, no functional impact.
+- **Multi-root edge case**: The F1 fix resolves relative paths against workspace roots using `fs.existsSync`. If a relative path matches files in multiple roots (unlikely for `.switchboard/plans/` paths), the first root wins. This matches the behavior of `fetchKanbanPlanPreview` which uses the same resolution strategy.

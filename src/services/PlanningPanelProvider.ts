@@ -550,7 +550,20 @@ export class PlanningPanelProvider {
                 try {
                     const selectedText = typeof msg?.selectedText === 'string' ? msg.selectedText.trim() : '';
                     const comment = typeof msg?.comment === 'string' ? msg.comment.trim() : '';
-                    const planFileAbsolute = typeof msg?.planFileAbsolute === 'string' ? msg.planFileAbsolute.trim() : '';
+                    let planFileAbsolute = typeof msg?.planFileAbsolute === 'string' ? msg.planFileAbsolute.trim() : '';
+
+                    // Resolve relative planFile against workspace roots.
+                    // The webview sends the DB-stored relative path (e.g. .switchboard/plans/foo.md);
+                    // sendReviewComment expects an absolute path.
+                    if (planFileAbsolute && !path.isAbsolute(planFileAbsolute)) {
+                        for (const root of allRoots) {
+                            const candidate = path.resolve(root, planFileAbsolute);
+                            if (fs.existsSync(candidate)) {
+                                planFileAbsolute = candidate;
+                                break;
+                            }
+                        }
+                    }
 
                     if (!selectedText) {
                         throw new Error('Please select text before submitting a comment.');

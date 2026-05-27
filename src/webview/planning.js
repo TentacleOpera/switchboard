@@ -1673,10 +1673,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         setTimeout(() => feedback.remove(), 2000);
                     }
                 } else {
+                    // Flash submit button red and show error message in controls strip
                     const submitBtn = document.getElementById('kanban-submit-comment');
                     if (submitBtn) {
                         submitBtn.style.borderColor = '#ff6b6b';
                         setTimeout(() => { submitBtn.style.borderColor = ''; }, 2000);
+                    }
+                    const kanbanStrip = document.querySelector('.kanban-controls-strip');
+                    if (kanbanStrip) {
+                        const feedback = document.createElement('span');
+                        feedback.textContent = message || 'Comment failed';
+                        feedback.style.cssText = 'color: #ff6b6b; font-size: 11px; margin-left: 8px;';
+                        kanbanStrip.appendChild(feedback);
+                        setTimeout(() => feedback.remove(), 3000);
                     }
                 }
                 break;
@@ -2220,7 +2229,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function enterReviewMode(tab) {
         if (tab !== 'kanban') return;
         if (state.editMode.kanban) {
-            exitEditMode('kanban', true);
+            if (!exitEditMode('kanban', true)) return;
         }
         state.reviewMode.kanban = true;
         const btnEdit = document.getElementById('btn-edit-kanban');
