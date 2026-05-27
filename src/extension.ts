@@ -1,4 +1,4 @@
-import { isDropdownWorkspace } from './services/WorkspaceIdentityService';
+
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
@@ -388,28 +388,12 @@ async function waitWithTimeout<T>(promise: Thenable<T> | Promise<T>, timeoutMs: 
     });
     return Promise.race([promise, timeoutPromise]).finally(() => clearTimeout(timeoutId));
 }
-async function cleanupDropdownIdentityFiles(): Promise<void> {
-    for (const folder of vscode.workspace.workspaceFolders ?? []) {
-        const resolved = path.resolve(folder.uri.fsPath);
-        if (isDropdownWorkspace(resolved)) {
-            const idFile = path.join(resolved, '.switchboard', 'workspace-id');
-            if (fs.existsSync(idFile)) {
-                try {
-                    await fs.promises.unlink(idFile);
-                    console.log(`[Switchboard] Removed dead identity file in dropdown workspace: ${idFile}`);
-                } catch (err) {
-                    console.warn(`[Switchboard] Failed to remove dead identity file: ${idFile}`, err);
-                }
-            }
-        }
-    }
-}
+
 
 export async function activate(context: vscode.ExtensionContext) {
     console.time('switchboard.activate');
     
-    // Cleanup stale identity files in dropdown workspaces
-    cleanupDropdownIdentityFiles().catch(err => console.error('[Switchboard] Cleanup failed:', err));
+
 
     if (!outputChannel) {
         outputChannel = vscode.window.createOutputChannel('Switchboard');

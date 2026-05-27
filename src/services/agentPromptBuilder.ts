@@ -228,21 +228,6 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (uni
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
-export const MERGE_WORKTREES_DIRECTIVE = `MERGE WORKTREES DIRECTIVE:
-You are tasked with merging git worktrees for reviewed plans.
-For each worktree listed in the plan context:
-1. Check if there are changes: cd <worktree-path> && git diff --exit-code
-2. If no changes: remove worktree (git worktree remove <worktree-path>) and skip
-3. If changes exist:
-   - Navigate to main workspace: cd <workspace-root>
-   - Attempt to merge the branch: git merge <worktree-branch>
-   - If merge succeeds: remove worktree and branch, mark as merged
-   - If merge conflicts:
-     * Show the conflicted files to the user
-     * Ask user how to resolve (accept theirs, accept ours, edit manually)
-     * After resolution, complete merge and remove worktree
-4. Report final status for each worktree in the plan file
-5. Do NOT push to remote — only local merge`;
 
 export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
 
@@ -441,12 +426,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? `${batchExecutionRules}`
             : '';
 
-        let baseInstructions = '';
-        if (baseInstruction === 'merge-worktrees') {
-            baseInstructions = MERGE_WORKTREES_DIRECTIVE;
-        } else {
-            baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
-        }
+        let baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }

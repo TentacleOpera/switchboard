@@ -24,8 +24,7 @@ suite('KanbanProvider', () => {
             complexity: 'medium',
             workspaceRoot,
             dependencies: [],
-            hasBlockingDependencies: false,
-            hasWorktree: false
+            hasBlockingDependencies: false
         }));
 
     setup(() => {
@@ -455,44 +454,6 @@ Manual verification steps:
         setup(() => {
             getConfigurationStub = sandbox.stub(vscode.workspace, 'getConfiguration');
             getWorkspaceRootsStub = sandbox.stub(provider as any, '_getWorkspaceRoots');
-        });
-
-        test('dropdownWorkspaces appear and are deduplicated with correct ~, and trigger mapped context', () => {
-            const os = require('os');
-            const homeDir = os.homedir();
-            
-            // Mock open roots: only a dropdown workspace is open
-            getWorkspaceRootsStub.returns([path.join(homeDir, 'dd-workspace-1')]);
-
-            // Mock configuration
-            getConfigurationStub.returns({
-                get: sandbox.stub().returns({
-                    enabled: true,
-                    mappings: [
-                        {
-                            parentFolder: '/test/parent',
-                            workspaceFolders: ['/test/child'],
-                            dropdownWorkspaces: ['~/dd-workspace-1', '/test/parent', '/test/dd-workspace-2', '~/dd-workspace-1']
-                        }
-                    ]
-                })
-            } as any);
-
-            const items = (provider as any)._getWorkspaceItems();
-
-            assert.strictEqual(items.length, 3, 'Should have exactly 3 unique items');
-            
-            const resolvedParent = path.resolve('/test/parent');
-            const resolvedDw1 = path.resolve(path.join(homeDir, 'dd-workspace-1'));
-            const resolvedDw2 = path.resolve('/test/dd-workspace-2');
-            
-            assert.ok(items.find((i: any) => i.workspaceRoot === resolvedParent), 'Parent should be present');
-            assert.ok(items.find((i: any) => i.workspaceRoot === resolvedDw1), 'Expanded dropdown workspace should be present');
-            assert.ok(items.find((i: any) => i.workspaceRoot === resolvedDw2), 'Absolute dropdown workspace should be present');
-            
-            // Verify labels
-            assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw1)?.label, path.basename(resolvedDw1), 'Dropdown workspace label should be basename');
-            assert.strictEqual(items.find((i: any) => i.workspaceRoot === resolvedDw2)?.label, path.basename(resolvedDw2), 'Dropdown workspace label should be basename');
         });
     });
 

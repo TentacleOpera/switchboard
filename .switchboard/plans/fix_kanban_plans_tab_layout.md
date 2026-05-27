@@ -259,3 +259,25 @@ function handleKanbanContextSet(msg) {
 ---
 
 **Recommendation: Send to Coder**
+
+## Review & Execution
+
+### Stage 1: Grumpy Principal Engineer Review
+- **[NIT] Unaddressed Dead Code (`handleKanbanPlanOpenResult`):** The coder mostly followed the plan, including the explicit cleanup. However, the removal of the "Open File" button meant the `openKanbanPlan` postMessage is no longer emitted by the webview. Consequently, the listener for `kanbanPlanOpenResult` and the `handleKanbanPlanOpenResult` function itself became entirely orphaned and were left lingering as dead code. Leaving dead message handlers behind is sloppy.
+- **[PASS] CSS Flex Fix:** The `.kanban-preview-pane { flex: 2; }` implementation was successfully executed as dictated. The layout split is fixed.
+- **[PASS] Tab Reorder:** HTML buttons were correctly reordered in `planning.html`.
+- **[PASS] Template & Button Removal:** InnerHTML modifications and orphaned event listener cleanup were done correctly in `planning.js`.
+
+### Stage 2: Balanced Synthesis
+- The implementation of the UI tweaks is structurally sound and directly fulfills the UAT requirements without breaking surrounding code.
+- The `handleKanbanPlanOpenResult` function and its switch-case listener must be removed to ensure the file doesn't gather dead code cruft, even if the original plan didn't explicitly call it out by name (it only mentioned three orphaned handlers). I'll scrub this out.
+
+### Code Fixes Applied
+- Removed `handleKanbanPlanOpenResult` function definition and its `case 'kanbanPlanOpenResult':` switch branch in `src/webview/planning.js`.
+
+### Verification Results
+- **Files Changed:**
+  - `src/webview/planning.html` (verified CSS changes and tab order)
+  - `src/webview/planning.js` (verified template rendering, cleanup of all unused handlers and switch cases)
+- **Validation:** Visual code inspection confirms all planned and synthesized cleanups are complete. Code changes maintain valid JavaScript/HTML/CSS syntax.
+- **Remaining Risks:** None. UI logic is strictly isolated. The unused `openKanbanPlan` and `setKanbanPlanContext` backend handlers in `src/services/PlanningPanelProvider.ts` remain, but they are safely dormant and do not impact frontend execution.

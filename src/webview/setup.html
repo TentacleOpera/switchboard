@@ -500,13 +500,7 @@
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Auto-close any file that gets opened in the editor. Use "Override Open" right-click to bypass.</span>
                     </div>
                 </label>
-                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
-                    <input id="open-worktree-coder-agents-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
-                    <div style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Open Worktree for Coder Agents</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Automatically create isolated git worktree when a plan is sent to any coder agent (lead, coder, or intern).</span>
-                    </div>
-                </label>
+
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
                     <input id="auto-commit-code-review-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <div style="display:flex; flex-direction:column; gap:4px;">
@@ -1348,7 +1342,6 @@
                 'setup': () => {
                     vscode.postMessage({ type: 'getGitIgnoreConfig' });
                     vscode.postMessage({ type: 'getPreventAgentFileOpeningSetting' });
-                    vscode.postMessage({ type: 'getOpenWorktreeForCoderAgentsSetting' });
                     vscode.postMessage({ type: 'getAutoCommitOnCodeReviewSetting' });
                     vscode.postMessage({ type: 'getExcludeReviewedBacklogSetting' });
                 },
@@ -3118,11 +3111,6 @@
                     <textarea data-field="workspaceFolders" placeholder="Child folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.workspaceFolders || []).join('\n')}</textarea>
                     <button data-action="browseFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
                 </div>
-                <div style="margin-bottom:8px;">
-                    <label style="display:block; font-size:10px; color:var(--text-secondary); margin-bottom:4px;">Dropdown Workspaces: <span style="font-weight:normal;">Folders that appear as independent board identities but share this database (one per line).</span></label>
-                    <textarea data-field="dropdownWorkspaces" placeholder="Dropdown folders that share this database (one per line)" style="width:100%; min-height:60px; background:var(--panel-bg); border:1px solid var(--border-color); color:var(--text-primary); padding:6px 8px; font-family:var(--font-mono); font-size:11px; resize:vertical;">${(mapping.dropdownWorkspaces || []).join('\n')}</textarea>
-                    <button data-action="browseDropdownFolders" class="secondary-btn" style="margin-top:4px; padding:4px 12px; font-size:10px;">Add Folder</button>
-                </div>
                 <input type="hidden" data-field="id" value="${mapping.id || ''}">
                 <input type="hidden" data-field="mode" value="${mode}">
             `;
@@ -3154,18 +3142,12 @@
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 vscode.postMessage({ type: 'browseWorkspaceMappingFolder', mappingId });
             });
-            div.querySelector('button[data-action="browseDropdownFolders"]')?.addEventListener('click', () => {
-                const mappingId = div.querySelector('[data-field="id"]')?.value || '';
-                vscode.postMessage({ type: 'browseWorkspaceMappingDropdownFolder', mappingId });
-            });
             div.querySelector('button[data-action="initDb"]')?.addEventListener('click', () => {
                 const mappingId = div.querySelector('[data-field="id"]')?.value || '';
                 const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value || '';
                 const name = div.querySelector('[data-field="name"]')?.value || '';
                 const workspaceFoldersText = div.querySelector('[data-field="workspaceFolders"]')?.value || '';
                 const workspaceFolders = workspaceFoldersText.split('\n').map(f => f.trim()).filter(Boolean);
-                const dropdownWorkspacesText = div.querySelector('[data-field="dropdownWorkspaces"]')?.value || '';
-                const dropdownWorkspaces = dropdownWorkspacesText.split('\n').map(f => f.trim()).filter(Boolean);
                 const initBtn = div.querySelector('button[data-action="initDb"]');
                 const statusDiv = div.querySelector('[data-field="initStatus"]');
                 if (initBtn) initBtn.disabled = true;
@@ -3179,8 +3161,7 @@
                     mappingId,
                     parentFolder,
                     name,
-                    workspaceFolders,
-                    dropdownWorkspaces
+                    workspaceFolders
                 });
             });
             div.querySelector('button[data-action="switchToConnect"]')?.addEventListener('click', () => {
@@ -3208,9 +3189,7 @@
             vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
         });
  
-        document.getElementById('open-worktree-coder-agents-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'saveStartupCommands', openWorktreeForCoderAgents: e.target.checked });
-        });
+
  
         document.getElementById('auto-commit-code-review-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'saveStartupCommands', autoCommitOnCodeReview: e.target.checked });
@@ -3238,12 +3217,10 @@
                 const dbPath = div.querySelector('[data-field="dbPath"]')?.value.trim() || '';
                 const parentFolder = div.querySelector('[data-field="parentFolder"]')?.value.trim() || '';
                 const foldersText = div.querySelector('[data-field="workspaceFolders"]')?.value.trim() || '';
-                const dropdownText = div.querySelector('[data-field="dropdownWorkspaces"]')?.value.trim() || '';
                 const id = div.querySelector('[data-field="id"]')?.value || ('mapping-' + Date.now() + '-' + i);
                 const mode = div.querySelector('[data-field="mode"]')?.value || 'connect';
                 const workspaceFolders = foldersText.split('\n').map(f => f.trim()).filter(Boolean);
-                const dropdownWorkspaces = dropdownText.split('\n').map(f => f.trim()).filter(Boolean);
-                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders, dropdownWorkspaces, mode });
+                updatedMappings.push({ id, name, dbPath, parentFolder, workspaceFolders, mode });
             }
             workspaceMappings = updatedMappings;
         }
@@ -3255,7 +3232,6 @@
                 dbPath: '',
                 parentFolder: '',
                 workspaceFolders: [],
-                dropdownWorkspaces: [],
                 mode: 'connect'
             });
             renderWorkspaceMappings();
@@ -3323,8 +3299,6 @@
                         if (input) {
                             input.value = lastPlanIngestionFolder;
                         }
-                        const worktreeToggle = document.getElementById('open-worktree-coder-agents-toggle');
-                        if (worktreeToggle) worktreeToggle.checked = message.openWorktreeForCoderAgents === true;
                         const autoCommitToggle = document.getElementById('auto-commit-code-review-toggle');
                         if (autoCommitToggle) autoCommitToggle.checked = message.autoCommitOnCodeReview !== false;
                     });
@@ -3411,19 +3385,7 @@
                     }
                     break;
                 }
-                case 'workspaceMappingDropdownFolderSelected': {
-                    const container = document.getElementById('workspace-mappings-container');
-                    if (container && message.mappingId) {
-                        const idInput = container.querySelector('[data-field="id"][value="' + message.mappingId + '"]');
-                        const mappingDiv = idInput?.parentElement;
-                        const ta = mappingDiv?.querySelector('[data-field="dropdownWorkspaces"]');
-                        if (ta) {
-                            const current = ta.value.trim();
-                            ta.value = current ? current + '\n' + message.path : message.path;
-                        }
-                    }
-                    break;
-                }
+
                 case 'workspaceMappingInitResult': {
                     const container = document.getElementById('workspace-mappings-container');
                     if (container && message.mappingId) {
@@ -3547,13 +3509,7 @@
                     });
                     break;
                 }
-                case 'openWorktreeForCoderAgentsSetting': {
-                    runSetupHydration(() => {
-                        const toggle = document.getElementById('open-worktree-coder-agents-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
-                    });
-                    break;
-                }
+
                 case 'autoCommitOnCodeReviewSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('auto-commit-code-review-toggle');

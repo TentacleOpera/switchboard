@@ -452,12 +452,7 @@
             filter: brightness(1.2);
         }
 
-        .worktree-count {
-            font-size: 9px;
-            font-weight: 600;
-            color: var(--accent-teal);
-            margin-left: 2px;
-        }
+
 
         .column-body {
             flex: 1;
@@ -1939,6 +1934,80 @@
             color: var(--text-primary);
             resize: vertical;
         }
+
+        /* CSS for worktrees tab */
+        .worktrees-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 16px;
+        }
+        .worktrees-list {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+        .worktree-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 12px;
+            background: var(--bg-secondary);
+            border-radius: 6px;
+        }
+        .worktree-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .worktree-path {
+            font-weight: 600;
+        }
+        .worktree-branch {
+            color: var(--text-muted);
+            font-size: 12px;
+        }
+        .worktree-agent {
+            color: var(--accent-teal);
+            font-size: 12px;
+        }
+        .worktree-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .btn-secondary {
+            background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--text-secondary) 30%, transparent);
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-secondary:hover {
+            background: color-mix(in srgb, var(--text-secondary) 20%, transparent);
+            color: var(--text-primary);
+        }
+        .btn-danger {
+            background: color-mix(in srgb, var(--accent-red) 10%, transparent);
+            border: 1px solid color-mix(in srgb, var(--accent-red) 30%, transparent);
+            color: var(--accent-red);
+            font-family: var(--font-mono);
+            font-size: 11px;
+            letter-spacing: 1px;
+            padding: 8px 12px;
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .btn-danger:hover {
+            background: color-mix(in srgb, var(--accent-red) 20%, transparent);
+            color: var(--text-primary);
+            border-color: var(--accent-red);
+        }
     </style>
 </head>
 
@@ -1947,6 +2016,7 @@
         <button class="kanban-tab-btn active" data-tab="kanban">KANBAN</button>
         <button class="kanban-tab-btn" data-tab="agents">AGENTS</button>
         <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
+        <button class="kanban-tab-btn" data-tab="worktrees">WORKTREES</button>
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="kanban-tab-btn" data-tab="dependencies">DEPENDENCIES</button>
         <button class="kanban-tab-btn" data-tab="uat">test</button>
@@ -2010,7 +2080,7 @@
             <div class="db-subsection">
                 <div class="subsection-header"><span>Plan Dependencies</span></div>
                 <div class="subsection-actions">
-                    <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">COPY PROMPT</button>
+                    <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">Copy dependency ordering prompt</button>
                     <button class="strip-btn" id="btn-rebuild-deps" data-tooltip="Send to analyst terminal">SEND TO ANALYST</button>
                     <button class="strip-btn" id="btn-refresh-deps" data-tooltip="Reload dependency map from database">REFRESH</button>
                 </div>
@@ -2551,6 +2621,32 @@
 
     <div id="tooltip-overlay"></div>
 
+    <!-- Worktrees Tab Content -->
+    <div id="worktrees-tab-content" class="kanban-tab-content">
+      <div style="padding:12px; overflow-y:auto; height:100%;">
+        <div class="worktrees-header">
+          <h3>Git Worktrees</h3>
+          <button id="create-worktree-btn" class="modal-btn-primary" style="flex:none;">Create Worktree</button>
+        </div>
+        <div id="worktrees-list" class="worktrees-list"></div>
+      </div>
+    </div>
+
+    <!-- Worktree Item Template -->
+    <template id="worktree-item-template">
+      <div class="worktree-item" data-worktree-id="">
+        <div class="worktree-info">
+          <div class="worktree-path"></div>
+          <div class="worktree-branch"></div>
+          <div class="worktree-agent"></div>
+        </div>
+        <div class="worktree-actions">
+          <button class="btn-secondary assign-agent-btn">Assign Agent</button>
+          <button class="btn-danger delete-worktree-btn">Delete</button>
+        </div>
+      </div>
+    </template>
+
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
         const vscode = acquireVsCodeApi();
@@ -2667,7 +2763,7 @@
                 return;
             }
 
-            desc.textContent = `${role.charAt(0).toUpperCase() + role.slice(1)}-specific orchestration features:`;
+            desc.textContent = `Build the ${role.charAt(0).toUpperCase() + role.slice(1)} prompt with add-on instructions:`;
 
             addons.forEach(addon => {
                 if (addon.type === 'radio' && addon.options) {
@@ -3033,7 +3129,6 @@
         let currentCards = [];
         let lastAgentNames = {};
         let cliTriggersEnabled = true;
-        window.worktreeCounts = {};
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = true;
         let clearTerminalBeforePrompt = false;
@@ -3117,7 +3212,6 @@
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
         const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
-        const ICON_MERGE_WORKTREES = '{{ICON_MERGE_WORKTREES}}';
 
         // Tab switching logic
         const kanbanTabButtons = document.querySelectorAll('.kanban-tab-btn');
@@ -3171,6 +3265,11 @@
                   postKanbanMessage({ type: 'getCustomAgents' });
                   loadRoleConfigs();
                   updateRoleDescription();
+                }
+
+                // Hydrate WORKTREES tab when activated
+                if (tabName === 'worktrees') {
+                  loadWorktrees();
                 }
             });
         });
@@ -3733,14 +3832,7 @@
                 const backlogToggleBtn = isCreated
                     ? `<button class="backlog-toggle-btn${showingBacklog ? ' is-active' : ''}" id="btn-toggle-backlog" style="${draggedSessionId !== null ? 'pointer-events:none;opacity:0.5;' : ''}" data-tooltip="${showingBacklog ? 'Switch to New view' : 'Switch to Backlog view'}">${showingBacklog ? 'NEW' : 'BACKLOG'}</button>`
                     : '';
-                const isCodeReviewed = def.id === 'CODE REVIEWED';
-                const worktreeCount = window.worktreeCounts?.[def.id] || 0;
-                const mergeBtn = (isCodeReviewed && worktreeCount > 0)
-                    ? `<button class="column-icon-btn merge-worktrees-btn" data-action="mergeWorktrees" data-column="${escapeAttr(def.id)}" data-tooltip="Merge git worktrees for reviewed plans (${worktreeCount} active)">
-                           <img src="${ICON_MERGE_WORKTREES}" alt="Merge Worktrees" style="width: 16px; height: 16px;">
-                           <span class="worktree-count">(${worktreeCount})</span>
-                       </button>`
-                    : '';
+
 
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
@@ -3752,7 +3844,6 @@
                     : `<div style="display: flex; align-items: center; gap: 4px;">
                             ${complexityRoutingToggle}
                             ${modeToggle}
-                            ${mergeBtn}
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`;
                 const subline = hasAgent
@@ -3892,13 +3983,9 @@
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'mergeWorktrees') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed') return;
 
                     switch (action) {
-                        case 'mergeWorktrees': {
-                            postKanbanMessage({ type: 'mergeWorktrees', workspaceRoot: currentWorkspaceRoot });
-                            break;
-                        }
                         case 'moveSelected': {
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
@@ -5083,6 +5170,10 @@
                     }
                     break;
                 }
+                case 'worktrees': {
+                    renderWorktrees(msg.worktrees);
+                    break;
+                }
                 case 'antigravityPrompt': {
                     const copyPromptBtn = document.getElementById('antigravity-copy-prompt-btn');
                     if (copyPromptBtn && msg.prompt) {
@@ -5161,11 +5252,11 @@
                         if (btnCopyDepsPrompt) {
                             navigator.clipboard.writeText(msg.prompt).then(() => {
                                 btnCopyDepsPrompt.textContent = 'COPIED!';
-                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'COPY PROMPT'; }, 2000);
+                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'Copy dependency ordering prompt'; }, 2000);
                             }).catch(err => {
                                 console.error('[kanban webview] failed to copy prompt:', err);
                                 btnCopyDepsPrompt.textContent = 'COPY FAILED';
-                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'COPY PROMPT'; }, 2000);
+                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'Copy dependency ordering prompt'; }, 2000);
                             });
                             btnCopyDepsPrompt.disabled = false;
                         }
@@ -5442,13 +5533,6 @@
                   break;
                 }
 
-                case 'worktreeCounts': {
-                  window.worktreeCounts = msg.counts;
-                  renderColumns();
-                  renderBoard(currentCards);
-                  updateAllColumnAgents();
-                  break;
-                }
                 case 'saveCustomAgentResult': {
                   if (msg.success) {
                     postKanbanMessage({ type: 'getCustomAgents' });
@@ -6036,12 +6120,42 @@
             agentSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; flex:1;';
             guardInteraction(agentSelect);
 
-            // Populate with enabled agents from lastVisibleAgents
+            // Populate with enabled agents from lastVisibleAgents, sorted by column order then label order
             const enabledAgents = Object.keys(lastVisibleAgents || {}).filter(name => lastVisibleAgents[name] !== false);
+
+            // Sort by column order (if agent has a column), then by BUILT_IN_AGENT_LABELS order
+            enabledAgents.sort((a, b) => {
+                const aColIndex = columnDefinitions.findIndex(col => col.role === a);
+                const bColIndex = columnDefinitions.findIndex(col => col.role === b);
+                
+                // If both have columns, sort by column order
+                if (aColIndex !== -1 && bColIndex !== -1) {
+                    return aColIndex - bColIndex;
+                }
+                
+                // If only one has a column, prioritize it
+                if (aColIndex !== -1) return -1;
+                if (bColIndex !== -1) return 1;
+                
+                // Fallback: sort by BUILT_IN_AGENT_LABELS order
+                const aLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === a);
+                const bLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === b);
+                return aLabelIndex - bLabelIndex;
+            });
+
             enabledAgents.forEach(agentName => {
                 const opt = document.createElement('option');
                 opt.value = agentName;
-                opt.textContent = agentName;
+                
+                // Use human-readable label: check BUILT_IN_AGENT_LABELS first, then custom agents
+                const labelInfo = BUILT_IN_AGENT_LABELS.find(l => l.key === agentName);
+                if (labelInfo) {
+                    opt.textContent = labelInfo.label;
+                } else {
+                    const customAgent = lastCustomAgents.find(a => a.role === agentName);
+                    opt.textContent = customAgent ? customAgent.name : agentName;
+                }
+                
                 agentSelect.appendChild(opt);
             });
             
@@ -6894,7 +7008,7 @@
             let html = '';
             for (const plan of plans) {
                 html += `<div class="uat-plan-section" data-session-id="${escapeAttr(plan.sessionId)}">`;
-                html += `<div class="uat-plan-title">${escapeHtml(plan.topic)} <span style="color:var(--text-secondary); font-size:9px;">(${escapeHtml(plan.kanbanColumn)})</span></div>`;
+                html += `<div class="uat-plan-title">${escapeHtml(plan.topic)}</div>`;
                 if (plan.steps && plan.steps.length > 0) {
                     for (let i = 0; i < plan.steps.length; i++) {
                         const step = plan.steps[i];
@@ -6931,6 +7045,25 @@
                         checked
                     });
                 });
+            });
+        }
+
+        function loadWorktrees() {
+            postKanbanMessage({ type: 'getWorktrees', workspaceRoot: currentWorkspaceRoot });
+        }
+
+        function renderWorktrees(worktrees) {
+            const list = document.getElementById('worktrees-list');
+            const template = document.getElementById('worktree-item-template');
+            if (!list || !template) return;
+            list.innerHTML = '';
+            worktrees.forEach(wt => {
+                const clone = template.content.cloneNode(true);
+                clone.querySelector('.worktree-item').dataset.worktreeId = wt.id;
+                clone.querySelector('.worktree-path').textContent = wt.path;
+                clone.querySelector('.worktree-branch').textContent = `Branch: ${wt.branch}`;
+                clone.querySelector('.worktree-agent').textContent = wt.coderAgentId ? `Agent: ${wt.coderAgentId}` : 'No agent assigned';
+                list.appendChild(clone);
             });
         }
 
@@ -6974,6 +7107,28 @@
             if (btnRefreshUAT) {
                 btnRefreshUAT.addEventListener('click', () => {
                     postKanbanMessage({ type: 'getUATData' });
+                });
+            }
+
+            // Worktrees Tab listeners
+            const btnCreateWorktree = document.getElementById('create-worktree-btn');
+            if (btnCreateWorktree) {
+                btnCreateWorktree.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
+                });
+            }
+
+            const worktreesList = document.getElementById('worktrees-list');
+            if (worktreesList) {
+                worktreesList.addEventListener('click', (e) => {
+                    if (e.target.classList.contains('assign-agent-btn')) {
+                        const worktreeId = e.target.closest('.worktree-item').dataset.worktreeId;
+                        postKanbanMessage({ type: 'assignAgentToWorktree', worktreeId, workspaceRoot: currentWorkspaceRoot });
+                    }
+                    if (e.target.classList.contains('delete-worktree-btn')) {
+                        const worktreeId = e.target.closest('.worktree-item').dataset.worktreeId;
+                        postKanbanMessage({ type: 'deleteWorktree', worktreeId, workspaceRoot: currentWorkspaceRoot });
+                    }
                 });
             }
         });

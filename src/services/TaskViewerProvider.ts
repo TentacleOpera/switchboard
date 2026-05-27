@@ -697,18 +697,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
-                if (Array.isArray(m.dropdownWorkspaces)) {
-                    for (const f of m.dropdownWorkspaces) {
-                        if (typeof f === 'string') {
-                            const trimmed = f.trim();
-                            const expanded = trimmed.startsWith('~')
-                                ? path.join(os.homedir(), trimmed.slice(1))
-                                : trimmed;
-                            
-                            mappedChildRoots.add(path.resolve(expanded));
-                        }
-                    }
-                }
+
             }
 
             return allRoots.filter(root => !mappedChildRoots.has(path.resolve(root)));
@@ -745,18 +734,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
                 }
-                if (Array.isArray(m.dropdownWorkspaces)) {
-                    for (const f of m.dropdownWorkspaces) {
-                        if (typeof f === 'string') {
-                            const trimmed = f.trim();
-                            const expanded = trimmed.startsWith('~')
-                                ? path.join(os.homedir(), trimmed.slice(1))
-                                : trimmed;
-                            
-                            mappedChildRoots.add(path.resolve(expanded));
-                        }
-                    }
-                }
+
             }
 
             for (const root of allRoots) {
@@ -882,17 +860,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             }
                         }
                     }
-                    if (Array.isArray(m.dropdownWorkspaces)) {
-                        for (const dw of m.dropdownWorkspaces) {
-                            if (typeof dw === 'string') {
-                                const p = dw.trim();
-                                const expanded = p.startsWith('~')
-                                    ? path.join(os.homedir(), p.slice(1))
-                                    : p;
-                                allowedRoots.add(path.resolve(expanded));
-                            }
-                        }
-                    }
+
                 }
             }
         } catch { /* fall through */ }
@@ -1828,8 +1796,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             mirrorPath: typeof sheet.mirrorPath === 'string' ? sheet.mirrorPath : '',
             routedTo: '',
             dispatchedAgent: '',
-            dispatchedIde: '',
-            hasWorktree: 0
+            dispatchedIde: ''
         };
 
         if (preserveExistingFields) {
@@ -1845,7 +1812,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         routedTo: existing.routedTo || '',
                         dispatchedAgent: existing.dispatchedAgent || '',
                         dispatchedIde: existing.dispatchedIde || '',
-                        hasWorktree: existing.hasWorktree ?? 0,
+                        worktreeId: existing.worktreeId,
                         tags: existing.tags || baseRecord.tags,
                         dependencies: existing.dependencies || baseRecord.dependencies,
                     };
@@ -3029,7 +2996,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         planIngestionFolder: string;
         visibleAgents: Record<string, boolean>;
         autoCommitOnCodeReview: boolean;
-        openWorktreeForCoderAgents: boolean;
     }> {
         const [commands, planIngestionFolder, visibleAgents] = await Promise.all([
             this.getStartupCommands(workspaceRoot),
@@ -3038,28 +3004,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ]);
         const statePath = this._resolveStateFilePath(workspaceRoot);
         let autoCommitOnCodeReview = true;
-        let openWorktreeForCoderAgents = false;
         if (statePath) {
             try {
                 const content = await fs.promises.readFile(statePath, 'utf8');
                 const state = JSON.parse(content);
                 if (state.autoCommitOnCodeReview === false) autoCommitOnCodeReview = false;
-                if (state.openWorktreeForCoderAgents === true) openWorktreeForCoderAgents = true;
             } catch {}
         }
-        return { commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview, openWorktreeForCoderAgents };
-    }
-
-    public async handleGetOpenWorktreeForCoderAgentsSetting(workspaceRoot?: string): Promise<boolean> {
-        const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return false;
-        try {
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
-            return state.openWorktreeForCoderAgents === true;
-        } catch {
-            return false;
-        }
+        return { commands, planIngestionFolder, visibleAgents, autoCommitOnCodeReview };
     }
 
     public async handleGetAutoCommitOnCodeReviewSetting(workspaceRoot?: string): Promise<boolean> {
@@ -3209,8 +3161,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (mappings.enabled && Array.isArray(mappings.mappings)) {
                     const mapping = mappings.mappings.find((m: any) => {
                         const childFolders = Array.isArray(m.workspaceFolders) ? m.workspaceFolders.map((f: string) => path.resolve(f)) : [];
-                        const dropdownFolders = Array.isArray(m.dropdownWorkspaces) ? m.dropdownWorkspaces.map((f: string) => path.resolve(f)) : [];
-                        return childFolders.includes(path.resolve(root)) || dropdownFolders.includes(path.resolve(root));
+                        return childFolders.includes(path.resolve(root));
                     });
                     if (mapping) {
                         isMapped = true;
@@ -6299,7 +6250,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 || sanitizedCustomKanbanColumns !== undefined
                 || (typeof data.planIngestionFolder === 'string' && !validationError)
                 || typeof data.autoCommitOnCodeReview === 'boolean'
-                || typeof data.openWorktreeForCoderAgents === 'boolean'
             ) {
                 await this.updateState(async (state: any) => {
                     if (data.commands) {
@@ -6350,9 +6300,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         state.autoCommitOnCodeReview = data.autoCommitOnCodeReview;
                     }
 
-                    if (typeof data.openWorktreeForCoderAgents === 'boolean') {
-                        state.openWorktreeForCoderAgents = data.openWorktreeForCoderAgents;
-                    }
+
                 });
             }
 
@@ -9605,8 +9553,7 @@ What would you like to find?`;
                 mirrorPath: entry.mirrorPath || '',
                 routedTo: '',
                 dispatchedAgent: '',
-                dispatchedIde: '',
-                hasWorktree: 0
+                dispatchedIde: ''
             });
         }
         if (records.length > 0) {
@@ -9655,7 +9602,7 @@ What would you like to find?`;
                 routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
-                hasWorktree: existing?.hasWorktree ?? 0
+                worktreeId: existing?.worktreeId
             });
         }
         if (records.length > 0) {
@@ -9741,7 +9688,7 @@ What would you like to find?`;
                 routedTo: existing?.routedTo || '',
                 dispatchedAgent: existing?.dispatchedAgent || '',
                 dispatchedIde: existing?.dispatchedIde || '',
-                hasWorktree: existing?.hasWorktree ?? 0
+                worktreeId: existing?.worktreeId
             }]);
         }
         console.log(`[TaskViewerProvider] Registered plan: ${entry.planId} (${entry.sourceType}) topic="${entry.topic}"`);
@@ -10681,8 +10628,7 @@ What would you like to find?`;
                             mirrorPath: '',
                             routedTo: '',
                             dispatchedAgent: '',
-                            dispatchedIde: '',
-                            hasWorktree: 0
+                            dispatchedIde: ''
                         }]);
                     } else {
                         await db.tombstonePlan(hash);
@@ -10730,8 +10676,7 @@ What would you like to find?`;
                     mirrorPath: '',
                     routedTo: '',
                     dispatchedAgent: '',
-                    dispatchedIde: '',
-                    hasWorktree: 0
+                    dispatchedIde: ''
                 }]);
             }
             this._tombstones.add(hash);
@@ -13481,19 +13426,7 @@ What would you like to find?`;
                 }
             }
 
-            if (isStop && workflow === 'reviewer-pass') {
-                const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-                if (db) {
-                    const plan = await db.getPlanBySessionId(sessionId);
-                    if (plan?.hasWorktree) {
-                        const lowOutcome = (outcome || '').toLowerCase();
-                        const isSuccess = !lowOutcome.includes('fail') && !lowOutcome.includes('error') && !lowOutcome.includes('conflict') && !lowOutcome.includes('abort') && !lowOutcome.includes('cancel');
-                        if (isSuccess) {
-                            await this._cleanupWorktree(resolvedWorkspaceRoot, sessionId);
-                        }
-                    }
-                }
-            }
+
 
             console.log(`[TaskViewerProvider] Updated Run Sheet for session ${sessionId} -> ${workflow} (${isStop ? 'stop' : 'start'})`);
             this._refreshRunSheets();
@@ -14681,28 +14614,7 @@ What would you like to find?`;
             return false;
         }
 
-        // Check if session has an existing worktree — use it as working directory
-        if (sessionId) {
-            const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-            if (db) {
-                const worktreeMeta = await db.getWorktreeMeta(sessionId);
-                if (worktreeMeta && worktreeMeta.worktreePath) {
-                    // Verify worktree path still exists on disk
-                    if (fs.existsSync(worktreeMeta.worktreePath)) {
-                        options = {
-                            ...options,
-                            workingDirectory: worktreeMeta.worktreePath,
-                            gitProhibitionEnabled: false
-                        };
-                    } else {
-                        // Stale metadata — clear it
-                        console.warn(`[TaskViewerProvider] Worktree path ${worktreeMeta.worktreePath} no longer exists, using main tree`);
-                        await db.clearWorktreeMeta(sessionId);
-                        await db.updateHasWorktree(sessionId, false);
-                    }
-                }
-            }
-        }
+
 
         // Focus the terminal for immediate feedback
         vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
@@ -14767,13 +14679,12 @@ Do NOT output the critiques or plan twice in your response; integrate this file 
 Do NOT output the critiques or plan twice in your response; integrate this with your single step-by-step workflow execution.`;
             }
         } else if (role === 'reviewer') {
-            const isMerge = baseInstruction === 'merge-worktrees';
             messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
                 instruction: baseInstruction,
                 advancedReviewerEnabled: this._isAdvancedReviewerEnabled(),
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled: isMerge ? false : gitProhibitionEnabled,
+                gitProhibitionEnabled,
                 switchboardSafeguardsEnabled
             });
             messageMetadata.phase_gate = {
@@ -14782,53 +14693,22 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
                 bypass_workflow_triggers: 'true'
             };
 
-            if (isMerge) {
-                // For merging worktrees, append custom merge context info with ALL worktree sessions
-                const mergeDb = await this._getKanbanDb(resolvedWorkspaceRoot);
-                let worktreeListBlock = '';
-                if (mergeDb) {
-                    const mergeWorkspaceId = await mergeDb.getWorkspaceId();
-                    if (mergeWorkspaceId) {
-                        const allBoardCards = await mergeDb.getBoard(mergeWorkspaceId);
-                        const reviewedWithWorktrees = allBoardCards.filter(
-                            c => c.kanbanColumn === 'CODE REVIEWED' && c.hasWorktree
-                        );
-                        const worktreeEntries: string[] = [];
-                        for (const card of reviewedWithWorktrees) {
-                            const meta = await mergeDb.getWorktreeMeta(card.sessionId);
-                            if (meta) {
-                                worktreeEntries.push(
-                                    `  - Session: ${card.sessionId} | Topic: ${card.topic || card.sessionId}\n` +
-                                    `    Branch: ${meta.worktreeBranch} | Path: ${meta.worktreePath}`
-                                );
-                            }
-                        }
-                        if (worktreeEntries.length > 0) {
-                            worktreeListBlock = `\n- Worktrees to merge (${worktreeEntries.length}):\n${worktreeEntries.join('\n')}`;
-                        }
-                    }
-                }
-                messagePayload += `\n\nMerge Target Context:
-- Main Workspace Root: ${resolvedWorkspaceRoot}${worktreeListBlock}
-- Please run local merges for all reviewed worktrees as instructed in the MERGE WORKTREES DIRECTIVE.`;
-            } else {
-                // Append dispatch-specific strict/light mode delivery extensions for normal reviews
-                const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
-                const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
-                if (strictReviewPrompts) {
-                    messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
+            // Append dispatch-specific strict/light mode delivery extensions for normal reviews
+            const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
+            const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
+            if (strictReviewPrompts) {
+                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Write Stage 1 findings to ${reviewerFindingsPath}
 - Write Stage 2 synthesis to ${reviewerSynthesisPath}
 - Apply fixes and update the plan. Keep file outputs as archival artifacts.
 - Strict format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
-                } else {
-                    messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
+            } else {
+                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
 - Do NOT write plan/review artifact files in light mode.
 - Apply fixes and update the plan after posting findings in chat.
 - Suggested format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
 - Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
-                }
             }
         } else if (role === 'tester') {
             if (!await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
@@ -16922,191 +16802,6 @@ Create this file exactly as specified, then continue your work.`);
         await vscode.commands.executeCommand('revealFileInOS', uri);
     }
 
-    /**
-     * Auto-commit any uncommitted changes in the main working tree before
-     * creating a worktree. This prevents merge conflicts caused by dirty
-     * state drifting in main while the coder works in the worktree.
-     * Commits are only created when there are actual changes to commit.
-     */
-    private async _autoCommitDirtyMain(workspaceRoot: string): Promise<void> {
-        const execAsync = promisify(cp.exec);
-        try {
-            // Check for unstaged changes
-            const { stdout: diffStdout } = await execAsync('git diff --exit-code --stat', { cwd: workspaceRoot });
-            // Check for staged but uncommitted changes
-            const { stdout: cachedStdout } = await execAsync('git diff --cached --exit-code --stat', { cwd: workspaceRoot });
-
-            const hasUnstaged = diffStdout.trim().length > 0;
-            const hasStaged = cachedStdout.trim().length > 0;
-
-            if (!hasUnstaged && !hasStaged) {
-                return; // Working tree is clean — nothing to do
-            }
-
-            // Stage all changes if there are unstaged files
-            if (hasUnstaged) {
-                await execAsync('git add -A', { cwd: workspaceRoot });
-            }
-
-            // Commit with a descriptive message
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-            await execAsync(`git commit -m "switchboard: auto-commit before worktree creation (${timestamp})"`, { cwd: workspaceRoot });
-
-            console.log(`[TaskViewerProvider] Auto-committed dirty working tree before worktree creation`);
-        } catch (e: any) {
-            // If auto-commit fails (e.g., empty commit, pre-commit hook rejection), log and continue.
-            // The worktree creation will still proceed — a dirty main is a soft risk, not a hard block.
-            console.warn(`[TaskViewerProvider] Auto-commit before worktree failed (non-fatal): ${e.message}`);
-        }
-    }
-
-    public async autoCommitForCodeReview(workspaceRoot: string, planTopic: string): Promise<void> {
-        const execAsync = promisify(cp.exec);
-        try {
-            // git status --porcelain detects all change types (unstaged, staged, untracked)
-            // and always exits 0 — unlike git diff --exit-code which exits 1 on differences
-            // and causes promisify(exec) to throw, silently skipping the commit.
-            const { stdout: statusStdout } = await execAsync('git status --porcelain', { cwd: workspaceRoot });
-            if (!statusStdout.trim()) {
-                console.log(`[TaskViewerProvider] Working tree clean — skipping auto-commit for code review`);
-                return;
-            }
-            await execAsync('git add -A', { cwd: workspaceRoot });
-            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
-            const safeTopic = planTopic.replace(/"/g, '').substring(0, 80);
-            await execAsync(`git commit -m "switchboard: auto-commit before code review (${safeTopic}, ${timestamp})"`, { cwd: workspaceRoot });
-            console.log(`[TaskViewerProvider] Auto-committed before code review for: ${safeTopic}`);
-        } catch (e: any) {
-            console.warn(`[TaskViewerProvider] Auto-commit before code review failed (non-fatal): ${e.message}`);
-        }
-    }
-
-    private async _isGitRepo(workspaceRoot: string): Promise<boolean> {
-        const execAsync = promisify(cp.exec);
-        try {
-            await execAsync('git rev-parse --is-inside-work-tree', { cwd: workspaceRoot });
-            return true;
-        } catch {
-            return false;
-        }
-    }
-
-    private async _createWorktree(workspaceRoot: string, sessionId: string): Promise<{ worktreePath: string; worktreeBranch: string }> {
-        const execAsync = promisify(cp.exec);
-
-        const safeId = sessionId.replace(/[^a-zA-Z0-9_-]/g, '-').substring(0, 40);
-        let worktreeBranch = `sb-coder-${safeId}`;
-
-        const repoName = path.basename(workspaceRoot);
-        const parentDir = path.dirname(workspaceRoot);
-        let worktreePath = path.join(parentDir, `${repoName}-wt-${safeId}`);
-
-        // Handle branch name collision: append timestamp suffix if branch already exists
-        try {
-            const { stdout: existingBranches } = await execAsync('git branch --list', { cwd: workspaceRoot });
-            if (existingBranches.split('\n').some(b => b.trim() === worktreeBranch)) {
-                const ts = Date.now().toString(36);
-                worktreeBranch = `sb-coder-${safeId}-${ts}`;
-                worktreePath = path.join(parentDir, `${repoName}-wt-${safeId}-${ts}`);
-                console.warn(`[TaskViewerProvider] Branch collision detected, using ${worktreeBranch}`);
-            }
-        } catch {
-            // git branch --list may fail in unusual states; proceed with original name
-        }
-
-        // Handle path collision: append numeric suffix if directory already exists
-        let suffix = 0;
-        let candidatePath = worktreePath;
-        while (fs.existsSync(candidatePath)) {
-            suffix++;
-            candidatePath = `${worktreePath}-${suffix}`;
-        }
-        if (suffix > 0) {
-            worktreePath = candidatePath;
-            // Also update branch name to stay consistent
-            worktreeBranch = `${worktreeBranch}-${suffix}`;
-            console.warn(`[TaskViewerProvider] Path collision detected, using ${worktreePath}`);
-        }
-
-        await execAsync(
-            `git worktree add -b "${worktreeBranch}" "${worktreePath}"`,
-            { cwd: workspaceRoot }
-        );
-
-        return { worktreePath, worktreeBranch };
-    }
-
-    private async _cleanupWorktree(workspaceRoot: string, sessionId: string): Promise<void> {
-        const execAsync = promisify(cp.exec);
-
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (!db) return;
-        const meta = await db.getWorktreeMeta(sessionId);
-        if (!meta) return;
-
-        try {
-            await execAsync(`git worktree remove --force "${meta.worktreePath}"`, { cwd: workspaceRoot });
-        } catch (e: any) {
-            console.warn(`[TaskViewerProvider] Failed to remove worktree: ${e.message}`);
-        }
-
-        try {
-            await execAsync(`git branch -D "${meta.worktreeBranch}"`, { cwd: workspaceRoot });
-        } catch (e: any) {
-            console.warn(`[TaskViewerProvider] Failed to delete branch ${meta.worktreeBranch}: ${e.message}`);
-        }
-
-        try {
-            await execAsync('git worktree prune', { cwd: workspaceRoot });
-        } catch (e: any) {
-            console.warn(`[TaskViewerProvider] Failed to prune worktrees: ${e.message}`);
-        }
-
-        await db.clearWorktreeMeta(sessionId);
-        await db.updateHasWorktree(sessionId, false);
-    }
-
-    public async createWorktreeForSession(
-        workspaceRoot: string,
-        sessionId: string
-    ): Promise<void> {
-        const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
-        if (!resolvedWorkspaceRoot) return;
-
-        // Check if this is a git repo
-        const isGit = await this._isGitRepo(resolvedWorkspaceRoot);
-        if (!isGit) {
-            console.warn('[TaskViewerProvider] Worktree addon enabled but workspace is not a git repository.');
-            return;
-        }
-
-        // Check if worktree already exists for this session
-        const db = await this._getKanbanDb(resolvedWorkspaceRoot);
-        if (db) {
-            const existingMeta = await db.getWorktreeMeta(sessionId);
-            if (existingMeta && existingMeta.worktreePath) {
-                console.log(`[TaskViewerProvider] Worktree already exists for session ${sessionId}`);
-                return;
-            }
-        }
-
-        try {
-            // Auto-commit any dirty working directory before creating worktree
-            await this._autoCommitDirtyMain(resolvedWorkspaceRoot);
-
-            const { worktreePath, worktreeBranch } = await this._createWorktree(resolvedWorkspaceRoot, sessionId);
-
-            // Store metadata in kanban_meta
-            if (db) {
-                await db.setWorktreeMeta(sessionId, { worktreePath, worktreeBranch });
-                await db.updateHasWorktree(sessionId, true);
-            }
-
-            console.log(`[TaskViewerProvider] Created worktree for session ${sessionId}: ${worktreePath}`);
-        } catch (e: any) {
-            console.error(`[TaskViewerProvider] Failed to create worktree for session ${sessionId}:`, e);
-        }
-    }
 
 
 

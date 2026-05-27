@@ -1657,9 +1657,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'kanbanContextSet':
                 handleKanbanContextSet(msg);
                 break;
-            case 'kanbanPlanOpenResult':
-                handleKanbanPlanOpenResult(msg);
-                break;
             case 'commentResult': {
                 const { ok, message } = msg;
                 if (ok) {
@@ -2583,12 +2580,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handleKanbanContextSet(msg) {
         if (!msg.success) {
             alert('Failed to set active context: ' + (msg.error || 'Unknown error'));
-        }
-    }
-
-    function handleKanbanPlanOpenResult(msg) {
-        if (!msg.success) {
-            alert('Failed to open plan file: ' + (msg.error || 'Unknown error'));
         }
     }
 

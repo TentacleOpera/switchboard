@@ -37,19 +37,12 @@ export function isAllowedSwitchboardLocation(candidatePath: string, workspaceRoo
         const cfg = getMappingsFromIndex();
 
         if (cfg?.enabled && Array.isArray(cfg.mappings)) {
-            // 1a. Is candidate a mapped child workspaceFolder or dropdownWorkspace? → BLOCK
+            // 1a. Is candidate a mapped child workspaceFolder? → BLOCK
             for (const mapping of cfg.mappings) {
                 if (Array.isArray(mapping.workspaceFolders)) {
                     for (const wf of mapping.workspaceFolders) {
                         if (path.resolve(expandHome(wf)) === resolvedCandidate) {
                             return false; // Child workspace — NOT allowed
-                        }
-                    }
-                }
-                if (Array.isArray(mapping.dropdownWorkspaces)) {
-                    for (const dw of mapping.dropdownWorkspaces) {
-                        if (path.resolve(expandHome(dw)) === resolvedCandidate) {
-                            return false; // Dropdown workspace — NOT allowed (shares parent DB)
                         }
                     }
                 }

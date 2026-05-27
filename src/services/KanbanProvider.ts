@@ -3,6 +3,8 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import * as crypto from 'crypto';
+import * as cp from 'child_process';
+import { promisify } from 'util';
 import { SessionActionLog } from './SessionActionLog';
 import {
     buildKanbanColumns,
@@ -31,7 +33,7 @@ import { NotionFetchService } from './NotionFetchService';
 import { type AutoPullIntegration, type AutoPullIntervalMinutes, IntegrationAutoPullService } from './IntegrationAutoPullService';
 import { ContinuousSyncService } from './ContinuousSyncService';
 import type { LiveSyncState } from '../models/LiveSyncTypes';
-import { isDropdownWorkspace, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
+import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 
 /**
  * Schedules a fire-and-forget write of the kanban state section to the plan file.
@@ -88,7 +90,6 @@ export interface KanbanCard {
     workspaceRoot: string;
     dependencies: string[];
     hasBlockingDependencies: boolean;
-    hasWorktree: boolean;
 }
 
 /**
@@ -470,12 +471,6 @@ export class KanbanProvider implements vscode.Disposable {
                             : wf;
                         allowedRoots.add(path.resolve(expanded));
                     }
-                    for (const dw of m.dropdownWorkspaces ?? []) {
-                        const expanded = dw.startsWith('~')
-                            ? path.join(os.homedir(), dw.slice(1))
-                            : dw;
-                        allowedRoots.add(path.resolve(expanded));
-                    }
                 }
             }
         } catch { /* fall through */ }
@@ -702,15 +697,6 @@ export class KanbanProvider implements vscode.Disposable {
                             break;
                         }
                     }
-                    for (const dw of m.dropdownWorkspaces || []) {
-                        const expandedDw = dw.startsWith('~')
-                            ? path.join(os.homedir(), dw.slice(1))
-                            : dw;
-                        if (path.resolve(expandedDw) === resolvedRoot) {
-                            anyOpenFolderIsMapped = true;
-                            break;
-                        }
-                    }
                     if (anyOpenFolderIsMapped) break;
                 }
                 if (anyOpenFolderIsMapped) break;
@@ -732,19 +718,6 @@ export class KanbanProvider implements vscode.Disposable {
                         items.push({
                             label: m.name || path.basename(resolvedParent),
                             workspaceRoot: resolvedParent
-                        });
-                    }
-                }
-                for (const dw of m.dropdownWorkspaces || []) {
-                    const expandedDw = dw.startsWith('~')
-                        ? path.join(os.homedir(), dw.slice(1))
-                        : dw;
-                    const resolvedDw = path.resolve(expandedDw);
-                    if (!addedRoots.has(resolvedDw)) {
-                        addedRoots.add(resolvedDw);
-                        items.push({
-                            label: `${m.name ? m.name + ' › ' : ''}${path.basename(resolvedDw)}`,
-                            workspaceRoot: resolvedDw
                         });
                     }
                 }
@@ -1005,8 +978,7 @@ export class KanbanProvider implements vscode.Disposable {
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     dependencies: deps,
-                    hasBlockingDependencies: deps.length > 0,
-                    hasWorktree: !!row.hasWorktree
+                    hasBlockingDependencies: deps.length > 0
                 };
             });
 
@@ -1021,8 +993,7 @@ export class KanbanProvider implements vscode.Disposable {
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
                 dependencies: [],
-                hasBlockingDependencies: false,
-                hasWorktree: false
+                hasBlockingDependencies: false
             })));
 
             this._calculateBlockingDependencies(cards);
@@ -1091,8 +1062,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._panel.webview.postMessage({ type: 'updateAgentNames', agentNames });
             this._panel.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
 
-            const worktreeCounts = await this._getWorktreeCounts(resolvedWorkspaceRoot);
-            this._panel.webview.postMessage({ type: 'worktreeCounts', counts: worktreeCounts });
+
 
             const effectiveModes: Record<string, 'cli' | 'prompt' | 'disabled'> = {};
             for (const col of columns) {
@@ -1717,11 +1687,7 @@ export class KanbanProvider implements vscode.Disposable {
                     : await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
 
-                // Filter out ghost plans: plan files that don't exist in this workspace
-                const isDropdown = isDropdownWorkspace(resolvedWorkspaceRoot);
-                const effectiveRootForPaths = isDropdown
-                    ? resolveEffectiveWorkspaceRootFromMappings(resolvedWorkspaceRoot)  // parent root
-                    : resolvedWorkspaceRoot;
+                const effectiveRootForPaths = resolvedWorkspaceRoot;
 
                 const activeRows = dbRows.filter(row => {
                     const planFile = row.planFile || '';
@@ -1748,8 +1714,7 @@ export class KanbanProvider implements vscode.Disposable {
                         complexity: row.complexity || 'Unknown',
                         workspaceRoot: resolvedWorkspaceRoot,
                         dependencies: deps,
-                        hasBlockingDependencies: deps.length > 0,
-                        hasWorktree: !!row.hasWorktree
+                        hasBlockingDependencies: deps.length > 0
                     };
                 });
 
@@ -1768,8 +1733,7 @@ export class KanbanProvider implements vscode.Disposable {
                     complexity: rec.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     dependencies: [],
-                    hasBlockingDependencies: false,
-                    hasWorktree: false
+                    hasBlockingDependencies: false
                 })));
 
                 this._calculateBlockingDependencies(cards);
@@ -1885,8 +1849,7 @@ export class KanbanProvider implements vscode.Disposable {
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
                     dependencies: deps,
-                    hasBlockingDependencies: deps.length > 0,
-                    hasWorktree: !!row.hasWorktree
+                    hasBlockingDependencies: deps.length > 0
                 };
             });
 
@@ -1901,8 +1864,7 @@ export class KanbanProvider implements vscode.Disposable {
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
                 dependencies: [],
-                hasBlockingDependencies: false,
-                hasWorktree: false
+                hasBlockingDependencies: false
             })));
 
             this._calculateBlockingDependencies(cards);
@@ -2234,7 +2196,7 @@ export class KanbanProvider implements vscode.Disposable {
                         ? promptsConfig.suppressWalkthroughByRole?.[role as any] ?? false
                         : undefined,
                     includeDependencyInstructions: (role === 'lead' || role === 'coder' || role === 'intern')
-                        ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? true)
+                        ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? false)
                         : undefined,
                     ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
                     complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
@@ -2258,11 +2220,10 @@ export class KanbanProvider implements vscode.Disposable {
                 commands: state.startupCommands || {},
                 visibleAgents: state.visibleAgents || {},
                 julesAutoSyncEnabled: state.julesAutoSyncEnabled ?? false,
-                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true,
-                openWorktreeForCoderAgents: state.openWorktreeForCoderAgents ?? false
+                autoCommitOnCodeReview: state.autoCommitOnCodeReview ?? true
             };
         } catch {
-            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true, openWorktreeForCoderAgents: false };
+            return { commands: {}, visibleAgents: {}, julesAutoSyncEnabled: false, autoCommitOnCodeReview: true };
         }
     }
 
@@ -2432,9 +2393,9 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.suppressWalkthrough ?? false,
             },
             includeDependencyInstructionsByRole: {
-                lead: leadConfig?.addons?.includeDependencyInstructions ?? true,
-                coder: coderConfig?.addons?.includeDependencyInstructions ?? true,
-                intern: internConfig?.addons?.includeDependencyInstructions ?? true,
+                lead: leadConfig?.addons?.includeDependencyInstructions ?? false,
+                coder: coderConfig?.addons?.includeDependencyInstructions ?? false,
+                intern: internConfig?.addons?.includeDependencyInstructions ?? false,
             },
             ticketUpdateMode: ticketUpdaterConfig?.addons?.ticketUpdateMode
                 ?? (ticketUpdaterConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
@@ -2715,7 +2676,7 @@ export class KanbanProvider implements vscode.Disposable {
             skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
             skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
             sourceColumnLabel,
-            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? true
+            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? false
         });
     }
 
@@ -2754,7 +2715,7 @@ export class KanbanProvider implements vscode.Disposable {
             suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false,
             skipCompilation: promptsConfig.skipCompilationByRole?.coder ?? false,
             skipTests: promptsConfig.skipTestsByRole?.coder ?? false,
-            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? true
+            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? false
         });
         if (coderUsesIde) {
             const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
@@ -3398,8 +3359,7 @@ export class KanbanProvider implements vscode.Disposable {
             complexity,
             workspaceRoot,
             dependencies: deps,
-            hasBlockingDependencies: false, // Will be recalculated if passed through refresh logic
-            hasWorktree: false
+            hasBlockingDependencies: false // Will be recalculated if passed through refresh logic
         };
     }
 
@@ -3771,9 +3731,20 @@ export class KanbanProvider implements vscode.Disposable {
             const previousColumn = previousRecord?.kanbanColumn || null;
 
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
+
+            const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+            if (coderColumns.includes(targetColumn)) {
+                await this._assignWorktreeToCard(workspaceRoot, sessionId);
+            }
+            if (targetColumn === 'CODE REVIEWED') {
+                await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
+            }
+            if (targetColumn === 'COMPLETED') {
+                await this._cleanupWorktreeAfterReview(workspaceRoot, sessionId);
+            }
+
             const moved = await db.updateColumn(sessionId, targetColumn);
             if (moved) {
-                await this._handleWorktreeForColumnTransition(workspaceRoot, sessionId, previousColumn, targetColumn);
                 await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
             }
             return moved;
@@ -3802,11 +3773,22 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
                 }
             }
+
+            if (sessionId) {
+                const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
+                if (coderColumns.includes(targetColumn)) {
+                    await this._assignWorktreeToCard(workspaceRoot, sessionId);
+                }
+                if (targetColumn === 'CODE REVIEWED') {
+                    await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
+                }
+                if (targetColumn === 'COMPLETED') {
+                    await this._cleanupWorktreeAfterReview(workspaceRoot, sessionId);
+                }
+            }
+
             const moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
             if (moved) {
-                if (sessionId) {
-                    await this._handleWorktreeForColumnTransition(workspaceRoot, sessionId, previousColumn, targetColumn);
-                }
                 await this.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
             }
             return moved;
@@ -5019,15 +5001,6 @@ export class KanbanProvider implements vscode.Disposable {
                         for (const card of selectedCards) {
                             const absPath = this._resolvePlanFilePath(workspaceRoot, card.planFile);
                             let line = `- [${card.topic}] Plan File: ${absPath}`;
-                            if (card.hasWorktree) {
-                                const db = this._getKanbanDb(workspaceRoot);
-                                if (db && await db.ensureReady()) {
-                                    const meta = await db.getWorktreeMeta(card.sessionId);
-                                    if (meta?.worktreePath) {
-                                        line += `\n  Worktree path: ${meta.worktreePath}`;
-                                    }
-                                }
-                            }
                             planLines.push(line);
                         }
                         planSection = `\n\n## Plans to Discuss\n${planLines.join('\n')}\n\nPlease read each plan file above before starting the discussion.`;
@@ -5467,7 +5440,7 @@ export class KanbanProvider implements vscode.Disposable {
                     suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.lead ?? false,
                     skipCompilation: promptsConfig.skipCompilationByRole?.lead ?? false,
                     skipTests: promptsConfig.skipTestsByRole?.lead ?? false,
-                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.lead ?? true
+                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.lead ?? false
                 });
 
                 // Build coder (Routine) prompt
@@ -5484,7 +5457,7 @@ export class KanbanProvider implements vscode.Disposable {
                     suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false,
                     skipCompilation: promptsConfig.skipCompilationByRole?.coder ?? false,
                     skipTests: promptsConfig.skipTestsByRole?.coder ?? false,
-                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? true
+                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? false
                 });
 
                 if (coderUsesIde) {
@@ -5710,50 +5683,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await this._saveStartupCommands(workspaceRoot, msg);
                 break;
             }
-            case 'mergeWorktrees': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
 
-                const db = this._getKanbanDb(workspaceRoot);
-                const workspaceId = await db.getWorkspaceId();
-                if (!workspaceId) break;
-
-                const allCards = await db.getBoard(workspaceId);
-                const cardsInCodeReviewed = allCards.filter(c => c.kanbanColumn === 'CODE REVIEWED');
-
-                const sessionsWithWorktrees = [];
-                for (const card of cardsInCodeReviewed) {
-                    if (card.hasWorktree) {
-                        const meta = await db.getWorktreeMeta(card.sessionId);
-                        if (meta) {
-                            sessionsWithWorktrees.push({
-                                sessionId: card.sessionId,
-                                worktreePath: meta.worktreePath,
-                                worktreeBranch: meta.worktreeBranch,
-                                topic: card.topic || card.sessionId
-                            });
-                        }
-                    }
-                }
-
-                if (sessionsWithWorktrees.length === 0) {
-                    vscode.window.showInformationMessage('No worktrees to merge');
-                    break;
-                }
-
-                const dispatched = await vscode.commands.executeCommand<boolean>(
-                    'switchboard.triggerAgentFromKanban',
-                    'reviewer',
-                    sessionsWithWorktrees[0].sessionId,
-                    'merge-worktrees',
-                    workspaceRoot
-                );
-
-                if (dispatched) {
-                    vscode.window.showInformationMessage(`Merging ${sessionsWithWorktrees.length} worktree(s)...`);
-                }
-                break;
-            }
             case 'getPromptsConfig': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
@@ -5942,7 +5872,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
                             : undefined,
                         includeDependencyInstructions: (role === 'lead' || role === 'coder' || role === 'intern')
-                            ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? true)
+                            ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? false)
                             : undefined,
                         ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
                         complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
@@ -6191,6 +6121,95 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
+            case 'getWorktrees': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const worktrees = await db.getWorktrees();
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                }
+                break;
+            }
+            case 'createWorktree': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const wtRelativePath = await vscode.window.showInputBox({ prompt: 'Worktree path (relative to workspace parent)' });
+                if (!wtRelativePath) break;
+                const branch = await vscode.window.showInputBox({ prompt: 'Branch name' });
+                if (!branch) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const id = await db.createWorktree(wtRelativePath, branch, null);
+                    const execAsync = promisify(cp.exec);
+                    const parentDir = path.dirname(workspaceRoot);
+                    const fullPath = path.join(parentDir, wtRelativePath);
+                    try {
+                        await execAsync(`git worktree add -b "${branch}" "${fullPath}"`, { cwd: workspaceRoot });
+                        vscode.window.showInformationMessage(`Worktree created at ${fullPath}`);
+                    } catch (e: any) {
+                        vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
+                        await db.deleteWorktree(id);
+                    }
+                    const worktrees = await db.getWorktrees();
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                }
+                break;
+            }
+            case 'deleteWorktree': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    const wt = await db.getWorktreeById(Number(msg.worktreeId));
+                    if (wt) {
+                        const workspaceId = await db.getWorkspaceId();
+                        const allCards = workspaceId ? await db.getBoard(workspaceId) : [];
+                        const assignedCards = allCards.filter(c => c.worktreeId === wt.id);
+                        if (assignedCards.length > 0) {
+                            const confirm = await vscode.window.showWarningMessage(
+                                `${assignedCards.length} plan(s) are assigned to this worktree. Delete anyway?`,
+                                'Delete', 'Cancel'
+                            );
+                            if (confirm !== 'Delete') break;
+                        }
+                        const execAsync = promisify(cp.exec);
+                        const parentDir = path.dirname(workspaceRoot);
+                        const fullPath = path.isAbsolute(wt.path) ? wt.path : path.resolve(parentDir, wt.path);
+                        try {
+                            await execAsync(`git worktree remove --force "${fullPath}"`, { cwd: workspaceRoot });
+                            await execAsync(`git branch -D "${wt.branch}"`, { cwd: workspaceRoot });
+                        } catch (e: any) {
+                            console.warn(`Failed to remove worktree: ${e.message}`);
+                        }
+                        await db.deleteWorktree(Number(msg.worktreeId));
+                    }
+                    const worktrees = await db.getWorktrees();
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                }
+                break;
+            }
+            case 'assignAgentToWorktree': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                const agentNames = Object.entries(visibleAgents)
+                    .filter(([_, enabled]) => enabled)
+                    .map(([name]) => name);
+                if (agentNames.length === 0) {
+                    vscode.window.showWarningMessage('No agents configured. Set up agents in Setup first.');
+                    break;
+                }
+                const selected = await vscode.window.showQuickPick(agentNames, { placeHolder: 'Select coder agent' });
+                if (!selected) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                if (db && await db.ensureReady()) {
+                    await db.assignAgentToWorktree(Number(msg.worktreeId), selected);
+                    const worktrees = await db.getWorktrees();
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                }
+                break;
+            }
         }
     }
 
@@ -6291,49 +6310,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         }
     }
 
-    private async _handleWorktreeForColumnTransition(
-        workspaceRoot: string,
-        sessionId: string,
-        previousColumn: string | null,
-        targetColumn: string
-    ): Promise<void> {
-        const targetRole = this._columnToRole(targetColumn);
-        if (!targetRole) return;
 
-        // Only consider worktree creation for built-in coder roles
-        const isCoderColumn = ['lead', 'coder', 'intern'].includes(targetRole);
-        if (!isCoderColumn) return;
-
-        // Check if global worktree workflow setting is enabled
-        const addonEnabled = await this._isWorktreeAddonEnabled(workspaceRoot, targetRole);
-        if (!addonEnabled) return;
-
-        // Delegate to TaskViewerProvider for actual worktree creation
-        if (this._taskViewerProvider) {
-            await this._taskViewerProvider.createWorktreeForSession(workspaceRoot, sessionId);
-        }
-    }
-
-    private async _isWorktreeAddonEnabled(
-        workspaceRoot: string,
-        role: string
-    ): Promise<boolean> {
-        // Custom agents no longer support worktree (consolidated to global setting)
-        if (role.startsWith('custom_agent_')) return false;
-
-        // Only coder roles are eligible
-        if (!['lead', 'coder', 'intern'].includes(role)) return false;
-
-        // Check global workflow setting
-        const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-        try {
-            const content = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(content);
-            return state.openWorktreeForCoderAgents === true;
-        } catch {
-            return false;
-        }
-    }
 
     private _isAcceptanceTesterDesignDocConfigured(): boolean {
         const config = vscode.workspace.getConfiguration('switchboard');
@@ -6391,21 +6368,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         });
     }
 
-    private async _getWorktreeCounts(workspaceRoot: string): Promise<Record<string, number>> {
-        const db = this._getKanbanDb(workspaceRoot);
-        const workspaceId = await db.getWorkspaceId();
-        if (!workspaceId) return {};
-        const cards = await db.getBoard(workspaceId);
 
-        const counts: Record<string, number> = {};
-        for (const card of cards) {
-            if (card.hasWorktree) {
-                counts[card.kanbanColumn] = (counts[card.kanbanColumn] || 0) + 1;
-            }
-        }
-
-        return counts;
-    }
 
     private async _getHtml(webview: vscode.Webview): Promise<string> {
         const paths = [
@@ -6454,8 +6417,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Inject icon URIs for column button area
         const iconDir = vscode.Uri.joinPath(this._extensionUri, 'icons');
         const iconMap: Record<string, string> = {
-            '{{ICON_22}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-22.png')).toString(),
-            '{{ICON_28}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-28.png')).toString(),
+            '{{ICON_22}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-138.png')).toString(),
+            '{{ICON_28}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-24.png')).toString(),
             '{{ICON_53}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-53.png')).toString(),
             '{{ICON_54}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-54.png')).toString(),
             '{{ICON_115}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-101-150 Sci-Fi Flat icons-115.png')).toString(),
@@ -6470,12 +6433,109 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_59}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-59.png')).toString(),
             '{{ICON_41}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-41.png')).toString(),
             '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
-            '{{ICON_MERGE_WORKTREES}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'git-merge.svg')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
         }
 
         return content;
+    }
+
+    private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) return;
+
+        const plan = await db.getPlanBySessionId(sessionId);
+        if (plan && plan.worktreeId) return;
+
+        const worktrees = await db.getWorktrees();
+        const availableWorktrees = worktrees.filter(wt => wt.coderAgentId !== null);
+
+        if (availableWorktrees.length === 0) {
+            return; // No worktrees available, leave worktree_id null
+        }
+
+        const workspaceId = await db.getWorkspaceId();
+        if (!workspaceId) return;
+        const cards = await db.getBoard(workspaceId);
+        const assignmentCounts = new Map<number, number>();
+        availableWorktrees.forEach(wt => assignmentCounts.set(wt.id, 0));
+
+        cards.forEach(card => {
+            if (card.worktreeId && assignmentCounts.has(card.worktreeId)) {
+                assignmentCounts.set(card.worktreeId, (assignmentCounts.get(card.worktreeId) || 0) + 1);
+            }
+        });
+
+        // Find worktree with minimum assignments
+        let minCount = Infinity;
+        let selectedWorktreeId: number | null = null;
+        for (const [wtId, count] of assignmentCounts) {
+            if (count < minCount) {
+                minCount = count;
+                selectedWorktreeId = wtId;
+            }
+        }
+
+        if (selectedWorktreeId !== null) {
+            await db.updatePlanWorktree(sessionId, selectedWorktreeId);
+        }
+    }
+
+    private async _appendWorktreeContextToPlan(workspaceRoot: string, sessionId: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) return;
+
+        const plan = await db.getPlanBySessionId(sessionId);
+        if (!plan || !plan.worktreeId) return;
+
+        const worktree = await db.getWorktreeById(plan.worktreeId);
+        if (!worktree) return;
+
+        const planPath = this._resolvePlanFilePath(workspaceRoot, plan.planFile);
+        if (!planPath) return;
+
+        const worktreeContext = `
+
+## Worktree Context
+This work was done in a git worktree.
+- Worktree path: ${worktree.path}
+- Branch: ${worktree.branch}
+- To merge: cd ${worktree.path} && git checkout main && git merge ${worktree.branch}
+`;
+
+        try {
+            await fs.promises.appendFile(planPath, worktreeContext, 'utf8');
+        } catch (e: any) {
+            console.error(`Failed to append worktree context to plan: ${e.message}`);
+        }
+    }
+
+    private async _cleanupWorktreeAfterReview(workspaceRoot: string, sessionId: string): Promise<void> {
+        const db = this._getKanbanDb(workspaceRoot);
+        if (!db || !await db.ensureReady()) return;
+
+        const plan = await db.getPlanBySessionId(sessionId);
+        if (!plan || !plan.worktreeId) return;
+
+        const choice = await vscode.window.showWarningMessage(
+            'Worktree used for this plan. Clean it up?',
+            'Clean Up', 'Keep'
+        );
+        if (choice === 'Clean Up') {
+            const worktree = await db.getWorktreeById(plan.worktreeId);
+            if (worktree) {
+                const execAsync = promisify(cp.exec);
+                try {
+                    await execAsync(`git worktree remove --force "${worktree.path}"`, { cwd: workspaceRoot });
+                    await execAsync(`git branch -D "${worktree.branch}"`, { cwd: workspaceRoot });
+                    await db.deleteWorktree(worktree.id);
+                } catch (e: any) {
+                    console.warn(`Failed to cleanup worktree: ${e.message}`);
+                }
+            }
+        }
+
+        await db.updatePlanWorktree(sessionId, null);
     }
 }

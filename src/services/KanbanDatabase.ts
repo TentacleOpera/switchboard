@@ -11,7 +11,6 @@ export interface WorkspaceDatabaseMapping {
     dbPath: string;
     parentFolder?: string;
     workspaceFolders: string[];
-    dropdownWorkspaces?: string[];
     mode?: 'create' | 'connect';
 }
 
@@ -41,7 +40,7 @@ export interface KanbanPlanRecord {
     dispatchedIde: string;   // IDE name: 'Visual Studio Code', 'Cursor', 'Windsurf', etc.
     clickupTaskId?: string;
     linearIssueId?: string;
-    hasWorktree: number;     // 0 or 1
+    worktreeId?: number;
 }
 
 export interface ImportedDocEntry {
@@ -112,11 +111,12 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
     linear_issue_id   TEXT DEFAULT '',
-    has_worktree      INTEGER DEFAULT 0
+    worktree_id       INTEGER
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
+CREATE INDEX IF NOT EXISTS idx_plans_worktree ON plans(worktree_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -134,6 +134,16 @@ CREATE TABLE IF NOT EXISTS projects (
     UNIQUE(name, workspace_id)
 );
 CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
+CREATE TABLE IF NOT EXISTS worktrees (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    path TEXT NOT NULL,
+    branch TEXT NOT NULL,
+    coder_agent_id TEXT,
+    workspace_id TEXT NOT NULL,
+    created_at TEXT DEFAULT (datetime('now')),
+    UNIQUE(path, workspace_id)
+);
+CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
 `;
 
 // Migration SQL to add new columns to existing databases
@@ -386,10 +396,6 @@ const MIGRATION_V23_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project)`,
 ];
 
-const MIGRATION_V24_SQL = [
-    `ALTER TABLE plans ADD COLUMN has_worktree INTEGER DEFAULT 0`,
-];
-
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -401,7 +407,7 @@ INSERT INTO plans (
     plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-    clickup_task_id, linear_issue_id, has_worktree
+    clickup_task_id, linear_issue_id, worktree_id
  ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
@@ -426,7 +432,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     dispatched_ide = excluded.dispatched_ide,
     clickup_task_id = excluded.clickup_task_id,
     linear_issue_id = excluded.linear_issue_id,
-    has_worktree = excluded.has_worktree
+    worktree_id = excluded.worktree_id
 `;
 
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
@@ -435,7 +441,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, has_worktree`;
+                       clickup_task_id, linear_issue_id, worktree_id`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -1098,7 +1104,7 @@ export class KanbanDatabase {
                     record.dispatchedIde || '',   // 21
                     record.clickupTaskId || '',   // 22
                     record.linearIssueId || '',    // 23
-                    record.hasWorktree ?? 0         // 24
+                    record.worktreeId ?? null       // 24
                 ]);
             }
             this._db.run('COMMIT');
@@ -1345,59 +1351,89 @@ export class KanbanDatabase {
         );
     }
 
-    public async updateHasWorktree(sessionId: string, hasWorktree: boolean): Promise<void> {
-        if (!this._db) return;
-        this._db.run(
-            'UPDATE plans SET has_worktree = ? WHERE session_id = ?',
-            [hasWorktree ? 1 : 0, sessionId]
-        );
-        await this._persist();
-    }
-
-    /**
-     * Build a workspace-scoped key for kanban_meta entries.
-     * When child workspaces share a parent DB (via workspaceDatabaseMappings),
-     * the workspace_id prefix prevents key collisions between workspaces.
-     */
-    private async _worktreeMetaKey(sessionId: string): Promise<string> {
-        const wsId = await this.getWorkspaceId();
-        return `worktree_${wsId || 'default'}_${sessionId}`;
-    }
-
-    public async setWorktreeMeta(sessionId: string, meta: { worktreePath: string; worktreeBranch: string }): Promise<void> {
-        if (!this._db) return;
-        const key = await this._worktreeMetaKey(sessionId);
-        this._db.run(
-            'INSERT OR REPLACE INTO kanban_meta (key, value) VALUES (?, ?)',
-            [key, JSON.stringify(meta)]
-        );
-        await this._persist();
-    }
-
-    public async getWorktreeMeta(sessionId: string): Promise<{ worktreePath: string; worktreeBranch: string } | null> {
-        if (!this._db) return null;
-        const key = await this._worktreeMetaKey(sessionId);
+    public async createWorktree(wtPath: string, branch: string, coderAgentId: string | null): Promise<number> {
+        if (!this._db) return -1;
         const stmt = this._db.prepare(
-            "SELECT value FROM kanban_meta WHERE key = ?"
+            'INSERT INTO worktrees (path, branch, coder_agent_id, workspace_id) VALUES (?, ?, ?, ?)'
         );
         try {
-            if (stmt.bind([key]) && stmt.step()) {
-                return JSON.parse(String(stmt.getAsObject().value));
-            }
-            return null;
+            stmt.bind([wtPath, branch, coderAgentId, await this.getWorkspaceId()]);
+            stmt.step();
+            return this._db.lastInsertRowid as number;
         } finally {
             stmt.free();
         }
     }
 
-    public async clearWorktreeMeta(sessionId: string): Promise<void> {
+    public async getWorktrees(): Promise<Array<{ id: number; path: string; branch: string; coderAgentId: string | null }>> {
+        if (!this._db) return [];
+        const stmt = this._db.prepare(
+            'SELECT id, path, branch, coder_agent_id FROM worktrees WHERE workspace_id = ?'
+        );
+        try {
+            stmt.bind([await this.getWorkspaceId()]);
+            const results: Array<{ id: number; path: string; branch: string; coderAgentId: string | null }> = [];
+            while (stmt.step()) {
+                const row = stmt.getAsObject();
+                results.push({
+                    id: row.id as number,
+                    path: row.path as string,
+                    branch: row.branch as string,
+                    coderAgentId: row.coder_agent_id as string | null
+                });
+            }
+            return results;
+        } finally {
+            stmt.free();
+        }
+    }
+
+    public async deleteWorktree(id: number): Promise<void> {
         if (!this._db) return;
-        const key = await this._worktreeMetaKey(sessionId);
+        // Clear worktree_id on any plans referencing this worktree
+        this._db.run('UPDATE plans SET worktree_id = NULL WHERE worktree_id = ?', [id]);
+        this._db.run('DELETE FROM worktrees WHERE id = ?', [id]);
+        await this._persist();
+    }
+
+    public async assignAgentToWorktree(worktreeId: number, coderAgentId: string): Promise<void> {
+        if (!this._db) return;
         this._db.run(
-            "DELETE FROM kanban_meta WHERE key = ?",
-            [key]
+            'UPDATE worktrees SET coder_agent_id = ? WHERE id = ?',
+            [coderAgentId, worktreeId]
         );
         await this._persist();
+    }
+
+    public async updatePlanWorktree(sessionId: string, worktreeId: number | null): Promise<void> {
+        if (!this._db) return;
+        this._db.run(
+            'UPDATE plans SET worktree_id = ? WHERE session_id = ?',
+            [worktreeId, sessionId]
+        );
+        await this._persist();
+    }
+
+    public async getWorktreeById(id: number): Promise<{ id: number; path: string; branch: string; coderAgentId: string | null } | null> {
+        if (!this._db) return null;
+        const stmt = this._db.prepare(
+            'SELECT id, path, branch, coder_agent_id FROM worktrees WHERE id = ?'
+        );
+        try {
+            stmt.bind([id]);
+            if (stmt.step()) {
+                const row = stmt.getAsObject();
+                return {
+                    id: row.id as number,
+                    path: row.path as string,
+                    branch: row.branch as string,
+                    coderAgentId: row.coder_agent_id as string | null
+                };
+            }
+            return null;
+        } finally {
+            stmt.free();
+        }
     }
 
     public async getDependencyStatus(
@@ -3731,29 +3767,7 @@ export class KanbanDatabase {
             }
         }
 
-        // V24: add has_worktree flag for git worktree tracking
-        const v24 = await this.getMigrationVersion();
-        if (v24 < 24) {
-            let v24Failed = false;
-            for (const sql of MIGRATION_V24_SQL) {
-                try { this._db.exec(sql); } catch (e) {
-                    const msg = e instanceof Error ? e.message : String(e);
-                    // Distinguish "already exists" (harmless) from real failures
-                    if (msg.includes('already exists') || msg.includes('duplicate column')) {
-                        console.debug('[KanbanDatabase] V24 migration step skipped (already exists):', msg);
-                    } else {
-                        console.error('[KanbanDatabase] V24 migration step FAILED:', msg);
-                        v24Failed = true;
-                    }
-                }
-            }
-            if (!v24Failed) {
-                await this.setMigrationVersion(24);
-                console.log('[KanbanDatabase] V24 migration completed: has_worktree column added');
-            } else {
-                console.error('[KanbanDatabase] V24 migration had failures — version NOT stamped. _ensureSchemaColumns() will reconcile.');
-            }
-        }
+
     }
 
     /**
@@ -3992,9 +4006,9 @@ FROM plans
                     routedTo: p.routed_to || p.routedTo || '',
                     dispatchedAgent: p.dispatched_agent || p.dispatchedAgent || '',
                     dispatchedIde: p.dispatched_ide || p.dispatchedIde || '',
-                    hasWorktree: p.has_worktree ?? p.hasWorktree ?? 0,
                     clickupTaskId: p.clickup_task_id || p.clickupTaskId || '',
-                    linearIssueId: p.linear_issue_id || p.linearIssueId || ''
+                    linearIssueId: p.linear_issue_id || p.linearIssueId || '',
+                    worktreeId: p.worktree_id ?? p.worktreeId ?? undefined
                 };
 
                 try {
@@ -4004,7 +4018,7 @@ FROM plans
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
-                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.hasWorktree ?? 0
+                        record.dispatchedIde, record.clickupTaskId, record.linearIssueId, record.worktreeId ?? null
                     ]);
                     restored++;
                 } catch (e) {
@@ -4497,7 +4511,7 @@ FROM plans
                     dispatchedIde: String(row.dispatched_ide || ""),
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
-                    hasWorktree: Number(row.has_worktree || 0)
+                    worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined
                 });
             }
         } finally {

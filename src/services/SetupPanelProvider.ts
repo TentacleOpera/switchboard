@@ -7,7 +7,6 @@ import { ControlPlaneMigrationService } from './ControlPlaneMigrationService';
 import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import type { TaskViewerProvider } from './TaskViewerProvider';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
-import { ensureWorkspaceIdentity } from './WorkspaceIdentityService';
 import type { KanbanProvider } from './KanbanProvider';
 
 type ControlPlaneTaskViewerProvider = TaskViewerProvider & {
@@ -510,14 +509,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                         enabled: this._taskViewerProvider.handleGetPreventAgentFileOpeningSetting()
                     });
                     break;
-                case 'getOpenWorktreeForCoderAgentsSetting': {
-                    const value = await this._taskViewerProvider.handleGetOpenWorktreeForCoderAgentsSetting();
-                    this._panel.webview.postMessage({
-                        type: 'openWorktreeForCoderAgentsSetting',
-                        enabled: value
-                    });
-                    break;
-                }
                 case 'getAutoCommitOnCodeReviewSetting': {
                     const value = await this._taskViewerProvider.handleGetAutoCommitOnCodeReviewSetting();
                     this._panel.webview.postMessage({
@@ -735,13 +726,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         if (m.parentFolder && !fs.existsSync(m.parentFolder)) {
                             warnings.push(`Mapping "${m.name}": parent folder not found at ${m.parentFolder}`);
                         }
-                        if (Array.isArray(m.dropdownWorkspaces)) {
-                            for (const dw of m.dropdownWorkspaces) {
-                                if (typeof dw === 'string' && !fs.existsSync(dw)) {
-                                    warnings.push(`Mapping "${m.name}": dropdown workspace folder not found at ${dw}`);
-                                }
-                            }
-                        }
+
                     }
                     this._panel?.webview.postMessage({
                         type: 'workspaceMappings',
@@ -812,15 +797,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             if (childFolders.includes(parentFolder)) {
                                 errors.push(`Mapping "${m.name}": parent folder cannot also be a child workspace folder`);
                             }
-                            const dropdownFolders = (m.dropdownWorkspaces ?? []).map((f: string) => path.resolve(expandHome(f)));
-                            if (dropdownFolders.includes(parentFolder)) {
-                                errors.push(`Mapping "${m.name}": parent folder cannot also be a dropdown workspace folder`);
-                            }
-                            for (const df of dropdownFolders) {
-                                if (childFolders.includes(df)) {
-                                    errors.push(`Mapping "${m.name}": folder "${df}" cannot be both a child workspace folder and a dropdown workspace folder`);
-                                }
-                            }
+
                         }
  
                         if (mode === 'connect') {
@@ -836,28 +813,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             }
                         }
 
-                        // Ensure dropdown workspaces have a valid dbPath (defense-in-depth)
-                        // Skip checks already covered by mode-specific validation above to avoid
-                        // duplicate error messages. Only adds dropdown-specific errors for modes
-                        // that don't already validate dbPath (unexpected/unknown modes).
-                        if (Array.isArray(m.dropdownWorkspaces) && m.dropdownWorkspaces.length > 0) {
-                            if (!m.dbPath?.trim()) {
-                                // mode='connect' and mode='create' already validate dbPath above;
-                                // only add dropdown-specific message for unexpected modes
-                                if (mode !== 'connect' && mode !== 'create') {
-                                    errors.push(`Mapping "${m.name}": database path is required when dropdown workspaces are configured`);
-                                }
-                            } else if (mode !== 'create' && mode !== 'connect') {
-                                // mode='connect' already checks existence and .db extension above;
-                                // only add dropdown-specific checks for unexpected modes
-                                const resolvedDbPath = path.resolve(expandHome(m.dbPath.trim()));
-                                if (!fs.existsSync(resolvedDbPath)) {
-                                    errors.push(`Mapping "${m.name}": database file does not exist for dropdown workspaces: ${resolvedDbPath}`);
-                                } else if (!resolvedDbPath.endsWith('.db')) {
-                                    errors.push(`Mapping "${m.name}": database path must end with .db`);
-                                }
-                            }
-                        }
+
  
                         for (const f of m.workspaceFolders ?? []) {
                             const norm = path.resolve(expandHome(f));
@@ -865,11 +821,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             seenFolders.add(norm);
                         }
 
-                        for (const f of m.dropdownWorkspaces ?? []) {
-                            const norm = path.resolve(expandHome(f));
-                            if (seenFolders.has(norm)) errors.push(`Folder ${norm} listed in multiple mappings`);
-                            seenFolders.add(norm);
-                        }
+
                     }
  
                     if (errors.length) {
@@ -891,23 +843,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         }
                     }
 
-                    // Provision workspace identity files for dropdown workspaces immediately after saving
-                    if (Array.isArray(incoming.mappings)) {
-                        for (const m of incoming.mappings) {
-                            if (Array.isArray(m.dropdownWorkspaces)) {
-                                for (const dw of m.dropdownWorkspaces) {
-                                    try {
-                                        const resolvedPath = path.resolve(expandHome(dw));
-                                        if (fs.existsSync(resolvedPath)) {
-                                            await ensureWorkspaceIdentity(resolvedPath);
-                                        }
-                                    } catch (err) {
-                                        console.error(`[SetupPanelProvider] Failed to ensure identity for dropdown workspace "${dw}":`, err);
-                                    }
-                                }
-                            }
-                        }
-                    }
+
  
                     this._panel?.webview.postMessage({ type: 'workspaceMappingStatus', ok: true });
                     await vscode.commands.executeCommand('switchboard.mappingsChanged');
@@ -941,12 +877,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                         this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a child workspace folder.' });
                         break;
                     }
-                    const dropdownWorkspaces = Array.isArray(message.dropdownWorkspaces) ? message.dropdownWorkspaces : [];
-                    const dropdownFolders = dropdownWorkspaces.map((f: string) => path.resolve(expandHome(f)));
-                    if (dropdownFolders.includes(resolvedParent)) {
-                        this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: false, error: 'Parent folder cannot also be a dropdown workspace folder.' });
-                        break;
-                    }
+
  
                     try {
                         // Direct construction to bypass mapping resolution during config setup
@@ -970,7 +901,6 @@ export class SetupPanelProvider implements vscode.Disposable {
                             dbPath: derivedDbPath,
                             parentFolder: resolvedParent,
                             workspaceFolders,
-                            dropdownWorkspaces,
                             mode: 'create'
                         };
                         const existingIndex = currentMappings.mappings.findIndex((m: any) => m.id === newMapping.id);
@@ -996,17 +926,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                             }
                         }
 
-                        // Provision workspace identity files for dropdown workspaces immediately
-                        for (const dw of dropdownWorkspaces) {
-                            try {
-                                const resolvedPath = path.resolve(expandHome(dw));
-                                if (fs.existsSync(resolvedPath)) {
-                                    await ensureWorkspaceIdentity(resolvedPath);
-                                }
-                            } catch (err) {
-                                console.error(`[SetupPanelProvider] Failed to ensure identity for dropdown workspace "${dw}":`, err);
-                            }
-                        }
+
 
                         this._panel?.webview.postMessage({ type: 'workspaceMappingInitResult', ok: true, dbPath: derivedDbPath });
                         await vscode.commands.executeCommand('switchboard.mappingsChanged');
@@ -1050,22 +970,7 @@ export class SetupPanelProvider implements vscode.Disposable {
                     }
                     break;
                 }
-                case 'browseWorkspaceMappingDropdownFolder': {
-                    const folderUri = await vscode.window.showOpenDialog({
-                        canSelectFiles: false,
-                        canSelectFolders: true,
-                        canSelectMany: false,
-                        title: 'Select dropdown workspace folder'
-                    });
-                    if (folderUri?.[0]) {
-                        this._panel?.webview.postMessage({
-                            type: 'workspaceMappingDropdownFolderSelected',
-                            path: folderUri[0].fsPath,
-                            mappingId: message.mappingId
-                        });
-                    }
-                    break;
-                }
+
                 case 'browseParentFolder': {
                     const parentUri = await vscode.window.showOpenDialog({
                         canSelectFiles: false,
