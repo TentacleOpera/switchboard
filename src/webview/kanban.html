@@ -6140,6 +6140,11 @@
                 // Fallback: sort by BUILT_IN_AGENT_LABELS order
                 const aLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === a);
                 const bLabelIndex = BUILT_IN_AGENT_LABELS.findIndex(l => l.key === b);
+                
+                // Push agents not found in BUILT_IN_AGENT_LABELS to the end
+                if (aLabelIndex === -1 && bLabelIndex !== -1) return 1;
+                if (bLabelIndex === -1 && aLabelIndex !== -1) return -1;
+                
                 return aLabelIndex - bLabelIndex;
             });
 
