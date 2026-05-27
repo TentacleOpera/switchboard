@@ -1053,7 +1053,7 @@ export class PlanningPanelProvider {
                     const allPlans: any[] = [];
                     const seenIds = new Set<string>();
                     const allWorkspaceProjects: Record<string, string[]> = {};
-                    const mergedColumns: { id: string; label: string; kind: string }[] = [];
+                    const mergedColumns: { id: string; label: string; kind: string; order: number }[] = [];
                     const seenColumnIds = new Set<string>();
 
                     // Build workspaceItems using VSCode folder names (not path.basename)
@@ -1088,14 +1088,14 @@ export class PlanningPanelProvider {
                             for (const col of colDefs) {
                                 if (!seenColumnIds.has(col.id)) {
                                     seenColumnIds.add(col.id);
-                                    mergedColumns.push({ id: col.id, label: col.label, kind: col.kind });
+                                    mergedColumns.push({ id: col.id, label: col.label, kind: col.kind, order: col.order });
                                 }
                             }
                         } catch (err) { /* root has no kanban DB, skip */ }
                     }
                     if (requestId !== this._latestRequestIds.get(guardKey)) { break; }
                     allPlans.sort((a, b) => b.mtime - a.mtime);
-                    mergedColumns.sort((a, b) => a.id.localeCompare(b.id));
+                    mergedColumns.sort((a, b) => a.order - b.order);
                     this._panel?.webview.postMessage({
                         type: 'kanbanPlansReady',
                         plans: allPlans,

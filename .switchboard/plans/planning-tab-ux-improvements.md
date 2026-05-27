@@ -350,6 +350,47 @@ The `mergedColumns` array aggregates all unique column definitions across worksp
 - Keeping `column` terminology (not renaming to `status`) maintains consistency with the backend data model
 - The `_getKanbanColumnDefinitions` helper in PlanningPanelProvider duplicates some state-file reading logic from TaskViewerProvider, but this is a small, stable pattern that avoids constructor changes
 
+## Review Pass Results (2026-05-27)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | Dropdown column sort was alphabetical by backend ID (`a.id.localeCompare(b.id)`), producing unintuitive order (e.g., "ACCEPTANCE TESTED" before "CREATED"). The `order` field from `KanbanColumnDefinition` was not included in the data sent to the frontend, so there was no way to sort by workflow progression either. |
+| 2 | **MAJOR** | Plan's kind mapping table says CONTEXT GATHERER has `kind: 'gather'` (blue badge), but `agentConfig.ts` defines it as `kind: 'review'` (purple badge). The JS code correctly reads the kind from actual data, so CONTEXT GATHERER gets purple, not blue. Decision: accept current behavior — `review` kind is semantically correct for a review-phase activity; changing it to `gather` in agentConfig.ts would affect the kanban board and other consumers. |
+| 3 | **NIT** | Variable shadowing: `const allRoots` redeclared inside `fetchKanbanPlans` case (line 1052), shadowing the outer `allRoots` from `_handleMessage` (line 532). Both produce the same result — not a bug, just redundant. |
+| 4 | **NIT** | `hideWhenNoAgent` columns (Researcher, Splitter, Intern, etc.) appear in the dropdown unconditionally. Plan says "show all columns" so this is correct, but users may see empty results when filtering by a column that's hidden on the board. Future UX improvement. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| #1 Sort by ID not order | **Fix now** | Include `order` field in `mergedColumns`, sort by `order` instead of `id` |
+| #2 CONTEXT GATHERER kind mismatch | **Accept current behavior** | Document discrepancy; `review` kind is semantically correct |
+| #3 Variable shadowing | **Defer** | Cosmetic only, not worth touching a working handler |
+| #4 hideWhenNoAgent in dropdown | **Defer** | Plan explicitly says "show all columns"; future improvement |
+
+### Stage 3: Code Fixes Applied
+
+**File: `src/services/PlanningPanelProvider.ts`**
+
+1. Changed `mergedColumns` type from `{ id: string; label: string; kind: string }[]` to `{ id: string; label: string; kind: string; order: number }[]` (line ~1056)
+2. Added `order: col.order` to the merged column push (line ~1091)
+3. Changed sort from `mergedColumns.sort((a, b) => a.id.localeCompare(b.id))` to `mergedColumns.sort((a, b) => a.order - b.order)` (line ~1098)
+
+This ensures the column dropdown follows the kanban board's visual workflow order (CREATED → CONTEXT GATHERER → RESEARCHER → PLAN REVIEWED → ... → COMPLETED) instead of alphabetical-by-ID.
+
+### Stage 4: Verification
+
+- **Typecheck:** Passed. `npx tsc --noEmit` shows only 2 pre-existing errors in unrelated files (`ClickUpSyncService.ts`, `KanbanProvider.ts`). Zero new errors from the fix.
+- **No compilation step run** (per session instructions).
+- **No tests run** (per session instructions; no automated tests exist for the planning webview).
+
+### Remaining Risks
+
+- **CONTEXT GATHERER badge color**: Gets purple (review) instead of blue (created) as the plan's kind mapping table suggested. This is accepted as correct — the `review` kind is semantically appropriate. If the user wants blue badges for CONTEXT GATHERER, the `kind` field in `agentConfig.ts` would need to be changed to `'gather'`, but this would affect the kanban board rendering and other consumers.
+- **`hideWhenNoAgent` columns in dropdown**: Users may filter by columns that have no visible plans (because the column is hidden on the board when no agent is configured). This is a minor UX papercut that can be addressed in a future iteration.
+
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
