@@ -78,24 +78,20 @@ export class PlanningPanelProvider {
     ) {}
 
     // Ensure adapters are registered for current workspace roots.
-    // Safe to call from any context — the double-guard (roots-key + available-sources check)
-    // makes this idempotent and avoids redundant clearAdapters() calls.
+    // Safe to call from any context — the roots-key guard makes this idempotent.
+    // Called from _handleMessage() on every webview message, so the guard must be cheap.
     private _ensureAdaptersRegistered(): void {
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) { return; }
 
-        // Track if any roots changed to determine if we need to re-register
-        // Clarification: Using JSON.stringify for deterministic comparison
+        // Using JSON.stringify for deterministic comparison of roots arrays
         const rootsKey = JSON.stringify(allRoots);
         if (this._registeredRootsKey === rootsKey) {
-            // Check if adapters are actually registered before returning early
-            const availableSources = this._researchImportService.getAvailableSources();
-            if (availableSources.length > 0) {
-                console.log('[PlanningPanel] Adapters already registered for roots:', allRoots);
-                return;
-            }
-            // If no sources available despite matching roots, re-register
-            console.log('[PlanningPanel] Roots match but no adapters registered, re-registering...');
+            // Roots unchanged — no need to re-register. Even if adapters were cleared
+            // externally (e.g. clearAdapters() during workspace folder change), the
+            // onDidChangeWorkspaceFolders handler will invalidate _registeredRootsKey
+            // by calling us again, which will re-register with the new roots.
+            return;
         }
 
         console.log('[PlanningPanel] Registering adapters for roots:', allRoots);

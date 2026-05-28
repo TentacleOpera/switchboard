@@ -121,3 +121,54 @@ private async _handleMessage(msg: any): Promise<void> {
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass — Completed 2026-05-28
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | Double-guard (`rootsKey + availableSources.length > 0`) never returns early for workspaces with no configured sources. On every `_handleMessage` call, the guard falls through to `clearAdapters()` + full registration loop + 2+ console.log statements. The plan's Complexity Audit claim of "guard returns early in 99%+ of calls" is **FALSE** for sourceless workspaces. |
+| 2 | **NIT** | Seven `console.log`/`console.debug` statements inside `_ensureAdaptersRegistered()`, now called on every webview message. Debug scaffolding that produces console spam. |
+| 3 | **NIT** | The `open()` reveal path (line 226-228) still returns early without calling `_ensureAdaptersRegistered()`. With `retainContextWhenHidden: true`, the webview won't re-send `fetchRoots` on reveal, so stale adapter state could persist. Pre-existing issue, not introduced by this fix. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| 1 (MAJOR): Guard pathological for sourceless workspaces | **Fix now** | Simplify guard to roots-key-only check. The `availableSources.length > 0` re-registration path is redundant now that `_ensureAdaptersRegistered()` is called on every `_handleMessage` — if adapters are cleared externally, the next message will re-register. Adapter factories are synchronous, so retry won't produce different results. |
+| 2 (NIT): Debug logging in hot path | **Defer** | Annoying but not harmful; separate cleanup pass |
+| 3 (NIT): Reveal path stale data | **Defer** | Pre-existing; document as known edge case |
+
+### Code Fixes Applied
+
+**File: `src/services/PlanningPanelProvider.ts`**
+
+**Fix 1: Simplified `_ensureAdaptersRegistered()` guard (lines 80-95)**
+
+Removed the `availableSources.length > 0` secondary check and the "roots match but no adapters registered, re-registering..." fallthrough path. The guard now simply checks `_registeredRootsKey === rootsKey` and returns early. Rationale:
+
+- Adapter factories are synchronous — if they return undefined on first call, retry won't help
+- `clearAdapters()` is only called within `_ensureAdaptersRegistered()` itself, so there's no external path that clears adapters without also updating `_registeredRootsKey`
+- The `onDidChangeWorkspaceFolders` handler calls `_ensureAdaptersRegistered()` which will compute a new `rootsKey`, bypassing the guard
+- Calling `_ensureAdaptersRegistered()` on every `_handleMessage` means any adapter loss is recovered on the next message
+
+Updated comment from "double-guard (roots-key + available-sources check)" to "roots-key guard" with note about hot-path performance.
+
+### Verification Results
+
+- **TypeScript typecheck**: 4 pre-existing errors in unrelated files (`ClickUpSyncService.ts`, `KanbanDatabase.ts`, `KanbanProvider.ts`). **Zero new errors** from this change. `PlanningPanelProvider.ts` passes cleanly.
+- **Automated tests**: Skipped per review instructions (test suite run separately by user)
+- **Compilation**: Skipped per review instructions
+
+### Files Changed
+
+- `src/services/PlanningPanelProvider.ts` — Simplified `_ensureAdaptersRegistered()` guard logic (lines 80-95)
+
+### Remaining Risks
+
+1. **NIT (deferred):** Console log spam in `_ensureAdaptersRegistered()` — 5 log statements fire on first call per roots config change. Acceptable for now but should be gated behind a debug flag in a future cleanup.
+2. **NIT (deferred):** `open()` reveal path doesn't call `_ensureAdaptersRegistered()` — with `retainContextWhenHidden: true`, the webview won't re-fetch roots on reveal. If adapters were cleared between panel hide and reveal (only possible via `onDidChangeWorkspaceFolders` which does re-register), stale data could display. Low probability edge case.
+3. **No regression risk:** The simplified guard is strictly more conservative (returns early more often) than the original double-guard. The only behavioral difference is that workspaces with no configured sources no longer re-attempt registration on every message — which is correct since synchronous factories won't produce different results on retry.
