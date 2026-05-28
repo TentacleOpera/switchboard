@@ -379,14 +379,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             })
             .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
 
-        // Protect <pre> blocks from newline-to-space conversion.
+        // Protect <pre> blocks from newline-to-<br> conversion.
         // Code blocks must preserve literal newlines for correct rendering;
-        // only non-code content should get soft-wrap (space) behavior.
+        // non-code content converts single newlines to <br> (GFM hard_wrap).
         const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
         html = parts.map((part, i) => {
             if (i % 2 === 1) return part; // pre block — preserve newlines
             return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
         }).join('');
+
+        // Clean up spurious <br> between list items inside <ul>/<ol>.
+        // The list-wrapping regex (above) captures \n between <li> items,
+        // which the <br> conversion turns into visible extra spacing.
+        html = html.replace(/<\/li><br><li>/g, '</li><li>');
 
         html = `<p>${html}</p>`;
         html = html.replace(/<p>\s*<\/p>/g, '');

@@ -79,7 +79,13 @@ After:
 return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
 ```
 
-This is the only change needed. The `<pre><code>` block protection on line 387 (`if (i % 2 === 1) return part`) already ensures code blocks are unaffected.
+The `<pre><code>` block protection on line 387 (`if (i % 2 === 1) return part`) already ensures code blocks are unaffected.
+
+**Additional fix required (discovered in review):** The list-wrapping regex on line 374 (`(<li>.*<\/li>\n?)+`) captures `\n` between consecutive `<li>` items. After the `\n` → `<br>` conversion, this produces spurious `<br>` tags between list items inside `<ul>` blocks, causing extra blank-line spacing. A cleanup step is needed after the `<br>` conversion:
+
+```js
+html = html.replace(/<\/li><br><li>/g, '</li><li>');
+```
 
 ### File: `src/webview/planning.html`
 
@@ -98,6 +104,42 @@ This is the only change needed. The `<pre><code>` block protection on line 387 (
 5. Verify that local preview (non-kanban) still renders correctly with the `<br>` change
 6. Verify that code blocks (`<pre><code>`) still render correctly (newlines preserved, not doubled)
 7. Verify that double-newline paragraph breaks still create proper `<p>` separation
+8. Verify that bullet lists (`* item`) render without extra spacing between items (no spurious `<br>`)
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass (2026-05-28)
+
+### Stage 1: Grumpy Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | Spurious `<br>` inside `<ul>` blocks — list-wrapping regex captures `\n` between `<li>` items, which becomes `<br>` after the conversion, causing extra blank lines between list items across all 6 `renderMarkdown()` call sites |
+| 2 | **NIT** | Stale comment on lines 382-384 says "soft-wrap (space) behavior" but code now does `<br>` (hard line break) |
+| 3 | **NIT** | `<br>` after block-level elements (`</h1>`, etc.) adds extra spacing beyond CSS margins — minor cosmetic, GFM-standard behavior |
+
+### Stage 2: Balanced Synthesis
+
+- **MAJOR #1 → Fix now.** Added `html.replace(/<\/li><br><li>/g, '</li><li>')` after the `<br>` conversion (line 394). Targeted fix — only removes `<br>` between `</li>` and `<li>`, preserving intentional `<br>` inside list item content.
+- **NIT #2 → Fix now.** Updated comment to reflect `<br>` behavior instead of "soft-wrap (space)".
+- **NIT #3 → Defer.** Extra spacing after block elements is GFM-standard. Not a regression from the old space behavior (which was incorrect).
+
+### Files Changed
+
+- `src/webview/planning.js` — Lines 382-394: Updated comment + added `<br>` cleanup for list items
+
+### Validation
+
+- Typecheck: Skipped per session directive
+- Tests: Skipped per session directive
+- Manual trace: Verified list rendering path (`* item1\n* item2` → `<ul><li>item1</li><li>item2</li></ul>` — no spurious `<br>`)
+- Manual trace: Verified ClickUp content path (single-newline text → `<br>` line breaks — correct)
+- Manual trace: Verified `<pre><code>` blocks remain protected (pre-block splitting unchanged)
+
+### Remaining Risks
+
+- Content with `<br>` intentionally placed between `</li>` and `<li>` (extremely unlikely — no markdown syntax produces this) would have the `<br>` stripped. Acceptable trade-off.
+- Extra `<br>` spacing after block-level headers is a known minor cosmetic difference from the old behavior. Aligns with GFM standard.
