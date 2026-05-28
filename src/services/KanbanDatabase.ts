@@ -136,12 +136,11 @@ CREATE TABLE IF NOT EXISTS projects (
 CREATE INDEX IF NOT EXISTS idx_projects_workspace ON projects(workspace_id);
 CREATE TABLE IF NOT EXISTS worktrees (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
-    path TEXT NOT NULL,
     branch TEXT NOT NULL,
     coder_agent_id TEXT,
     workspace_id TEXT NOT NULL,
     created_at TEXT DEFAULT (datetime('now')),
-    UNIQUE(path, workspace_id)
+    UNIQUE(branch, workspace_id)
 );
 CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
 `;
@@ -394,6 +393,12 @@ const MIGRATION_V23_SQL = [
     // Add project column to plans table
     `ALTER TABLE plans ADD COLUMN project TEXT DEFAULT ''`,
     `CREATE INDEX IF NOT EXISTS idx_plans_project ON plans(workspace_id, project)`,
+];
+
+// V24: Remove path column from worktrees table — paths are derived from git at read time.
+// Feature was never used, so just drop and recreate.
+const MIGRATION_V24_SQL = [
+    `DROP TABLE IF EXISTS worktrees`,
 ];
 
 /**
@@ -1352,13 +1357,13 @@ export class KanbanDatabase {
         );
     }
 
-    public async createWorktree(wtPath: string, branch: string, coderAgentId: string | null): Promise<number> {
+    public async createWorktree(branch: string, coderAgentId: string | null): Promise<number> {
         if (!this._db) return -1;
         const stmt = this._db.prepare(
-            'INSERT INTO worktrees (path, branch, coder_agent_id, workspace_id) VALUES (?, ?, ?, ?)'
+            'INSERT INTO worktrees (branch, coder_agent_id, workspace_id) VALUES (?, ?, ?)'
         );
         try {
-            stmt.bind([wtPath, branch, coderAgentId, await this.getWorkspaceId()]);
+            stmt.bind([branch, coderAgentId, await this.getWorkspaceId()]);
             stmt.step();
             return this._db.lastInsertRowid as number;
         } finally {
@@ -1366,19 +1371,18 @@ export class KanbanDatabase {
         }
     }
 
-    public async getWorktrees(): Promise<Array<{ id: number; path: string; branch: string; coderAgentId: string | null }>> {
+    public async getWorktrees(): Promise<Array<{ id: number; branch: string; coderAgentId: string | null }>> {
         if (!this._db) return [];
         const stmt = this._db.prepare(
-            'SELECT id, path, branch, coder_agent_id FROM worktrees WHERE workspace_id = ?'
+            'SELECT id, branch, coder_agent_id FROM worktrees WHERE workspace_id = ?'
         );
         try {
             stmt.bind([await this.getWorkspaceId()]);
-            const results: Array<{ id: number; path: string; branch: string; coderAgentId: string | null }> = [];
+            const results: Array<{ id: number; branch: string; coderAgentId: string | null }> = [];
             while (stmt.step()) {
                 const row = stmt.getAsObject();
                 results.push({
                     id: row.id as number,
-                    path: row.path as string,
                     branch: row.branch as string,
                     coderAgentId: row.coder_agent_id as string | null
                 });
@@ -1415,10 +1419,10 @@ export class KanbanDatabase {
         await this._persist();
     }
 
-    public async getWorktreeById(id: number): Promise<{ id: number; path: string; branch: string; coderAgentId: string | null } | null> {
+    public async getWorktreeById(id: number): Promise<{ id: number; branch: string; coderAgentId: string | null } | null> {
         if (!this._db) return null;
         const stmt = this._db.prepare(
-            'SELECT id, path, branch, coder_agent_id FROM worktrees WHERE id = ?'
+            'SELECT id, branch, coder_agent_id FROM worktrees WHERE id = ?'
         );
         try {
             stmt.bind([id]);
@@ -1426,7 +1430,6 @@ export class KanbanDatabase {
                 const row = stmt.getAsObject();
                 return {
                     id: row.id as number,
-                    path: row.path as string,
                     branch: row.branch as string,
                     coderAgentId: row.coder_agent_id as string | null
                 };
@@ -3769,6 +3772,17 @@ export class KanbanDatabase {
             } else {
                 console.error('[KanbanDatabase] V23 migration had failures — version NOT stamped. _ensureSchemaColumns() will reconcile.');
             }
+        }
+
+        // V24: Remove path column from worktrees table — paths derived from git at read time
+        // Feature was never used, so just drop the table; SCHEMA_SQL recreates it on next load.
+        const v24 = await this.getMigrationVersion();
+        if (v24 < 24) {
+            for (const sql of MIGRATION_V24_SQL) {
+                try { this._db.exec(sql); } catch { /* ignore */ }
+            }
+            await this.setMigrationVersion(24);
+            console.log('[KanbanDatabase] V24 migration completed: worktrees table dropped (will be recreated from SCHEMA_SQL)');
         }
 
 

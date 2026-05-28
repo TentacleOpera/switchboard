@@ -1795,6 +1795,9 @@ export class KanbanProvider implements vscode.Disposable {
 
     /**
      * Refresh the board using pre-fetched DB rows (no DB read — uses caller's snapshot).
+     *
+     * NOTE: This method is currently dead code (zero call sites). The active refresh
+     * path is the public `refreshWithData()` method. Kept for potential future use.
      */
     private async _refreshBoardWithData(
         activeRows: import('./KanbanDatabase').KanbanPlanRecord[],
@@ -1911,9 +1914,10 @@ export class KanbanProvider implements vscode.Disposable {
                 this._panel.webview.postMessage({ type: 'updatePairProgrammingMode', mode: this._autobanState.pairProgrammingMode });
             }
 
-            const wsRoot = this._currentWorkspaceRoot;
-            if (wsRoot) {
-                void this._postIntegrationStates(wsRoot);
+            // Use resolvedWorkspaceRoot (not this._currentWorkspaceRoot) to avoid
+            // desync: _resolveWorkspaceRoot no longer auto-switches _currentWorkspaceRoot.
+            if (resolvedWorkspaceRoot) {
+                void this._postIntegrationStates(resolvedWorkspaceRoot);
             }
 
             // Auto-refresh dependency map tab alongside board refresh
@@ -6123,7 +6127,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
                     const worktrees = await db.getWorktrees();
-                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                    const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
                 }
                 break;
             }
@@ -6148,7 +6154,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (db && await db.ensureReady()) {
                     const parentDir = path.dirname(workspaceRoot);
                     const fullPath = path.join(parentDir, wtRelativePath);
-                    const id = await db.createWorktree(wtRelativePath, branch, null);
+                    const id = await db.createWorktree(branch, null);
                     try {
                         // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
                         const execFileAsync = promisify(cp.execFile);
@@ -6158,8 +6164,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
                         await db.deleteWorktree(id);
                     }
+                    // Enrich with git-derived paths before sending to webview
                     const worktrees = await db.getWorktrees();
-                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                    const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
                 }
                 break;
             }
@@ -6180,20 +6189,26 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             );
                             if (confirm !== 'Delete') break;
                         }
-                        const parentDir = path.dirname(workspaceRoot);
-                        const fullPath = path.isAbsolute(wt.path) ? wt.path : path.resolve(parentDir, wt.path);
+                        // Derive path from git (source of truth) instead of DB
+                        const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                        const fullPath = branchToPath.get(wt.branch);
                         try {
                             // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
                             const execFileAsync = promisify(cp.execFile);
-                            await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                            if (fullPath) {
+                                await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                            }
                             await execFileAsync('git', ['branch', '-D', wt.branch], { cwd: workspaceRoot });
                         } catch (e: any) {
                             console.warn(`Failed to remove worktree: ${e.message}`);
                         }
                         await db.deleteWorktree(Number(msg.worktreeId));
                     }
+                    // Enrich with git-derived paths before sending to webview
                     const worktrees = await db.getWorktrees();
-                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                    const branchToPath2 = await this._resolveWorktreePaths(workspaceRoot);
+                    const enriched = worktrees.map(w => ({ ...w, path: branchToPath2.get(w.branch) || '' }));
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
                 }
                 break;
             }
@@ -6213,8 +6228,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
                     await db.assignAgentToWorktree(Number(msg.worktreeId), selected);
+                    // Enrich with git-derived paths before sending to webview
                     const worktrees = await db.getWorktrees();
-                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees });
+                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                    const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
+                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
                 }
                 break;
             }
@@ -6449,6 +6467,41 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return content;
     }
 
+    /**
+     * Query git for the current worktree list and return a map of branch name → absolute path.
+     * Branch names are stripped of the "refs/heads/" prefix for matching against DB entries.
+     * Returns an empty map if git is unavailable or has no worktrees.
+     */
+    private async _resolveWorktreePaths(workspaceRoot: string): Promise<Map<string, string>> {
+        const branchToPath = new Map<string, string>();
+        try {
+            const execFileAsync = promisify(cp.execFile);
+            const { stdout } = await execFileAsync('git', ['worktree', 'list', '--porcelain'], { cwd: workspaceRoot });
+            let currentPath = '';
+            for (const line of stdout.split('\n')) {
+                const trimmed = line.trim();
+                if (trimmed.startsWith('worktree ')) {
+                    currentPath = trimmed.slice('worktree '.length);
+                } else if (trimmed.startsWith('branch ')) {
+                    const ref = trimmed.slice('branch '.length);
+                    // Strip refs/heads/ prefix; bare repos may use refs/tags/ etc. — skip those
+                    if (ref.startsWith('refs/heads/')) {
+                        const branchName = ref.slice('refs/heads/'.length);
+                        if (currentPath) {
+                            branchToPath.set(branchName, currentPath);
+                        }
+                    }
+                    currentPath = '';
+                } else if (trimmed === '') {
+                    currentPath = '';
+                }
+            }
+        } catch (e: any) {
+            console.warn(`[KanbanProvider] Failed to list git worktrees: ${e.message}`);
+        }
+        return branchToPath;
+    }
+
     private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) return;
@@ -6509,8 +6562,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             if (existing.includes('## Worktree Context')) return;
         } catch { /* file may not exist yet, proceed to append */ }
 
-        const parentDir = path.dirname(workspaceRoot);
-        const absoluteWorktreePath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
+        // Derive absolute path from git (source of truth) instead of DB
+        const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+        const absoluteWorktreePath = branchToPath.get(worktree.branch) || worktree.branch;
         const worktreeContext = `
 
 ## Worktree Context
@@ -6541,12 +6595,15 @@ This work was done in a git worktree.
         if (choice === 'Clean Up') {
             const worktree = await db.getWorktreeById(plan.worktreeId);
             if (worktree) {
-                const parentDir = path.dirname(workspaceRoot);
-                const fullPath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
+                // Derive path from git (source of truth) instead of DB
+                const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                const fullPath = branchToPath.get(worktree.branch);
                 try {
                     // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
                     const execFileAsync = promisify(cp.execFile);
-                    await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                    if (fullPath) {
+                        await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                    }
                     await execFileAsync('git', ['branch', '-D', worktree.branch], { cwd: workspaceRoot });
                     await db.deleteWorktree(worktree.id);
                 } catch (e: any) {

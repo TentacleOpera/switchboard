@@ -311,3 +311,65 @@ All of these suggest the workspace switching logic has been fragile and needs ca
 ## Recommendation
 
 Complexity 4 → **Send to Coder**
+
+---
+
+## Review Pass (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Location |
+|---|---------|----------|----------|
+| 1 | `_refreshBoardWithData` (line 1914) reads `this._currentWorkspaceRoot` instead of `resolvedWorkspaceRoot` after calling `_resolveWorkspaceRoot`. In the old code this "worked" because `_resolveWorkspaceRoot` auto-switched `_currentWorkspaceRoot`. After the fix, this line would post integration states for the WRONG workspace. The guards in `_postClickUpState` (line 1254) and `_postLinearState` (line 1290) would silently swallow the call, making the bug invisible. | MAJOR | `KanbanProvider.ts:1914` |
+| 2 | `_refreshBoardWithData` is dead code (zero call sites) but unmarked. Plan's Category D only noted `_refreshBoardImpl` as dead code, missed this one. | NIT | `KanbanProvider.ts:1799` |
+| 3 | Test paths (`/workspace1`, `/workspace2`) are Unix-style absolute paths. `path.resolve` is a no-op on macOS but would produce `C:\workspace1` on Windows, potentially causing test failures on that platform. | NIT | `KanbanProvider.test.ts:484` |
+| 4 | Plan states 69 call sites; actual count from comprehensive audit is 67. | NIT | Plan doc |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| #1 (MAJOR): `_currentWorkspaceRoot` used instead of `resolvedWorkspaceRoot` in dead code | **Fix now** | Latent desync bug identical to the one we just fixed. The `_postClickUpState`/`_postLinearState` guards would silently swallow the wrong workspace. Fix while context is fresh. |
+| #2 (NIT): `_refreshBoardWithData` dead code unmarked | **Fix now** (trivial) | Add dead-code annotation. Zero cost, prevents future confusion. |
+| #3 (NIT): Test path platform fragility | **Defer** | Tests work correctly on macOS (target platform). Windows compat not a current requirement. |
+| #4 (NIT): Call site count (69 vs 67) | **Defer** | Documentation inaccuracy in plan, not in code. Noted here. |
+
+### Code Fixes Applied
+
+1. **`KanbanProvider.ts` line 1914-1917**: Changed `this._currentWorkspaceRoot` → `resolvedWorkspaceRoot` in `_refreshBoardWithData._postIntegrationStates` call, with explanatory comment:
+   ```typescript
+   // Use resolvedWorkspaceRoot (not this._currentWorkspaceRoot) to avoid
+   // desync: _resolveWorkspaceRoot no longer auto-switches _currentWorkspaceRoot.
+   if (resolvedWorkspaceRoot) {
+       void this._postIntegrationStates(resolvedWorkspaceRoot);
+   }
+   ```
+
+2. **`KanbanProvider.ts` line 1796-1801**: Added dead-code annotation to `_refreshBoardWithData`:
+   ```
+   NOTE: This method is currently dead code (zero call sites). The active refresh
+   path is the public `refreshWithData()` method. Kept for potential future use.
+   ```
+
+### Verification Results
+
+- **TypeScript typecheck (`tsc --noEmit`)**: 4 pre-existing errors, none related to changes. Modified lines (1914-1918, 1796-1801) are type-safe.
+- **Test compilation (`tsc -p tsconfig.test.json --noEmit`)**: 2 pre-existing errors, none in test file. `KanbanProvider.test.ts` compiles cleanly.
+- **Pre-existing errors** (unrelated to this fix):
+  - `ClickUpSyncService.ts:2309` — import path extension issue
+  - `KanbanDatabase.ts:1363` — `lastInsertRowid` property access
+  - `KanbanProvider.ts:3714` — `autoCommitForCodeReview` missing property
+  - `KanbanProvider.ts:4562` — import path extension issue
+
+### Comprehensive Call Site Audit Results
+
+Full audit of all 67 `_resolveWorkspaceRoot` call sites confirmed:
+- **66 sites**: Use return value exclusively, no implicit `_currentWorkspaceRoot` dependency. SAFE.
+- **1 site** (`_refreshBoardWithData` line 1914): Read `this._currentWorkspaceRoot` after calling `_resolveWorkspaceRoot`. **FIXED** in this review pass.
+- **0 sites**: Call `_resolveWorkspaceRoot` without using the return value (no side-effect-only calls).
+
+### Remaining Risks
+
+- **Low**: The diagnostic logging (`_resolveWorkspaceRoot: resolved X differs from current Y — not switching`) may appear frequently in multi-workspace setups. This is expected and informational, not a bug. If it becomes noisy, consider reducing log level or adding rate-limiting.
+- **Low**: `_refreshBoardImpl` (line 1648) is also dead code and contains a `_resolveWorkspaceRoot` call. It's safe (uses return value only) but should be annotated similarly in a future cleanup pass.
+- **None**: No active code paths have implicit dependencies on the removed auto-switch behavior.
