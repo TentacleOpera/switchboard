@@ -6499,6 +6499,12 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const planPath = this._resolvePlanFilePath(workspaceRoot, plan.planFile);
         if (!planPath) return;
 
+        // Idempotency: skip if section already exists (card may be moved back and forth)
+        try {
+            const existing = await fs.promises.readFile(planPath, 'utf8');
+            if (existing.includes('## Worktree Context')) return;
+        } catch { /* file may not exist yet, proceed to append */ }
+
         const parentDir = path.dirname(workspaceRoot);
         const absoluteWorktreePath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
         const worktreeContext = `
@@ -6543,8 +6549,9 @@ This work was done in a git worktree.
                     console.warn(`Failed to cleanup worktree: ${e.message}`);
                 }
             }
+            // Only clear worktree association when user chose to clean up
+            await db.updatePlanWorktree(sessionId, null);
         }
-
-        await db.updatePlanWorktree(sessionId, null);
+        // If user chose "Keep" or dismissed the dialog, preserve the worktree association
     }
 }

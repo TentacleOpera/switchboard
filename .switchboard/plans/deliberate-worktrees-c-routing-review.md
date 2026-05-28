@@ -189,3 +189,59 @@ This work was done in a git worktree.
 **Complexity: 4 → Send to Coder**
 
 Three focused additions to KanbanProvider: routing method, plan file appender, cleanup handler. Each is self-contained and follows existing patterns. The main gotcha is using `db.getBoard(workspaceId)` not the non-existent `db.getAllCards()`.
+
+---
+
+## Review Pass (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | `_appendWorktreeContextToPlan` uses `appendFile` with zero deduplication. If a card is moved to CODE REVIEWED more than once (back-and-forth on kanban), the plan file gets duplicate `## Worktree Context` sections. Kanban boards are designed for back-and-forth movement. |
+| 2 | **MAJOR** | `_cleanupWorktreeAfterReview` calls `db.updatePlanWorktree(sessionId, null)` unconditionally — even when user clicks "Keep" or dismisses the dialog. This silently destroys the worktree association that `_appendWorktreeContextToPlan` just wrote into the plan file. Data integrity violation. |
+| 3 | NIT | Plan spec used `cp.exec` with shell strings (shell injection risk). Implementation correctly uses `cp.execFile` with args array. Good deviation from plan — security improvement. |
+| 4 | NIT | `_appendWorktreeContextToPlan` resolves worktree paths via `path.dirname(workspaceRoot)`, consistent with `createWorktree` (line 6145-6146). Fragile but consistent. |
+| 5 | NIT | `moveCardToColumnByPlanFile` has inconsistent `_autoCommitIfCodeReviewTransition` guard vs `moveCardToColumn`. Pre-existing, not Plan C scope. |
+| 6 | NIT | `_assignWorktreeToCard` early-returns when plan already has `worktreeId` — correct, prevents reassignment. |
+| 7 | NIT | `getBoard` returns only `status = 'active'` plans — round-robin balance is based on active cards only, which is the desired behavior. |
+
+### Stage 2: Balanced Synthesis — Fixes Applied
+
+| Finding | Action | Status |
+|---------|--------|--------|
+| #1 (MAJOR): Duplicate append | Added idempotency check: read file first, skip if `## Worktree Context` section already exists | **Fixed** |
+| #2 (MAJOR): Unconditional worktree_id null | Moved `updatePlanWorktree(sessionId, null)` inside the `if (choice === 'Clean Up')` block | **Fixed** |
+| #3 (NIT): execFile vs exec | Keep as-is (implementation is better than plan) | No change needed |
+| #4-7 (NIT) | Keep as-is | No change needed |
+
+### Stage 3: Code Fixes Applied
+
+**File: `src/services/KanbanProvider.ts`**
+
+1. **`_appendWorktreeContextToPlan`** (line ~6502): Added idempotency guard before `appendFile`:
+   ```typescript
+   // Idempotency: skip if section already exists (card may be moved back and forth)
+   try {
+       const existing = await fs.promises.readFile(planPath, 'utf8');
+       if (existing.includes('## Worktree Context')) return;
+   } catch { /* file may not exist yet, proceed to append */ }
+   ```
+
+2. **`_cleanupWorktreeAfterReview`** (line ~6552): Moved `updatePlanWorktree(sessionId, null)` inside the `if (choice === 'Clean Up')` block. Added comment: "Only clear worktree association when user chose to clean up". Added trailing comment: "If user chose 'Keep' or dismissed the dialog, preserve the worktree association".
+
+### Stage 4: Verification Results
+
+- **TypeScript compilation**: 4 pre-existing errors (none in Plan C code). No new errors introduced by fixes.
+  - `ClickUpSyncService.ts:2309` — import path (pre-existing)
+  - `KanbanDatabase.ts:1363` — `lastInsertRowid` type (Plan B, pre-existing)
+  - `KanbanProvider.ts:3706` — `autoCommitForCodeReview` missing (pre-existing)
+  - `KanbanProvider.ts:4554` — import path (pre-existing)
+- **Automated tests**: Skipped per session instructions (run separately).
+- **Manual verification items**: All remain valid from original plan.
+
+### Remaining Risks
+
+1. **Race condition on worktree assignment**: Multiple simultaneous card moves could assign the same worktree. Mitigated by single-user context. Could add DB-level locking later if needed.
+2. **`deleteWorktree` cascading clear**: `db.deleteWorktree(id)` also clears `worktree_id` on all referencing plans (line 1395). After the "Clean Up" path, `updatePlanWorktree(sessionId, null)` is technically redundant for the current plan but harmless — it ensures the specific plan is cleared even if the `deleteWorktree` cascade misses it (e.g., if the plan's worktree_id was already changed by another operation).
+3. **Idempotency check is string-based**: `existing.includes('## Worktree Context')` could false-positive if a user manually writes that heading. Acceptable tradeoff — unlikely in practice.
