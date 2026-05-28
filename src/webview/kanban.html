@@ -5738,13 +5738,13 @@
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,
                     controlPlaneAction: controlPlaneAction,
-                    project: selectedProject || null // Include selected project
+                    project: (selectedProject && selectedProject !== '__unassigned__') ? selectedProject : null // Include selected project; __unassigned__ = no filter (show all)
                 });
             } else if (selectedProject !== (activeProjectFilter ?? '')) {
                 // Same workspace, different project filter
                 postKanbanMessage({
                     type: 'setProjectFilter',
-                    project: selectedProject || null
+                    project: (selectedProject && selectedProject !== '__unassigned__') ? selectedProject : null
                 });
             }
 
