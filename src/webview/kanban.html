@@ -3437,12 +3437,12 @@
             // Restore selection logic (preserved from original workspace/project selectors)
             if (explicitRoot && workspaceItems.some(item => item.workspaceRoot === explicitRoot)) {
                 // If the backend explicitly changed workspace, honor that
-                const targetProject = activeProjectFilter || '';
+                const targetProject = activeProjectFilter ?? '';
                 const targetValue = explicitRoot + '|' + targetProject;
                 if ([...select.options].some(o => o.value === targetValue)) {
                     select.value = targetValue;
                 } else {
-                    select.value = explicitRoot + '|';
+                    select.value = explicitRoot + '|__unassigned__';
                 }
                 const delBtn = document.getElementById('btn-delete-project');
                 if (delBtn) {
@@ -5738,13 +5738,13 @@
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,
                     controlPlaneAction: controlPlaneAction,
-                    project: (selectedProject && selectedProject !== '__unassigned__') ? selectedProject : null // Include selected project; __unassigned__ = no filter (show all)
+                    project: selectedProject || null // Sentinel '__unassigned__' is truthy, so || null preserves it
                 });
             } else if (selectedProject !== (activeProjectFilter ?? '')) {
                 // Same workspace, different project filter
                 postKanbanMessage({
                     type: 'setProjectFilter',
-                    project: (selectedProject && selectedProject !== '__unassigned__') ? selectedProject : null
+                    project: selectedProject || null // Sentinel '__unassigned__' is truthy, so || null preserves it
                 });
             }
 

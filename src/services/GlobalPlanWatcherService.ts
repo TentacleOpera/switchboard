@@ -38,8 +38,11 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     public setCurrentProject(workspaceRoot: string, project: string | null): void {
-        if (project) {
-            this._currentProjects.set(workspaceRoot, project);
+        // Translate sentinel to empty string — the sentinel '__unassigned__' is a UI filter value
+        // and must never be stored as a plan's project name.
+        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        if (effectiveProject) {
+            this._currentProjects.set(workspaceRoot, effectiveProject);
         } else {
             this._currentProjects.delete(workspaceRoot);
         }

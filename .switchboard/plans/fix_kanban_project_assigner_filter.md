@@ -380,3 +380,42 @@ The delete button should be disabled for the base workspace option (unassigned i
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Pass Results (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | File | Description |
+|----|----------|------|-------------|
+| CRITICAL-1 | CRITICAL | GlobalPlanWatcherService.ts:40-42 | Sentinel `__unassigned__` leaks into `_currentProjects` map and gets stored as plan project name for newly discovered plans (line 420). Plan explicitly flagged this risk in Edge-Case Audit but implementation did not address it. |
+| CRITICAL-2 | CRITICAL | kanban.html:5741,5747 | Frontend sends `null` instead of sentinel when base workspace option selected. Ternary `(selectedProject && selectedProject !== '__unassigned__') ? selectedProject : null` converts sentinel to null, which backend interprets as "no filter / show all". Completely defeats the feature. |
+| MAJOR-1 | MAJOR | kanban.html:3440 | Dropdown restore uses `activeProjectFilter \|\| ''` instead of `?? ''`. Works by accident (sentinel is truthy) but plan explicitly specified `??` for defensive correctness. |
+| MAJOR-2 | MAJOR | kanban.html:3445 | Fallback restore uses `explicitRoot + '\|'` (old format) instead of `explicitRoot + '\|__unassigned__'`. The old option value no longer exists in the dropdown, so selection fails to restore. |
+| NIT-1 | NIT | KanbanDatabase.ts:2139,2233 | Implementation uses `effectiveProject === null` instead of plan's `!effectiveProject`. Implementation is actually better — `!effectiveProject` would be true for empty string `''`, incorrectly skipping the filter. No change needed. |
+
+### Stage 2: Balanced Synthesis — Actions Taken
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| CRITICAL-1 | VALID — Fixed | Added sentinel-to-empty-string translation in `setCurrentProject()` before storing in `_currentProjects` |
+| CRITICAL-2 | VALID — Fixed | Changed lines 5741, 5747 from ternary that strips sentinel to `selectedProject \|\| null` (sentinel is truthy, so `\|\| null` preserves it) |
+| MAJOR-1 | VALID — Fixed | Changed `activeProjectFilter \|\| ''` to `activeProjectFilter ?? ''` at line 3440 |
+| MAJOR-2 | VALID — Fixed | Changed `explicitRoot + '\|'` to `explicitRoot + '\|__unassigned__'` at line 3445 |
+| NIT-1 | No change needed | Implementation is correct; plan's code sample had a subtle bug that was caught during implementation |
+
+### Files Changed by Review
+
+- `/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/GlobalPlanWatcherService.ts` — Added sentinel translation in `setCurrentProject()` (lines 40-49)
+- `/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html` — Fixed sentinel flow in change handler (lines 5741, 5747), restore logic `??` (line 3440), fallback value format (line 3445)
+
+### Validation Results
+
+- **Typecheck**: No new errors introduced. Pre-existing errors in ClickUpSyncService.ts, KanbanDatabase.ts, KanbanProvider.ts are unrelated to this change.
+- **Tests**: Not run per session instructions (SKIP TESTS). Existing test in `control-plane-repo-scope.test.js` covers sentinel DB queries.
+
+### Remaining Risks
+
+1. **GlobalPlanWatcherService `_currentProjects.get()` usage** (line 420): Even after the fix, if the sentinel were somehow stored before this fix was applied (e.g., from a running session), existing data in `_currentProjects` could still contain the sentinel. This is a transient in-memory map (not persisted), so restarting the extension clears it. Low risk.
+2. **No automated test for the frontend sentinel flow**: The test file only covers DB-level sentinel translation. The frontend→backend round-trip (selecting base workspace option → sentinel sent to backend → filter applied → only unassigned plans returned) should be manually verified per the Manual Testing checklist above.
