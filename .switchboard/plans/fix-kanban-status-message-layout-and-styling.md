@@ -185,3 +185,68 @@ The existing `statusFlash` keyframe animation (lines 2013-2018) and `.flashing` 
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+
+## Review Pass (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Verdict |
+|---|---------|----------|---------|
+| 1 | `display:none` + `position:absolute` interaction — does `display: ''` restore correctly? | — | RETRACTED: `display: ''` clears inline style, div defaults to `display: block`, which works fine with absolute positioning |
+| 2 | `background: var(--panel-bg)` (#000000) may not match surrounding area (#1a1a1a) — visible "floating black box" | NIT | Acceptable for a transient 3-second overlay in dark theme |
+| 3 | `overflow: hidden` on wrapper could clip upward-extending tooltips near top of board | NIT | 36px `padding-top` buffer on `.kanban-board` provides adequate clearance |
+| 4 | Anonymous wrapper div with no id/class — minor maintainability concern | NIT | Can add id later if needed |
+| 5 | **Wrapper div missing `display: flex; flex-direction: column;`** — `.kanban-board` has `flex: 1` in its CSS class, which only works when the parent is a flex container. The wrapper was a bare `<div>` with no flex context, so the board's `flex: 1` was inert. The board would NOT fill available vertical space — it would be content-height only. | **MAJOR** | **Must fix** |
+| 6 | `overflow: hidden` on wrapper could clip board's horizontal scrollbar if board doesn't fill wrapper | MAJOR | Subsumed by #5 — resolves once wrapper is a flex container |
+
+### Stage 2: Balanced Synthesis
+
+**Keep (no changes needed):**
+- Absolute positioning strategy — correct
+- `border-bottom` removal — done correctly
+- `text-align:left` — done correctly
+- `z-index: 100` — no stacking conflict with column z-index (different stacking contexts)
+- `background: var(--panel-bg)` — acceptable for transient overlay
+- `animationend` handler — preserved correctly
+- `showStatusMessage` handler — preserved correctly
+- `statusFlash` animation CSS — preserved correctly
+
+**Fix now:**
+- Finding #5: Add `display: flex; flex-direction: column;` to wrapper div inline style
+
+**Defer:**
+- Findings #2, #3, #4: NIT-level, no user-visible impact
+
+### Code Fixes Applied
+
+**File:** `/Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/kanban.html`
+**Line 2080** — Added `display: flex; flex-direction: column;` to wrapper div inline style:
+
+Before:
+```html
+<div style="position: relative; flex: 1; overflow: hidden;">
+```
+
+After:
+```html
+<div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
+```
+
+**Rationale:** The `.kanban-board` CSS class includes `flex: 1` (line 321), which requires its parent to be a flex container. Without `display: flex; flex-direction: column;` on the wrapper, the board's `flex: 1` was ignored, causing the board to render at content height rather than filling the available vertical space — a layout regression.
+
+### Verification Results
+
+- **TypeScript references**: No `.ts` files reference `status-message` DOM element directly. The `showStatusMessage` message type is sent via `postMessage` from `KanbanProvider.ts` (15 call sites) — all unaffected by the HTML change.
+- **HTML structure**: Verified correct nesting: `#kanban-tab-content` (flex column) → wrapper (flex column, flex: 1) → `#status-message` (absolute overlay) + `.kanban-board` (flex: 1, fills space).
+- **CSS animation**: `statusFlash` keyframes and `.flashing` class unchanged, work correctly with absolute positioning.
+- **JS handlers**: `showStatusMessage` and `animationend` handlers unchanged, work correctly with absolute positioning.
+- **Compilation**: Skipped per review instructions.
+- **Automated tests**: Skipped per review instructions.
+
+### Remaining Risks
+
+1. **Manual testing needed**: Verify the board fills vertical space correctly after the flex fix (Finding #5). This is the highest-priority manual check.
+2. **Tooltip clipping (NIT)**: Theoretically possible for very tall tooltips near the top of the board, but the 36px buffer makes this unlikely. Verify during manual testing per Verification Plan step 7.
+3. **Background color (NIT)**: `var(--panel-bg)` (#000000) is slightly darker than the surrounding area. If this is visually jarring, consider using `var(--panel-bg2)` (#0a0a0a) or a semi-transparent background instead. Low priority — the overlay is transient.
