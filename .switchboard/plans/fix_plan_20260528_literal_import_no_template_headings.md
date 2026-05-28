@@ -215,3 +215,21 @@ None
 
 ## Recommendation
 Complexity 3 → **Send to Intern**
+
+---
+## Direct Reviewer Pass
+
+### Stage 1: Grumpy Review (Adversarial Findings)
+*I've looked at the changes. They match the plan perfectly. You actually managed to add a boolean flag and plumb it through the options object without breaking the entire type system or duplicating a 500-line method. I guess adding `skipTemplateHeadings` to `_createInitiatedPlan` and hooking it up to `_createImportedLinearPlan` and `importClickUpTask` is exactly what I asked for. The ternary logic is clean, and the default behavior remains untouched for the clipboard imports.*
+
+- **NIT**: I don't love the name `skipTemplateHeadings`—it's a bit wordy, but it explicitly tells me what it does. I can live with it.
+
+### Stage 2: Balanced Synthesis
+The implementation aligns flawlessly with the proposed plan. The new optional `skipTemplateHeadings` property was correctly added to the `options` parameter of `_createInitiatedPlan`, and the fallback template string logic now uses an OR condition (`isFullPlan || options.skipTemplateHeadings`) to skip the appending of template headings. The three necessary call sites (Linear import, ClickUp parent task import, and ClickUp subtask import) were successfully updated to pass this flag as `true`. No other callers were modified, preserving existing functionality where template headings are still required. 
+
+No material code fixes are needed.
+
+### Execution & Validation
+- **Files Changed**: `src/services/TaskViewerProvider.ts`
+- **Validation**: Static analysis confirmed the proper logic and TypeScript types. Compilation and automated tests were skipped per the session directive. 
+- **Remaining Risks**: None identified. The fallback heuristic remains in place securely for un-flagged callers.
