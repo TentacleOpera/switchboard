@@ -2073,13 +2073,14 @@
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
             <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
             <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
-            <span id="project-filter-badge" class="workspace-filter-badge" hidden></span>
         </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
         </div>
-        <div id="status-message" role="status" aria-live="polite" style="display:none; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid var(--border-color);"></div>
-        <div class="kanban-board" id="kanban-board"></div>
+        <div style="position: relative; flex: 1; overflow: hidden;">
+            <div id="status-message" role="status" aria-live="polite" style="display:none; position: absolute; top: 0; left: 0; right: 0; padding:6px 12px; font-size:12px; text-align:left; z-index: 100; background: var(--panel-bg);"></div>
+            <div class="kanban-board" id="kanban-board"></div>
+        </div>
     </div>
 
     <!-- Automation Tab Content -->
@@ -5126,16 +5127,6 @@
                     const explicitChange = previousRoot !== '' && previousRoot !== currentWorkspaceRoot;
                     updateWorkspaceProjectDropdown(explicitChange ? currentWorkspaceRoot : null);
                     updateWorkspaceFilterBadge();
-
-                    const projectFilterBadge = document.getElementById('project-filter-badge');
-                    if (projectFilterBadge) {
-                        if (msg.projectFilter) {
-                            projectFilterBadge.textContent = 'PROJECT: ' + msg.projectFilter;
-                            projectFilterBadge.hidden = false;
-                        } else {
-                            projectFilterBadge.hidden = true;
-                        }
-                    }
                     break;
                 }
                 case 'moveCards': {

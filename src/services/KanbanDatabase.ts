@@ -110,13 +110,11 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
-    linear_issue_id   TEXT DEFAULT '',
-    worktree_id       INTEGER
+    linear_issue_id   TEXT DEFAULT ''
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
 CREATE INDEX IF NOT EXISTS idx_plans_status ON plans(status);
-CREATE INDEX IF NOT EXISTS idx_plans_worktree ON plans(worktree_id);
 CREATE UNIQUE INDEX IF NOT EXISTS idx_plans_plan_file_workspace ON plans(plan_file, workspace_id);
 CREATE TABLE IF NOT EXISTS config (
     key   TEXT PRIMARY KEY,
@@ -424,6 +422,12 @@ const MIGRATION_V25_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
 ];
 
+// V26: Add worktree_id column to plans table (was in SCHEMA_SQL but never added to existing DBs).
+const MIGRATION_V26_SQL = [
+    `ALTER TABLE plans ADD COLUMN worktree_id INTEGER`,
+    `CREATE INDEX IF NOT EXISTS idx_plans_worktree ON plans(worktree_id)`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -581,6 +585,7 @@ export class KanbanDatabase {
     public async getWorkspaceMappings(): Promise<{ enabled: boolean; mappings: WorkspaceDatabaseMapping[] }> {
         try {
             const val = await this.getConfig('workspace_mappings');
+            console.log(`[KanbanDatabase] getWorkspaceMappings: dbPath=${this._dbPath}, hasVal=${!!val}, dbReady=${!!this._db}`);
             if (val) {
                 const parsed = JSON.parse(val);
                 if (parsed && typeof parsed === 'object') {
@@ -1004,12 +1009,16 @@ export class KanbanDatabase {
             return true;
         }
         if (!this._initPromise) {
+            console.log(`[KanbanDatabase.ensureReady] No _db and no _initPromise for ${this._dbPath}, calling _initialize()`);
             this._initPromise = this._initialize().then((ready) => {
+                console.log(`[KanbanDatabase.ensureReady] _initialize() returned ${ready} for ${this._dbPath}, lastError=${this._lastInitError}`);
                 if (!ready) {
                     this._initPromise = null;
                 }
                 return ready;
             });
+        } else {
+            console.log(`[KanbanDatabase.ensureReady] Reusing existing _initPromise for ${this._dbPath}`);
         }
         return this._initPromise;
     }
@@ -3158,6 +3167,7 @@ export class KanbanDatabase {
     private async _initialize(): Promise<boolean> {
         try {
             const SQL = await KanbanDatabase._loadSqlJs();
+            console.log(`[KanbanDatabase._initialize] sql.js loaded, checking ${this._dbPath}, exists=${fs.existsSync(this._dbPath)}`);
 
             if (fs.existsSync(this._dbPath)) {
                 // Guard: only create directories within .switchboard or workspace root
@@ -3280,6 +3290,13 @@ export class KanbanDatabase {
             this._lastInitError = errorMessage;
             console.error('[KanbanDatabase] Initialization failed:', error);
             console.error('[KanbanDatabase] Init failure stack:', error instanceof Error ? error.stack : 'no stack');
+            try {
+                const vscode = require('vscode');
+                const channel = vscode.window.createOutputChannel('Switchboard');
+                channel.appendLine(`[KanbanDatabase] INIT FAILED for ${this._dbPath}: ${errorMessage}`);
+                channel.appendLine(`[KanbanDatabase] Stack: ${error instanceof Error ? error.stack : 'no stack'}`);
+                channel.show();
+            } catch {}
             return false;
         }
     }
@@ -3825,6 +3842,26 @@ export class KanbanDatabase {
             }
             await this.setMigrationVersion(25);
             console.log('[KanbanDatabase] V25 migration completed: worktrees table ensured');
+        }
+
+        // V26: Add worktree_id column to plans table.
+        // This column was declared in SCHEMA_SQL but never added to existing DBs
+        // (CREATE TABLE IF NOT EXISTS silently skips existing tables).
+        // Without this, the index CREATE INDEX idx_plans_worktree fails with
+        // "no such column: worktree_id", which crashes _initialize().
+        const v26 = await this.getMigrationVersion();
+        if (v26 < 26) {
+            for (const sql of MIGRATION_V26_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    // Column already exists — harmless
+                    const msg = e instanceof Error ? e.message : String(e);
+                    if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
+                        console.warn('[KanbanDatabase] V26 migration step failed:', msg);
+                    }
+                }
+            }
+            await this.setMigrationVersion(26);
+            console.log('[KanbanDatabase] V26 migration completed: worktree_id column added to plans');
         }
 
 
@@ -4583,15 +4620,21 @@ FROM plans
     private static async _loadSqlJs(): Promise<SqlJsStatic> {
         if (!KanbanDatabase._sqlJsPromise) {
             KanbanDatabase._sqlJsPromise = (async () => {
+                console.log('[KanbanDatabase._loadSqlJs] Starting sql.js load...');
                 const sqlJsModulePath = KanbanDatabase._resolveSqlJsModulePath();
+                console.log(`[KanbanDatabase._loadSqlJs] Module path: ${sqlJsModulePath}`);
                 const initSqlJsModule = runtimeRequire(sqlJsModulePath) as ((config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic>) | { default?: (config?: { wasmBinary?: Uint8Array }) => Promise<SqlJsStatic> };
                 const initSqlJs = typeof initSqlJsModule === 'function' ? initSqlJsModule : initSqlJsModule.default;
                 if (!initSqlJs) {
                     throw new Error('sql.js module did not expose an initializer function.');
                 }
                 const wasmPath = KanbanDatabase._resolveSqlWasmPath();
+                console.log(`[KanbanDatabase._loadSqlJs] WASM path: ${wasmPath}`);
                 const wasmBinary = new Uint8Array(await fs.promises.readFile(wasmPath));
-                return initSqlJs({ wasmBinary });
+                console.log(`[KanbanDatabase._loadSqlJs] WASM loaded (${wasmBinary.length} bytes), initializing...`);
+                const result = await initSqlJs({ wasmBinary });
+                console.log('[KanbanDatabase._loadSqlJs] sql.js initialized successfully');
+                return result;
             })().catch((error) => {
                 KanbanDatabase._sqlJsPromise = null;
                 throw error;

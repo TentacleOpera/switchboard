@@ -179,7 +179,7 @@ async function bootstrapMappingsToDb(context: vscode.ExtensionContext): Promise<
     }
 }
 
-async function initializeMappingIndex(): Promise<void> {
+async function initializeMappingIndex(outputChannel?: vscode.OutputChannel): Promise<void> {
     const dbs = new Map<string, KanbanDatabase>();
     for (const folder of vscode.workspace.workspaceFolders ?? []) {
         const folderPath = path.resolve(folder.uri.fsPath);
@@ -202,10 +202,17 @@ async function initializeMappingIndex(): Promise<void> {
         if (dbPath && fs.existsSync(dbPath)) {
             const db = KanbanDatabase.forWorkspace(folderPath, dbPath);
             dbs.set(folderPath, db);
+            outputChannel?.appendLine(`[initializeMappingIndex] Found DB for ${path.basename(folderPath)} at ${dbPath}`);
+        } else {
+            outputChannel?.appendLine(`[initializeMappingIndex] No DB for ${path.basename(folderPath)} (dbPath=${dbPath}, exists=${dbPath ? fs.existsSync(dbPath) : false})`);
         }
     }
+    outputChannel?.appendLine(`[initializeMappingIndex] Found ${dbs.size} DB(s), calling buildMappingIndexFromDbs`);
     const { buildMappingIndexFromDbs } = require('./services/WorkspaceIdentityService');
-    await buildMappingIndexFromDbs(dbs);
+    await buildMappingIndexFromDbs(dbs, outputChannel);
+    const { getMappingsFromIndex } = require('./services/WorkspaceIdentityService');
+    const result = getMappingsFromIndex();
+    outputChannel?.appendLine(`[initializeMappingIndex] After build: enabled=${result.enabled}, mappings=${result.mappings?.length ?? 0}`);
 }
 
 function shouldRefreshAgentWorkspaceFiles(extensionPath: string, workspaceRoot: string): boolean {
@@ -402,9 +409,11 @@ export async function activate(context: vscode.ExtensionContext) {
     // One-shot bootstrap: copy VS Code config mappings to DB if DB is empty, then build index
     try {
         await bootstrapMappingsToDb(context);
-        await initializeMappingIndex();
+        await initializeMappingIndex(outputChannel ?? undefined);
+        outputChannel?.appendLine('[Switchboard] Mapping index initialization completed successfully');
     } catch (err) {
         console.error('[Switchboard] Mapping index initialization failed, continuing activation:', err);
+        outputChannel?.appendLine(`[Switchboard] Mapping index initialization FAILED: ${err}`);
     }
 
     kanbanProvider = new KanbanProvider(context.extensionUri, context, outputChannel);
@@ -990,7 +999,7 @@ export async function activate(context: vscode.ExtensionContext) {
         const { clearMappingCache } = require('./services/WorkspaceIdentityService');
         clearMappingCache();
         // Rebuild index
-        await initializeMappingIndex();
+        await initializeMappingIndex(outputChannel ?? undefined);
         // Refresh UI
         kanbanProvider!._scheduleBoardRefresh();
         // Tell watchers to refresh
@@ -1392,6 +1401,42 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(linearUpdateDescriptionDisposable);
 
+    // Terminal sync serialization state — MUST be declared before first call
+    // (Control Plane Runtime init at line ~1395 calls syncTerminalRegistryWithState).
+    // Previously these were declared ~120 lines later, causing a TDZ ReferenceError
+    // in the webpack bundle where the call site preceded the let-declaration.
+    let syncInFlight = false;
+    let syncPending = false;
+    const syncCompletionWaiters: Array<() => void> = [];
+    function resolveSyncCompletionWaiters() {
+        if (syncInFlight || syncPending || syncCompletionWaiters.length === 0) {
+            return;
+        }
+        while (syncCompletionWaiters.length > 0) {
+            const resolve = syncCompletionWaiters.shift();
+            resolve?.();
+        }
+    }
+    async function syncTerminalRegistryWithState(workspaceRoot: string): Promise<void> {
+        if (syncInFlight) {
+            syncPending = true;
+            return new Promise<void>((resolve) => {
+                syncCompletionWaiters.push(resolve);
+            });
+        }
+        syncInFlight = true;
+        try {
+            await _syncTerminalRegistryWithStateImpl(workspaceRoot);
+        } finally {
+            syncInFlight = false;
+            if (syncPending) {
+                syncPending = false;
+                await syncTerminalRegistryWithState(workspaceRoot);
+            }
+            resolveSyncCompletionWaiters();
+        }
+    }
+
     // Initialize Control Plane Runtime
     if (workspaceRoot) {
         const runtimeStateRoot = resolveEffectiveStateRoot(workspaceRoot) || workspaceRoot;
@@ -1507,41 +1552,6 @@ export async function activate(context: vscode.ExtensionContext) {
         })
     );
 
-    /**
-     * Re-claim terminals from state.json by matching PIDs.
-     * Serialized: concurrent calls are coalesced so only one runs at a time.
-     */
-    let syncInFlight = false;
-    let syncPending = false;
-    const syncCompletionWaiters: Array<() => void> = [];
-    function resolveSyncCompletionWaiters() {
-        if (syncInFlight || syncPending || syncCompletionWaiters.length === 0) {
-            return;
-        }
-        while (syncCompletionWaiters.length > 0) {
-            const resolve = syncCompletionWaiters.shift();
-            resolve?.();
-        }
-    }
-    async function syncTerminalRegistryWithState(workspaceRoot: string): Promise<void> {
-        if (syncInFlight) {
-            syncPending = true;
-            return new Promise<void>((resolve) => {
-                syncCompletionWaiters.push(resolve);
-            });
-        }
-        syncInFlight = true;
-        try {
-            await _syncTerminalRegistryWithStateImpl(workspaceRoot);
-        } finally {
-            syncInFlight = false;
-            if (syncPending) {
-                syncPending = false;
-                await syncTerminalRegistryWithState(workspaceRoot);
-            }
-            resolveSyncCompletionWaiters();
-        }
-    }
     async function _syncTerminalRegistryWithStateImpl(workspaceRoot: string) {
         // NOTE: PID resolution retained for backward compatibility — name + ideName matching is preferred
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
@@ -2211,6 +2221,7 @@ export async function activate(context: vscode.ExtensionContext) {
                         cwd: effectiveWorkspaceRoot
                     };
                     terminal = vscode.window.createTerminal(gridTermOpts);
+                    createdTerminals.push(terminal);
                 }
                 batchRegistrations.push({
                     name: suffixedName(agent.name),
@@ -2223,7 +2234,6 @@ export async function activate(context: vscode.ExtensionContext) {
                 });
                 outputChannel?.appendLine(`[Extension] Queued grid terminal '${agent.name}' (PID: null — skipParentResolution) for batch registration`);
                 registeredTerminals.set(suffixedName(agent.name), terminal);
-                createdTerminals.push(terminal);
                 terminal.show();
                 if (!alreadyExisted) {
                     try {
@@ -2251,6 +2261,31 @@ export async function activate(context: vscode.ExtensionContext) {
                 outputChannel?.appendLine(`[Extension] Registrations for ${batchRegistrations.length} terminal(s) were persisted to state.json`);
             }
             try {
+                // Wait for all created terminals' shells to start before sending commands
+                const newlyCreated = new Set(createdTerminals);
+                if (newlyCreated.size > 0) {
+                    await new Promise<void>((resolve) => {
+                        const remaining = new Set(newlyCreated);
+                        const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
+                            if (remaining.has(e.terminal)) {
+                                remaining.delete(e.terminal);
+                                if (remaining.size === 0) {
+                                    disposable.dispose();
+                                    resolve();
+                                }
+                            }
+                        });
+                        // Safety timeout: resolve after 5s even if some shells didn't report
+                        setTimeout(() => {
+                            disposable.dispose();
+                            if (remaining.size > 0) {
+                                outputChannel?.appendLine(`[Extension] Shell init timeout — ${remaining.size} terminal(s) did not report ready, proceeding anyway`);
+                            }
+                            resolve();
+                        }, 5000);
+                    });
+                }
+
                 for (const agent of agents) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
                     if (cmd && cmd.trim()) {

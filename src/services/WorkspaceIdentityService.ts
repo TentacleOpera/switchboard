@@ -29,14 +29,24 @@ export function clearMappingCache(): void {
     _mappingsDocument = null;
 }
 
-export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>): Promise<void> {
+export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>, outputChannel?: any): Promise<void> {
     const index = new Map<string, string>();
     const allMappings: WorkspaceDatabaseMapping[] = [];
     let anyEnabled = false;
 
+    const log = (msg: string) => {
+        console.log(`[WorkspaceIdentityService] ${msg}`);
+        try { outputChannel?.appendLine(`[WorkspaceIdentityService] ${msg}`); } catch {}
+    };
+
+    log(`buildMappingIndexFromDbs called with ${dbs.size} DB(s)`);
+
     for (const [parentPath, db] of dbs.entries()) {
         try {
+            const dbReady = await db.ensureReady();
+            log(`DB at ${path.basename(parentPath)}: ready=${dbReady}, dbPath=${db.dbPath}`);
             const result = await db.getWorkspaceMappings();
+            log(`DB at ${path.basename(parentPath)}: enabled=${result.enabled}, mappings=${result.mappings?.length ?? 0}`);
             if (result.enabled && Array.isArray(result.mappings)) {
                 anyEnabled = true;
                 for (const mapping of result.mappings) {
@@ -47,7 +57,7 @@ export async function buildMappingIndexFromDbs(dbs: Map<string, KanbanDatabase>)
                 }
             }
         } catch (error) {
-            console.error(`[WorkspaceIdentityService] Error reading mappings from DB at ${parentPath}:`, error);
+            log(`Error reading mappings from DB at ${parentPath}: ${error}`);
         }
     }
 
