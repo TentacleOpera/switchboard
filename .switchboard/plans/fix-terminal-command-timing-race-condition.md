@@ -174,4 +174,53 @@ try {
 
 ---
 
-**Recommendation:** Complexity 4 → **Send to Coder**
+## Review Pass — 2026-05-28
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **CRITICAL** | Event subscription race: `onDidStartTerminalShellExecution` is subscribed AFTER `terminal.show()` and an `await updateState()` yield. Fast-starting shells fire the event before the listener is attached, causing missed events and a full 5s timeout fallback — worse latency than the original bug on fast machines. | `src/extension.ts` lines 2264–2287 (original impl) |
+| 2 | **NIT** | Redundant Set copy: `newlyCreated` intermediate Set is immediately copied into `remaining` — could construct `remaining` directly from `createdTerminals`. | `src/extension.ts` lines 2265–2268 (original impl) |
+| 3 | **NIT** | Double `resolve()` without guard: if all shells report before timeout, `resolve()` fires at line 2274; timeout then fires `resolve()` again at line 2284. Safe per JS Promise semantics but not self-documenting. | `src/extension.ts` lines 2272–2284 (original impl) |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| 1 — Event subscription race | **Fix now** | Pre-subscribe to `onDidStartTerminalShellExecution` BEFORE the terminal creation loop. Accumulate ready terminals in a `shellReadyTerminals` Set. After the loop, filter `createdTerminals` against the Set and only await stragglers. |
+| 2 — Redundant Set copy | **Fix as drive-by** | Eliminated by the restructured code (no intermediate `newlyCreated` Set). |
+| 3 — Double resolve | **Defer** | JS Promise semantics make this safe; cosmetic only. |
+
+### Code Fixes Applied
+
+**File: `src/extension.ts`**
+
+1. **Added pre-subscription before terminal creation loop** (before line 2208):
+   - Declared `shellReadyTerminals: Set<vscode.Terminal>` and `preSubscription` listener
+   - Pre-subscribes to `onDidStartTerminalShellExecution` so events from fast-starting shells are captured even during the `await updateState()` yield
+
+2. **Replaced shell wait block** (lines 2271–2294):
+   - Changed from `new Set(createdTerminals)` to `createdTerminals.filter(t => !shellReadyTerminals.has(t))` — only await terminals not already reported ready
+   - Removed redundant intermediate `newlyCreated` Set
+   - Second `onDidStartTerminalShellExecution` subscription still handles terminals that haven't started yet, with 5s safety timeout unchanged
+
+3. **Added `preSubscription.dispose()` in finally block** (line 2320):
+   - Ensures the pre-subscription listener is always cleaned up regardless of success/failure
+
+**File: `package.json`** — No changes needed (engine bump and `@types/vscode` bump already correctly applied)
+
+### Verification Results
+
+- **TypeScript check (`tsc --noEmit`):** PASS — zero errors in `extension.ts`. Two pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated relative import path issues).
+- **Compilation:** Skipped per session instructions.
+- **Automated tests:** Skipped per session instructions.
+
+### Remaining Risks
+
+- **Low:** If `onDidStartTerminalShellExecution` never fires for a terminal (unsupported shell type), the 5s safety timeout still ensures forward progress. The pre-subscription does not change this behavior.
+- **Low:** The `shellReadyTerminals` Set accumulates entries for ALL terminal shell starts (including non-Switchboard terminals) during the function's lifetime. This is harmless — entries are only checked against `createdTerminals` — but the Set could grow if many external terminals start concurrently. The Set is disposed with `preSubscription.dispose()` in the finally block.
+
+---
+
+**Recommendation:** Complexity 4 → **Send to Coder** (original) → **Review Complete, Fixes Applied**

@@ -2205,6 +2205,13 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
             });
         };
+        // Pre-subscribe to shell execution events BEFORE creating terminals to avoid race:
+        // If we subscribe after terminal.show(), fast shells may start and fire the event
+        // before our listener is attached, causing an unnecessary 5s timeout fallback.
+        const shellReadyTerminals = new Set<vscode.Terminal>();
+        const preSubscription = vscode.window.onDidStartTerminalShellExecution((e) => {
+            shellReadyTerminals.add(e.terminal);
+        });
         taskViewerProvider.sendLoadingState(true);
         try {
             await clearGridBlockers();
@@ -2262,10 +2269,10 @@ export async function activate(context: vscode.ExtensionContext) {
             }
             try {
                 // Wait for all created terminals' shells to start before sending commands
-                const newlyCreated = new Set(createdTerminals);
-                if (newlyCreated.size > 0) {
+                const awaiting = createdTerminals.filter(t => !shellReadyTerminals.has(t));
+                if (awaiting.length > 0) {
                     await new Promise<void>((resolve) => {
-                        const remaining = new Set(newlyCreated);
+                        const remaining = new Set(awaiting);
                         const disposable = vscode.window.onDidStartTerminalShellExecution((e) => {
                             if (remaining.has(e.terminal)) {
                                 remaining.delete(e.terminal);
@@ -2310,6 +2317,7 @@ export async function activate(context: vscode.ExtensionContext) {
             outputChannel?.appendLine(`[Extension] createAgentGrid failed: ${msg}`);
             vscode.window.showErrorMessage(`Failed to open agent terminals: ${msg}`);
         } finally {
+            preSubscription.dispose();
             taskViewerProvider.sendLoadingState(false);
         }
     }

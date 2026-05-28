@@ -3729,7 +3729,7 @@ export class KanbanProvider implements vscode.Disposable {
 
             const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
             if (coderColumns.includes(targetColumn)) {
-                await this._assignWorktreeToCard(workspaceRoot, sessionId);
+                await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
             }
             if (targetColumn === 'CODE REVIEWED') {
                 await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
@@ -3772,7 +3772,7 @@ export class KanbanProvider implements vscode.Disposable {
             if (sessionId) {
                 const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
                 if (coderColumns.includes(targetColumn)) {
-                    await this._assignWorktreeToCard(workspaceRoot, sessionId);
+                    await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
                 }
                 if (targetColumn === 'CODE REVIEWED') {
                     await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
@@ -6136,39 +6136,66 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'createWorktree': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                const wtRelativePath = await vscode.window.showInputBox({ prompt: 'Worktree path (relative to workspace parent)' });
-                if (!wtRelativePath) break;
-                // Validate path: must be relative and must not escape workspace parent
-                if (path.isAbsolute(wtRelativePath) || wtRelativePath.includes('..')) {
-                    vscode.window.showErrorMessage('Worktree path must be relative and cannot contain ".."');
-                    break;
-                }
-                const branch = await vscode.window.showInputBox({ prompt: 'Branch name' });
-                if (!branch) break;
-                // Validate branch name: must be a valid git branch name
-                if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch) || branch.includes('..') || branch.endsWith('.lock') || branch.endsWith('/') || branch.startsWith('-')) {
-                    vscode.window.showErrorMessage('Invalid branch name. Use letters, digits, hyphens, underscores, slashes, and dots. Cannot start with "-", contain "..", end with "/" or ".lock".');
-                    break;
-                }
+                const role = msg.role;  // 'coder', 'lead', 'intern'
+                const agentCount = Math.max(1, Math.min(10, parseInt(msg.agentCount, 10) || 1));
+
                 const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    const parentDir = path.dirname(workspaceRoot);
-                    const fullPath = path.join(parentDir, wtRelativePath);
-                    const id = await db.createWorktree(branch, null);
-                    try {
-                        // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
+                if (!db || !await db.ensureReady()) break;
+
+                // Verify the role has a visible agent
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (!visibleAgents[role]) {
+                    vscode.window.showWarningMessage(`No ${role} agent configured. Enable it in Setup first.`);
+                    break;
+                }
+
+                // Auto-generate worktree paths as siblings of workspace root
+                const parentDir = path.dirname(workspaceRoot);
+                const timestamp = Date.now();
+                const createdWorktrees: Array<{ id: number; path: string; branch: string }> = [];
+
+                try {
+                    for (let i = 0; i < agentCount; i++) {
+                        const worktreeDirName = `switchboard-${role}-${timestamp}-${i}`;
+                        const fullPath = path.join(parentDir, worktreeDirName);
+                        const branchName = `${role}-${timestamp}-${i}`;
+
+                        // Create DB entry — store role name in coder_agent_id
+                        const id = await db.createWorktree(branchName, role);
+
+                        // Create git worktree (SECURITY: execFile with args array, F-03)
                         const execFileAsync = promisify(cp.execFile);
-                        await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
-                        vscode.window.showInformationMessage(`Worktree created at ${fullPath}`);
-                    } catch (e: any) {
-                        vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
-                        await db.deleteWorktree(id);
+                        try {
+                            await execFileAsync('git', ['worktree', 'add', '-b', branchName, fullPath], { cwd: workspaceRoot });
+                        } catch (gitError: any) {
+                            // Rollback DB entry if git fails
+                            await db.deleteWorktree(id);
+                            throw gitError;
+                        }
+
+                        createdWorktrees.push({ id, path: fullPath, branch: branchName });
                     }
-                    // Enrich with git-derived paths before sending to webview
+
+                    vscode.window.showInformationMessage(`Created ${agentCount} ${role} worktree(s)`);
+
+                    // Refresh worktrees list with enriched data
                     const worktrees = await db.getWorktrees();
                     const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
                     const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
                     this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
+
+                } catch (e: any) {
+                    // Rollback: delete all created worktrees and DB entries
+                    vscode.window.showErrorMessage(`Failed to create worktrees: ${e.message}`);
+
+                    const execFileAsync = promisify(cp.execFile);
+                    for (const wt of createdWorktrees) {
+                        try {
+                            await execFileAsync('git', ['worktree', 'remove', '--force', wt.path], { cwd: workspaceRoot });
+                            await execFileAsync('git', ['branch', '-D', wt.branch], { cwd: workspaceRoot });
+                        } catch { /* ignore cleanup errors */ }
+                        await db.deleteWorktree(wt.id);
+                    }
                 }
                 break;
             }
@@ -6208,30 +6235,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const worktrees = await db.getWorktrees();
                     const branchToPath2 = await this._resolveWorktreePaths(workspaceRoot);
                     const enriched = worktrees.map(w => ({ ...w, path: branchToPath2.get(w.branch) || '' }));
-                    this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
-                }
-                break;
-            }
-            case 'assignAgentToWorktree': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                const agentNames = Object.entries(visibleAgents)
-                    .filter(([_, enabled]) => enabled)
-                    .map(([name]) => name);
-                if (agentNames.length === 0) {
-                    vscode.window.showWarningMessage('No agents configured. Set up agents in Setup first.');
-                    break;
-                }
-                const selected = await vscode.window.showQuickPick(agentNames, { placeHolder: 'Select coder agent' });
-                if (!selected) break;
-                const db = this._getKanbanDb(workspaceRoot);
-                if (db && await db.ensureReady()) {
-                    await db.assignAgentToWorktree(Number(msg.worktreeId), selected);
-                    // Enrich with git-derived paths before sending to webview
-                    const worktrees = await db.getWorktrees();
-                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-                    const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
                     this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
                 }
                 break;
@@ -6502,7 +6505,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return branchToPath;
     }
 
-    private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string): Promise<void> {
+    private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string, targetColumn?: string): Promise<void> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) return;
 
@@ -6510,7 +6513,22 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (plan && plan.worktreeId) return;
 
         const worktrees = await db.getWorktrees();
-        const availableWorktrees = worktrees.filter(wt => wt.coderAgentId !== null);
+
+        // Determine role from target column
+        let targetRole: string | null = null;
+        if (targetColumn) {
+            const columnDefs = this._buildKanbanColumns(
+                await this._getCustomAgents(workspaceRoot),
+                await this._getCustomKanbanColumns(workspaceRoot)
+            );
+            const colDef = columnDefs.find(c => c.id === targetColumn);
+            targetRole = colDef?.role || null;
+        }
+
+        // Filter worktrees by role (coder_agent_id stores the role name)
+        const availableWorktrees = targetRole
+            ? worktrees.filter(wt => wt.coderAgentId === targetRole)
+            : worktrees.filter(wt => wt.coderAgentId !== null);
 
         if (availableWorktrees.length === 0) {
             return; // No worktrees available, leave worktree_id null

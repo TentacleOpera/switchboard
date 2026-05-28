@@ -7,7 +7,7 @@ Redesign the worktrees tab to follow the automation tab's terminal pool pattern.
 ## Metadata
 
 - **Tags:** [workflow, git, ui]
-- **Complexity:** 6
+- **Complexity:** 4
 
 ## User Review Required
 
@@ -21,23 +21,20 @@ Redesign the worktrees tab to follow the automation tab's terminal pool pattern.
 - Replacing manual input form with role selector and number input
 - Auto-generating branch names based on agent names
 - Creating multiple git worktrees for a single logical worktree group
-- Updating DB schema to support multiple worktrees per role assignment
-- Adding `getWorktreeAgents` and `assignAgentsToWorktree` CRUD methods
-- Updating `renderWorktrees()` JS to show role and agent count
+- Updating `renderWorktrees()` JS to show role and agent name
 - Removing assign-agent button and handler
+- Filtering `_assignWorktreeToCard` by role (using existing `coder_agent_id` value)
 
 ### Complex / Risky
-- DB schema change: current `worktrees` table has single `coder_agent_id` field — needs table recreation (not ALTER TABLE DROP COLUMN, which sql.js may not support) to replace with `role` column and junction table
 - Git worktree creation loop with rollback on partial failure — must handle mid-loop failures where some worktrees are created and others are not
 - UI pattern matching automation tab's dynamic DOM construction (createElement-based, not static HTML templates)
-- `_assignWorktreeToCard` must now filter worktrees by role matching the target column's role (requires mapping column ID → role via `KanbanColumnDefinition`)
 
 ## Edge-Case & Dependency Audit
 
 - **Race Conditions**: Multiple simultaneous worktree creation requests could conflict on branch names. Mitigation: `Date.now()` + index suffix ensures uniqueness; `UNIQUE(branch, workspace_id)` constraint catches any collision at DB level.
 - **Security**: Worktree paths are auto-generated as siblings of workspace root — no user input to validate. Branch names are auto-generated from agent names + timestamp — no shell injection risk since `cp.execFile` with args array is used (F-03 pattern already followed at line 6161).
-- **Side Effects**: Git worktree creation failure mid-loop must rollback all created worktrees and DB entries. Rollback must also clean up any `worktree_agents` entries for partially-created worktrees (FK CASCADE handles this if worktree row is deleted).
-- **Dependencies & Conflicts**: Depends on Plans A/B/C being complete (DB schema exists, CRUD methods exist). This plan replaces Plan B's UI approach. The `isAllowedSwitchboardLocation` guard (src/utils/switchboardLocationGuard.ts) is NOT relevant here since worktrees are created as siblings, not inside `.switchboard/`.
+- **Side Effects**: Git worktree creation failure mid-loop must rollback all created worktrees and DB entries.
+- **Dependencies & Conflicts**: Depends on Plans A/B/C being complete (DB schema exists, CRUD methods exist). This plan replaces Plan B's UI approach. No schema change required — `coder_agent_id` already stores agent/role names and serves as a de facto role field.
 
 ## Dependencies
 
@@ -47,174 +44,19 @@ Redesign the worktrees tab to follow the automation tab's terminal pool pattern.
 
 ## Adversarial Synthesis
 
-Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` within the workspace root — git forbids worktrees inside the main working tree, so worktrees must be siblings of the workspace root (matching current behavior at KanbanProvider.ts line 6155-6156). (2) Original plan re-added a `path` column to the worktrees table, but V24 explicitly removed it because paths are derived from git at read time via `_resolveWorktreePaths()`. (3) `_getAgentRole()` method referenced in plan does not exist — must use `KanbanColumnDefinition.role` from agentConfig.ts to map columns to roles. Mitigations: Use sibling directory pattern for worktree paths, keep paths git-derived (no `path` column), add `_resolveAgentRole()` helper that reads column-role mappings from the kanban column definitions.
+Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` within the workspace root — git forbids worktrees inside the main working tree, so worktrees must be siblings of the workspace root (matching current behavior at KanbanProvider.ts line 6155-6156). (2) Original plan proposed a schema migration (V27) with junction table — but `coder_agent_id` is already a `TEXT` column storing agent/role names (e.g., "coder", "lead", "intern"), so it already serves as a de facto role field. No migration needed. Mitigations: Use sibling directory pattern for worktree paths, repurpose `coder_agent_id` as the role identifier at read time, derive role from the stored agent name.
 
 ## Proposed Changes
 
 ### File: `src/services/KanbanDatabase.ts`
 
-1. **Add V27 migration** to update the worktrees schema (table recreation pattern, matching V20/V24 approach since sql.js may not support `ALTER TABLE DROP COLUMN`):
-   - **Context**: Current schema at line 135-143 has `coder_agent_id TEXT` column. V24 (line 396-409) already demonstrated the drop-and-recreate pattern for this table.
-   - **Logic**: Drop and recreate `worktrees` table with `role` column instead of `coder_agent_id`. Create `worktree_agents` junction table. Migrate existing `coder_agent_id` values.
-   - **Implementation**:
-   ```typescript
-   // Add after MIGRATION_V26_SQL (line 429)
-   const MIGRATION_V27_SQL = [
-       // Step 1: Create new worktrees table with role column (no path, no coder_agent_id)
-       `CREATE TABLE worktrees_v27 (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           branch TEXT NOT NULL,
-           role TEXT NOT NULL DEFAULT 'coder',
-           workspace_id TEXT NOT NULL,
-           created_at TEXT DEFAULT (datetime('now')),
-           UNIQUE(branch, workspace_id)
-       )`,
-       // Step 2: Migrate existing rows — infer role from coder_agent_id presence
-       `INSERT INTO worktrees_v27 (id, branch, role, workspace_id, created_at)
-        SELECT id, branch,
-               CASE WHEN coder_agent_id IS NOT NULL AND coder_agent_id != '' THEN 'coder' ELSE 'coder' END,
-               workspace_id, created_at
-        FROM worktrees`,
-       // Step 3: Drop old table
-       `DROP TABLE worktrees`,
-       // Step 4: Rename
-       `ALTER TABLE worktrees_v27 RENAME TO worktrees`,
-       // Step 5: Recreate index
-       `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
-       // Step 6: Create junction table for agent-worktree relationships
-       `CREATE TABLE IF NOT EXISTS worktree_agents (
-           worktree_id INTEGER NOT NULL,
-           agent_name TEXT NOT NULL,
-           PRIMARY KEY (worktree_id, agent_name),
-           FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE CASCADE
-       )`,
-       `CREATE INDEX IF NOT EXISTS idx_worktree_agents_worktree ON worktree_agents(worktree_id)`,
-       `CREATE INDEX IF NOT EXISTS idx_worktree_agents_agent ON worktree_agents(agent_name)`,
-       // Step 7: Migrate existing coder_agent_id values to worktree_agents
-       `INSERT INTO worktree_agents (worktree_id, agent_name)
-        SELECT id, coder_agent_id FROM worktrees_v27_backup WHERE coder_agent_id IS NOT NULL AND coder_agent_id != ''`,
-   ];
-   ```
-   - **Edge Cases**: The backup table reference in Step 7 needs adjustment — since we DROP the old table in Step 3, we must capture `coder_agent_id` values BEFORE dropping. Either: (a) create a temporary backup table before Step 1, or (b) combine Steps 2 and 7 into a single INSERT-SELECT before the DROP. Approach (b) is cleaner:
-   ```typescript
-   const MIGRATION_V27_SQL = [
-       // Step 1: Create new worktrees table
-       `CREATE TABLE worktrees_v27 (
-           id INTEGER PRIMARY KEY AUTOINCREMENT,
-           branch TEXT NOT NULL,
-           role TEXT NOT NULL DEFAULT 'coder',
-           workspace_id TEXT NOT NULL,
-           created_at TEXT DEFAULT (datetime('now')),
-           UNIQUE(branch, workspace_id)
-       )`,
-       // Step 2: Migrate rows
-       `INSERT INTO worktrees_v27 (id, branch, role, workspace_id, created_at)
-        SELECT id, branch, 'coder', workspace_id, created_at FROM worktrees`,
-       // Step 3: Create junction table BEFORE dropping old table
-       `CREATE TABLE IF NOT EXISTS worktree_agents (
-           worktree_id INTEGER NOT NULL,
-           agent_name TEXT NOT NULL,
-           PRIMARY KEY (worktree_id, agent_name),
-           FOREIGN KEY (worktree_id) REFERENCES worktrees_v27(id) ON DELETE CASCADE
-       )`,
-       // Step 4: Migrate coder_agent_id → worktree_agents (while old table still exists)
-       `INSERT INTO worktree_agents (worktree_id, agent_name)
-        SELECT id, coder_agent_id FROM worktrees WHERE coder_agent_id IS NOT NULL AND coder_agent_id != ''`,
-       // Step 5: Drop old table
-       `DROP TABLE worktrees`,
-       // Step 6: Rename
-       `ALTER TABLE worktrees_v27 RENAME TO worktrees`,
-       // Step 7: Recreate indexes
-       `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
-       `CREATE INDEX IF NOT EXISTS idx_worktree_agents_worktree ON worktree_agents(worktree_id)`,
-       `CREATE INDEX IF NOT EXISTS idx_worktree_agents_agent ON worktree_agents(agent_name)`,
-   ];
-   ```
+**No changes required.** The existing schema already supports this feature:
 
-2. **Update SCHEMA_SQL** (line 89-144) to reflect new schema for fresh DBs:
-   ```sql
-   CREATE TABLE IF NOT EXISTS worktrees (
-       id INTEGER PRIMARY KEY AUTOINCREMENT,
-       branch TEXT NOT NULL,
-       role TEXT NOT NULL DEFAULT 'coder',
-       workspace_id TEXT NOT NULL,
-       created_at TEXT DEFAULT (datetime('now')),
-       UNIQUE(branch, workspace_id)
-   );
-   CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id);
-   CREATE TABLE IF NOT EXISTS worktree_agents (
-       worktree_id INTEGER NOT NULL,
-       agent_name TEXT NOT NULL,
-       PRIMARY KEY (worktree_id, agent_name),
-       FOREIGN KEY (worktree_id) REFERENCES worktrees(id) ON DELETE CASCADE
-   );
-   CREATE INDEX IF NOT EXISTS idx_worktree_agents_worktree ON worktree_agents(worktree_id);
-   CREATE INDEX IF NOT EXISTS idx_worktree_agents_agent ON worktree_agents(agent_name);
-   ```
-
-3. **Update `createWorktree` method** (line 1392-1412):
-   - Remove `coderAgentId` parameter, add `role` parameter
-   - Signature: `createWorktree(branch: string, role: string): Promise<number>`
-   - SQL: `INSERT INTO worktrees (branch, role, workspace_id) VALUES (?, ?, ?)`
-
-4. **Update `getWorktrees` method** (line 1414-1434):
-   - Return `role` instead of `coderAgentId`
-   - Signature: `getWorktrees(): Promise<Array<{ id: number; branch: string; role: string }>>`
-   - SQL: `SELECT id, branch, role FROM worktrees WHERE workspace_id = ?`
-
-5. **Add `assignAgentToWorktree` (junction)** method:
-   ```typescript
-   public async assignAgentToWorktree(worktreeId: number, agentName: string): Promise<void> {
-       if (!this._db) return;
-       this._db.run(
-           'INSERT OR IGNORE INTO worktree_agents (worktree_id, agent_name) VALUES (?, ?)',
-           [worktreeId, agentName]
-       );
-       await this._persist();
-   }
-   ```
-
-6. **Add `getWorktreeAgents` method**:
-   ```typescript
-   public async getWorktreeAgents(worktreeId: number): Promise<string[]> {
-       if (!this._db) return [];
-       const stmt = this._db.prepare(
-           'SELECT agent_name FROM worktree_agents WHERE worktree_id = ?'
-       );
-       try {
-           stmt.bind([worktreeId]);
-           const results: string[] = [];
-           while (stmt.step()) {
-               results.push(stmt.getAsObject().agent_name as string);
-           }
-           return results;
-       } finally {
-           stmt.free();
-       }
-   }
-   ```
-
-7. **Update `getWorktreeById` method** (line 1462-1469):
-   - Return `role` instead of `coderAgentId`
-   - SQL: `SELECT id, branch, role FROM worktrees WHERE id = ?`
-
-8. **Remove old `assignAgentToWorktree(coderAgentId)` method** (line 1444-1451) — replaced by junction table version above.
-
-9. **Add V27 migration execution** in `_runMigrations()` method (after V26 block, around line 3865):
-   ```typescript
-   if (currentVersion < 27) {
-       for (const sql of MIGRATION_V27_SQL) {
-           try { this._db.exec(sql); } catch (e) {
-               const msg = e instanceof Error ? e.message : String(e);
-               if (!msg.includes('duplicate column') && !msg.includes('already exists')) {
-                   console.warn('[KanbanDatabase] V27 migration step failed:', msg);
-               }
-           }
-       }
-       await this.setMigrationVersion(27);
-       console.log('[KanbanDatabase] V27 migration completed: worktrees role column + worktree_agents junction table');
-   }
-   ```
+- `coder_agent_id TEXT` — Despite the misleading column name, this stores agent/role identifiers like "coder", "lead", "intern" (see `_getVisibleAgents()` at line 3250 which returns these as keys). It functions as the role field already.
+- `createWorktree(branch, coderAgentId)` — The `coderAgentId` parameter will receive the role name (e.g., "coder", "lead", "intern") instead of being left `null`.
+- `getWorktrees()` — Returns `coderAgentId` which IS the role. The webview can use this value directly as the role identifier.
+- `assignAgentToWorktree(worktreeId, coderAgentId)` — Already exists, already works for any agent name.
+- Paths are derived from git at read time via `_resolveWorktreePaths()` — no `path` column needed (V24 removed it for this reason).
 
 ### File: `src/webview/kanban.html`
 
@@ -233,7 +75,7 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
    - **Logic**: Build a panel with:
      - Header section: "GIT WORKTREES" with role selector and agent count input
      - Role-based pool display: for each role that has worktrees, show a pool block with worktree entries
-     - Each worktree entry shows: branch name, path (git-derived), agent names, status badges
+     - Each worktree entry shows: branch name, path (git-derived), agent name badge
      - "Create Worktree" button that sends `createWorktree` message with role + agentCount
      - "Delete" button per worktree
    - **Implementation**:
@@ -313,7 +155,8 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
 
        const roles = ['coder', 'lead', 'intern'];
        roles.forEach(role => {
-           const roleWorktrees = (lastWorktrees || []).filter(wt => wt.role === role);
+           // coder_agent_id stores the role name, so filter by it
+           const roleWorktrees = (lastWorktrees || []).filter(wt => wt.coderAgentId === role);
            const roleBlock = document.createElement('div');
            roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2); margin-bottom:8px;';
 
@@ -353,13 +196,8 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
                    pathBadge.style.cssText = chipStyle;
                    pathBadge.textContent = wt.path || 'Unknown path';
 
-                   const agentBadge = document.createElement('span');
-                   agentBadge.style.cssText = chipStyle;
-                   agentBadge.textContent = (wt.agentCount || 0) + ' agent' + ((wt.agentCount || 0) !== 1 ? 's' : '');
-
                    left.appendChild(branchSpan);
                    left.appendChild(pathBadge);
-                   left.appendChild(agentBadge);
 
                    const right = document.createElement('div');
                    right.style.cssText = 'display:flex; align-items:center; gap:6px;';
@@ -420,50 +258,10 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
 
 ### File: `src/services/KanbanProvider.ts`
 
-1. **Add `_resolveAgentRole` helper method** (new, near line 3250):
-   - **Context**: The plan's original code referenced a non-existent `_getAgentRole()` method. The automation tab determines roles from terminal metadata (`lastTerminals[name].role`), but for worktree creation we need to know which agents belong to which role. The `_getVisibleAgents()` method (line 3250) returns `Record<string, boolean>` with no role info. We need a new method.
-   - **Logic**: Read `state.json` → parse `customAgents` → build a map of agent name → role. For built-in agents, the role IS the key name (e.g., "coder" → "coder", "lead" → "lead").
-   - **Implementation**:
-   ```typescript
-   private async _resolveAgentRole(workspaceRoot: string, agentName: string): Promise<string | null> {
-       // Built-in agents: the agent name IS the role
-       const builtInRoles = ['lead', 'coder', 'intern', 'reviewer', 'tester', 'planner', 'analyst', 'jules', 'gatherer', 'ticket_updater', 'researcher', 'splitter', 'code_researcher'];
-       if (builtInRoles.includes(agentName)) {
-           return agentName;
-       }
-       // Custom agents: read from state.json
-       const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
-       try {
-           if (fs.existsSync(statePath)) {
-               const content = await fs.promises.readFile(statePath, 'utf8');
-               const state = JSON.parse(content);
-               const customAgents = parseCustomAgents(state.customAgents);
-               const match = customAgents.find(a => a.role === agentName || a.name === agentName);
-               return match?.role || null;
-           }
-       } catch (e) {
-           console.error('[KanbanProvider] Failed to resolve agent role:', e);
-       }
-       return null;
-   }
-
-   private async _getAgentsForRole(workspaceRoot: string, role: string): Promise<string[]> {
-       const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-       const agents: string[] = [];
-       for (const [name, enabled] of Object.entries(visibleAgents)) {
-           if (!enabled) continue;
-           const agentRole = await this._resolveAgentRole(workspaceRoot, name);
-           if (agentRole === role) {
-               agents.push(name);
-           }
-       }
-       return agents;
-   }
-   ```
-
-2. **Update `createWorktree` handler** (lines 6136-6173):
+1. **Update `createWorktree` handler** (lines 6136-6173):
    - **Context**: Current handler uses `vscode.window.showInputBox` for path and branch. New handler receives `role` and `agentCount` from webview message and auto-generates paths/branches.
    - **CRITICAL**: Worktrees must be created as SIBLING directories of the workspace root (e.g., `../switchboard-coder-XXXX-0`), NOT inside `.switchboard/`. Git forbids worktrees inside the main working tree. The current code already uses `path.dirname(workspaceRoot)` (line 6155).
+   - **Logic**: For each agent in the requested count, auto-generate a branch name and worktree path, create the git worktree, and store the role name in `coder_agent_id`.
    - **Implementation**:
    ```typescript
    case 'createWorktree': {
@@ -475,11 +273,10 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
        const db = this._getKanbanDb(workspaceRoot);
        if (!db || !await db.ensureReady()) break;
 
-       // Get agents for the selected role
-       const roleAgents = await this._getAgentsForRole(workspaceRoot, role);
-
-       if (roleAgents.length === 0) {
-           vscode.window.showWarningMessage(`No ${role} agents configured. Set up agents in Setup first.`);
+       // Verify the role has a visible agent
+       const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+       if (!visibleAgents[role]) {
+           vscode.window.showWarningMessage(`No ${role} agent configured. Enable it in Setup first.`);
            break;
        }
 
@@ -490,18 +287,12 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
 
        try {
            for (let i = 0; i < agentCount; i++) {
-               const agentName = roleAgents[i % roleAgents.length];
                const worktreeDirName = `switchboard-${role}-${timestamp}-${i}`;
                const fullPath = path.join(parentDir, worktreeDirName);
-               const branchName = `${agentName.replace(/[^A-Za-z0-9._\/-]/g, '-').toLowerCase()}-${role}-${timestamp}-${i}`;
+               const branchName = `${role}-${timestamp}-${i}`;
 
-               // Validate auto-generated branch name (matches existing validation at line 6149)
-               if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branchName) || branchName.includes('..') || branchName.endsWith('.lock') || branchName.endsWith('/') || branchName.startsWith('-')) {
-                   throw new Error(`Auto-generated branch name '${branchName}' is invalid`);
-               }
-
-               // Create DB entry
-               const wtId = await db.createWorktree(branchName, role);
+               // Create DB entry — store role name in coder_agent_id
+               const id = await db.createWorktree(branchName, role);
 
                // Create git worktree (SECURITY: execFile with args array, F-03)
                const execFileAsync = promisify(cp.execFile);
@@ -509,14 +300,11 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
                    await execFileAsync('git', ['worktree', 'add', '-b', branchName, fullPath], { cwd: workspaceRoot });
                } catch (gitError: any) {
                    // Rollback DB entry if git fails
-                   await db.deleteWorktree(wtId);
+                   await db.deleteWorktree(id);
                    throw gitError;
                }
 
-               // Assign agent to worktree
-               await db.assignAgentToWorktree(wtId, agentName);
-
-               createdWorktrees.push({ id: wtId, path: fullPath, branch: branchName });
+               createdWorktrees.push({ id, path: fullPath, branch: branchName });
            }
 
            vscode.window.showInformationMessage(`Created ${agentCount} ${role} worktree(s)`);
@@ -524,10 +312,7 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
            // Refresh worktrees list with enriched data
            const worktrees = await db.getWorktrees();
            const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-           const enriched = await Promise.all(worktrees.map(async (wt) => {
-               const agents = await db.getWorktreeAgents(wt.id);
-               return { ...wt, path: branchToPath.get(wt.branch) || '', agentCount: agents.length, agents };
-           }));
+           const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
            this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
 
        } catch (e: any) {
@@ -547,38 +332,11 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
    }
    ```
 
-3. **Remove `assignAgentToWorktree` handler** (lines 6215-6238) — agents are now assigned during creation, not manually afterward.
+2. **Remove `assignAgentToWorktree` handler** (lines 6215-6238) — agents are now assigned during creation (role name stored in `coder_agent_id`), not manually afterward.
 
-4. **Update `getWorktrees` handler** (lines 6124-6135) to enrich with agent data:
-   ```typescript
-   case 'getWorktrees': {
-       const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-       if (!workspaceRoot) break;
-       const db = this._getKanbanDb(workspaceRoot);
-       if (db && await db.ensureReady()) {
-           const worktrees = await db.getWorktrees();
-           const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-
-           // Enrich with agent counts and names
-           const enriched = await Promise.all(worktrees.map(async (wt) => {
-               const agents = await db.getWorktreeAgents(wt.id);
-               return {
-                   ...wt,
-                   path: branchToPath.get(wt.branch) || '',
-                   agentCount: agents.length,
-                   agents
-               };
-           }));
-
-           this._panel?.webview.postMessage({ type: 'worktrees', worktrees: enriched });
-       }
-       break;
-   }
-   ```
-
-5. **Update `_assignWorktreeToCard`** (lines 6505-6544) to filter by role:
-   - **Context**: Currently filters by `coderAgentId !== null` (line 6513). Must now filter by role matching the target column.
-   - **Logic**: When a card moves to a coder column, find worktrees with `role = 'coder'`. Use `KanbanColumnDefinition.role` from `agentConfig.ts` to determine the column's role.
+3. **Update `_assignWorktreeToCard`** (lines 6505-6544) to filter by role:
+   - **Context**: Currently filters by `coderAgentId !== null` (line 6513). Must now filter by `coderAgentId` matching the target column's role. The `coder_agent_id` column stores the role name (e.g., "coder", "lead", "intern"), so filtering is straightforward.
+   - **Logic**: When a card moves to a coder column, find worktrees where `coderAgentId === 'coder'`. Use `KanbanColumnDefinition.role` from `agentConfig.ts` to determine the column's role.
    - **Implementation**:
    ```typescript
    private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string, targetColumn?: string): Promise<void> {
@@ -601,10 +359,10 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
            targetRole = colDef?.role || null;
        }
 
-       // Filter worktrees by role (if determined), otherwise use all
+       // Filter worktrees by role (coder_agent_id stores the role name)
        const availableWorktrees = targetRole
-           ? worktrees.filter(wt => wt.role === targetRole)
-           : worktrees;
+           ? worktrees.filter(wt => wt.coderAgentId === targetRole)
+           : worktrees.filter(wt => wt.coderAgentId !== null);
 
        if (availableWorktrees.length === 0) {
            return; // No worktrees available for this role
@@ -638,15 +396,13 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
    }
    ```
 
-6. **Update `_assignWorktreeToCard` call sites** (lines 3732, 3775) to pass `targetColumn`:
+4. **Update `_assignWorktreeToCard` call sites** (lines 3732, 3775) to pass `targetColumn`:
    ```typescript
    // Line 3732:
    await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
    // Line 3775:
    await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
    ```
-
-7. **Update `deleteWorktree` handler** (lines 6175-6213): No structural changes needed — `db.deleteWorktree()` already clears `worktree_id` on plans (line 1439), and FK CASCADE on `worktree_agents` will auto-delete junction rows.
 
 ## Verification Plan
 
@@ -657,16 +413,16 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
 ### Manual Verification
 - Open kanban board, click Worktrees tab — tab renders with role selector and agent count input matching automation tab styling
 - Select "coder" role, enter "3" agents, click Create — 3 worktrees created as siblings of workspace root (e.g., `../switchboard-coder-XXXX-0`, `../switchboard-coder-XXXX-1`, `../switchboard-coder-XXXX-2`)
-- Worktrees list shows role-grouped pool blocks with branch, path, and agent count badges
-- Delete worktree — git worktree removed, branch deleted, DB entries cleaned up (including worktree_agents via CASCADE)
-- Move card to CODER CODED column — card assigned to a worktree with `role = 'coder'` (not lead/intern)
-- Move card to LEAD CODED column — card assigned to a worktree with `role = 'lead'` (not coder/intern)
-- Move card to INTERN CODED column — card assigned to a worktree with `role = 'intern'`
-- Attempt to create worktrees for a role with no configured agents — warning message shown
-- Verify existing DB with `coder_agent_id` values migrates correctly: V27 preserves existing worktrees, migrates agent assignments to junction table
+- Worktrees list shows role-grouped pool blocks with branch and path badges
+- Delete worktree — git worktree removed, branch deleted, DB entry cleaned up
+- Move card to CODER CODED column — card assigned to a worktree where `coder_agent_id = 'coder'` (not lead/intern)
+- Move card to LEAD CODED column — card assigned to a worktree where `coder_agent_id = 'lead'` (not coder/intern)
+- Move card to INTERN CODED column — card assigned to a worktree where `coder_agent_id = 'intern'`
+- Attempt to create worktrees for a role with no enabled agent — warning message shown
+- Verify existing DB with `coder_agent_id = null` worktrees still works — they appear in an "Unassigned" section or are filtered out of role pools
 
 ## Recommendation
 
-**Complexity: 6 → Send to Coder**
+**Complexity: 4 → Send to Coder**
 
-The core changes are routine (CRUD method updates, UI replacement), but there are two well-scoped moderate risks: (1) the V27 migration must correctly recreate the worktrees table while preserving data and migrating `coder_agent_id` to the junction table, and (2) the `_assignWorktreeToCard` role-filtering logic must correctly map column IDs to roles via `KanbanColumnDefinition`. Both risks are well-contained within single functions and have clear test criteria.
+No schema changes, no migrations. This is a UI replacement (static HTML → dynamic panel matching automation tab) and a backend logic update (manual input → auto-generation based on role + count). The only moderate risk is the git worktree creation loop with rollback on partial failure, which is well-scoped within a single handler function.

@@ -1936,45 +1936,6 @@
         }
 
         /* CSS for worktrees tab */
-        .worktrees-header {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            margin-bottom: 16px;
-        }
-        .worktrees-list {
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-        .worktree-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 12px;
-            background: var(--bg-secondary);
-            border-radius: 6px;
-        }
-        .worktree-info {
-            display: flex;
-            flex-direction: column;
-            gap: 4px;
-        }
-        .worktree-path {
-            font-weight: 600;
-        }
-        .worktree-branch {
-            color: var(--text-muted);
-            font-size: 12px;
-        }
-        .worktree-agent {
-            color: var(--accent-teal);
-            font-size: 12px;
-        }
-        .worktree-actions {
-            display: flex;
-            gap: 8px;
-        }
         .btn-secondary {
             background: color-mix(in srgb, var(--text-secondary) 10%, transparent);
             border: 1px solid color-mix(in srgb, var(--text-secondary) 30%, transparent);
@@ -2637,29 +2598,8 @@
 
     <!-- Worktrees Tab Content -->
     <div id="worktrees-tab-content" class="kanban-tab-content">
-      <div style="padding:12px; overflow-y:auto; height:100%;">
-        <div class="worktrees-header">
-          <h3>Git Worktrees</h3>
-          <button id="create-worktree-btn" class="modal-btn-primary" style="flex:none;">Create Worktree</button>
-        </div>
-        <div id="worktrees-list" class="worktrees-list"></div>
-      </div>
+        <div id="worktree-panel-root" class="automation-panel"></div>
     </div>
-
-    <!-- Worktree Item Template -->
-    <template id="worktree-item-template">
-      <div class="worktree-item" data-worktree-id="">
-        <div class="worktree-info">
-          <div class="worktree-path"></div>
-          <div class="worktree-branch"></div>
-          <div class="worktree-agent"></div>
-        </div>
-        <div class="worktree-actions">
-          <button class="btn-secondary assign-agent-btn">Assign Agent</button>
-          <button class="btn-danger delete-worktree-btn">Delete</button>
-        </div>
-      </div>
-    </template>
 
     <!-- SHARED_DEFAULTS_SCRIPT -->
     <script>
@@ -3284,6 +3224,7 @@
                 // Hydrate WORKTREES tab when activated
                 if (tabName === 'worktrees') {
                   loadWorktrees();
+                  renderWorktreePanel();
                 }
             });
         });
@@ -5190,7 +5131,8 @@
                     break;
                 }
                 case 'worktrees': {
-                    renderWorktrees(msg.worktrees);
+                    lastWorktrees = msg.worktrees || [];
+                    renderWorktreePanel();
                     break;
                 }
                 case 'antigravityPrompt': {
@@ -7074,27 +7016,215 @@
             });
         }
 
-        function loadWorktrees() {
-            postKanbanMessage({ type: 'getWorktrees', workspaceRoot: currentWorkspaceRoot });
+        function createWorktreePanel() {
+            const container = document.createElement('div');
+            container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
+
+            // ── Create Section ──
+            const createSection = document.createElement('div');
+            createSection.className = 'db-subsection';
+
+            const createHeader = document.createElement('div');
+            createHeader.className = 'subsection-header';
+            const createSpan = document.createElement('span');
+            createSpan.textContent = 'CREATE WORKTREES';
+            createHeader.appendChild(createSpan);
+            createSection.appendChild(createHeader);
+
+            const createRow = document.createElement('div');
+            createRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            const roleLabel = document.createElement('span');
+            roleLabel.textContent = 'ROLE:';
+
+            const roleSelect = document.createElement('select');
+            roleSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+            ['coder', 'lead', 'intern'].forEach(r => {
+                const opt = document.createElement('option');
+                opt.value = r;
+                opt.textContent = r.charAt(0).toUpperCase() + r.slice(1);
+                roleSelect.appendChild(opt);
+            });
+
+            const countLabel = document.createElement('span');
+            countLabel.textContent = 'AGENTS:';
+
+            const countInput = document.createElement('input');
+            countInput.type = 'number';
+            countInput.min = '1';
+            countInput.max = '10';
+            countInput.value = '1';
+            countInput.style.cssText = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+
+            const createBtn = document.createElement('button');
+            createBtn.className = 'strip-btn';
+            createBtn.textContent = 'CREATE';
+            createBtn.addEventListener('click', () => {
+                postKanbanMessage({
+                    type: 'createWorktree',
+                    role: roleSelect.value,
+                    agentCount: parseInt(countInput.value, 10) || 1,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+
+            createRow.appendChild(roleLabel);
+            createRow.appendChild(roleSelect);
+            createRow.appendChild(countLabel);
+            createRow.appendChild(countInput);
+            createRow.appendChild(createBtn);
+            createSection.appendChild(createRow);
+            container.appendChild(createSection);
+
+            // ── Pools Section ──
+            const poolsSection = document.createElement('div');
+            poolsSection.className = 'db-subsection';
+
+            const poolsHeader = document.createElement('div');
+            poolsHeader.className = 'subsection-header';
+            const poolsSpan = document.createElement('span');
+            poolsSpan.textContent = 'WORKTREE POOLS';
+            poolsHeader.appendChild(poolsSpan);
+            poolsSection.appendChild(poolsHeader);
+
+            const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
+
+            const roles = ['coder', 'lead', 'intern'];
+            roles.forEach(role => {
+                const roleWorktrees = (lastWorktrees || []).filter(wt => wt.coderAgentId === role);
+                const roleBlock = document.createElement('div');
+                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2); margin-bottom:8px;';
+
+                const roleHeader = document.createElement('div');
+                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+
+                const roleTitle = document.createElement('span');
+                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                roleTitle.textContent = role.charAt(0).toUpperCase() + role.slice(1);
+
+                const roleCapacity = document.createElement('span');
+                roleCapacity.style.cssText = chipStyle;
+                roleCapacity.textContent = roleWorktrees.length + ' WORKTREE' + (roleWorktrees.length !== 1 ? 'S' : '');
+
+                roleHeader.appendChild(roleTitle);
+                roleHeader.appendChild(roleCapacity);
+                roleBlock.appendChild(roleHeader);
+
+                if (roleWorktrees.length === 0) {
+                    const emptyState = document.createElement('div');
+                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
+                    emptyState.textContent = 'No worktrees for this role.';
+                    roleBlock.appendChild(emptyState);
+                } else {
+                    roleWorktrees.forEach(wt => {
+                        const wtRow = document.createElement('div');
+                        wtRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+
+                        const left = document.createElement('div');
+                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+
+                        const branchSpan = document.createElement('span');
+                        branchSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                        branchSpan.textContent = wt.branch;
+
+                        const pathBadge = document.createElement('span');
+                        pathBadge.style.cssText = chipStyle;
+                        pathBadge.textContent = wt.path || 'Unknown path';
+
+                        left.appendChild(branchSpan);
+                        left.appendChild(pathBadge);
+
+                        const right = document.createElement('div');
+                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                        const deleteBtn = document.createElement('button');
+                        deleteBtn.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--accent-red, #e55); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
+                        deleteBtn.textContent = 'DELETE';
+                        deleteBtn.addEventListener('click', () => {
+                            postKanbanMessage({ type: 'deleteWorktree', worktreeId: wt.id, workspaceRoot: currentWorkspaceRoot });
+                        });
+                        right.appendChild(deleteBtn);
+
+                        wtRow.appendChild(left);
+                        wtRow.appendChild(right);
+                        roleBlock.appendChild(wtRow);
+                    });
+                }
+
+                poolsSection.appendChild(roleBlock);
+            });
+
+            const unassignedWorktrees = (lastWorktrees || []).filter(wt => !roles.includes(wt.coderAgentId));
+            if (unassignedWorktrees.length > 0) {
+                const roleBlock = document.createElement('div');
+                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2); margin-bottom:8px;';
+
+                const roleHeader = document.createElement('div');
+                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+
+                const roleTitle = document.createElement('span');
+                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                roleTitle.textContent = 'Unassigned';
+
+                const roleCapacity = document.createElement('span');
+                roleCapacity.style.cssText = chipStyle;
+                roleCapacity.textContent = unassignedWorktrees.length + ' WORKTREE' + (unassignedWorktrees.length !== 1 ? 'S' : '');
+
+                roleHeader.appendChild(roleTitle);
+                roleHeader.appendChild(roleCapacity);
+                roleBlock.appendChild(roleHeader);
+
+                unassignedWorktrees.forEach(wt => {
+                    const wtRow = document.createElement('div');
+                    wtRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+
+                    const left = document.createElement('div');
+                    left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+
+                    const branchSpan = document.createElement('span');
+                    branchSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                    branchSpan.textContent = wt.branch;
+
+                    const pathBadge = document.createElement('span');
+                    pathBadge.style.cssText = chipStyle;
+                    pathBadge.textContent = wt.path || 'Unknown path';
+
+                    left.appendChild(branchSpan);
+                    left.appendChild(pathBadge);
+
+                    const right = document.createElement('div');
+                    right.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                    const deleteBtn = document.createElement('button');
+                    deleteBtn.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--accent-red, #e55); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
+                    deleteBtn.textContent = 'DELETE';
+                    deleteBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'deleteWorktree', worktreeId: wt.id, workspaceRoot: currentWorkspaceRoot });
+                    });
+                    right.appendChild(deleteBtn);
+
+                    wtRow.appendChild(left);
+                    wtRow.appendChild(right);
+                    roleBlock.appendChild(wtRow);
+                });
+                poolsSection.appendChild(roleBlock);
+            }
+
+            container.appendChild(poolsSection);
+            return container;
         }
 
-        function renderWorktrees(worktrees) {
-            const list = document.getElementById('worktrees-list');
-            const template = document.getElementById('worktree-item-template');
-            if (!list || !template) return;
-            list.innerHTML = '';
-            if (worktrees.length === 0) {
-                list.innerHTML = '<div style="color:var(--text-muted);text-align:center;padding:24px;">No worktrees yet. Create one to get started.</div>';
-                return;
-            }
-            worktrees.forEach(wt => {
-                const clone = template.content.cloneNode(true);
-                clone.querySelector('.worktree-item').dataset.worktreeId = wt.id;
-                clone.querySelector('.worktree-path').textContent = wt.path;
-                clone.querySelector('.worktree-branch').textContent = `Branch: ${wt.branch}`;
-                clone.querySelector('.worktree-agent').textContent = wt.coderAgentId ? `Agent: ${wt.coderAgentId}` : 'No agent assigned';
-                list.appendChild(clone);
-            });
+        let lastWorktrees = [];
+
+        function renderWorktreePanel() {
+            const root = document.getElementById('worktree-panel-root');
+            if (!root) return;
+            root.innerHTML = '';
+            root.appendChild(createWorktreePanel());
+        }
+
+        function loadWorktrees() {
+            postKanbanMessage({ type: 'getWorktrees', workspaceRoot: currentWorkspaceRoot });
         }
 
         // Add listeners for the dependencies tab buttons
@@ -7145,28 +7275,6 @@
             if (btnRefreshUAT) {
                 btnRefreshUAT.addEventListener('click', () => {
                     postKanbanMessage({ type: 'getUATData' });
-                });
-            }
-
-            // Worktrees Tab listeners
-            const btnCreateWorktree = document.getElementById('create-worktree-btn');
-            if (btnCreateWorktree) {
-                btnCreateWorktree.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'createWorktree', workspaceRoot: currentWorkspaceRoot });
-                });
-            }
-
-            const worktreesList = document.getElementById('worktrees-list');
-            if (worktreesList) {
-                worktreesList.addEventListener('click', (e) => {
-                    if (e.target.classList.contains('assign-agent-btn')) {
-                        const worktreeId = e.target.closest('.worktree-item').dataset.worktreeId;
-                        postKanbanMessage({ type: 'assignAgentToWorktree', worktreeId, workspaceRoot: currentWorkspaceRoot });
-                    }
-                    if (e.target.classList.contains('delete-worktree-btn')) {
-                        const worktreeId = e.target.closest('.worktree-item').dataset.worktreeId;
-                        postKanbanMessage({ type: 'deleteWorktree', worktreeId, workspaceRoot: currentWorkspaceRoot });
-                    }
                 });
             }
         });
