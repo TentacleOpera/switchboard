@@ -209,6 +209,26 @@ Examples to keep as-is:
 9. Switch to a different VS Code tab, then trigger a kanban operation — confirm the operation succeeds (clipboard copy, card movement) even though the inline message is not visible.
 10. Rapidly click two different kanban operations — confirm "last message wins" behavior (second message overwrites first).
 
+## Review Results
+
+### Stage 1: Grumpy Review (Findings)
+1. **NIT**: The plan stated there were 13 `_showTemporaryNotification` calls to replace, but there were actually 14 instances correctly identified and replaced by the implementation.
+2. **NIT**: A `showInformationMessage` call in `moveSelected` for complexity-routing ("Moved N plans...") was not replaced in the implementation because it was originally missed in the predecessor plan (`fix-kanban-toast-persistence.md`), meaning it wasn't technically a `_showTemporaryNotification`. However, logically it belongs as an inline status message alongside its `moveAll` counterpart.
+
+### Stage 2: Balanced Synthesis
+- The implementation is excellent. The HTML DOM changes, CSS animations, and `postMessage` handlers were perfectly executed. 
+- The "last message wins" reflow restart logic (`classList.remove`, `offsetWidth`, `classList.add`) was correctly applied.
+- The `animationend` cleanup listener ensures the DOM element properly collapses.
+- **Action**: Fix the single remaining `showInformationMessage` in the `moveSelected` branch of `KanbanProvider.ts` that should have been converted to an inline status message.
+
+### Code Fixes Applied
+- `src/services/KanbanProvider.ts`: Modified line 4842 in `moveSelected` to use `this._panel?.webview.postMessage({ type: 'showStatusMessage', ... })` instead of `vscode.window.showInformationMessage(...)` for consistency with `moveAll`.
+
+### Final Status
+- **Files Modified**: `src/webview/kanban.html`, `src/services/KanbanProvider.ts`
+- **Verification**: Verified via manual inspection that all temporary success toasts are now routed to `showStatusMessage`, while error and non-advance notifications correctly retain their `showInformationMessage` persistence.
+- **Ready for review/commit.**
+
 ---
 
 **Recommendation: Send to Coder**

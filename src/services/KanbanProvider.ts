@@ -4839,7 +4839,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     if (movedParts.length > 0) {
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        vscode.window.showInformationMessage(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                     }
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
