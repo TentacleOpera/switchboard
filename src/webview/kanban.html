@@ -2008,6 +2008,18 @@
             color: var(--text-primary);
             border-color: var(--accent-red);
         }
+
+        /* Add flash animation — 3 seconds total: 0.3s fade-in, ~2.4s hold, 0.3s fade-out */
+        @keyframes statusFlash {
+            0% { opacity: 0; }
+            10% { opacity: 1; }
+            90% { opacity: 1; }
+            100% { opacity: 0; }
+        }
+
+        #status-message.flashing {
+            animation: statusFlash 3s ease-in-out forwards;
+        }
     </style>
 </head>
 
@@ -2066,6 +2078,7 @@
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
         </div>
+        <div id="status-message" role="status" aria-live="polite" style="display:none; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid var(--border-color);"></div>
         <div class="kanban-board" id="kanban-board"></div>
     </div>
 
@@ -5073,6 +5086,21 @@
         window.addEventListener('message', (event) => {
             const msg = event.data;
             switch (msg.type) {
+                case 'showStatusMessage': {
+                    const statusEl = document.getElementById('status-message');
+                    if (statusEl) {
+                        statusEl.textContent = msg.message || '';
+                        statusEl.style.color = msg.isError
+                            ? 'var(--vscode-errorForeground, #ff6b6b)'
+                            : 'var(--text-secondary)';
+                        statusEl.style.display = '';
+                        // Reset animation by removing class, forcing reflow, re-adding class
+                        statusEl.classList.remove('flashing');
+                        void statusEl.offsetWidth; // Trigger reflow to restart animation
+                        statusEl.classList.add('flashing');
+                    }
+                    break;
+                }
                 case 'switchToTab': {
                     const tabName = msg.tab;
                     if (!tabName) break;
@@ -5709,7 +5737,8 @@
                 postKanbanMessage({
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,
-                    controlPlaneAction: controlPlaneAction
+                    controlPlaneAction: controlPlaneAction,
+                    project: selectedProject || null // Include selected project
                 });
             } else if (selectedProject !== (activeProjectFilter || '')) {
                 // Same workspace, different project filter
@@ -7074,6 +7103,14 @@
 
         // Add listeners for the dependencies tab buttons
         window.addEventListener('DOMContentLoaded', () => {
+            const statusMsgEl = document.getElementById('status-message');
+            if (statusMsgEl) {
+                statusMsgEl.addEventListener('animationend', () => {
+                    statusMsgEl.style.display = 'none';
+                    statusMsgEl.classList.remove('flashing');
+                });
+            }
+
             const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
             const btnRebuildDeps = document.getElementById('btn-rebuild-deps');
             const btnRefreshDeps = document.getElementById('btn-refresh-deps');

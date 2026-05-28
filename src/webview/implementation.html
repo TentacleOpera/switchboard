@@ -452,11 +452,29 @@
 
         .project-issue-meta,
         .project-task-meta,
-        .project-task-description,
-        .project-detail-item {
+        .project-task-description {
             font-size: 11px;
             color: var(--text-secondary);
             line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .project-detail-item {
+            font-size: 11px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .project-detail-item-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .project-detail-item-status {
+            font-size: 10px;
+            color: var(--text-secondary);
             font-family: var(--font-mono);
         }
 
@@ -3625,9 +3643,14 @@
             if (detailSubtasksList) {
                 const newSubtasksHtml = selectedLinearIssue.subtasks.length > 0
                     ? selectedLinearIssue.subtasks.map((subtask) => `
-                        <button type="button" class="project-detail-item" data-linear-subtask-id="${escapeAttr(subtask.id)}">
-                            ${escapeHtml(subtask.title || subtask.identifier || subtask.id)} · ${escapeHtml(subtask.state?.name || 'Unknown state')}
-                        </button>
+                        <div class="project-detail-item" data-linear-subtask-id="${escapeAttr(subtask.id)}">
+                            <div class="project-detail-item-title">${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</div>
+                            <div class="project-detail-item-status">${escapeHtml(subtask.state?.name || 'Unknown state')}</div>
+                            <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                                <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}" aria-label="Refine ${escapeAttr(subtask.identifier || subtask.id)}">REFINE</button>
+                                <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(subtask.id)}" aria-label="Import ${escapeAttr(subtask.identifier || subtask.id)}">IMPORT</button>
+                            </div>
+                        </div>
                     `).join('')
                     : '<div class="project-empty-state">No subtasks attached to this issue.</div>';
                 if (_lastDetailSubtasksHtml !== newSubtasksHtml) {
@@ -4258,10 +4281,14 @@
             const subtasksHtml = subtasks.length === 0
                 ? '<p>No subtasks.</p>'
                 : subtasks.map(st => `
-                    <button type="button" class="project-detail-item" data-clickup-subtask-id="${escapeAttr(st.id)}">
-                        <span class="project-detail-item-title">${escapeHtml(st.title)}</span>
-                        <span class="project-detail-item-status">${escapeHtml(st.status)}</span>
-                    </button>
+                    <div class="project-detail-item" data-clickup-subtask-id="${escapeAttr(st.id)}">
+                        <div class="project-detail-item-title">${escapeHtml(st.title)}</div>
+                        <div class="project-detail-item-status">${escapeHtml(st.status)}</div>
+                        <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                            <button type="button" class="project-issue-import-btn" data-refine-issue-id="${escapeAttr(st.id)}" data-issue-title="${escapeAttr(st.title || '')}" data-issue-description="${escapeAttr(st.markdownDescription || st.description || '')}" aria-label="Refine ${escapeAttr(st.id)}">REFINE</button>
+                            <button type="button" class="project-issue-import-btn" data-import-issue-id="${escapeAttr(st.id)}" aria-label="Import ${escapeAttr(st.id)}">IMPORT</button>
+                        </div>
+                    </div>
                 `).join('');
 
             if (_lastClickUpDetailSubtasksHtml !== subtasksHtml && detailSubtasksList) {
@@ -4566,18 +4593,73 @@
                 }
             });
             detailSubtasksList?.addEventListener('click', (event) => {
-                const button = event.target.closest('[data-linear-subtask-id]');
-                if (!button) {
+                // 1. Handle REFINE button click
+                const refineBtn = event.target.closest('[data-refine-issue-id]');
+                if (refineBtn) {
+                    event.stopPropagation();
+                    const id = refineBtn.getAttribute('data-refine-issue-id');
+                    const title = refineBtn.getAttribute('data-issue-title');
+                    const description = refineBtn.getAttribute('data-issue-description');
+                    if (lastIntegrationProvider === 'clickup') {
+                        vscode.postMessage({
+                            type: 'clickupRefineTask',
+                            taskId: id,
+                            title,
+                            description,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    } else {
+                        vscode.postMessage({
+                            type: 'linearRefineTask',
+                            issueId: id,
+                            title,
+                            description,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    }
                     return;
                 }
-                loadLinearTaskDetails(button.dataset.linearSubtaskId);
-            });
-            detailSubtasksList?.addEventListener('click', (event) => {
-                const button = event.target.closest('[data-clickup-subtask-id]');
-                if (!button) {
+
+                // 2. Handle IMPORT button click
+                const importBtn = event.target.closest('[data-import-issue-id]');
+                if (importBtn && importBtn.dataset.importIssueId) {
+                    event.stopPropagation();
+                    importBtn.disabled = true;
+                    importBtn.dataset.importing = '';
+                    if (lastIntegrationProvider === 'clickup') {
+                        clickUpImportPending = true;
+                        vscode.postMessage({
+                            type: 'clickupImportTask',
+                            taskId: importBtn.dataset.importIssueId,
+                            includeSubtasks: false,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    } else {
+                        linearImportPending = true;
+                        vscode.postMessage({
+                            type: 'linearImportTask',
+                            issueId: importBtn.dataset.importIssueId,
+                            includeSubtasks: false,
+                            workspaceRoot: currentWorkspaceRoot || undefined
+                        });
+                    }
                     return;
                 }
-                loadClickUpTaskDetails(button.dataset.clickupSubtaskId);
+
+                // 3. Handle clicking on subtask card body to view details
+                if (lastIntegrationProvider === 'clickup') {
+                    const clickupBtn = event.target.closest('[data-clickup-subtask-id]');
+                    if (clickupBtn) {
+                        event.stopPropagation();
+                        loadClickUpTaskDetails(clickupBtn.dataset.clickupSubtaskId);
+                    }
+                } else {
+                    const linearBtn = event.target.closest('[data-linear-subtask-id]');
+                    if (linearBtn) {
+                        event.stopPropagation();
+                        loadLinearTaskDetails(linearBtn.dataset.linearSubtaskId);
+                    }
+                }
             });
             const backToParentButton = container.querySelector('#sidebar-task-back-to-parent-button');
             backToParentButton?.addEventListener('click', () => {

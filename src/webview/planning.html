@@ -1354,6 +1354,7 @@
         #kanban-list-pane { flex: 1; overflow-y: auto; }
         .kanban-preview-pane { flex: 2; overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); }
         .kanban-plan-item {
+            position: relative;
             display: flex;
             align-items: flex-start;
             gap: 10px;
@@ -1391,6 +1392,28 @@
         }
         .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
         .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
+        .kanban-plan-copy-link {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 7px;
+            cursor: pointer;
+            border-radius: 10px;
+            opacity: 0;
+            transition: all 0.15s;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .kanban-plan-item:hover .kanban-plan-copy-link {
+            opacity: 1;
+        }
+        .kanban-plan-copy-link:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
         .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
 
         .markdown-editor {
@@ -1478,8 +1501,88 @@
             color: #000;
             border-color: var(--accent-teal, #3ddbd9);
         }
-        .popup-actions button.primary:hover {
-            opacity: 0.85;
+        /* Folder Modal */
+        .folder-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .folder-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .folder-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .folder-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .folder-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .folder-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .folder-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .folder-modal .modal-section {
+            margin-bottom: 20px;
+        }
+        .folder-modal .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        .folder-modal .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .folder-modal .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .folder-modal .section-actions {
+            display: flex;
+            gap: 8px;
         }
     </style>
 </head>
@@ -1511,11 +1614,7 @@
                 <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
                 <span id="status"></span>
-                <label class="toggle-switch" style="margin-left: auto;" title="Include Antigravity Sessions">
-                    <input type="checkbox" id="antigravity-toggle">
-                    <span class="toggle-slider"></span>
-                </label>
-                <span class="toggle-label" style="font-size:10px; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-secondary); margin-left: 6px; margin-right: 6px;">Antigravity</span>
+                <button id="btn-manage-folders" class="strip-btn" style="margin-left: auto;">Folders</button>
             </div>
             <div class="content-row">
                 <div id="tree-pane">
@@ -1764,6 +1863,41 @@
         <div class="popup-actions">
             <button id="kanban-cancel-comment">Cancel</button>
             <button class="primary" id="kanban-submit-comment">Submit Comment</button>
+        </div>
+    </div>
+
+    <div class="folder-modal" id="folder-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="folder-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="folder-modal-title">Manage Local Docs Folders</h3>
+                <button class="modal-close-btn" id="btn-close-folder-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <!-- Antigravity toggle section -->
+                <div class="modal-section">
+                    <div class="toggle-container" style="display: flex; align-items: center; gap: 10px;">
+                        <label class="toggle-switch">
+                            <input type="checkbox" id="antigravity-toggle-modal">
+                            <span class="toggle-slider"></span>
+                        </label>
+                        <span class="toggle-label" style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-secondary);">Show Antigravity Brain</span>
+                    </div>
+                </div>
+                
+                <!-- Folder list section -->
+                <div class="modal-section">
+                    <div class="section-header">
+                        <span class="section-title">Configured Folders</span>
+                        <div class="section-actions">
+                            <button id="btn-refresh-folders-modal" class="strip-btn" title="Refresh folders">&#8635;</button>
+                            <button id="btn-add-folder-modal" class="strip-btn">Add Folder</button>
+                        </div>
+                    </div>
+                    <div id="folder-list-modal" class="folder-list">
+                        <!-- Folder items rendered by JS -->
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     <script nonce="{{NONCE}}" src="{{PLANNING_JS_URI}}"></script>

@@ -77,9 +77,9 @@ export class PlanningPanelProvider {
         private _context: vscode.ExtensionContext
     ) {}
 
-    // ⚠️ CRITICAL: This method MUST ONLY be called during initialization (panel open) or when workspace folders change.
-    // DO NOT call this in _handleMessage() or on every message - it causes race conditions and breaks online docs.
-    // Adapters are registered once and only re-registered when workspace folders actually change.
+    // Ensure adapters are registered for current workspace roots.
+    // Safe to call from any context — the double-guard (roots-key + available-sources check)
+    // makes this idempotent and avoids redundant clearAdapters() calls.
     private _ensureAdaptersRegistered(): void {
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) { return; }
@@ -537,6 +537,9 @@ export class PlanningPanelProvider {
 
         // Use active workspace root if available, otherwise use first root
         const workspaceRoot = this._getWorkspaceRoot() || allRoots[0];
+
+        // Ensure adapters are registered before processing any message
+        this._ensureAdaptersRegistered();
 
         switch (msg.type) {
             case 'fetchRoots': {

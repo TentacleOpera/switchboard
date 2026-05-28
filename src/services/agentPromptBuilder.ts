@@ -283,7 +283,7 @@ export function buildKanbanBatchPrompt(
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? true;
-    const includeDependencyInstructions = options?.includeDependencyInstructions ?? true;
+    const includeDependencyInstructions = options?.includeDependencyInstructions ?? false;
 
     const parallelInstruction = plans.length > 1
         ? (useSubagentsEnabled

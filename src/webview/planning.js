@@ -385,7 +385,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const parts = html.split(/(<pre><code>[\s\S]*?<\/code><\/pre>)/);
         html = parts.map((part, i) => {
             if (i % 2 === 1) return part; // pre block — preserve newlines
-            return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, ' ');
+            return part.replace(/\n\n+/g, '</p><p>').replace(/\n/g, '<br>');
         }).join('');
 
         html = `<p>${html}</p>`;
@@ -575,6 +575,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const LOCAL_SOURCES = ['local-folder'];
     const ONLINE_SOURCES = ['clickup', 'linear', 'notion'];
 
+    // DEPRECATED: Inline folder list removed; use renderFolderListModal() instead.
+    // Kept for safety — returns early if target element not found.
     function renderFolderList(paths) {
         const folderList = document.getElementById('local-folders-list');
         if (!folderList) return;
@@ -611,6 +613,44 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    function renderFolderListModal() {
+        const folderListModal = document.getElementById('folder-list-modal');
+        if (!folderListModal) return;
+        folderListModal.innerHTML = '';
+
+        const folderPaths = state.localFolderPaths || [];
+
+        if (folderPaths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            folderListModal.appendChild(empty);
+            return;
+        }
+
+        folderPaths.forEach(path => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = path;
+            pathSpan.title = path;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vscode.postMessage({ type: 'removeLocalFolder', folderPath: path });
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            folderListModal.appendChild(row);
+        });
+    }
+
     function renderLocalDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
         
@@ -629,67 +669,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         treePane.appendChild(toggleRow);
         
         if (sourceId === 'local-folder') {
-            const configRow = document.createElement('div');
-            configRow.className = 'folder-config-container';
-            configRow.style.display = 'flex';
-            configRow.style.flexDirection = 'column';
-            configRow.style.gap = '8px';
-            configRow.style.padding = '8px';
-            configRow.style.borderBottom = '1px solid var(--border-color)';
-
-            const controlsRow = document.createElement('div');
-            controlsRow.style.display = 'flex';
-            controlsRow.style.alignItems = 'center';
-            controlsRow.style.justifyContent = 'space-between';
-            controlsRow.style.gap = '8px';
-
-            const sectionTitle = document.createElement('span');
-            sectionTitle.textContent = 'Local Docs Folders';
-            sectionTitle.style.fontWeight = 'bold';
-            sectionTitle.style.fontSize = '11px';
-            sectionTitle.style.textTransform = 'uppercase';
-            sectionTitle.style.color = 'var(--text-secondary)';
-
-            const buttonsContainer = document.createElement('div');
-            buttonsContainer.style.display = 'flex';
-            buttonsContainer.style.gap = '6px';
-
-            const refreshLocalBtn = document.createElement('button');
-            refreshLocalBtn.textContent = '↻';
-            refreshLocalBtn.title = 'Refresh Local Folders';
-            refreshLocalBtn.style.padding = '2px 6px';
-            refreshLocalBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-            });
-
-            const addFolderBtn = document.createElement('button');
-            addFolderBtn.textContent = 'Add Folder';
-            addFolderBtn.style.padding = '2px 8px';
-            addFolderBtn.addEventListener('click', () => {
-                vscode.postMessage({ type: 'addLocalFolder' });
-            });
-
-            buttonsContainer.appendChild(refreshLocalBtn);
-            buttonsContainer.appendChild(addFolderBtn);
-            controlsRow.appendChild(sectionTitle);
-            controlsRow.appendChild(buttonsContainer);
-            configRow.appendChild(controlsRow);
-
-            const folderList = document.createElement('div');
-            folderList.id = 'local-folders-list';
-            folderList.className = 'folder-list';
-            configRow.appendChild(folderList);
-
-            treePane.appendChild(configRow);
-
             // ALWAYS create docList container so handleLocalFolderPathUpdated can find it later
             const docList = document.createElement('div');
             docList.className = 'source-doc-list';
             docList.dataset.sourceId = sourceId;
             treePane.appendChild(docList);
-
-            // Render list
-            renderFolderList(folderPaths || []);
 
             if (!nodes || nodes.length === 0) {
                 // Check if there are imported docs from other sources (clickup, linear, notion)
@@ -987,8 +971,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         renderAntigravitySessions(msg.antigravitySessions || [], msg.antigravityEnabled || false);
 
         // Sync toggle state
-        const agToggle = document.getElementById('antigravity-toggle');
-        if (agToggle) { agToggle.checked = msg.antigravityEnabled || false; }
+        state.antigravityEnabled = msg.antigravityEnabled || false;
+        const agToggleModal = document.getElementById('antigravity-toggle-modal');
+        if (agToggleModal) { agToggleModal.checked = state.antigravityEnabled; }
     }
 
     function handleOnlineDocsReady(msg) {
@@ -1360,6 +1345,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.localFolderPaths = [folderPath];
         }
         renderFolderList(state.localFolderPaths);
+        renderFolderListModal();
 
         // Delegate to renderLocalDocs to ensure consistent source-folder grouping
         renderLocalDocs({
@@ -1795,6 +1781,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'localFoldersListed':
                 state.localFolderPaths = msg.paths || [];
                 renderFolderList(state.localFolderPaths);
+                renderFolderListModal();
                 break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
@@ -2418,6 +2405,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     </div>
                     <div class="kanban-plan-actions">
                         <span class="kanban-column-badge">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                        ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}" title="Copy plan file path">Copy Link</button>` : ''}
                     </div>
                 </div>
             `;
@@ -2454,6 +2442,29 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 }
             });
+
+            const copyLinkBtn = itemDiv.querySelector('.kanban-plan-copy-link');
+            if (copyLinkBtn) {
+                copyLinkBtn.addEventListener('click', (e) => {
+                    e.stopPropagation(); // Prevent triggering plan selection
+                    const planFile = copyLinkBtn.dataset.planFile;
+                    if (planFile) {
+                        navigator.clipboard.writeText(planFile).then(() => {
+                            const originalText = copyLinkBtn.textContent;
+                            copyLinkBtn.textContent = 'Copied';
+                            setTimeout(() => {
+                                copyLinkBtn.textContent = originalText;
+                            }, 2000);
+                        }).catch(err => {
+                            console.error('Failed to copy plan file path:', err);
+                            copyLinkBtn.textContent = 'Failed';
+                            setTimeout(() => {
+                                copyLinkBtn.textContent = 'Copy Link';
+                            }, 2000);
+                        });
+                    }
+                });
+            }
 
             kanbanListPane.appendChild(itemDiv);
         });
@@ -2789,13 +2800,52 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         setupTextareaTabInterceptor(kanbanEditor);
     }
 
-    // Initialize
-    console.log('[PlanningPanel Webview] Initializing, sending fetchRoots');
-    const agToggle = document.getElementById('antigravity-toggle');
-    if (agToggle) {
-        agToggle.addEventListener('change', () => {
-            vscode.postMessage({ type: 'toggleAntigravityBrain', enabled: agToggle.checked });
-        });
-    }
+    // Folder modal open
+    document.getElementById('btn-manage-folders').addEventListener('click', () => {
+        const modal = document.getElementById('folder-modal');
+        modal.style.display = 'flex';
+        // Sync antigravity toggle state from JS state
+        const modalToggle = document.getElementById('antigravity-toggle-modal');
+        modalToggle.checked = !!state.antigravityEnabled;
+        // Render folder list in modal
+        renderFolderListModal();
+    });
+
+    // Folder modal close (X button)
+    document.getElementById('btn-close-folder-modal').addEventListener('click', () => {
+        document.getElementById('folder-modal').style.display = 'none';
+    });
+
+    // Folder modal close (backdrop click)
+    document.getElementById('folder-modal').addEventListener('click', (e) => {
+        if (e.target.id === 'folder-modal') {
+            e.target.style.display = 'none';
+        }
+    });
+
+    // Folder modal close (Escape key)
+    document.addEventListener('keydown', (e) => {
+        if (e.key === 'Escape') {
+            const modal = document.getElementById('folder-modal');
+            if (modal && modal.style.display !== 'none') {
+                modal.style.display = 'none';
+            }
+        }
+    });
+
+    // Antigravity toggle in modal — send message directly
+    document.getElementById('antigravity-toggle-modal').addEventListener('change', (e) => {
+        vscode.postMessage({ type: 'toggleAntigravityBrain', enabled: e.target.checked });
+    });
+
+    // Modal folder management buttons
+    document.getElementById('btn-refresh-folders-modal').addEventListener('click', () => {
+        vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
+    });
+
+    document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
+        vscode.postMessage({ type: 'addLocalFolder' });
+    });
+
     vscode.postMessage({ type: 'fetchRoots' });
 })();

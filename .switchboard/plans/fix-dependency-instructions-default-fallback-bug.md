@@ -118,9 +118,29 @@ Change all occurrences of `?? true` to `?? false` for `includeDependencyInstruct
 
 ## Files Changed
 - `src/services/KanbanProvider.ts`
+- `src/services/agentPromptBuilder.ts`
 
 ## Risk Assessment
 Low risk. This change aligns the fallback behavior with the documented default configuration in `sharedDefaults.js`. The change only affects the default behavior when the configuration is explicitly undefined, which should be rare in normal usage.
 
 ## Recommendation
 **Send to Intern** — Complexity 2: trivial single-file fallback value change with no logic modifications.
+
+## Review & Execution (Reviewer Pass)
+
+### Stage 1: Grumpy Principal Engineer Review
+**Findings:**
+1. [NIT] You correctly updated `KanbanProvider.ts` to `?? false` for all 9 fallback occurrences. Good. However, you completely missed the downstream usage in `agentPromptBuilder.ts`! The prompt builder itself had `const includeDependencyInstructions = options?.includeDependencyInstructions ?? true;`. If `KanbanProvider.ts` ever omitted this option instead of explicitly passing `false`, the bug would instantly resurrect itself. Never leave defaults mismatched across layers.
+
+### Stage 2: Balanced Synthesis
+- **Actionable:** The primary fixes in `KanbanProvider.ts` are solid and correctly implemented.
+- **Actionable:** Update the default in `agentPromptBuilder.ts` to also be `?? false` to ensure layer-to-layer consistency.
+
+### Execution & Fixes
+- `src/services/agentPromptBuilder.ts` was updated to default `includeDependencyInstructions` to `false` instead of `true`.
+
+### Verification Results
+- **Code verification:** Checked all codebase occurrences of `includeDependencyInstructions`. All `?? true` fallbacks have been eliminated in both `KanbanProvider.ts` and `agentPromptBuilder.ts`.
+- **Tests/Compilation:** SKIPPED per execution directive.
+
+**Status:** ALL CLEAR. Code aligns with intended fallback states.

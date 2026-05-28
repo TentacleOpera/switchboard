@@ -504,19 +504,6 @@ export class KanbanProvider implements vscode.Disposable {
         return result;
     }
 
-    private _showTemporaryNotification(message: string, durationMs: number = 1000): void {
-        void vscode.window.withProgress(
-            {
-                location: vscode.ProgressLocation.Notification,
-                title: message,
-                cancellable: false
-            },
-            async () => {
-                await new Promise(resolve => setTimeout(resolve, durationMs));
-            }
-        );
-    }
-
     private _resolveWorkspaceRoot(workspaceRoot?: string): string | null {
         const allowedRoots = this._getAllowedRoots();
         if (allowedRoots.size === 0) { return null; }
@@ -4115,7 +4102,12 @@ export class KanbanProvider implements vscode.Disposable {
                 if (typeof msg.workspaceRoot === 'string' && msg.workspaceRoot.trim()) {
                     const prevWorkspaceRoot = this._currentWorkspaceRoot;
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
-                    this.setProjectFilter(null); // Reset project filter on workspace switch
+                    // Only reset project filter if not explicitly provided
+                    if (!msg.project) {
+                        this.setProjectFilter(null); // Reset project filter on workspace switch
+                    } else {
+                        this.setProjectFilter(msg.project); // Preserve selected project
+                    }
 
                     // Reset control plane action: always clear the filter to show all cards,
                     // regardless of which workspace root is currently active.
@@ -4699,7 +4691,7 @@ export class KanbanProvider implements vscode.Disposable {
                     await this._refreshBoard(workspaceRoot);
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: dispatched });
                     if (dispatched) {
-                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                     }
                     break;
                 }
@@ -4738,7 +4730,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: true });
-                this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plan(s) to clipboard.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plan(s) to clipboard.`, isError: false });
                 break;
             }
             case 'batchPlannerPrompt': {
@@ -4756,7 +4748,7 @@ export class KanbanProvider implements vscode.Disposable {
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                this._showTemporaryNotification(`Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
             }
             case 'batchDispatchLow': {
@@ -4783,7 +4775,7 @@ export class KanbanProvider implements vscode.Disposable {
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
-                this._showTemporaryNotification(`Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
             }
             case 'julesLowComplexity': {
@@ -4940,7 +4932,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     await this._refreshBoard(workspaceRoot);
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                    this._showTemporaryNotification(`Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                 } else {
                     const nextCol = await this._getNextColumnId(column, workspaceRoot);
                     if (!nextCol) { break; }
@@ -4982,7 +4974,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     await this._refreshBoard(workspaceRoot);
-                    this._showTemporaryNotification(`Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${sourceCards.length} plans from ${column} to ${nextCol}.`, isError: false });
                 }
                 break;
             }
@@ -5062,7 +5054,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
-                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
@@ -5082,9 +5074,9 @@ export class KanbanProvider implements vscode.Disposable {
                             this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sids, targetColumn: targetCol });
                         }
                         const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
-                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}.${skippedSuffix}`, isError: false });
                     } else {
-                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced (${skippedCount} skipped — unknown complexity).`, isError: false });
                     }
                 } else {
                     for (const sid of msg.sessionIds) {
@@ -5092,7 +5084,7 @@ export class KanbanProvider implements vscode.Disposable {
                         await this._taskViewerProvider?.recordRunSheetForColumnMove(sid, nextCol, 'forward', workspaceRoot);
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: msg.sessionIds, targetColumn: nextCol });
-                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to next stage.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to next stage.`, isError: false });
                 }
                 break;
             }
@@ -5139,7 +5131,7 @@ export class KanbanProvider implements vscode.Disposable {
                         }
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
-                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                     break;
                 }
 
@@ -5166,9 +5158,9 @@ export class KanbanProvider implements vscode.Disposable {
                             await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sids, targetCol, workspaceRoot);
                             movedParts.push(`${sids.length} → ${targetCol}`);
                         }
-                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. Advanced ${knownIds.length}: ${movedParts.join(', ')}.`, isError: false });
                     } else {
-                        this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans. No plans advanced.`);
+                        this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans. No plans advanced.`, isError: false });
                     }
                     this._notifySkippedUnknownComplexity(skippedCount, knownIds.length);
                 } else {
@@ -5183,7 +5175,7 @@ export class KanbanProvider implements vscode.Disposable {
                     }
                     this._panel?.webview.postMessage({ type: 'moveCards', sessionIds: sessionIds, targetColumn: nextCol });
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', sessionIds, nextCol, workspaceRoot);
-                    this._showTemporaryNotification(`Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied prompt for ${sourceCards.length} plans and advanced to ${nextCol}.`, isError: false });
                 }
                 break;
             }

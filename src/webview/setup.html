@@ -467,7 +467,11 @@
         </div>
 
         <div class="tab-content open" id="startup-fields" data-tab-content="setup">
-                <button id="btn-initialize" class="secondary-btn w-full">INIT PLUGIN</button>
+                <div style="margin-bottom: 16px; border-bottom: 1px solid var(--border-dim); padding-bottom: 12px;">
+                    <div class="section-label" style="margin-bottom: 4px;">Switchboard guide</div>
+                    <div class="hint-text" style="margin-bottom: 6px;">Copy this prompt to ask an agent for guidance on Switchboard setup options</div>
+                    <button id="btn-copy-tutorial-prompt" class="action-btn w-full">COPY TUTORIAL PROMPT</button>
+                </div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
                 </div>
@@ -515,6 +519,13 @@
                         <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Hide plans in 'reviewed' and 'backlog' columns from the sidebar dropdown to reduce clutter.</span>
                     </div>
                 </label>
+
+                <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
+                    <div style="font-size: 10px; color: var(--accent-orange); margin-bottom: 8px; line-height: 1.4; font-family: var(--font-mono);">
+                        ⚠ Press this button if your .switchboard directory, agents.md or agent folder gets deleted. Do not touch otherwise.
+                    </div>
+                    <button id="btn-initialize" class="secondary-btn w-full">REINITIALISE PLUGIN</button>
+                </div>
             </div>
 
         <div class="tab-content" id="kanban-fields" data-tab-content="kanban">
@@ -2708,6 +2719,23 @@
                 }
             });
         }
+
+        document.getElementById('btn-copy-tutorial-prompt')?.addEventListener('click', () => {
+            const prompt = 'Please read the Switchboard README.md (located at the extension root) — specifically the "Getting started" section covering Install, Set up your agent team, Create your first plans, and Run your pipeline — and guide me through my Switchboard setup options. Present the setup steps as a numbered list and ask which one I\'d like help with first.';
+            const btn = document.getElementById('btn-copy-tutorial-prompt');
+            navigator.clipboard.writeText(prompt).then(() => {
+                if (btn) {
+                    btn.textContent = 'COPIED!';
+                    setTimeout(() => { btn.textContent = 'COPY TUTORIAL PROMPT'; }, 2000);
+                }
+            }).catch(err => {
+                if (btn) {
+                    btn.textContent = 'COPY FAILED';
+                    setTimeout(() => { btn.textContent = 'COPY TUTORIAL PROMPT'; }, 2000);
+                }
+                console.error('[Setup] Clipboard write failed:', err);
+            });
+        });
 
         document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));

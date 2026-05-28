@@ -4029,7 +4029,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             {
                 skipBrainPromotion: true,
                 createdAt,
-                suppressIntegrationSync: true
+                suppressIntegrationSync: true,
+                skipTemplateHeadings: true
             }
         );
 
@@ -4175,7 +4176,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 {
                     skipBrainPromotion: true,
                     suppressIntegrationSync: true,
-                    createdAt
+                    createdAt,
+                    skipTemplateHeadings: true
                 }
             );
 
@@ -4192,7 +4194,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     subtask.name || `ClickUp Subtask ${subtask.id}`,
                     subtaskContent,
                     false,
-                    { skipBrainPromotion: true, suppressIntegrationSync: true, createdAt: subtaskCreatedAt }
+                    {
+                        skipBrainPromotion: true,
+                        suppressIntegrationSync: true,
+                        createdAt: subtaskCreatedAt,
+                        skipTemplateHeadings: true
+                    }
                 );
                 const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
                 await db.updateClickUpTaskIdByPlanFile(subtaskPlanFile, workspaceId, subtask.id);
@@ -15269,6 +15276,7 @@ Create this file exactly as specified, then continue your work.`);
             skipBrainPromotion?: boolean;
             suppressIntegrationSync?: boolean;
             createdAt?: string;
+            skipTemplateHeadings?: boolean;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -15290,7 +15298,7 @@ Create this file exactly as specified, then continue your work.`);
         try {
             const isFullPlan = idea.includes('## Proposed Changes') || idea.includes('## Goal');
             const headerText = isAirlock ? '## Notebook Plan\n\n' : '';
-            const content = isFullPlan
+            const content = (isFullPlan || options.skipTemplateHeadings)
                 ? idea
                 : `# ${title}\n\n${headerText}${idea}\n\n## Goal\n- Clarify expected outcome and scope.\n\n## Proposed Changes\n- TODO\n\n## Verification Plan\n- TODO\n\n## Open Questions\n- TODO\n`;
             await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
