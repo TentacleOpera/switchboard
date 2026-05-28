@@ -2541,9 +2541,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         // Note: Worktrees are NOT auto-cleaned when a plan leaves CODE REVIEWED.
-        // Worktrees persist until the user explicitly merges (merge button) or
-        // manually resolves them. This prevents accidental destruction of
-        // in-progress work that hasn't been merged yet.
+        // Worktrees persist until the user explicitly cleans them up from the
+        // Worktrees tab or they are removed when the plan moves to COMPLETED.
+        // This prevents accidental destruction of in-progress work.
 
         if (workflowName) {
             await this._updateSessionRunSheet(sessionId, workflowName, outcome, true, resolvedWorkspaceRoot);

@@ -298,3 +298,62 @@ Key risks: (1) Incomplete removal of old worktree code across 10+ files will lea
 **Complexity: 4 → Send to Coder**
 
 This is a systematic removal + schema edit task. The main risk is missing a reference, which TypeScript will catch at compile time. Follow the checklist, compile, grep for zero references, and you're done.
+
+---
+
+## Review Pass Results (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| M1 | MAJOR | `_cleanupWorktreeAfterReview` uses raw `worktree.path` without resolution — will silently fail on relative paths (the `createWorktree` handler stores relative paths). The `deleteWorktree` handler correctly resolves paths; this method did not. |
+| M2 | MAJOR | Stale comment in TaskViewerProvider.ts (lines 2543-2546) references "merge button" which was removed by this plan. Misleading documentation. |
+| N1 | NIT | `_appendWorktreeContextToPlan` embeds potentially relative `worktree.path` in plan text and merge instructions — ambiguous for users. |
+| N2 | NIT | Scope expansion: implementation added new KanbanProvider methods (`_assignWorktreeToCard`, `_appendWorktreeContextToPlan`, `_cleanupWorktreeAfterReview`), four message handlers (`createWorktree`, `deleteWorktree`, `assignAgentToWorktree`, `getWorktrees`), and an entire WORKTREES tab in kanban.html — all beyond the plan's stated scope of "Remove Old Code + Update Schema." |
+
+### Stage 2: Balanced Synthesis & Actions Taken
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| M1 | **Fixed** | Added path resolution logic matching `deleteWorktree` handler pattern: `path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path)` |
+| M2 | **Fixed** | Updated comment to reference "Worktrees tab" instead of removed "merge button" |
+| N1 | **Fixed** | Added absolute path resolution before embedding in plan context text |
+| N2 | **Deferred** | Code is functional; scope expansion documented here. Plans B/C functionality was baked into Plan A implementation. |
+
+### Files Changed by Review
+
+1. **`src/services/KanbanProvider.ts`** — Fixed `_cleanupWorktreeAfterReview` path resolution (M1), fixed `_appendWorktreeContextToPlan` path resolution (N1)
+2. **`src/services/TaskViewerProvider.ts`** — Updated stale "merge button" comment (M2)
+
+### Verification Results
+
+**Grep zero-reference checks — ALL PASS:**
+- `hasWorktree` / `has_worktree` → 0 matches
+- `mergeWorktrees` / `MERGE_WORKTREES` → 0 matches
+- `worktreeCounts` → 0 matches
+- `openWorktreeForCoderAgents` → 0 matches
+- `createWorktreeForSession` → 0 matches
+- `_cleanupWorktree` (old) / `_createWorktree` (old) / `_autoCommitDirtyMain` → 0 matches
+- `_handleWorktreeForColumnTransition` / `_isWorktreeAddonEnabled` / `_getWorktreeCounts` → 0 matches
+- `setWorktreeMeta` / `getWorktreeMeta` / `clearWorktreeMeta` / `updateHasWorktree` / `_worktreeMetaKey` → 0 matches
+- `MIGRATION_V24` → 0 matches
+- `ICON_MERGE` → 0 matches
+
+**Schema verification — PASS:**
+- SCHEMA_SQL: `has_worktree` removed, `worktree_id INTEGER` added to plans table, `worktrees` table added with correct columns, `idx_plans_worktree` and `idx_worktrees_workspace` indexes added
+- `_ensureSchemaColumns()`: Dynamically parses SCHEMA_SQL — `worktree_id` column auto-reconciled for existing DBs
+- `worktrees` table: Auto-created via `CREATE TABLE IF NOT EXISTS` in SCHEMA_SQL on DB reload
+
+**Implementation completeness — PASS:**
+- All 11 KanbanDatabase.ts items implemented (schema, migration removal, metadata method removal, interface update, PLAN_COLUMNS, UPSERT_PLAN_SQL, _readRows, upsertPlans, restoreFromBackup, _ensureSchemaColumns, CRUD methods)
+- All TaskViewerProvider.ts items implemented (method removals, dispatch logic cleanup, shared fields preserved)
+- All KanbanProvider.ts items implemented (method removals, logic removals, card interface cleanup)
+- All kanban.html items implemented (merge button removal, count state removal)
+- All agentPromptBuilder.ts items implemented
+- All secondary files cleaned (PlanFileImporter, GlobalPlanWatcherService, NotionBackupService, KanbanMigration, test file, SetupPanelProvider, setup.html)
+
+### Remaining Risks
+
+1. **Path storage convention**: The `createWorktree` handler stores relative paths while `deleteWorktree` and (now fixed) `_cleanupWorktreeAfterReview` resolve them. If future code reads `worktree.path` and assumes it's absolute, it will break. Consider storing absolute paths in the DB instead, or documenting the convention.
+2. **Scope expansion**: Plans B/C functionality was implemented alongside Plan A. If Plans B/C are still tracked separately, they may need to be updated or closed as already-done.

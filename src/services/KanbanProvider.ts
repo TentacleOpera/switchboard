@@ -6487,13 +6487,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const planPath = this._resolvePlanFilePath(workspaceRoot, plan.planFile);
         if (!planPath) return;
 
+        const parentDir = path.dirname(workspaceRoot);
+        const absoluteWorktreePath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
         const worktreeContext = `
 
 ## Worktree Context
 This work was done in a git worktree.
-- Worktree path: ${worktree.path}
+- Worktree path: ${absoluteWorktreePath}
 - Branch: ${worktree.branch}
-- To merge: cd ${worktree.path} && git checkout main && git merge ${worktree.branch}
+- To merge: cd ${absoluteWorktreePath} && git checkout main && git merge ${worktree.branch}
 `;
 
         try {
@@ -6518,8 +6520,10 @@ This work was done in a git worktree.
             const worktree = await db.getWorktreeById(plan.worktreeId);
             if (worktree) {
                 const execAsync = promisify(cp.exec);
+                const parentDir = path.dirname(workspaceRoot);
+                const fullPath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
                 try {
-                    await execAsync(`git worktree remove --force "${worktree.path}"`, { cwd: workspaceRoot });
+                    await execAsync(`git worktree remove --force "${fullPath}"`, { cwd: workspaceRoot });
                     await execAsync(`git branch -D "${worktree.branch}"`, { cwd: workspaceRoot });
                     await db.deleteWorktree(worktree.id);
                 } catch (e: any) {
