@@ -421,6 +421,70 @@ Key risks: (1) Original plan proposed creating worktrees inside `.switchboard/` 
 - Attempt to create worktrees for a role with no enabled agent — warning message shown
 - Verify existing DB with `coder_agent_id = null` worktrees still works — they appear in an "Unassigned" section or are filtered out of role pools
 
+## Review Pass — 2026-05-28
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| MAJOR-1 | MAJOR | `createWorktree` returning -1 (failure sentinel) was not checked. If DB insert fails silently, code proceeds to create git worktree with invalid DB reference. On rollback, `db.deleteWorktree(-1)` is a no-op, leaving orphaned git worktrees with no cleanup path. |
+| MAJOR-2 | MAJOR | `execFileAsync = promisify(cp.execFile)` was re-declared inside the for-loop (line 6167) and again in the catch block (line 6191). `promisify()` creates a new closure each call — should be hoisted before the loop and shared with the catch block. |
+| NIT-1 | NIT | `assignAgentToWorktree` DB method in KanbanDatabase.ts (lines 1444-1451) is now dead code — message handler removed but DB method remains. Harmless. |
+| NIT-2 | NIT | Duplicate worktree-row DOM construction in `createWorktreePanel` — the "Unassigned" section (lines 7157-7211) duplicates the row code from the role pool loop (lines 7119-7152). Should be a helper function for maintainability. |
+| NIT-3 | NIT | No CREATE button disable during async operation — rapid double-click could send duplicate `createWorktree` messages. DB UNIQUE constraint is safety net but UX would be confusing. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| MAJOR-1: createWorktree -1 not checked | **Fix now** | Added guard: `if (id === -1) throw new Error(...)` after `db.createWorktree()` call |
+| MAJOR-2: execFileAsync inside loop | **Fix now** | Hoisted `execFileAsync` declaration before the for-loop; removed duplicate in catch block |
+| NIT-1: Dead assignAgentToWorktree DB method | **Defer** | Harmless dead code; cleanup in future pass |
+| NIT-2: Duplicate row rendering | **Defer** | Style/maintenance concern; not a bug |
+| NIT-3: No button disable | **Defer** | Edge case; DB constraint is safety net |
+
+### Stage 3: Fixes Applied
+
+**File: `src/services/KanbanProvider.ts`**
+- Line 6157: Hoisted `const execFileAsync = promisify(cp.execFile);` before the for-loop (was inside at old line 6167)
+- Line 6166-6168: Added guard `if (id === -1) { throw new Error(\`Failed to create DB entry for branch ${branchName}\`); }` after `db.createWorktree()` call
+- Line 6194: Removed duplicate `const execFileAsync = promisify(cp.execFile);` from catch block (now uses hoisted declaration)
+
+### Stage 4: Verification
+
+- TypeScript compilation: SKIPPED per session instructions
+- Automated tests: SKIPPED per session instructions
+- Manual code review of all plan requirements: **PASSED**
+
+### Implementation Conformance Checklist
+
+| Plan Requirement | Status | Notes |
+|-----------------|--------|-------|
+| Replace worktrees tab HTML with dynamic panel root | ✅ | Lines 2599-2602: `worktree-panel-root` div |
+| Remove `<template id="worktree-item-template">` | ✅ | Not found in codebase |
+| Add `createWorktreePanel()` function | ✅ | Lines 7019-7215: role selector, count input, pool blocks |
+| Add `renderWorktreePanel()` function | ✅ | Lines 7219-7224 |
+| Add `lastWorktrees` variable | ✅ | Line 7217 |
+| Update 'worktrees' message handler | ✅ | Lines 5133-5137: stores + re-renders |
+| Update tab click handler for worktrees | ✅ | Lines 3225-3228: calls `loadWorktrees()` + `renderWorktreePanel()` |
+| Remove old `renderWorktrees` function | ✅ | Not found in codebase |
+| Remove old worktree tab listeners | ✅ | Not found in codebase |
+| Remove old CSS classes (.worktree-item etc.) | ✅ | Not found in codebase |
+| createWorktree handler accepts role + agentCount | ✅ | Lines 6136-6202 |
+| Worktrees created as siblings of workspace root | ✅ | `path.dirname(workspaceRoot)` at line 6153 |
+| Role stored in coder_agent_id | ✅ | `db.createWorktree(branchName, role)` at line 6165 |
+| Rollback on partial failure | ✅ | Lines 6190-6201 (now with -1 guard) |
+| Remove assignAgentToWorktree message handler | ✅ | Not found in codebase |
+| _assignWorktreeToCard filters by role | ✅ | Lines 6529-6531: `wt.coderAgentId === targetRole` |
+| Call sites pass targetColumn | ✅ | Lines 3732, 3775 |
+| Unassigned section for null coderAgentId | ✅ | Lines 7157-7211 |
+
+### Remaining Risks
+
+1. **Double-click race on CREATE button** (NIT-3): Low probability, DB UNIQUE constraint catches it. Could add button disable in a future pass.
+2. **Dead code `assignAgentToWorktree` in KanbanDatabase.ts** (NIT-1): Harmless, can be removed in a cleanup pass.
+3. **Duplicate DOM construction** (NIT-2): Maintenance burden if styles change, but functionally correct.
+
 ## Recommendation
 
 **Complexity: 4 → Send to Coder**

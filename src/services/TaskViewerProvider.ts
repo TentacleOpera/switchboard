@@ -5532,7 +5532,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    private async _createAutobanTerminal(role: string, requestedName?: string): Promise<void> {
+    private async _createAutobanTerminal(role: string, requestedName?: string, cwd?: string): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
             vscode.window.showErrorMessage('No workspace folder found. Cannot create an autoban terminal.');
@@ -5572,7 +5572,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const terminal = vscode.window.createTerminal({
             name: uniqueName,
             location: vscode.TerminalLocation.Panel,
-            cwd: workspaceRoot
+            cwd: cwd || workspaceRoot
         });
         this._registeredTerminals?.set(suffixedUniqueName, terminal);
         terminal.show();
@@ -5620,7 +5620,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 icon: 'terminal',
                 color: 'cyan',
                 lastSeen: new Date().toISOString(),
-                ideName: vscode.env.appName
+                ideName: vscode.env.appName,
+                worktreePath: cwd || undefined
             };
         });
 
@@ -5798,8 +5799,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /** Called by Kanban automation panel to add a terminal to the autoban pool. */
-    public async addAutobanTerminalFromKanban(role: string, requestedName?: string): Promise<void> {
-        await this._createAutobanTerminal(role, requestedName);
+    public async addAutobanTerminalFromKanban(role: string, requestedName?: string, cwd?: string): Promise<void> {
+        await this._createAutobanTerminal(role, requestedName, cwd);
+    }
+
+    /** Kill terminal by name, supporting IDE suffixes. */
+    public async killTerminal(terminalName: string): Promise<void> {
+        const trimmedName = String(terminalName || '').trim();
+        if (!trimmedName) return;
+
+        // Try to remove references from autoban pool and close the terminal
+        await this._removeAutobanTerminalReferences(trimmedName);
+        await this._closeTerminal(trimmedName);
+
+        // Also clean up by stripped name matching if not found directly
+        const strippedTarget = this._stripIdeSuffix(trimmedName);
+        const activeTerminals = vscode.window.terminals;
+        const found = activeTerminals.find(t => this._stripIdeSuffix(t.name) === strippedTarget);
+        if (found) {
+            found.dispose();
+        }
+
+        // Clean up from state
+        await this.updateState(async (state) => {
+            if (state.terminals) {
+                for (const key of Object.keys(state.terminals)) {
+                    if (this._stripIdeSuffix(key) === strippedTarget) {
+                        delete state.terminals[key];
+                    }
+                }
+            }
+        });
+
+        this._refreshTerminalStatuses();
+        this._postAutobanState();
     }
 
     /** Called by Kanban automation panel to remove a terminal from the autoban pool. */

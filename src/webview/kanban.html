@@ -4350,6 +4350,19 @@
                 });
             });
 
+            document.querySelectorAll('.card-btn.merge-action-btn').forEach(btn => {
+                btn.addEventListener('click', () => {
+                    btn.disabled = true;
+                    btn.textContent = 'Merging…';
+                    postKanbanMessage({
+                        type: 'executeMerge',
+                        sessionId: btn.dataset.session || '',
+                        rule: lastWorktreeDefaultMergeStrategy || 'squash',
+                        workspaceRoot: currentWorkspaceRoot
+                    });
+                });
+            });
+
             document.querySelectorAll('.pair-program-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const sessionId = btn.dataset.session || '';
@@ -4434,10 +4447,15 @@
             // but card-level indicator and action buttons have been removed to reduce clutter.
             // Pause/resume is still available via the card context menu.
 
+            const worktree = card.worktreeId ? (lastWorktrees || []).find(wt => wt.id === card.worktreeId) : null;
+            const branchInfo = worktree ? `<div class="card-branch" style="font-family:var(--font-mono); font-size:8px; color:var(--accent-teal, #4fc3f7); margin-top:2px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="Branch: ${escapeAttr(worktree.branch)}">🌿 ${escapeHtml(worktree.branch)}</div>` : '';
+
             // For completed cards, show a Recover button instead of Copy Prompt
             let primaryActionBtn;
             if (isCompleted) {
                 primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
+            } else if (card.column === 'MERGE') {
+                primaryActionBtn = `<button class="card-btn merge-action-btn" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Execute Git Merge">Merge</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
@@ -4502,7 +4520,7 @@
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
-                    <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}</div>
+                    <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}${branchInfo}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
@@ -5132,6 +5150,10 @@
                 }
                 case 'worktrees': {
                     lastWorktrees = msg.worktrees || [];
+                    lastWorktreeModeEnabled = msg.worktreeModeEnabled || false;
+                    lastWorktreeMaxCap = msg.worktreeMaxCap || 10;
+                    lastWorktreeDefaultMergeStrategy = msg.worktreeDefaultMergeStrategy || 'squash';
+                    lastWorktreeAutoMerge = msg.worktreeAutoMerge || false;
                     renderWorktreePanel();
                     break;
                 }
@@ -7020,6 +7042,108 @@
             const container = document.createElement('div');
             container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
 
+            // ── Mode Toggle & Rules Section ──
+            const configSection = document.createElement('div');
+            configSection.className = 'db-subsection';
+
+            const configHeader = document.createElement('div');
+            configHeader.className = 'subsection-header';
+            const configSpan = document.createElement('span');
+            configSpan.textContent = 'WORKTREE MODE & RULES';
+            configHeader.appendChild(configSpan);
+            configSection.appendChild(configHeader);
+
+            const configRow = document.createElement('div');
+            configRow.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+
+            // Toggle
+            const toggleDiv = document.createElement('div');
+            toggleDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
+            const toggleLabel = document.createElement('span');
+            toggleLabel.textContent = 'ENABLE WORKTREE MODE:';
+            const toggleInput = document.createElement('input');
+            toggleInput.type = 'checkbox';
+            toggleInput.checked = lastWorktreeModeEnabled || false;
+            toggleInput.addEventListener('change', () => {
+                postKanbanMessage({
+                    type: 'setWorktreeMode',
+                    enabled: toggleInput.checked,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            });
+            toggleDiv.appendChild(toggleLabel);
+            toggleDiv.appendChild(toggleInput);
+            configRow.appendChild(toggleDiv);
+
+            // Cap
+            const capDiv = document.createElement('div');
+            capDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
+            const capLabel = document.createElement('span');
+            capLabel.textContent = 'MAX WORKTREE CAP:';
+            const capInput = document.createElement('input');
+            capInput.type = 'number';
+            capInput.min = '1';
+            capInput.max = '50';
+            capInput.value = lastWorktreeMaxCap || '10';
+            capInput.style.cssText = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+            capInput.addEventListener('change', () => {
+                saveRules();
+            });
+            capDiv.appendChild(capLabel);
+            capDiv.appendChild(capInput);
+            configRow.appendChild(capDiv);
+
+            // Merge Strategy
+            const mergeDiv = document.createElement('div');
+            mergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
+            const mergeLabel = document.createElement('span');
+            mergeLabel.textContent = 'DEFAULT MERGE STRATEGY:';
+            const mergeSelect = document.createElement('select');
+            mergeSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
+            ['squash', 'merge', 'rebase'].forEach(strategy => {
+                const opt = document.createElement('option');
+                opt.value = strategy;
+                opt.textContent = strategy.toUpperCase();
+                if (strategy === (lastWorktreeDefaultMergeStrategy || 'squash')) {
+                    opt.selected = true;
+                }
+                mergeSelect.appendChild(opt);
+            });
+            mergeSelect.addEventListener('change', () => {
+                saveRules();
+            });
+            mergeDiv.appendChild(mergeLabel);
+            mergeDiv.appendChild(mergeSelect);
+            configRow.appendChild(mergeDiv);
+
+            // Auto-merge
+            const autoMergeDiv = document.createElement('div');
+            autoMergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
+            const autoMergeLabel = document.createElement('span');
+            autoMergeLabel.textContent = 'AUTO-MERGE ON COMPLETION:';
+            const autoMergeInput = document.createElement('input');
+            autoMergeInput.type = 'checkbox';
+            autoMergeInput.checked = lastWorktreeAutoMerge || false;
+            autoMergeInput.addEventListener('change', () => {
+                saveRules();
+            });
+            autoMergeDiv.appendChild(autoMergeLabel);
+            autoMergeDiv.appendChild(autoMergeInput);
+            configRow.appendChild(autoMergeDiv);
+
+            function saveRules() {
+                postKanbanMessage({
+                    type: 'setWorktreeRules',
+                    maxCap: parseInt(capInput.value, 10) || 10,
+                    defaultMergeStrategy: mergeSelect.value,
+                    autoMerge: autoMergeInput.checked,
+                    workspaceRoot: currentWorkspaceRoot
+                });
+            }
+
+            configSection.appendChild(configRow);
+            container.appendChild(configSection);
+
             // ── Create Section ──
             const createSection = document.createElement('div');
             createSection.className = 'db-subsection';
@@ -7215,6 +7339,10 @@
         }
 
         let lastWorktrees = [];
+        let lastWorktreeModeEnabled = false;
+        let lastWorktreeMaxCap = 10;
+        let lastWorktreeDefaultMergeStrategy = 'squash';
+        let lastWorktreeAutoMerge = false;
 
         function renderWorktreePanel() {
             const root = document.getElementById('worktree-panel-root');

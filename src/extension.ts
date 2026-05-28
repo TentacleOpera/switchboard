@@ -1087,8 +1087,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setPairProgrammingModeDisposable);
 
-    const addAutobanTerminalDisposable = vscode.commands.registerCommand('switchboard.addAutobanTerminalFromKanban', async (role: string, requestedName?: string) => {
-        await taskViewerProvider.addAutobanTerminalFromKanban(role, requestedName);
+    const addAutobanTerminalDisposable = vscode.commands.registerCommand('switchboard.addAutobanTerminalFromKanban', async (role: string, requestedName?: string, cwd?: string) => {
+        await taskViewerProvider.addAutobanTerminalFromKanban(role, requestedName, cwd);
     });
     context.subscriptions.push(addAutobanTerminalDisposable);
 
