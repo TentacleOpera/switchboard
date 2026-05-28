@@ -3030,6 +3030,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    public async autoCommitForCodeReview(workspaceRoot: string, planTopic: string): Promise<void> {
+        const execFileAsync = promisify(cp.execFile);
+        try {
+            // git status --porcelain detects all change types and always exits 0
+            const { stdout } = await execFileAsync('git', ['status', '--porcelain'], { cwd: workspaceRoot });
+            if (!stdout.trim()) {
+                console.log('[TaskViewerProvider] Working tree clean — skipping auto-commit for code review');
+                return;
+            }
+            await execFileAsync('git', ['add', '-A'], { cwd: workspaceRoot });
+            const timestamp = new Date().toISOString().replace(/[:.]/g, '-').substring(0, 19);
+            const safeTopic = planTopic.replace(/"/g, '').substring(0, 80);
+            await execFileAsync('git', ['commit', '-m', `switchboard: auto-commit before code review (${safeTopic}, ${timestamp})`], { cwd: workspaceRoot });
+            console.log(`[TaskViewerProvider] Auto-committed before code review for: ${safeTopic}`);
+        } catch (e: any) {
+            console.warn(`[TaskViewerProvider] Auto-commit before code review failed (non-fatal): ${e.message}`);
+        }
+    }
+
     public handleGetAccurateCodingSetting(): boolean {
         return this._isAccurateCodingEnabled();
     }

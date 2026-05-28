@@ -396,9 +396,32 @@ const MIGRATION_V23_SQL = [
 ];
 
 // V24: Remove path column from worktrees table — paths are derived from git at read time.
-// Feature was never used, so just drop and recreate.
+// Feature was never used, so just drop and recreate with new schema.
 const MIGRATION_V24_SQL = [
     `DROP TABLE IF EXISTS worktrees`,
+    `CREATE TABLE IF NOT EXISTS worktrees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch TEXT NOT NULL,
+        coder_agent_id TEXT,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
+];
+
+// V25: Safety net — if V24 dropped worktrees without recreating it (early broken version),
+// recreate it now. Harmless no-op if the table already exists.
+const MIGRATION_V25_SQL = [
+    `CREATE TABLE IF NOT EXISTS worktrees (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        branch TEXT NOT NULL,
+        coder_agent_id TEXT,
+        workspace_id TEXT NOT NULL,
+        created_at TEXT DEFAULT (datetime('now')),
+        UNIQUE(branch, workspace_id)
+    )`,
+    `CREATE INDEX IF NOT EXISTS idx_worktrees_workspace ON worktrees(workspace_id)`,
 ];
 
 /**
@@ -1359,13 +1382,21 @@ export class KanbanDatabase {
 
     public async createWorktree(branch: string, coderAgentId: string | null): Promise<number> {
         if (!this._db) return -1;
+        const workspaceId = await this.getWorkspaceId();
+        this._db.run(
+            'INSERT INTO worktrees (branch, coder_agent_id, workspace_id) VALUES (?, ?, ?)',
+            [branch, coderAgentId, workspaceId]
+        );
+        // Retrieve the auto-generated ID by the unique (branch, workspace_id) constraint
         const stmt = this._db.prepare(
-            'INSERT INTO worktrees (branch, coder_agent_id, workspace_id) VALUES (?, ?, ?)'
+            'SELECT id FROM worktrees WHERE branch = ? AND workspace_id = ?'
         );
         try {
-            stmt.bind([branch, coderAgentId, await this.getWorkspaceId()]);
-            stmt.step();
-            return this._db.lastInsertRowid as number;
+            stmt.bind([branch, workspaceId]);
+            if (stmt.step()) {
+                return stmt.getAsObject().id as number;
+            }
+            return -1;
         } finally {
             stmt.free();
         }
@@ -3775,14 +3806,25 @@ export class KanbanDatabase {
         }
 
         // V24: Remove path column from worktrees table — paths derived from git at read time
-        // Feature was never used, so just drop the table; SCHEMA_SQL recreates it on next load.
+        // Feature was never used, so just drop and recreate with new schema.
         const v24 = await this.getMigrationVersion();
         if (v24 < 24) {
             for (const sql of MIGRATION_V24_SQL) {
                 try { this._db.exec(sql); } catch { /* ignore */ }
             }
             await this.setMigrationVersion(24);
-            console.log('[KanbanDatabase] V24 migration completed: worktrees table dropped (will be recreated from SCHEMA_SQL)');
+            console.log('[KanbanDatabase] V24 migration completed: worktrees table recreated without path column');
+        }
+
+        // V25: Safety net — ensures worktrees table exists even if V24's broken early version
+        // dropped it without recreating. Harmless no-op if table already exists (CREATE IF NOT EXISTS).
+        const v25 = await this.getMigrationVersion();
+        if (v25 < 25) {
+            for (const sql of MIGRATION_V25_SQL) {
+                try { this._db.exec(sql); } catch { /* ignore */ }
+            }
+            await this.setMigrationVersion(25);
+            console.log('[KanbanDatabase] V25 migration completed: worktrees table ensured');
         }
 
 
