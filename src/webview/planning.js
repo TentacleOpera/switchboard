@@ -974,6 +974,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.antigravityEnabled = msg.antigravityEnabled || false;
         const agToggleModal = document.getElementById('antigravity-toggle-modal');
         if (agToggleModal) { agToggleModal.checked = state.antigravityEnabled; }
+
+        // Keep modal folder list in sync when docs are refreshed
+        renderFolderListModal();
     }
 
     function handleOnlineDocsReady(msg) {
@@ -2826,6 +2829,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     // Folder modal close (Escape key)
     document.addEventListener('keydown', (e) => {
         if (e.key === 'Escape') {
+            // Don't close modal if focus is in a text input — Escape should clear the field instead
+            const tag = e.target.tagName.toLowerCase();
+            if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
             const modal = document.getElementById('folder-modal');
             if (modal && modal.style.display !== 'none') {
                 modal.style.display = 'none';

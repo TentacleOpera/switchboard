@@ -385,3 +385,58 @@ Key risks: (1) Antigravity toggle sync breaks if the modal proxies through the r
 
 ## Recommendation
 Complexity 4 → **Send to Coder**
+
+---
+
+## Review Results (Post-Implementation Audit)
+
+### Reviewer: Grumpy Principal Engineer pass
+### Date: 2026-05-28
+
+### Findings
+
+| # | Severity | Description | Status |
+|---|----------|-------------|--------|
+| 1 | MAJOR | Escape key handler fires on all keydowns, including when focus is in textarea/input/select — causes unexpected modal closes while editing | **Fixed** |
+| 2 | MAJOR | `.folder-list` CSS has `max-height: 120px` (designed for inline sidebar), creating nested scroll in the modal's spacious 80vh body | **Fixed** |
+| 3 | NIT | `renderFolderList()` is dead code (target element removed, always returns early) | Deferred — plan explicitly chose to keep for safety |
+| 4 | NIT | `toggle-container` uses inline style instead of CSS class | Deferred — functional, cosmetic |
+| 5 | NIT | `toggle-label` inline style overrides in modal differ from CSS class defaults | Deferred — functional, cosmetic |
+| 6 | — | Antigravity toggle state sync (initially suspected) | Withdrawn — verified correct |
+| 7 | MAJOR | `handleLocalDocsReady` missing `renderFolderListModal()` call — modal folder list goes stale when refresh triggers `localDocsReady` instead of `localFoldersListed` | **Fixed** |
+
+### Code Fixes Applied
+
+1. **`src/webview/planning.js` line ~2831** — Added input element guard to Escape key handler:
+   ```javascript
+   const tag = e.target.tagName.toLowerCase();
+   if (tag === 'textarea' || tag === 'input' || tag === 'select') return;
+   ```
+
+2. **`src/webview/planning.html` line ~1588** — Added CSS override for modal folder list:
+   ```css
+   .folder-modal .folder-list {
+       max-height: none;
+   }
+   ```
+
+3. **`src/webview/planning.js` line ~979** — Added `renderFolderListModal()` call to `handleLocalDocsReady`:
+   ```javascript
+   // Keep modal folder list in sync when docs are refreshed
+   renderFolderListModal();
+   ```
+
+### Validation Results
+
+- **JS syntax check**: `node -c planning.js` → PASS (exit code 0)
+- **HTML structure**: div opens/closes balanced (94/94), style tags balanced (2/2)
+- **Feature presence**: Folders button ✓, Modal HTML ✓, Modal antigravity toggle ✓, Old antigravity toggle removed ✓, Old agToggle init removed ✓, `state.antigravityEnabled` used ✓
+- **`renderFolderListModal()` call sites**: 4 active calls confirmed (modal open, handleLocalDocsReady, handleLocalFolderPathUpdated, localFoldersListed)
+- **Compilation**: Skipped per review instructions
+- **Automated tests**: Skipped per review instructions
+
+### Remaining Risks
+
+1. **Dead code accumulation**: `renderFolderList()` (lines 580-614) is a no-op that should be removed in a follow-up cleanup. It safely returns early but adds cognitive noise.
+2. **Inline styles in modal HTML**: The `toggle-container` and `toggle-label` inline styles work but should be extracted to CSS classes in a future polish pass for maintainability.
+3. **No automated test coverage**: This is a webview UI change with no test infrastructure. All verification is manual. The manual verification steps in the plan remain the authoritative checklist.
