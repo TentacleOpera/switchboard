@@ -510,7 +510,11 @@ export class KanbanProvider implements vscode.Disposable {
         if (workspaceRoot) {
             const resolved = path.resolve(workspaceRoot);
             if (allowedRoots.has(resolved)) {
-                this._currentWorkspaceRoot = resolved;
+                if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolved) {
+                    this._outputChannel?.appendLine(
+                        `[KanbanProvider] _resolveWorkspaceRoot: resolved ${resolved} differs from current ${this._currentWorkspaceRoot} — not switching`
+                    );
+                }
                 return resolved;
             }
         }

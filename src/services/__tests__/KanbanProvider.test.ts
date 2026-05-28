@@ -478,4 +478,47 @@ Manual verification steps:
             assert.strictEqual(provider.getProjectFilter(), null);
         });
     });
+
+    suite('resolveWorkspaceRoot auto-switch bug', () => {
+        test('should not auto-switch currentWorkspaceRoot when resolving a different workspace', () => {
+            const allowedRoots = new Set(['/workspace1', '/workspace2']);
+            sandbox.stub(provider as any, '_getAllowedRoots').returns(allowedRoots);
+
+            (provider as any)._currentWorkspaceRoot = '/workspace1';
+
+            const resolved = (provider as any)._resolveWorkspaceRoot('/workspace2');
+
+            assert.strictEqual(resolved, '/workspace2');
+            assert.strictEqual((provider as any)._currentWorkspaceRoot, '/workspace1');
+        });
+
+        test('should still resolve current workspace when no argument passed', () => {
+            const allowedRoots = new Set(['/workspace1']);
+            sandbox.stub(provider as any, '_getAllowedRoots').returns(allowedRoots);
+            (provider as any)._currentWorkspaceRoot = '/workspace1';
+
+            const resolved = (provider as any)._resolveWorkspaceRoot();
+
+            assert.strictEqual(resolved, '/workspace1');
+            assert.strictEqual((provider as any)._currentWorkspaceRoot, '/workspace1');
+        });
+
+        test('should auto-select first workspace when none is set and autoSelect is true', () => {
+            const allowedRoots = new Set(['/workspace1', '/workspace2']);
+            sandbox.stub(provider as any, '_getAllowedRoots').returns(allowedRoots);
+            sandbox.stub(provider as any, '_getWorkspaceRoots').returns(['/workspace1', '/workspace2']);
+            (provider as any)._currentWorkspaceRoot = null;
+
+            const getConfigStub = sandbox.stub(vscode.workspace, 'getConfiguration');
+            getConfigStub.returns({
+                get: sandbox.stub().withArgs('autoSelectFirstWorkspace', true).returns(true)
+            } as any);
+
+            const resolved = (provider as any)._resolveWorkspaceRoot();
+
+            assert.strictEqual(resolved, '/workspace1');
+            assert.strictEqual((provider as any)._currentWorkspaceRoot, '/workspace1');
+        });
+    });
 });
+

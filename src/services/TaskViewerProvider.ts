@@ -4118,7 +4118,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             importedPlanFiles,
             undefined,
             undefined,
-            projectFilter ?? undefined
+            projectFilter || undefined
         );
 
         for (const planFile of importedPlanFiles) {
@@ -4188,7 +4188,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     suppressIntegrationSync: true,
                     createdAt,
                     skipTemplateHeadings: true,
-                    projectName: projectFilter ?? undefined
+                    projectName: projectFilter || undefined
                 }
             );
 
@@ -4210,7 +4210,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         suppressIntegrationSync: true,
                         createdAt: subtaskCreatedAt,
                         skipTemplateHeadings: true,
-                        projectName: projectFilter ?? undefined
+                        projectName: projectFilter || undefined
                     }
                 );
                 const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
@@ -15346,11 +15346,16 @@ Create this file exactly as specified, then continue your work.`);
             if (options.projectName && wsId) {
                 const db = await this._getKanbanDb(workspaceRoot);
                 if (db) {
-                    await db.assignPlansToProject(
+                    const assigned = await db.assignPlansToProject(
                         [planFileRelative.replace(/\\/g, '/')],
                         options.projectName,
                         wsId
                     );
+                    if (!assigned) {
+                        console.warn(`[TaskViewerProvider] assignPlansToProject returned false for plan ${planFileRelative}, project "${options.projectName}". Project assignment may have failed.`);
+                    }
+                } else {
+                    console.warn(`[TaskViewerProvider] Cannot assign plan ${planFileRelative} to project "${options.projectName}": kanban DB unavailable.`);
                 }
             }
 
