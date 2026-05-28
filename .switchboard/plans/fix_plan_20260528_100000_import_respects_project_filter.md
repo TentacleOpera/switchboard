@@ -4,16 +4,47 @@ description: Fix ClickUp/Linear import to respect project filter
 
 # Fix: ClickUp/Linear Import Respects Project Filter
 
-## Problem
-When importing a task from ClickUp or Linear using the import button in `implementation.html`, the imported plan is created on the base board even when a project is selected in the kanban filter. The plan should be assigned to the currently selected project.
+## Goal
+When importing a task from ClickUp or Linear, the imported plan should be assigned to the currently selected project in the kanban filter, rather than always landing on the base board.
 
-## Root Cause
-The `_createInitiatedPlan()` method in `TaskViewerProvider.ts` does not accept or set a project ID. When `importClickUpTask()` and `importLinearTask()` call this method, they pass no project information, so the plan is created with an empty `project` field in the database. This causes the plan to appear on the base board regardless of the current project filter.
+## Metadata
+- **Tags:** [bugfix, backend, UI]
+- **Complexity:** 4
+
+## User Review Required
+- Confirm that imported plans should inherit the active project filter (vs. always going to base board).
+- Confirm that draft plans and clipboard imports are out of scope for this fix.
+
+## Complexity Audit
+
+### Routine
+- Adding an optional `projectName` parameter to `_createInitiatedPlan()` options (backward-compatible, no callers break)
+- Calling `assignPlansToProject()` after plan creation — reuses existing DB method already used by the kanban UI
+- Reading `this._kanbanProvider?.getProjectFilter()` in import handlers — already proven pattern (line 13472)
+
+### Complex / Risky
+- Threading `projectName` through `_createImportedLinearPlan()` recursive helper — must ensure the parameter propagates to all recursive subtask calls without breaking the recursion signature
+
+## Edge-Case & Dependency Audit
+
+- **Race Conditions:** Between `_createInitiatedPlan` creating the plan and `assignPlansToProject` updating it, there is a brief window where the plan exists without a project assignment. This is benign — the assignment happens in the same async function before any UI refresh, and the kanban refresh only fires after the entire import completes.
+- **Security:** No user-controlled input flows through `projectName` beyond what `KanbanProvider._projectFilter` already holds (set from a validated dropdown). No injection risk.
+- **Side Effects:** `assignPlansToProject` does a direct SQL UPDATE on the `plans` table. If the project name doesn't exist in the `projects` table, the plan gets a `project` column value that doesn't match any project row. This is the same behavior as the existing kanban UI drag-and-drop assignment (KanbanProvider line 4197), and the project filter is always set from a validated dropdown, so phantom projects are unlikely.
+- **Dependencies & Conflicts:** No other in-flight changes touch `_createInitiatedPlan` or the import methods. The `assignPlansToProject` DB method is stable and already tested.
+
+## Dependencies
+- None
+
+## Adversarial Synthesis
+Key risks: (1) The Linear import call path goes through `_createImportedLinearPlan`, not directly to `_createInitiatedPlan` — the `projectName` option must be threaded through this recursive helper. (2) Redundant DB calls inside `_createInitiatedPlan` should be avoided by reusing the existing `wsId` variable. Mitigations: Explicitly update `_createImportedLinearPlan` signature; reuse `wsId` from `_registerPlan` for project assignment; drop the unnecessary webview change since `getProjectFilter()` is already accessible from the backend.
 
 ## Proposed Changes
 
-### 1. Update `_createInitiatedPlan()` signature
-Add an optional `projectName` parameter to the `_createInitiatedPlan()` method in `TaskViewerProvider.ts`:
+### 1. Update `_createInitiatedPlan()` signature and implementation
+**File:** `src/services/TaskViewerProvider.ts`
+**Lines:** 15271-15361
+
+Add `projectName?: string` to the options type (line 15276-15280):
 
 ```typescript
 private async _createInitiatedPlan(
@@ -24,81 +55,194 @@ private async _createInitiatedPlan(
         skipBrainPromotion?: boolean;
         suppressIntegrationSync?: boolean;
         createdAt?: string;
+        skipTemplateHeadings?: boolean;
         projectName?: string;  // NEW: optional project assignment
     } = {}
 ): Promise<{ planFileAbsolute: string; }>
 ```
 
-### 2. Update plan creation to set project in database
-After creating the plan file, if `projectName` is provided, update the database record to assign the plan to that project:
+After `_registerPlan` completes (after line 15330) and before the `suppressIntegrationSync` check (line 15338), add project assignment:
 
 ```typescript
-// After line 15306 (after log.createRunSheet)
-if (options.projectName) {
+// Assign to project if specified (reuses wsId from _registerPlan above)
+if (options.projectName && wsId) {
     const db = await this._getKanbanDb(workspaceRoot);
     if (db) {
-        const workspaceId = await this._getOrCreateWorkspaceId(workspaceRoot);
-        if (workspaceId) {
-            await db.assignPlansToProject([planFileRelative], options.projectName, workspaceId);
-        }
+        await db.assignPlansToProject(
+            [planFileRelative.replace(/\\/g, '/')],
+            options.projectName,
+            wsId
+        );
     }
 }
 ```
 
-### 3. Get current project filter in import handlers
-Update `importClickUpTask()` and `importLinearTask()` to retrieve the current project filter from `KanbanProvider` and pass it to `_createInitiatedPlan()`:
+**Why reuse `wsId`:** The `_getOrCreateWorkspaceId` is already called at line 15320 and stored as `wsId`. Calling it again would be redundant and could theoretically return a different value if the workspace context changed between calls (unlikely but defensive).
+
+**Insertion point rationale:** Placing project assignment after `_registerPlan` ensures the plan row exists in the DB before we UPDATE it. Placing it before `suppressIntegrationSync` ensures the project is set before any integration sync fires, so synced data reflects the correct project.
+
+### 2. Update `_createImportedLinearPlan()` to thread `projectName`
+**File:** `src/services/TaskViewerProvider.ts`
+**Lines:** 4016-4067
+
+This is the recursive helper that `importLinearTask()` actually calls. It must accept and forward `projectName`:
 
 ```typescript
-// In importClickUpTask() and importLinearTask()
-const projectFilter = this._kanbanProvider?.getProjectFilter() || null;
+private async _createImportedLinearPlan(
+    db: KanbanDatabase,
+    linearService: LinearSyncService,
+    node: LinearImportNode,
+    createdPlanFiles: string[],
+    parentPlanFile?: string,
+    parentIssue?: LinearIssue,
+    projectName?: string  // NEW: forward to _createInitiatedPlan
+): Promise<string> {
+    const createdAt = new Date().toISOString();
+    const { planFileAbsolute } = await this._createInitiatedPlan(
+        node.issue.title || this._describeLinearIssue(node.issue),
+        this._buildLinearImportPlanContent(node, parentIssue, createdAt),
+        false,
+        {
+            skipBrainPromotion: true,
+            createdAt,
+            suppressIntegrationSync: true,
+            skipTemplateHeadings: true,
+            projectName  // NEW: pass through
+        }
+    );
+    // ... existing code unchanged ...
 
-const { planFileAbsolute: rootPlanFile } = await this._createInitiatedPlan(
-    task.name || `ClickUp Task ${task.id}`,
-    planContent,
-    false,
-    {
-        skipBrainPromotion: true,
-        suppressIntegrationSync: true,
-        createdAt,
-        projectName: projectFilter || undefined  // Pass current project filter
+    for (const child of node.subtasks) {
+        await this._createImportedLinearPlan(
+            db,
+            linearService,
+            child,
+            createdPlanFiles,
+            planFileRelative,
+            node.issue,
+            projectName  // NEW: forward to recursive subtask calls
+        );
     }
-);
+    // ...
+}
 ```
 
-Do the same for subtask creation in both import methods.
+### 3. Update `importLinearTask()` to pass project filter
+**File:** `src/services/TaskViewerProvider.ts`
+**Lines:** 4069-4132
 
-### 4. Update webview to send project filter (optional)
-If the project filter is not accessible from the backend, update the webview message in `implementation.html` to include the current project filter:
+Retrieve the current project filter and pass it to `_createImportedLinearPlan`:
 
 ```typescript
-// In the import button click handlers (lines 4537 and 4628)
-vscode.postMessage({
-    type: 'clickupImportTask',
-    taskId: importBtn.dataset.importIssueId,
-    includeSubtasks: true,
-    workspaceRoot: currentWorkspaceRoot || undefined,
-    projectFilter: currentProjectFilter || undefined  // NEW: send current project
-});
+public async importLinearTask(
+    workspaceRoot: string,
+    issueId: string,
+    includeSubtasks: boolean = true,
+    skipSync: boolean = false
+): Promise<{ success: boolean; planFile?: string; importedPlanFiles: string[]; error?: string; message?: string }> {
+    // ... existing validation code unchanged (lines 4075-4106) ...
+
+    const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+
+    const importedPlanFiles: string[] = [];
+    const rootPlanFile = await this._createImportedLinearPlan(
+        db,
+        linearService,
+        rootNode,
+        importedPlanFiles,
+        undefined,   // parentPlanFile
+        undefined,   // parentIssue
+        projectFilter ?? undefined  // NEW: pass current project filter
+    );
+
+    // ... rest of method unchanged ...
+}
 ```
 
-Then update the message handlers in `TaskViewerProvider.ts` to use `data.projectFilter` instead of querying `KanbanProvider`.
+### 4. Update `importClickUpTask()` to pass project filter
+**File:** `src/services/TaskViewerProvider.ts`
+**Lines:** 4134-4218
+
+Retrieve the current project filter and pass it to both the parent and subtask `_createInitiatedPlan` calls:
+
+```typescript
+public async importClickUpTask(
+    workspaceRoot: string,
+    taskId: string,
+    includeSubtasks: boolean = true,
+    skipSync: boolean = false
+): Promise<{ ... }> {
+    // ... existing validation code unchanged (lines 4140-4167) ...
+
+    const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+
+    // Parent task import (line 4172)
+    const { planFileAbsolute: rootPlanFile } = await this._createInitiatedPlan(
+        task.name || `ClickUp Task ${task.id}`,
+        planContent,
+        false,
+        {
+            skipBrainPromotion: true,
+            suppressIntegrationSync: true,
+            createdAt,
+            skipTemplateHeadings: true,
+            projectName: projectFilter ?? undefined  // NEW
+        }
+    );
+
+    // Subtask import (line 4193)
+    for (const subtask of subtasks) {
+        const subtaskCreatedAt = new Date().toISOString();
+        const subtaskContent = this._buildClickUpImportPlanContent(subtask, subtaskCreatedAt);
+        const { planFileAbsolute: subtaskPlanFile } = await this._createInitiatedPlan(
+            subtask.name || `ClickUp Subtask ${subtask.id}`,
+            subtaskContent,
+            false,
+            {
+                skipBrainPromotion: true,
+                suppressIntegrationSync: true,
+                createdAt: subtaskCreatedAt,
+                skipTemplateHeadings: true,
+                projectName: projectFilter ?? undefined  // NEW
+            }
+        );
+        // ... rest of subtask loop unchanged ...
+    }
+
+    // ... rest of method unchanged ...
+}
+```
+
+### 5. No webview changes needed
+The webview does NOT need to send `projectFilter` in its messages. The backend already has access to `this._kanbanProvider?.getProjectFilter()` (proven by existing usage at line 13472 of TaskViewerProvider.ts). Adding a webview field would create unnecessary coupling between frontend filter state and backend message handling.
 
 ## Verification Plan
 1. Select a project in the kanban board filter
 2. Import a ClickUp task from the implementation.html sidebar
 3. Verify the imported plan appears in the selected project board (not base board)
 4. Repeat for Linear task import
-5. Verify that when no project is selected, imports still work (go to base board)
+5. Verify that when no project is selected (filter = null), imports still work (go to base board as before)
 6. Verify that subtasks are also assigned to the same project as the parent task
+7. Verify that `linearImportAndSendToPlanner` flow also respects the project filter (it calls `importLinearTask`, so it should inherit the fix automatically)
+8. Verify that existing callers of `_createInitiatedPlan` (draft plans, clipboard imports) are unaffected — they don't pass `projectName`, so `undefined` is the default and no project assignment occurs
+
+### Automated Tests
+- Existing test `src/test/integrations/linear/linear-import-flow.test.js` verifies `_createInitiatedPlan` signature — the regex at line 248 will need updating to include `projectName?: string` in the options pattern
+- Existing test `src/test/plan-creation-integration-sync-regression.test.js` verifies `_createInitiatedPlan` signature — may need similar regex update
+- Existing test `src/test/clipboard-import-brain-promotion-regression.test.js` — should continue passing since `projectName` is optional with no default
 
 ## Files Changed
 - `src/services/TaskViewerProvider.ts`:
-  - Update `_createInitiatedPlan()` signature and implementation
-  - Update `importClickUpTask()` to pass project filter
-  - Update `importLinearTask()` to pass project filter
-- `src/webview/implementation.html` (optional, if backend can't access filter):
-  - Update import button click handlers to send project filter
+  - Update `_createInitiatedPlan()` signature and implementation (add `projectName` option + `assignPlansToProject` call)
+  - Update `_createImportedLinearPlan()` signature (add `projectName` parameter, forward to `_createInitiatedPlan` and recursive calls)
+  - Update `importLinearTask()` to read project filter and pass to `_createImportedLinearPlan`
+  - Update `importClickUpTask()` to read project filter and pass to `_createInitiatedPlan` (both parent and subtask calls)
+- `src/test/integrations/linear/linear-import-flow.test.js`:
+  - Update regex patterns to match new `_createInitiatedPlan` signature with `projectName`
+- `src/test/plan-creation-integration-sync-regression.test.js`:
+  - Update regex pattern if it matches the full options signature
+- `src/test/clipboard-import-brain-promotion-regression.test.js`:
+  - Update regex pattern at line 34 to include `projectName?: string` in options
 
-## Open Questions
-- Should the project filter be sent from the webview or queried from `KanbanProvider` in the backend? (Prefer querying from backend to avoid webview changes)
-- What should happen if the selected project doesn't exist in the database? (Should auto-create or fail gracefully?)
+## Recommendation
+Complexity 4 → **Send to Coder**
