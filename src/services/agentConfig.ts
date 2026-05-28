@@ -58,7 +58,7 @@ export interface KanbanColumnDefinition {
     label: string;
     role?: string;
     order: number;
-    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'custom-agent' | 'custom-user' | 'completed';
+    kind: 'created' | 'review' | 'gather' | 'coded' | 'reviewed' | 'merge' | 'custom-agent' | 'custom-user' | 'completed';
     source: 'built-in' | 'custom-agent' | 'custom-user';
     autobanEnabled: boolean;
     dragDropMode: 'cli' | 'prompt' | 'disabled';

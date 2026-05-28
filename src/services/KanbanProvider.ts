@@ -396,12 +396,12 @@ export class KanbanProvider implements vscode.Disposable {
             columns.splice(insertIdx, 0, {
                 id: 'MERGE',
                 label: 'MERGE',
-                role: null,
-                order: 95,
-                kind: 'custom-user',
-                source: 'custom-user',
+                role: undefined,
+                order: 310,
+                kind: 'merge',
+                source: 'built-in',
                 autobanEnabled: false,
-                dragDropMode: 'manual'
+                dragDropMode: 'disabled'
             });
         }
         return columns;
@@ -2755,7 +2755,7 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     /** Get the next column ID in the pipeline, or null for the last column. */
-    private async _getNextColumnId(column: string, workspaceRoot: string): Promise<string | null> {
+    private async _getNextColumnId(column: string, workspaceRoot: string, planWorktreeId?: number | null): Promise<string | null> {
         const normalizedColumn = this._normalizeLegacyKanbanColumn(column);
         const [customAgents, customKanbanColumns] = await Promise.all([
             this._getCustomAgents(workspaceRoot),
@@ -2771,6 +2771,9 @@ export class KanbanProvider implements vscode.Disposable {
         /** Returns true if the column should NOT be considered a next step. */
         const shouldSkip = (col: typeof allColumns[0]): boolean => {
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
+                return true;
+            }
+            if (col.id === 'MERGE' && !planWorktreeId) {
                 return true;
             }
             if (col.dragDropMode === 'disabled') {
@@ -3746,6 +3749,11 @@ export class KanbanProvider implements vscode.Disposable {
             await this._autoCommitIfCodeReviewTransition(workspaceRoot, sessionId, targetColumn);
 
             if (targetColumn === 'MERGE') {
+                // Plans without worktrees skip MERGE and go directly to COMPLETED
+                const plan = await db.getPlanBySessionId(sessionId);
+                if (!plan?.worktreeId) {
+                    return await this.moveCardToColumn(workspaceRoot, sessionId, 'COMPLETED');
+                }
                 const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const moved = await db.updateColumn(sessionId, targetColumn);
                 if (moved) {
@@ -3802,6 +3810,11 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             if (targetColumn === 'MERGE' && sessionId) {
+                // Plans without worktrees skip MERGE and go directly to COMPLETED
+                const plan = await db.getPlanBySessionId(sessionId);
+                if (!plan?.worktreeId) {
+                    return await this.moveCardToColumnByPlanFile(workspaceRoot, planFile, 'COMPLETED');
+                }
                 const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
                 if (moved) {
@@ -6305,7 +6318,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         try {
                             // Kill associated terminal if any
                             if (fullPath) {
-                                const terminalName = this._findTerminalForWorktree(fullPath);
+                                const terminalName = await this._findTerminalForWorktree(fullPath);
                                 if (terminalName) {
                                     await this._taskViewerProvider?.killTerminal(terminalName);
                                 }
@@ -6822,17 +6835,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return { id, branch: branchName };
     }
 
-    private _findTerminalForWorktree(worktreePath: string): string | undefined {
-        const activeTerminals = vscode.window.terminals;
-        const found = activeTerminals.find(t => {
-            const cwdOpt = (t.creationOptions as vscode.TerminalOptions)?.cwd;
-            if (cwdOpt) {
-                const fsPath = typeof cwdOpt === 'string' ? cwdOpt : cwdOpt.fsPath;
-                return path.resolve(fsPath) === path.resolve(worktreePath);
-            }
-            return false;
-        });
-        return found?.name;
+    private async _findTerminalForWorktree(worktreePath: string): Promise<string | undefined> {
+        // Use stored worktreePath from terminal state records (reliable)
+        // rather than creationOptions.cwd (unreliable at runtime — VS Code #114858)
+        return await this._taskViewerProvider?.findTerminalNameByWorktreePath(worktreePath);
     }
 
     private async _executeMergeRule(workspaceRoot: string, sessionId: string, rule: string): Promise<void> {
@@ -6852,7 +6858,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Execute git command from MAIN worktree (workspaceRoot), NOT from the worktree itself
         const execFileAsync = promisify(cp.execFile);
         const gitArgs = rule === 'squash' ? ['merge', '--squash', worktree.branch]
-                      : rule === 'rebase' ? ['rebase', worktree.branch]
+                      : rule === 'ff-only' ? ['merge', '--ff-only', worktree.branch]
                       : ['merge', worktree.branch];
 
         try {
@@ -6860,7 +6866,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
             // If squash, need a separate commit step
             if (rule === 'squash') {
-                await execFileAsync('git', ['commit', '--no-edit'], { cwd: workspaceRoot });
+                try {
+                    await execFileAsync('git', ['commit', '--no-edit'], { cwd: workspaceRoot });
+                } catch (commitErr: any) {
+                    // Handle "nothing to commit" gracefully — branch may already be fully merged
+                    if (!commitErr.stderr?.includes('nothing to commit') && !commitErr.message?.includes('nothing to commit')) {
+                        throw commitErr;
+                    }
+                    console.info(`[KanbanProvider] Squash commit skipped — no changes to commit for ${worktree.branch}`);
+                }
             }
 
             // Cleanup: kill terminal, remove worktree, delete branch
@@ -6872,11 +6886,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 );
                 // Abort the merge to leave main branch clean
                 try {
-                    if (rule === 'rebase') {
-                        await execFileAsync('git', ['rebase', '--abort'], { cwd: workspaceRoot });
-                    } else {
-                        await execFileAsync('git', ['merge', '--abort'], { cwd: workspaceRoot });
-                    }
+                    await execFileAsync('git', ['merge', '--abort'], { cwd: workspaceRoot });
                 } catch { /* ignore abort failure */ }
                 // Leave worktree in place for manual resolution
             } else {
@@ -6896,7 +6906,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
         const worktreePath = branchToPath.get(worktree.branch);
         if (worktreePath) {
-            const terminalName = this._findTerminalForWorktree(worktreePath);
+            const terminalName = await this._findTerminalForWorktree(worktreePath);
             if (terminalName) {
                 await this._taskViewerProvider?.killTerminal(terminalName);
             }
@@ -6905,7 +6915,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Remove git worktree and branch
         try {
             if (worktreePath) {
-                await execFileAsync('git', ['worktree', '--force', 'remove', worktreePath], { cwd: workspaceRoot });
+                await execFileAsync('git', ['worktree', 'remove', '--force', worktreePath], { cwd: workspaceRoot });
             }
             await execFileAsync('git', ['branch', '-D', worktree.branch], { cwd: workspaceRoot });
         } catch (e: any) {

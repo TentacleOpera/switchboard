@@ -3763,16 +3763,17 @@
                 const isCreated = def.id === 'CREATED';
                 const isPlanReviewed = def.id === 'PLAN REVIEWED';
                 const isCompleted = def.kind === 'completed';
+                const isMerge = def.kind === 'merge';
                 // Last working column = the column immediately before the completed column
                 const completedIndex = renderDefs.findIndex(d => d.kind === 'completed');
                 const defIndex = renderDefs.indexOf(def);
                 const isLastWorkingColumn = !isCompleted && completedIndex > 0 && defIndex === completedIndex - 1;
-                const hasAgent = !isCreated && !isCompleted;
+                const hasAgent = !isCreated && !isCompleted && !isMerge;
                 
                 const mode = columnDragDropModes[def.id] || 'cli';
                 const modeIcon = mode === 'prompt' ? ICON_PROMPT : ICON_CLI;
                 const modeTitle = mode === 'prompt' ? 'Mode: Copy Prompt (drag cards to copy prompt to clipboard)' : 'Mode: CLI Dispatch (drag cards to trigger CLI agent)';
-                const modeToggle = (!isCreated && !isLastWorkingColumn && !isCompleted) 
+                const modeToggle = (!isCreated && !isLastWorkingColumn && !isCompleted && !isMerge) 
                     ? `<div class="mode-toggle mode-${mode}" data-column="${escapeAttr(def.id)}" data-tooltip="${escapeAttr(modeTitle)}">
                            <img src="${modeIcon}" alt="${mode}">
                        </div>` 
@@ -3827,6 +3828,16 @@
                         </button>
                         <button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">
                             <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
+                        </button>
+                    </div>`;
+                } else if (isMerge) {
+                    // Merge column: only merge-selected and merge-all (progress to completed)
+                    buttonArea = `<div class="column-button-area">
+                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Merge selected plans (execute git merge and move to Completed)">
+                            <img src="${ICON_MOVE_SELECTED}" alt="Merge Selected">
+                        </button>
+                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Merge all plans in this column (execute git merge and move to Completed)">
+                            <img src="${ICON_MOVE_ALL}" alt="Merge All">
                         </button>
                     </div>`;
                 } else {
@@ -4500,11 +4511,14 @@
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
 
+            const isMergeCard = card.column === 'MERGE';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
-                : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
-                       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
-                   </button>`;
+                : isMergeCard
+                    ? '' // Merge cards use the Merge button to progress to completed
+                    : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
+                           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
+                       </button>`;
             const depInfo = resolveCardDependencies(card);
             const blockingList = depInfo.resolved
                 .filter(r => r.card.column !== 'COMPLETED' && r.card.column !== 'CODE REVIEWED')
@@ -7100,7 +7114,7 @@
             mergeLabel.textContent = 'DEFAULT MERGE STRATEGY:';
             const mergeSelect = document.createElement('select');
             mergeSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
-            ['squash', 'merge', 'rebase'].forEach(strategy => {
+            ['squash', 'merge', 'ff-only'].forEach(strategy => {
                 const opt = document.createElement('option');
                 opt.value = strategy;
                 opt.textContent = strategy.toUpperCase();

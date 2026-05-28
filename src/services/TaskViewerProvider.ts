@@ -5835,6 +5835,26 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._postAutobanState();
     }
 
+    /** Find a terminal name by its stored worktreePath (from terminal state records). */
+    public async findTerminalNameByWorktreePath(worktreePath: string): Promise<string | undefined> {
+        const resolvedTarget = path.resolve(worktreePath);
+        // Search state records for matching worktreePath
+        return new Promise<string | undefined>((resolve) => {
+            this.updateState(async (state) => {
+                if (state.terminals) {
+                    for (const [termName, termInfo] of Object.entries(state.terminals)) {
+                        const info = termInfo as any;
+                        if (info.worktreePath && path.resolve(info.worktreePath) === resolvedTarget) {
+                            resolve(termName);
+                            return;
+                        }
+                    }
+                }
+                resolve(undefined);
+            }).then(() => { /* updateState resolves after persistence */ });
+        });
+    }
+
     /** Called by Kanban automation panel to remove a terminal from the autoban pool. */
     public async removeAutobanTerminalFromKanban(role: string, terminalName: string): Promise<void> {
         await this._removeAutobanTerminal(role, terminalName);

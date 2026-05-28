@@ -73,12 +73,66 @@ This is incorrect because:
 
 ## Files Affected
 
-- `src/services/TaskViewerProvider.ts` - Send terminal-derived agent names to sidebar
+- `src/services/KanbanProvider.ts` - Remove incorrect `clearRegisteredTerminalsMap()` call on workspace switch
+- `src/services/TaskViewerProvider.ts` - Make `getActualTerminalAgentNames()` work without `_registeredTerminals`, send terminal-derived names to sidebar
 - `src/webview/implementation.html` - Use terminal-derived agent names instead of workspace-derived
 
 ## Proposed Solution
 
-### Step 1: Send terminal-derived agent names to sidebar
+### Step 1: Remove incorrect `clearRegisteredTerminalsMap()` call
+
+In KanbanProvider.ts, remove the call to `clearRegisteredTerminalsMap()` on workspace switch. The `_registeredTerminals` map is a dispatch map for sending commands to terminals, not workspace-specific state. Clearing it breaks agent name lookup:
+
+```typescript
+// In KanbanProvider.ts, around line 4191-4196
+// BEFORE:
+if (prevWorkspaceRoot !== this._currentWorkspaceRoot) {
+    this._taskViewerProvider?.clearRegisteredTerminalsMap();
+}
+
+// AFTER: Remove this block entirely
+// The _registeredTerminals map should persist across workspace switches
+// because terminals are still running and valid
+```
+
+### Step 2: Make `getActualTerminalAgentNames()` work without `_registeredTerminals`
+
+The current implementation requires `_registeredTerminals` to iterate over terminals. However, we can iterate directly over the `_terminalAgentInfo` cache and check if terminals are still alive using `vscode.window.terminals`:
+
+```typescript
+// In TaskViewerProvider.ts, replace getActualTerminalAgentNames() (lines 465-488)
+public getActualTerminalAgentNames(): Record<string, string> {
+    const result: Record<string, string> = {};
+
+    // Get all currently open VS Code terminals
+    const allTerminals = vscode.window.terminals;
+    const terminalNames = new Set(allTerminals.map(t => t.name));
+
+    // Iterate over cached agent info and check if terminal is still open
+    for (const [name, info] of this._terminalAgentInfo.entries()) {
+        // Skip if terminal is no longer open
+        if (!terminalNames.has(name)) {
+            this._terminalAgentInfo.delete(name);
+            continue;
+        }
+
+        // First alive terminal per role wins (deterministic: Map iteration order)
+        if (!(info.role in result)) {
+            result[info.role] = info.displayName;
+        }
+    }
+
+    return result;
+}
+```
+
+This approach:
+- Doesn't require `_registeredTerminals` to be populated
+- Works correctly even if `_registeredTerminals` is cleared
+- Still prunes stale cache entries for closed terminals
+- Is workspace-agnostic by design
+
+### Step 3: Send terminal-derived agent names to sidebar
 
 In TaskViewerProvider.ts, modify the `_postSidebarConfigurationState` method to send terminal-derived agent names:
 
@@ -108,7 +162,7 @@ const terminalAgentNames = this.getActualTerminalAgentNames();
 this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
 ```
 
-### Step 2: Update implementation.html to use terminal-derived names
+### Step 4: Update implementation.html to use terminal-derived names
 
 In implementation.html, add a variable to store terminal-derived agent names and update the display logic:
 
@@ -160,7 +214,7 @@ if (lastTerminalAgentNames['analyst']) {
 }
 ```
 
-### Step 3: Send terminal agent names on terminal state changes
+### Step 5: Send terminal agent names on terminal state changes
 
 In TaskViewerProvider.ts, send updated terminal agent names when terminals are created or closed:
 
@@ -193,43 +247,52 @@ private _notifyTerminalAgentNamesChanged(): void {
 1. **Manual test scenario**:
    - Open workspace A with lead coder configured as gemini
    - Start a lead coder terminal
+   - Verify kanban shows "GEMINI CLI" in column header
    - Verify sidebar shows "LEAD CODER - GEMINI CLI"
    - Switch to workspace B where lead coder is configured as claude
+   - Verify kanban still shows "GEMINI CLI"
    - Verify sidebar still shows "LEAD CODER - GEMINI CLI"
-   - Verify kanban column headers also show "GEMINI CLI"
    - Close the terminal
-   - Verify sidebar shows "LEAD CODER - CLAUDE CLI" (fallback to workspace config)
+   - Verify kanban shows "CLAUDE CLI" (fallback to workspace config)
+   - Verify sidebar shows "LEAD CODER - CLAUDE CLI"
 
 2. **Regression tests**:
+   - Ensure kanban agent display still works when no terminals are running
    - Ensure sidebar agent display still works when no terminals are running
-   - Ensure sidebar agent display still works for custom agents
-   - Ensure workspace switching doesn't break other sidebar functionality
-   - Ensure terminal creation updates sidebar agent names correctly
+   - Ensure workspace switching doesn't break other functionality
+   - Ensure terminal creation updates agent names correctly
+   - Ensure terminal closure updates agent names correctly
 
 ## Risks and Considerations
 
-1. **Message ordering**: Terminal agent names might arrive after startup commands on initial load — mitigated by prioritizing terminal names in display logic
-2. **Race conditions**: Workspace switch during terminal creation could cause temporary inconsistency — mitigated by fallback to workspace config
-3. **Backward compatibility**: If the sidebar doesn't receive terminal agent names (old extension version), it falls back to workspace config — no regression
+1. **Terminal dispatch map persistence**: Not clearing `_registeredTerminals` on workspace switch means the dispatch map persists. This is correct behavior because terminals are still running and valid.
+2. **Message ordering**: Terminal agent names might arrive after startup commands on initial load — mitigated by prioritizing terminal names in display logic
+3. **Race conditions**: Workspace switch during terminal creation could cause temporary inconsistency — mitigated by fallback to workspace config
+4. **Backward compatibility**: If the sidebar doesn't receive terminal agent names (old extension version), it falls back to workspace config — no regression
 
 ## Success Criteria
 
+- Kanban board agent names are locked to the terminals that created them
 - Sidebar agent names are locked to the terminals that created them
-- Switching workspaces does not change displayed terminal names in the sidebar
-- Sidebar and kanban board show consistent agent names
+- Switching workspaces does not change displayed terminal names in either kanban or sidebar
+- Kanban and sidebar show consistent agent names
 - Fallback to workspace configuration works when no terminals are running
-- Terminal creation/closure updates sidebar agent names correctly
+- Terminal creation/closure updates agent names correctly in both kanban and sidebar
 
 ## Verification Plan
 
 ### Manual Tests
+- Workspace switch does not change kanban agent names for running terminals
 - Workspace switch does not change sidebar agent names for running terminals
-- Sidebar and kanban board show consistent agent names
-- Terminal closure causes sidebar to fall back to workspace config
-- Terminal creation causes sidebar to update to terminal-derived name
+- Kanban and sidebar show consistent agent names
+- Terminal closure causes both kanban and sidebar to fall back to workspace config
+- Terminal creation causes both kanban and sidebar to update to terminal-derived name
 
 ### Automated Tests
+- Unit test: `getActualTerminalAgentNames()` works without `_registeredTerminals`
+- Unit test: `getActualTerminalAgentNames()` prunes stale entries for closed terminals
 - Unit test: terminal agent names are sent to sidebar on terminal creation
 - Unit test: terminal agent names are sent to sidebar on terminal closure
 - Unit test: sidebar prioritizes terminal-derived names over workspace config
+- Integration test: workspace switch does not change kanban agent names
 - Integration test: workspace switch does not change sidebar agent names
