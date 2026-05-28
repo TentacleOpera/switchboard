@@ -479,6 +479,7 @@ function delay(ms: number): Promise<void> {
 }
 
 export class KanbanDatabase {
+    public static readonly UNASSIGNED_PROJECT_FILTER = '__unassigned__';
     private static _instances = new Map<string, KanbanDatabase>();
     private static _instancesByDbPath = new Map<string, KanbanDatabase>();
     private static _warnedUnmappedRoots = new Set<string>();
@@ -2133,14 +2134,16 @@ export class KanbanDatabase {
         repoScope: string | null
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        if (!project && !repoScope) {
+        // Translate sentinel to empty-string filter for unassigned plans
+        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        if (effectiveProject === null && !repoScope) {
             return this.getBoard(workspaceId);
         }
         let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'active'`;
         const params: unknown[] = [workspaceId];
-        if (project) {
+        if (effectiveProject !== null && effectiveProject !== undefined) {
             sql += ' AND project = ?';
-            params.push(project);
+            params.push(effectiveProject);
         }
         if (repoScope) {
             sql += " AND repo_scope IN (?, '')";
@@ -2226,14 +2229,15 @@ export class KanbanDatabase {
         limit: number = 100
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
-        if (!project && !repoScope) {
+        const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        if (effectiveProject === null && !repoScope) {
             return this.getCompletedPlans(workspaceId, limit);
         }
         let sql = `SELECT ${PLAN_COLUMNS} FROM plans WHERE workspace_id = ? AND status = 'completed'`;
         const params: unknown[] = [workspaceId];
-        if (project) {
+        if (effectiveProject !== null && effectiveProject !== undefined) {
             sql += ' AND project = ?';
-            params.push(project);
+            params.push(effectiveProject);
         }
         if (repoScope) {
             sql += " AND repo_scope IN (?, '')";

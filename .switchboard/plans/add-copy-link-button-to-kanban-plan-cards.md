@@ -76,7 +76,8 @@ After line 1393 (after `.kanban-plan-actions` rule), add:
     white-space: nowrap;
 }
 
-.kanban-plan-item:hover .kanban-plan-copy-link {
+.kanban-plan-item:hover .kanban-plan-copy-link,
+.kanban-plan-copy-link:focus-visible {
     opacity: 1;
 }
 
@@ -91,6 +92,7 @@ After line 1393 (after `.kanban-plan-actions` rule), add:
 - Button uses `margin-left: auto` within the flex `.kanban-plan-actions` row to push it to the right, matching the visual intent of "bottom-right" placement without overlap issues.
 - `border-radius: 10px` matches the existing `.kanban-column-badge` style for visual consistency.
 - Hover reveal pattern matches the existing `.doc-delete-btn` pattern (opacity 0 → 1 on parent hover).
+- **Added:** `:focus-visible` to allow keyboard users to see the focused button even when not hovering the parent.
 
 ### `src/webview/planning.js` — Button HTML and click handler
 
@@ -172,3 +174,23 @@ if (copyLinkBtn) {
 ---
 
 **Recommendation:** Complexity 2 → Send to Intern
+
+## Review & Execution (Completed)
+
+**Stage 1: Grumpy Review**
+- [NIT] "The CSS implementation completely ignores keyboard users. Setting `opacity: 0` on an interactive element and only revealing it on parent `:hover` means tab-navigating users will tab into an invisible black hole. This is frontend 101. Add `:focus-visible` reveal."
+- [PASS] The implementation correctly applies `margin-left: auto` in a flex container, keeping it safely right-aligned.
+- [PASS] Event propagation correctly stopped; we won't accidentally trigger plan selection or a messy "discard changes" dialog.
+
+**Stage 2: Balanced Synthesis**
+- The original code was structurally solid and followed the plan, but missed fundamental keyboard accessibility for hover-revealed buttons. I am applying the fix to add `:focus-visible`.
+
+**Code Fixes Applied:**
+- Edited `src/webview/planning.html` to add `.kanban-plan-copy-link:focus-visible { opacity: 1; }` so the button appears when receiving keyboard focus.
+
+**Files Verified:**
+- `src/webview/planning.html`
+- `src/webview/planning.js`
+
+**Remaining Risks:**
+- None. The feature correctly handles clipboard interactions, cleanly scopes to individual cards, and is now fully accessible.

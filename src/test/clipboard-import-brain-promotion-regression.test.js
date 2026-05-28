@@ -25,13 +25,13 @@ function run() {
 
     assert.match(
         source,
-        /public async createDraftPlanTicket\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false\);/,
+        /public async createDraftPlanTicket\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, idea, false, \{ createdAt \}\);/,
         'Expected normal draft plan creation to keep the default brain-promotion behavior.'
     );
 
     assert.match(
         source,
-        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;\s*\} = \{\}\s*\): Promise<\{ sessionId: string; planFileAbsolute: string; \}> \{[\s\S]*if \(!options\.skipBrainPromotion\) \{[\s\S]*void this\._promotePlanToBrain\(planFileAbsolute, fileName\)\.catch\(\(e\) => \{/,
+        /private async _createInitiatedPlan\(\s*title: string,\s*idea: string,\s*isAirlock: boolean,\s*options: \{\s*skipBrainPromotion\?: boolean;\s*suppressIntegrationSync\?: boolean;[\s\S]*?\} = \{\}\s*\): Promise<\{ planFileAbsolute: string; \}> \{[\s\S]*if \(!options\.skipBrainPromotion\) \{[\s\S]*void this\._promotePlanToBrain\(planFileAbsolute, fileName\)\.catch\(\(e\) => \{/,
         'Expected _createInitiatedPlan to skip auto-promotion when skipBrainPromotion=true.'
     );
 

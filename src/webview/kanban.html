@@ -3412,16 +3412,16 @@
                 const wsLabel = buildWorkspaceOptionLabel(item);
                 const projects = allWorkspaceProjects[wsRoot] || [];
 
-                // "All Projects" option for this workspace
-                const allOpt = document.createElement('option');
-                allOpt.value = wsRoot + '|';
-                allOpt.textContent = wsLabel + ' > All Projects';
-                allOpt.dataset.workspaceRoot = wsRoot;
-                allOpt.dataset.project = '';
+                // Base workspace option (shows only unassigned plans)
+                const baseOpt = document.createElement('option');
+                baseOpt.value = wsRoot + '|__unassigned__';
+                baseOpt.textContent = wsLabel;
+                baseOpt.dataset.workspaceRoot = wsRoot;
+                baseOpt.dataset.project = '__unassigned__';
                 if (item.controlPlaneAction || item.selectionMode) {
-                    allOpt.dataset.controlPlaneAction = item.controlPlaneAction || item.selectionMode;
+                    baseOpt.dataset.controlPlaneAction = item.controlPlaneAction || item.selectionMode;
                 }
-                select.appendChild(allOpt);
+                select.appendChild(baseOpt);
 
                 // Per-project options
                 for (const proj of projects) {
@@ -3447,7 +3447,7 @@
                 const delBtn = document.getElementById('btn-delete-project');
                 if (delBtn) {
                     const currentOption = select.selectedOptions?.[0];
-                    const hasProject = !!(currentOption?.dataset?.project);
+                    const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
                     delBtn.disabled = !hasProject;
                     delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
                 }
@@ -3466,12 +3466,12 @@
                     fallbackRoot = workspaceItems[0]?.workspaceRoot || '';
                 }
                 if (fallbackRoot) {
-                    const fallbackProject = activeProjectFilter || '';
+                    const fallbackProject = activeProjectFilter ?? '';
                     const fallbackValue = fallbackRoot + '|' + fallbackProject;
                     if ([...select.options].some(o => o.value === fallbackValue)) {
                         select.value = fallbackValue;
                     } else {
-                        select.value = fallbackRoot + '|';
+                        select.value = fallbackRoot + '|__unassigned__';
                     }
                 }
             }
@@ -3480,7 +3480,7 @@
             const delBtn = document.getElementById('btn-delete-project');
             if (delBtn) {
                 const currentOption = select.selectedOptions?.[0];
-                const hasProject = !!(currentOption?.dataset?.project);
+                const hasProject = !!(currentOption?.dataset?.project) && currentOption.dataset.project !== '__unassigned__';
                 delBtn.disabled = !hasProject;
                 delBtn.setAttribute('data-tooltip', hasProject ? 'Delete selected project' : 'Select a project to delete');
             }
@@ -5114,7 +5114,7 @@
                     const previousRoot = currentWorkspaceRoot;
                     currentWorkspaceRoot = msg.workspaceRoot || '';
                     activeWorkspaceFilter = msg.activeFilter || null;
-                    activeProjectFilter = msg.projectFilter || null;
+                    activeProjectFilter = msg.projectFilter ?? null;
                     workspaceItems = Array.isArray(msg.workspaces) ? msg.workspaces : [];
                     currentControlPlaneMode = msg.controlPlaneMode || msg.mode || 'none';
                     currentControlPlaneRoot = msg.controlPlaneRoot || msg.effectiveControlPlaneRoot || '';
@@ -5682,8 +5682,8 @@
             const sourceWorkspaces = new Set(selectedCards.values());
             const isSameWorkspace = sourceWorkspaces.size === 1 && sourceWorkspaces.has(targetWorkspaceRoot);
 
-            if (isSameWorkspace && !targetProject) {
-                // No-op: same workspace, no project
+            if (isSameWorkspace && (!targetProject || targetProject === '__unassigned__')) {
+                // No-op: same workspace, no project or unassigned
                 vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
                 return;
             }
@@ -5700,13 +5700,13 @@
                     sessionIds: sessionIds,
                     sourceWorkspaceRoot: sourceWorkspaceRoot,
                     targetWorkspaceRoot: targetWorkspaceRoot,
-                    targetProject: targetProject
+                    targetProject: targetProject === '__unassigned__' ? '' : targetProject
                 });
             } else {
                 // Same workspace: project assignment only
                 postKanbanMessage({
                     type: 'assignSelectedToProject',
-                    projectName: targetProject,
+                    projectName: targetProject === '__unassigned__' ? '' : targetProject,
                     planIds: sessionIds
                 });
             }
@@ -5740,7 +5740,7 @@
                     controlPlaneAction: controlPlaneAction,
                     project: selectedProject || null // Include selected project
                 });
-            } else if (selectedProject !== (activeProjectFilter || '')) {
+            } else if (selectedProject !== (activeProjectFilter ?? '')) {
                 // Same workspace, different project filter
                 postKanbanMessage({
                     type: 'setProjectFilter',
@@ -5751,8 +5751,9 @@
             // Update delete button state
             const btnDeleteProject = document.getElementById('btn-delete-project');
             if (btnDeleteProject) {
-                btnDeleteProject.disabled = !selectedProject;
-                btnDeleteProject.setAttribute('data-tooltip', selectedProject ? 'Delete selected project' : 'Select a project to delete');
+                const disabled = !selectedProject || selectedProject === '__unassigned__';
+                btnDeleteProject.disabled = disabled;
+                btnDeleteProject.setAttribute('data-tooltip', !disabled ? 'Delete selected project' : 'Select a project to delete');
             }
         });
         document.getElementById('workspace-reset-control-plane')?.addEventListener('click', () => {

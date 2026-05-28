@@ -4019,7 +4019,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         node: LinearImportNode,
         createdPlanFiles: string[],
         parentPlanFile?: string,
-        parentIssue?: LinearIssue
+        parentIssue?: LinearIssue,
+        projectName?: string
     ): Promise<string> {
         const createdAt = new Date().toISOString();
         const { planFileAbsolute } = await this._createInitiatedPlan(
@@ -4030,7 +4031,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 skipBrainPromotion: true,
                 createdAt,
                 suppressIntegrationSync: true,
-                skipTemplateHeadings: true
+                skipTemplateHeadings: true,
+                projectName
             }
         );
 
@@ -4046,7 +4048,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (parentPlan) {
                 const dependencySaved = await db.updateDependenciesByPlanFile(planFileAbsolute, workspaceId, parentPlan.planFile);
                 if (!dependencySaved) {
-                    throw new Error(`Failed to link imported subtask ${planFileRelative} to parent ${parentPlanFile}.`);
+                     throw new Error(`Failed to link imported subtask ${planFileRelative} to parent ${parentPlanFile}.`);
                 }
             }
         }
@@ -4059,7 +4061,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 child,
                 createdPlanFiles,
                 planFileRelative,
-                node.issue
+                node.issue,
+                projectName
             );
         }
 
@@ -4105,12 +4108,17 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+
         const importedPlanFiles: string[] = [];
         const rootPlanFile = await this._createImportedLinearPlan(
             db,
             linearService,
             rootNode,
-            importedPlanFiles
+            importedPlanFiles,
+            undefined,
+            undefined,
+            projectFilter ?? undefined
         );
 
         for (const planFile of importedPlanFiles) {
@@ -4166,6 +4174,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const task = details.task;
             const subtasks = includeSubtasks && details.subtasks ? details.subtasks : [];
 
+            const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
+
             // Build plan content for the parent task
             const createdAt = new Date().toISOString();
             const planContent = this._buildClickUpImportPlanContent(task, createdAt);
@@ -4177,7 +4187,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     skipBrainPromotion: true,
                     suppressIntegrationSync: true,
                     createdAt,
-                    skipTemplateHeadings: true
+                    skipTemplateHeadings: true,
+                    projectName: projectFilter ?? undefined
                 }
             );
 
@@ -4198,7 +4209,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         skipBrainPromotion: true,
                         suppressIntegrationSync: true,
                         createdAt: subtaskCreatedAt,
-                        skipTemplateHeadings: true
+                        skipTemplateHeadings: true,
+                        projectName: projectFilter ?? undefined
                     }
                 );
                 const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
@@ -13471,10 +13483,10 @@ What would you like to find?`;
             const repoScope = this._kanbanProvider?.getRepoScopeFilter() ?? null;
             const projectFilter = this._kanbanProvider?.getProjectFilter() ?? null;
 
-            const activeRows = (repoScope || projectFilter)
+            const activeRows = (projectFilter !== null || repoScope)
                 ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                 : await db.getBoard(workspaceId);
-            const completedRows = (repoScope || projectFilter)
+            const completedRows = (projectFilter !== null || repoScope)
                 ? await db.getCompletedPlansFilteredByProject(workspaceId, projectFilter, repoScope)
                 : await db.getCompletedPlans(workspaceId);
             // Log column distribution for debugging
@@ -15277,6 +15289,7 @@ Create this file exactly as specified, then continue your work.`);
             suppressIntegrationSync?: boolean;
             createdAt?: string;
             skipTemplateHeadings?: boolean;
+            projectName?: string;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -15318,6 +15331,7 @@ Create this file exactly as specified, then continue your work.`);
 
             // Register local plan in ownership registry
             const wsId = await this._getOrCreateWorkspaceId(workspaceRoot);
+
             await this._registerPlan(workspaceRoot, {
                 planId: planFileRelative,
                 ownerWorkspaceId: wsId,
@@ -15328,6 +15342,17 @@ Create this file exactly as specified, then continue your work.`);
                 updatedAt: now.toISOString(),
                 status: 'active'
             });
+
+            if (options.projectName && wsId) {
+                const db = await this._getKanbanDb(workspaceRoot);
+                if (db) {
+                    await db.assignPlansToProject(
+                        [planFileRelative.replace(/\\/g, '/')],
+                        options.projectName,
+                        wsId
+                    );
+                }
+            }
 
             await this._logEvent('plan_management', {
                 operation: 'create_plan',

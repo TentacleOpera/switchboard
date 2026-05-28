@@ -158,6 +158,20 @@ async function run() {
             'Expected getCompletedPlansFilteredByProject to return ProjA rows matching repo scope.'
         );
 
+        // Test sentinel filter for unassigned project ('')
+        const filteredUnassigned = await db.getBoardFilteredByProject(workspaceId, KanbanDatabase.UNASSIGNED_PROJECT_FILTER, null);
+        assert.deepStrictEqual(
+            filteredUnassigned.map((row) => row.sessionId).sort(),
+            ['sess-active-be', 'sess-active-fe', 'sess-active-unscoped'].sort(),
+            'Expected getBoardFilteredByProject with sentinel to return active plans with empty project.'
+        );
+
+        const filteredCompletedUnassigned = await db.getCompletedPlansFilteredByProject(workspaceId, KanbanDatabase.UNASSIGNED_PROJECT_FILTER, null, 100);
+        assert.deepStrictEqual(
+            filteredCompletedUnassigned.map((row) => row.sessionId).sort(),
+            [],
+            'Expected getCompletedPlansFilteredByProject with sentinel to return completed plans with empty project.'
+        );
 
         assert.strictEqual(sanitizeRepoScope('be'), 'be', 'Expected sanitizeRepoScope to keep a simple repo name.');
         assert.strictEqual(sanitizeRepoScope('../be'), '', 'Expected sanitizeRepoScope to reject path traversal.');

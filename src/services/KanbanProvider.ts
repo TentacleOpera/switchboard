@@ -1669,7 +1669,7 @@ export class KanbanProvider implements vscode.Disposable {
             if (workspaceId && dbReady) {
                 const projectFilter = this._projectFilter;
                 const repoScope = this._repoScopeFilter;
-                const dbRows = (projectFilter || repoScope)
+                const dbRows = (projectFilter !== null || repoScope)
                     ? await db.getBoardFilteredByProject(workspaceId, projectFilter, repoScope)
                     : await db.getBoard(workspaceId);
                 console.log(`[KanbanProvider] _refreshBoardImpl: getBoard returned ${dbRows.length} active rows`);
@@ -4103,7 +4103,7 @@ export class KanbanProvider implements vscode.Disposable {
                     const prevWorkspaceRoot = this._currentWorkspaceRoot;
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
                     // Only reset project filter if not explicitly provided
-                    if (!msg.project) {
+                    if (msg.project === null || msg.project === undefined) {
                         this.setProjectFilter(null); // Reset project filter on workspace switch
                     } else {
                         this.setProjectFilter(msg.project); // Preserve selected project
@@ -4183,7 +4183,7 @@ export class KanbanProvider implements vscode.Disposable {
             case 'setProjectFilter': {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
-                    this.setProjectFilter(msg.project || null);
+                    this.setProjectFilter(msg.project ?? null);
                     await this._refreshBoard(workspaceRoot);
                 }
                 break;
