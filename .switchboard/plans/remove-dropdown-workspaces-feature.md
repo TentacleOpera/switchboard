@@ -769,3 +769,40 @@ Delete the file `src/test/kanban-dropdown-workspaces.test.ts` entirely.
 ## Recommendation
 
 **Send to Coder** — Complexity 4. The changes are routine removals across 10 files, but the cascading simplification in WorkspaceIdentityService.ts (removing `isDropdownWorkspace` and cleaning up 8 dead-code guards) and the ghost plan filtering simplification in KanbanProvider.ts require careful attention to ensure no logic is accidentally broken.
+
+---
+
+## Review Results (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | File | Line(s) |
+|---|---------|----------|------|---------|
+| 1 | Stale comment "OR as dropdown" in `resolveEffectiveWorkspaceRootFromMappings` | NIT | `src/services/WorkspaceIdentityService.ts` | 118 |
+| 2 | Misleading variable name `isDropdown` and comments referencing "dropdown (sub-workspace)" in workspace scope filter logic — this variable checks if a workspace is a mapped child vs parent, has nothing to do with the removed dropdown workspaces feature | MAJOR | `src/services/KanbanProvider.ts` | 4119-4127 |
+| 3 | All feature-specific code properly removed | PASS | All 10 files + test file | — |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| NIT: Stale comment | **Fix now** | One-line edit, prevents future confusion |
+| MAJOR: Misleading `isDropdown` variable | **Fix now** | Variable name references removed feature; rename to `isChildWorkspace` and update comments |
+
+### Stage 3: Code Fixes Applied
+
+1. **`src/services/WorkspaceIdentityService.ts` line 118:** Changed comment from `"as child OR as parent OR as dropdown"` to `"as child OR as parent"`
+2. **`src/services/KanbanProvider.ts` lines 4119-4127:** Renamed `isDropdown` → `isChildWorkspace`, updated comments from "dropdown (sub-workspace)" → "child workspace", "Only dropdown workspaces should trigger filtering" → "Only child workspaces should trigger filtering", "Dropdown workspace: set repo scope filter" → "Child workspace: set repo scope filter"
+
+### Stage 4: Verification Results
+
+- `grep` for `dropdownWorkspaces|isDropdownWorkspace|browseDropdownFolders|browseWorkspaceMappingDropdownFolder|workspaceMappingDropdownFolderSelected|cleanupDropdownIdentityFiles` across `src/`: **0 matches** ✅
+- `grep` for `isDropdown` in `src/services/KanbanProvider.ts`: **0 matches** ✅
+- `grep` for `dropdown` in `src/services/WorkspaceIdentityService.ts`: **0 matches** ✅
+- `grep` for `isDropdown[^W]` across `src/`: **0 matches** ✅
+- `kanban-dropdown-workspaces.test.ts` file: **Deleted** ✅
+- `isChildWorkspace` variable in `src/services/KanbanProvider.ts`: **2 matches** (declaration + usage) ✅
+
+### Remaining Risks
+
+- None. All feature-specific code, imports, tests, and misleading naming have been cleaned up. The feature removal is complete.

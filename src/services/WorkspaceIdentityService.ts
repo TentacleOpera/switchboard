@@ -115,7 +115,7 @@ export function resolveEffectiveWorkspaceRootFromMappings(workspaceRoot: string)
 
         // workspaceRoot is already resolved by caller
 
-        // Check if this workspace root is in any mapping (as child OR as parent OR as dropdown)
+        // Check if this workspace root is in any mapping (as child OR as parent)
         for (const mapping of cfg.mappings) {
             if (!Array.isArray(mapping.workspaceFolders)) continue;
 

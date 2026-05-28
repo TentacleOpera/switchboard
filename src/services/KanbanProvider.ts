@@ -4116,13 +4116,13 @@ export class KanbanProvider implements vscode.Disposable {
                     if (msg.controlPlaneAction === 'reset-auto-detect') {
                         this._repoScopeFilter = null;
                     } else {
-                        // Determine if the selected workspace is a dropdown (sub-workspace)
-                        // or the parent workspace. Only dropdown workspaces should trigger filtering.
+                        // Determine if the selected workspace is a child workspace
+                        // or the parent workspace. Only child workspaces should trigger filtering.
                         const effectiveRoot = this.resolveEffectiveWorkspaceRoot(msg.workspaceRoot);
-                        const isDropdown = path.resolve(msg.workspaceRoot) !== effectiveRoot;
+                        const isChildWorkspace = path.resolve(msg.workspaceRoot) !== effectiveRoot;
 
-                        if (isDropdown) {
-                            // Dropdown workspace: set repo scope filter to the folder name
+                        if (isChildWorkspace) {
+                            // Child workspace: set repo scope filter to the folder name
                             const repoScope = path.basename(path.resolve(msg.workspaceRoot));
                             this._repoScopeFilter = repoScope;
                         } else {
