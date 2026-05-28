@@ -6128,16 +6128,27 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const wtRelativePath = await vscode.window.showInputBox({ prompt: 'Worktree path (relative to workspace parent)' });
                 if (!wtRelativePath) break;
+                // Validate path: must be relative and must not escape workspace parent
+                if (path.isAbsolute(wtRelativePath) || wtRelativePath.includes('..')) {
+                    vscode.window.showErrorMessage('Worktree path must be relative and cannot contain ".."');
+                    break;
+                }
                 const branch = await vscode.window.showInputBox({ prompt: 'Branch name' });
                 if (!branch) break;
+                // Validate branch name: must be a valid git branch name
+                if (!/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/.test(branch) || branch.includes('..') || branch.endsWith('.lock') || branch.endsWith('/') || branch.startsWith('-')) {
+                    vscode.window.showErrorMessage('Invalid branch name. Use letters, digits, hyphens, underscores, slashes, and dots. Cannot start with "-", contain "..", end with "/" or ".lock".');
+                    break;
+                }
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
-                    const id = await db.createWorktree(wtRelativePath, branch, null);
-                    const execAsync = promisify(cp.exec);
                     const parentDir = path.dirname(workspaceRoot);
                     const fullPath = path.join(parentDir, wtRelativePath);
+                    const id = await db.createWorktree(wtRelativePath, branch, null);
                     try {
-                        await execAsync(`git worktree add -b "${branch}" "${fullPath}"`, { cwd: workspaceRoot });
+                        // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
+                        const execFileAsync = promisify(cp.execFile);
+                        await execFileAsync('git', ['worktree', 'add', '-b', branch, fullPath], { cwd: workspaceRoot });
                         vscode.window.showInformationMessage(`Worktree created at ${fullPath}`);
                     } catch (e: any) {
                         vscode.window.showErrorMessage(`Failed to create worktree: ${e.message}`);
@@ -6165,12 +6176,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             );
                             if (confirm !== 'Delete') break;
                         }
-                        const execAsync = promisify(cp.exec);
                         const parentDir = path.dirname(workspaceRoot);
                         const fullPath = path.isAbsolute(wt.path) ? wt.path : path.resolve(parentDir, wt.path);
                         try {
-                            await execAsync(`git worktree remove --force "${fullPath}"`, { cwd: workspaceRoot });
-                            await execAsync(`git branch -D "${wt.branch}"`, { cwd: workspaceRoot });
+                            // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
+                            const execFileAsync = promisify(cp.execFile);
+                            await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                            await execFileAsync('git', ['branch', '-D', wt.branch], { cwd: workspaceRoot });
                         } catch (e: any) {
                             console.warn(`Failed to remove worktree: ${e.message}`);
                         }
@@ -6519,12 +6531,13 @@ This work was done in a git worktree.
         if (choice === 'Clean Up') {
             const worktree = await db.getWorktreeById(plan.worktreeId);
             if (worktree) {
-                const execAsync = promisify(cp.exec);
                 const parentDir = path.dirname(workspaceRoot);
                 const fullPath = path.isAbsolute(worktree.path) ? worktree.path : path.resolve(parentDir, worktree.path);
                 try {
-                    await execAsync(`git worktree remove --force "${fullPath}"`, { cwd: workspaceRoot });
-                    await execAsync(`git branch -D "${worktree.branch}"`, { cwd: workspaceRoot });
+                    // SECURITY: Use cp.execFile with args array to prevent shell injection (F-03)
+                    const execFileAsync = promisify(cp.execFile);
+                    await execFileAsync('git', ['worktree', 'remove', '--force', fullPath], { cwd: workspaceRoot });
+                    await execFileAsync('git', ['branch', '-D', worktree.branch], { cwd: workspaceRoot });
                     await db.deleteWorktree(worktree.id);
                 } catch (e: any) {
                     console.warn(`Failed to cleanup worktree: ${e.message}`);

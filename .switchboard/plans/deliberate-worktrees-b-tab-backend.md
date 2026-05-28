@@ -277,3 +277,48 @@ Key risks: (1) Git worktree creation could fail after DB entry is created — mu
 **Complexity: 3 → Send to Coder**
 
 Straightforward UI + message handler addition following existing patterns. The only non-trivial part is the git worktree creation with rollback on failure, which is a simple try/catch pattern.
+
+---
+
+## Review Pass Results (2026-05-28)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | Shell injection via `cp.exec` with string interpolation in all worktree git commands. Branch names and paths interpolated into shell strings — `$(malicious)` would execute. Codebase already has F-03 SECURITY pattern using `cp.execFile` with args arrays (see TaskViewerProvider.ts:16273, ArchiveManager.ts:175). |
+| MAJOR-1 | MAJOR | Missing path validation — plan's Edge-Case audit explicitly requires "validate paths are within workspace parent directory" but no validation existed. `../../etc/shadow` would be accepted. |
+| MAJOR-2 | MAJOR | No branch name validation — any string accepted from `showInputBox`, including invalid git branch names with shell metacharacters. DB entry created before git validation. |
+| NIT-1 | NIT | No empty state message in `renderWorktrees` — blank list when no worktrees exist. |
+| NIT-2 | NIT | `execAsync = promisify(cp.exec)` declared redundantly in three locations (resolved by CRITICAL-1 fix). |
+
+### Stage 2: Balanced Synthesis
+
+All findings fixed — no deferrals.
+
+| Finding | Action |
+|---------|--------|
+| CRITICAL-1 | **Fixed**: Replaced all `cp.exec` with `cp.execFile('git', argsArray)` following F-03 pattern |
+| MAJOR-1 | **Fixed**: Added path validation — rejects absolute paths and paths containing `..` |
+| MAJOR-2 | **Fixed**: Added branch name regex validation before DB insertion |
+| NIT-1 | **Fixed**: Added empty state message in `renderWorktrees` |
+| NIT-2 | **Fixed**: Resolved by CRITICAL-1 fix (no more `promisify(cp.exec)`) |
+
+### Files Changed
+
+| File | Change |
+|------|--------|
+| `src/services/KanbanProvider.ts` | Lines 6126-6161 (createWorktree): Added path validation, branch name validation, replaced `cp.exec` with `cp.execFile`. Lines 6162-6195 (deleteWorktree): Replaced `cp.exec` with `cp.execFile`. Lines 6531-6546 (_cleanupWorktreeAfterReview): Replaced `cp.exec` with `cp.execFile`. |
+| `src/webview/kanban.html` | Lines 7090-7107 (renderWorktrees): Added empty state message when worktrees list is empty. |
+
+### Validation
+
+- **TypeScript compilation**: Skipped per session instructions (SKIP COMPILATION).
+- **Automated tests**: Skipped per session instructions (SKIP TESTS).
+- **Security regression check**: Verified zero remaining `promisify(cp.exec)` usages in KanbanProvider.ts.
+- **Pattern consistency**: All worktree git commands now use `cp.execFile` with args arrays, matching the established F-03 SECURITY pattern in TaskViewerProvider.ts and ArchiveManager.ts.
+
+### Remaining Risks
+
+- **Branch name regex is permissive**: The regex `/^[A-Za-z0-9][A-Za-z0-9._\/-]*$/` allows some technically invalid git branch names (e.g., sequences with `//`). Git itself will reject these at execution time with a clear error message, and the DB entry will be rolled back. A stricter validation matching git's exact rules could be added later if confusing errors are reported.
+- **`deleteWorktree` deletes DB entry even if git removal fails**: This is by design (best-effort cleanup), but could leave orphaned worktree directories on disk if git removal fails. The `--force` flag handles most cases.
