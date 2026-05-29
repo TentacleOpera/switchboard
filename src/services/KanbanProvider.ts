@@ -489,6 +489,11 @@ export class KanbanProvider implements vscode.Disposable {
                         allowedRoots.add(path.resolve(expanded));
                     }
                 }
+                for (const root of roots) {
+                    if (!this.isWorkspaceInMapping(root)) {
+                        allowedRoots.delete(path.resolve(root));
+                    }
+                }
             }
         } catch { /* fall through */ }
         return allowedRoots;
@@ -541,8 +546,13 @@ export class KanbanProvider implements vscode.Disposable {
 
         const autoSelect = vscode.workspace.getConfiguration('switchboard').get<boolean>('autoSelectFirstWorkspace', true);
         if (autoSelect) {
-            this._currentWorkspaceRoot = this._getWorkspaceRoots()[0] || Array.from(allowedRoots)[0];
-            return this._currentWorkspaceRoot;
+            // Only auto-select from allowed (mapped) roots — never fall back to unmapped workspace folders
+            const firstAllowed = Array.from(allowedRoots)[0];
+            if (firstAllowed) {
+                this._currentWorkspaceRoot = firstAllowed;
+                return this._currentWorkspaceRoot;
+            }
+            return null;
         }
 
         return null;
@@ -883,11 +893,59 @@ export class KanbanProvider implements vscode.Disposable {
         }
 
         // Fallback: if no mappings configured, watch the current workspace root
+        // If mappings exist but current workspace is not in any mapping, skip it silently
         if (folders.length === 0) {
-            folders.push(workspaceRoot);
+            try {
+                const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+                const cfg = getMappingsFromIndex();
+                if (!cfg?.enabled || !Array.isArray(cfg.mappings) || cfg.mappings.length === 0) {
+                    folders.push(workspaceRoot);
+                }
+            } catch {
+                // Outside extension host — fall back to current workspace
+                folders.push(workspaceRoot);
+            }
         }
 
         return folders;
+    }
+
+    /**
+     * Check if a workspace root is part of any workspace mapping (as parent or child).
+     * Returns true if mappings are not enabled (conservative: assume workspace is relevant).
+     */
+    public isWorkspaceInMapping(workspaceRoot: string): boolean {
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (!cfg?.enabled || !Array.isArray(cfg.mappings) || cfg.mappings.length === 0) {
+                return true; // No mappings configured — assume workspace is relevant (preserves fallback)
+            }
+            const currentResolved = path.resolve(workspaceRoot);
+            for (const m of cfg.mappings) {
+                // Check if workspace is the parent folder
+                if (typeof m.parentFolder === 'string') {
+                    const expanded = m.parentFolder.startsWith('~')
+                        ? path.join(os.homedir(), m.parentFolder.slice(1))
+                        : m.parentFolder;
+                    if (path.resolve(expanded) === currentResolved) return true;
+                }
+                // Check if workspace is a child folder
+                if (Array.isArray(m.workspaceFolders)) {
+                    for (const wf of m.workspaceFolders) {
+                        if (typeof wf === 'string') {
+                            const expanded = wf.startsWith('~')
+                                ? path.join(os.homedir(), wf.slice(1))
+                                : wf;
+                            if (path.resolve(expanded) === currentResolved) return true;
+                        }
+                    }
+                }
+            }
+            return false; // Workspace not found in any mapping
+        } catch {
+            return true; // Conservative: assume relevant if we can't check
+        }
     }
 
     public async triggerPlanScan(): Promise<void> {

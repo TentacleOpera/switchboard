@@ -862,6 +862,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     }
 
                 }
+                for (const root of roots) {
+                    if (this._kanbanProvider && !this._kanbanProvider.isWorkspaceInMapping(root)) {
+                        allowedRoots.delete(path.resolve(root));
+                    }
+                }
             }
         } catch { /* fall through */ }
         return allowedRoots;
@@ -1910,7 +1915,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             } catch (error) {
                 console.error(`[TaskViewerProvider] Failed to resolve control plane on startup for ${workspaceRoot}:`, error);
             }
-            rootsToBootstrap.add(this._resolveStateWorkspaceRoot(workspaceRoot) || workspaceRoot);
+            const effectiveRoot = this._resolveStateWorkspaceRoot(workspaceRoot) || workspaceRoot;
+            if (this._kanbanProvider && !this._kanbanProvider.isWorkspaceInMapping(effectiveRoot)) {
+                console.log(`[TaskViewerProvider] Skipping unmapped workspace: ${effectiveRoot}`);
+                continue;
+            }
+            rootsToBootstrap.add(effectiveRoot);
         }
 
         for (const workspaceRoot of rootsToBootstrap) {
