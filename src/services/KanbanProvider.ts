@@ -2550,11 +2550,37 @@ export class KanbanProvider implements vscode.Disposable {
             }
             const schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
 
+            const nextColumn = await this._getNextColumnId(column, workspaceRoot) ?? 'CODED';
+            const oldestPlan = columnPlans[columnPlans.length - 1];
+            const sqlInstruction = `
+
+---
+
+**IMPORTANT: After completing the coding work for this plan, update the kanban database to move it to the next column.**
+
+Run the following command (uses the sqlite3 CLI — it must be installed):
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${nextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; SELECT changes();"
+\`\`\`
+
+Verify that the output is \`1\` (one row updated). If it is \`0\`, the plan_file path may not match — check the DB with:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column FROM plans WHERE workspace_id = '${workspaceId}';"
+\`\`\`
+
+Database: \`${db.dbPath}\`
+Target column: \`${nextColumn}\`
+
+This step is what moves the plan forward in the Switchboard pipeline.
+`;
+
             let prompt: string;
             // Custom agent roles (custom_agent_*) are not supported by buildKanbanBatchPrompt
             // (it throws for unknown roles). Compose a minimal preamble directly.
             if (role.startsWith('custom_agent_')) {
-                prompt = `Please process plans as a custom agent.${schedulingBlock}`;
+                prompt = `Please process plans as a custom agent.${schedulingBlock}` + sqlInstruction;
             } else {
                 const options: any = {
                     workspaceRoot,
@@ -2598,7 +2624,7 @@ export class KanbanProvider implements vscode.Disposable {
                 // by the scheduling block below and would be contradictory noise).
                 let preamble = buildKanbanBatchPrompt(role, [], options);
                 preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
-                prompt = preamble + schedulingBlock;
+                prompt = preamble + schedulingBlock + sqlInstruction;
             }
 
             this._panel?.webview.postMessage({
