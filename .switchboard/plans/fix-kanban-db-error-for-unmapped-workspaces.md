@@ -353,3 +353,10 @@ try {
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+
+## Worktree Context
+This work was done in a git worktree.
+- Worktree path: /Users/patrickvuleta/Documents/GitHub/switchboard-Fix-Kanban-DB-Error-for-Unmapped-Workspa-1780017545405
+- Branch: Fix-Kanban-DB-Error-for-Unmapped-Workspa-1780017545405
+- To merge: cd /Users/patrickvuleta/Documents/GitHub/switchboard-Fix-Kanban-DB-Error-for-Unmapped-Workspa-1780017545405 && git checkout main && git merge Fix-Kanban-DB-Error-for-Unmapped-Workspa-1780017545405
