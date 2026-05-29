@@ -2523,26 +2523,6 @@ export class KanbanProvider implements vscode.Disposable {
                 return;
             }
 
-            // Sort by creation timestamp (oldest first) — createdAt is a string
-            columnPlans.sort((a, b) => {
-                const aTime = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                const bTime = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                return aTime - bTime;
-            });
-
-            const oldestPlan = columnPlans[0];
-
-            // Convert KanbanPlanRecord to BatchPromptPlan
-            // NOTE: KanbanPlanRecord has planFile (relative), BatchPromptPlan needs absolutePath
-            const plans: BatchPromptPlan[] = [{
-                sessionId: oldestPlan.sessionId,
-                topic: oldestPlan.topic,
-                absolutePath: this._resolvePlanFilePath(workspaceRoot, oldestPlan.planFile),
-                complexity: oldestPlan.complexity !== 'Unknown' ? oldestPlan.complexity : undefined,
-                dependencies: oldestPlan.dependencies || undefined,
-                workingDir: resolveWorkingDir(workspaceRoot, oldestPlan.repoScope) || undefined
-            }];
-
             // Map agent name to role (for custom agents, use their role)
             let role = agentName;
             const customAgents = await this._getCustomAgents(workspaceRoot);
@@ -2604,7 +2584,9 @@ export class KanbanProvider implements vscode.Disposable {
             };
 
             // Generate prompt using actual prompts tab configuration
-            const prompt = buildKanbanBatchPrompt(role, plans, options);
+            const preamble = buildKanbanBatchPrompt(role, [], options);
+            const schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
+            const prompt = preamble + schedulingBlock;
 
             this._panel?.webview.postMessage({
                 type: 'antigravityPrompt',
@@ -6792,7 +6774,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             // If squash, need a separate commit step
             if (rule === 'squash') {
                 try {
-                    await execFileAsync('git', ['commit', '--no-edit'], { cwd: workspaceRoot });
+                    await execFileAsync('git', ['commit', '-m', `Merge ${worktree.branch} (squash)`], { cwd: workspaceRoot });
                 } catch (commitErr: any) {
                     // Handle "nothing to commit" gracefully — branch may already be fully merged
                     if (!commitErr.stderr?.includes('nothing to commit') && !commitErr.message?.includes('nothing to commit')) {

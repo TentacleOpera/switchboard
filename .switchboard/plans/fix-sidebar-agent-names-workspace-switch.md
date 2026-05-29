@@ -7,19 +7,67 @@ Fix both the kanban board and sidebar implementation.html to display agent names
 ## Metadata
 
 - **Tags:** [bugfix, frontend, backend]
-- **Complexity:** 2
+- **Complexity:** 4
+
+## User Review Required
+
+> [!IMPORTANT]
+> **Step 1 — Removing `clearRegisteredTerminalsMap()`**: The call at KanbanProvider.ts line 4267 exists to prevent stale dispatch-map entries from routing commands to terminals that belonged to the previous workspace. Removing it means terminals from workspace A could theoretically receive commands dispatched in workspace B (if workspace-agnostic dispatch logic is ever used). **Step 2's fix makes Step 1 unnecessary for agent-name correctness alone**, but the dispatch-safety tradeoff must be confirmed before removing.
+>
+> Current recommendation: **Keep the `clearRegisteredTerminalsMap()` call intact** and rely solely on Step 2 to fix agent name display. Only remove Step 1 if the team confirms that dispatch map re-population (on re-registration) makes this safe.
+
+## Complexity Audit
+
+### Routine
+- Replacing `_registeredTerminals` iteration with `vscode.window.terminals` in `getActualTerminalAgentNames()` — a mechanical swap within one method
+- Adding `_notifyTerminalAgentNamesChanged()` private helper — trivial, calls existing `postMessage`
+- Adding a `case 'terminalAgentNames':` to the `implementation.html` message switch — straightforward extension
+- Adding `lastTerminalAgentNames` variable declaration alongside existing `lastStartupCommands`
+
+### Complex / Risky
+- Coordinating message flow across backend (TaskViewerProvider) and frontend (implementation.html) with two separate trigger points (workspace switch + terminal state change) — ordering and debounce risk
+- The call to `renderAgentList()` inside the new `terminalAgentNames` handler must be added or names will not visually update between `terminalStatuses` messages
+- Ghost dispatch risk if `clearRegisteredTerminalsMap()` is removed — dispatch map persists and could route to wrong-workspace terminals
+
+## Edge-Case & Dependency Audit
+
+### Race Conditions
+- **Workspace switch + terminal creation overlap**: If `_postSidebarConfigurationState` fires while a new terminal is halfway through `setTerminalAgentInfo`, the sidebar receives an intermediate (incomplete) snapshot. Mitigated by the sidebar's fallback to `lastStartupCommands`.
+- **`terminalAgentNames` arrives before `startupCommands`**: On initial load, `_postSidebarConfigurationState` sends `startupCommands` then `terminalAgentNames` sequentially. If they arrive in order, terminal names take priority correctly. If delivery reorders (unlikely in VS Code IPC), workspace-derived names temporarily show. Acceptable.
+
+### Security
+- No new attack surface: message payloads are terminal names already visible in the VS Code terminal panel.
+
+### Side Effects
+- `_notifyTerminalAgentNamesChanged()` fires on every `setTerminalAgentInfo` and `clearTerminalAgentInfo` call. During `createAgentGrid`, this may fire once per agent (up to ~8 times). Each call re-derives the full map via `vscode.window.terminals`. Performance is acceptable; `vscode.window.terminals` is a synchronous in-process list.
+- `clearAllTerminalAgentInfo()` (called on `deactivate()`) does not call `_notifyTerminalAgentNamesChanged()` — the view is being torn down, so no notification is needed.
+
+### Dependencies & Conflicts
+- `getActualTerminalAgentNames()` is only called by KanbanProvider (for column header badges). The new implementation using `vscode.window.terminals` must match the same role→displayName semantics or kanban column headers may change unexpectedly.
+- `clearTerminalAgentInfo(name)` at TaskViewerProvider.ts:14006 is called after the terminal closure cleanup path. The new notification fires synchronously — the sidebar may briefly show empty names until the next `terminalStatuses` push. Acceptable.
+
+## Dependencies
+
+- None (self-contained bugfix; no cross-session dependencies)
+
+## Adversarial Synthesis
+
+Key risks: (1) removing `clearRegisteredTerminalsMap()` may allow stale dispatch-map entries to route commands to wrong-workspace terminals; (2) forgetting `renderAgentList()` in the new `terminalAgentNames` case means the sidebar never visually updates between `terminalStatuses` pushes; (3) the `vscode.window.terminals` staleness window during rapid terminal create/close is negligible but must be acknowledged. Mitigations: keep the dispatch-map clear call (Step 1) as a non-issue by keeping it; always call `renderAgentList()` in the message handler; rely on the existing `terminalStatuses` push to converge any stale snapshot.
 
 ## Problem Description
 
 The existing fix for `fix_agent_names_locked_to_terminals.md` added a terminal cache and modified `_getAgentNames()` to use it, but the fix is broken because `_registeredTerminals` is cleared on workspace switch. This causes `getActualTerminalAgentNames()` to return an empty map, making the terminal cache ineffective.
 
 When switching workspaces via the kanban workspace picker:
-1. KanbanProvider calls `clearRegisteredTerminalsMap()` on workspace switch (line 4196)
-2. This clears `_registeredTerminals` in TaskViewerProvider
-3. `getActualTerminalAgentNames()` checks `if (!this._registeredTerminals) return result;` (line 468)
-4. Since `_registeredTerminals` is empty, it returns an empty map
+1. KanbanProvider calls `clearRegisteredTerminalsMap()` on workspace switch (line 4267)
+2. This calls `_registeredTerminals.clear()` in TaskViewerProvider — the map is emptied (not set to `undefined`)
+3. `getActualTerminalAgentNames()` iterates over `_registeredTerminals.entries()` (line 470)
+4. Since `_registeredTerminals` is empty, the `for...of` loop yields zero iterations and returns an empty map
 5. The kanban board falls back to workspace configuration, showing wrong agent names
 6. The sidebar also shows wrong agent names because it uses workspace-derived `lastStartupCommands`
+
+> [!NOTE]
+> **Clarification:** The guard `if (!this._registeredTerminals) return result;` (line 468) is a null-check for the `undefined` case (field is typed `Map | undefined`). `clearRegisteredTerminalsMap()` calls `.clear()` (empties the map but leaves it as a non-null `Map`), so the null-check never triggers. The real failure is zero loop iterations on an empty map.
 
 **Example scenario:**
 1. Start a lead coder terminal with gemini in workspace A
@@ -35,7 +83,7 @@ The `getActualTerminalAgentNames()` method in TaskViewerProvider requires `_regi
 public getActualTerminalAgentNames(): Record<string, string> {
     const result: Record<string, string> = {};
 
-    if (!this._registeredTerminals) return result;  // ← Returns empty if cleared
+    if (!this._registeredTerminals) return result;  // ← Only guards undefined, not empty Map
 
     for (const [name, terminal] of this._registeredTerminals.entries()) {
         // Skip exited terminals
@@ -59,48 +107,76 @@ public getActualTerminalAgentNames(): Record<string, string> {
 However, KanbanProvider clears `_registeredTerminals` on workspace switch:
 
 ```typescript
-// KanbanProvider.ts line 4191-4196
+// KanbanProvider.ts line 4266-4268
 if (prevWorkspaceRoot !== this._currentWorkspaceRoot) {
     this._taskViewerProvider?.clearRegisteredTerminalsMap();
 }
 ```
 
-This is incorrect because:
+This is incorrect for agent-name purposes because:
 - The terminals are still running and valid
 - `_registeredTerminals` is a dispatch map, not workspace-specific state
 - Clearing it breaks the ability to look up terminal agent info
-- The `_terminalAgentInfo` cache is preserved but becomes inaccessible
+- The `_terminalAgentInfo` cache is preserved but becomes inaccessible via the existing iteration
 
 ## Files Affected
 
-- `src/services/KanbanProvider.ts` - Remove incorrect `clearRegisteredTerminalsMap()` call on workspace switch
-- `src/services/TaskViewerProvider.ts` - Make `getActualTerminalAgentNames()` work without `_registeredTerminals`, send terminal-derived names to sidebar
-- `src/webview/implementation.html` - Use terminal-derived agent names instead of workspace-derived
+- `src/services/KanbanProvider.ts` — (Optional) Remove or retain `clearRegisteredTerminalsMap()` call on workspace switch (see User Review Required)
+- `src/services/TaskViewerProvider.ts` — Make `getActualTerminalAgentNames()` work without `_registeredTerminals`; add `_notifyTerminalAgentNamesChanged()`; emit `terminalAgentNames` in `_postSidebarConfigurationState`; hook notifications into `setTerminalAgentInfo` and `clearTerminalAgentInfo`
+- `src/webview/implementation.html` — Add `lastTerminalAgentNames` variable; handle `terminalAgentNames` message; update agent name display to prefer terminal-derived names
 
-## Proposed Solution
+## Proposed Changes
 
-### Step 1: Remove incorrect `clearRegisteredTerminalsMap()` call
+### `src/services/KanbanProvider.ts`
 
-In KanbanProvider.ts, remove the call to `clearRegisteredTerminalsMap()` on workspace switch. The `_registeredTerminals` map is a dispatch map for sending commands to terminals, not workspace-specific state. Clearing it breaks agent name lookup:
+#### Around line 4266-4268 (inside `case 'selectWorkspace':`)
+
+**Context:** The `clearRegisteredTerminalsMap()` call fires on every workspace switch. After Step 2's rewrite of `getActualTerminalAgentNames()`, this call no longer affects agent-name display. It may still be useful for dispatch safety (see User Review Required).
+
+**Decision point:** If removing, delete the entire `if (prevWorkspaceRoot !== this._currentWorkspaceRoot)` block. If retaining, leave as-is — Step 2 makes this a no-op for correctness.
 
 ```typescript
-// In KanbanProvider.ts, around line 4191-4196
-// BEFORE:
+// OPTION A — Remove (if dispatch safety confirmed safe):
+// Delete lines 4266-4268 entirely
+
+// OPTION B — Retain (recommended default):
+// Leave unchanged; Step 2 makes it harmless for agent name display
 if (prevWorkspaceRoot !== this._currentWorkspaceRoot) {
     this._taskViewerProvider?.clearRegisteredTerminalsMap();
 }
-
-// AFTER: Remove this block entirely
-// The _registeredTerminals map should persist across workspace switches
-// because terminals are still running and valid
 ```
 
-### Step 2: Make `getActualTerminalAgentNames()` work without `_registeredTerminals`
+---
 
-The current implementation requires `_registeredTerminals` to iterate over terminals. However, we can iterate directly over the `_terminalAgentInfo` cache and check if terminals are still alive using `vscode.window.terminals`:
+### `src/services/TaskViewerProvider.ts`
+
+#### Step 2: Rewrite `getActualTerminalAgentNames()` (lines 465-488)
+
+Replace the existing implementation with one that iterates `_terminalAgentInfo` directly and validates liveness using `vscode.window.terminals`:
 
 ```typescript
-// In TaskViewerProvider.ts, replace getActualTerminalAgentNames() (lines 465-488)
+// BEFORE (lines 465-488):
+public getActualTerminalAgentNames(): Record<string, string> {
+    const result: Record<string, string> = {};
+
+    if (!this._registeredTerminals) return result;
+
+    for (const [name, terminal] of this._registeredTerminals.entries()) {
+        if (terminal.exitStatus !== undefined) {
+            this._terminalAgentInfo.delete(name);
+            continue;
+        }
+        const info = this._terminalAgentInfo.get(name);
+        if (!info) continue;
+        if (!(info.role in result)) {
+            result[info.role] = info.displayName;
+        }
+    }
+
+    return result;
+}
+
+// AFTER:
 public getActualTerminalAgentNames(): Record<string, string> {
     const result: Record<string, string> = {};
 
@@ -110,13 +186,13 @@ public getActualTerminalAgentNames(): Record<string, string> {
 
     // Iterate over cached agent info and check if terminal is still open
     for (const [name, info] of this._terminalAgentInfo.entries()) {
-        // Skip if terminal is no longer open
+        // Skip if terminal is no longer open; prune stale cache entry
         if (!terminalNames.has(name)) {
             this._terminalAgentInfo.delete(name);
             continue;
         }
 
-        // First alive terminal per role wins (deterministic: Map iteration order)
+        // First alive terminal per role wins (deterministic: Map insertion order)
         if (!(info.role in result)) {
             result[info.role] = info.displayName;
         }
@@ -126,70 +202,119 @@ public getActualTerminalAgentNames(): Record<string, string> {
 }
 ```
 
-This approach:
-- Doesn't require `_registeredTerminals` to be populated
-- Works correctly even if `_registeredTerminals` is cleared
-- Still prunes stale cache entries for closed terminals
-- Is workspace-agnostic by design
+**Edge Cases:**
+- `vscode.window.terminals` may contain terminals that have exited but have not yet fired `onDidCloseTerminal`. These will have `exitStatus !== undefined`. The terminal name will still be in the set. To guard against this, optionally filter by `t.exitStatus === undefined` — but the existing `clearTerminalAgentInfo` call path already handles cleanup on close, so this is low-risk.
+- Map mutation during iteration (`this._terminalAgentInfo.delete(name)`) is safe in JavaScript Maps (V8 and SpiderMonkey specs guarantee it).
 
-### Step 3: Send terminal-derived agent names to sidebar
+#### Step 3 & 5: Add `_notifyTerminalAgentNamesChanged()` and hook into `setTerminalAgentInfo`/`clearTerminalAgentInfo`
 
-In TaskViewerProvider.ts, modify the `_postSidebarConfigurationState` method to send terminal-derived agent names:
+Insert after the existing `clearAllTerminalAgentInfo()` method (around line 442):
 
 ```typescript
-// In TaskViewerProvider.ts, around line 3337-3342
-const startupState = await this.handleGetStartupCommands(workspaceRoot);
-this._view.webview.postMessage({ type: 'startupCommands', ...startupState });
-
-// NEW: Send terminal-derived agent names
-const terminalAgentNames = this.getActualTerminalAgentNames();
-this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
+// Add private helper (insert after clearAllTerminalAgentInfo at line 444):
+private _notifyTerminalAgentNamesChanged(): void {
+    if (this._view) {
+        const terminalAgentNames = this.getActualTerminalAgentNames();
+        this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
+    }
+}
 ```
 
-Also send terminal agent names when workspace changes:
+Modify `setTerminalAgentInfo` (line 434-436) to notify after setting:
 
 ```typescript
-// In TaskViewerProvider.ts, around line 3338-3342 (inside handleWorkspaceChanged)
-if (resolvedRoot) {
-    this._view.webview.postMessage({ type: 'workspaceChanged', workspaceRoot: resolvedRoot });
+// BEFORE:
+public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
+    this._terminalAgentInfo.set(suffixedName, { role, displayName });
 }
 
+// AFTER:
+public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
+    this._terminalAgentInfo.set(suffixedName, { role, displayName });
+    // Notify sidebar immediately so it doesn't wait for next terminalStatuses push
+    this._notifyTerminalAgentNamesChanged();
+}
+```
+
+Modify `clearTerminalAgentInfo` (line 438-440) to notify after clearing:
+
+```typescript
+// BEFORE:
+public clearTerminalAgentInfo(suffixedName: string): void {
+    this._terminalAgentInfo.delete(suffixedName);
+}
+
+// AFTER:
+public clearTerminalAgentInfo(suffixedName: string): void {
+    this._terminalAgentInfo.delete(suffixedName);
+    // Notify sidebar so it updates immediately on terminal close
+    this._notifyTerminalAgentNamesChanged();
+}
+```
+
+> [!NOTE]
+> `clearAllTerminalAgentInfo()` (called only from `deactivate()`) should NOT call `_notifyTerminalAgentNamesChanged()` — the view is being torn down and posting a message would be a no-op or error.
+
+#### Step 3: Emit `terminalAgentNames` in `_postSidebarConfigurationState` (line 3340-3379)
+
+Add immediately after the existing `startupCommands` post at line 3352:
+
+```typescript
+// EXISTING (line 3351-3352):
 const startupState = await this.handleGetStartupCommands(workspaceRoot);
 this._view.webview.postMessage({ type: 'startupCommands', ...startupState });
 
-// NEW: Send terminal-derived agent names on workspace switch
+// ADD AFTER:
+// Send terminal-derived agent names (workspace-agnostic, locked to actual running terminals)
 const terminalAgentNames = this.getActualTerminalAgentNames();
 this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
 ```
 
-### Step 4: Update implementation.html to use terminal-derived names
+---
 
-In implementation.html, add a variable to store terminal-derived agent names and update the display logic:
+### `src/webview/implementation.html`
+
+#### Step 4a: Declare `lastTerminalAgentNames` variable (near line 2291)
 
 ```javascript
-// In implementation.html, around line 2291 (near lastStartupCommands)
+// EXISTING (line 2291):
 let lastStartupCommands = {};
-let lastTerminalAgentNames = {}; // NEW
 
-// In the message handler, add case for terminalAgentNames (around line 3003)
-case 'commands':
-    lastStartupCommands = message.commands;
-    break;
-case 'terminalAgentNames': // NEW
+// ADD IMMEDIATELY AFTER:
+let lastTerminalAgentNames = {}; // Terminal-derived agent names; workspace-agnostic
+```
+
+#### Step 4b: Handle `terminalAgentNames` message (after line 3017, inside the message switch)
+
+```javascript
+// ADD after the 'startupCommands' case (after line 3017):
+case 'terminalAgentNames':
     lastTerminalAgentNames = message.agentNames || {};
+    renderAgentList(); // Re-render so terminal-derived names take effect immediately
     break;
 ```
 
-Update the agent name display logic to prioritize terminal-derived names:
+> [!IMPORTANT]
+> `renderAgentList()` MUST be called here. Without it, `lastTerminalAgentNames` is updated but the DOM is not refreshed until the next `terminalStatuses` message. This is the most commonly forgotten step.
+
+#### Step 4c: Update agent name display logic (lines 4806-4811)
 
 ```javascript
-// In implementation.html, around line 4806-4808 (in the agent row rendering)
+// BEFORE (lines 4806-4811):
+if (roleId !== 'jules' && lastStartupCommands[roleId]) {
+    const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
+    name.innerText = `${label} - ${cmd} CLI`;
+} else {
+    name.innerText = label;
+}
+
+// AFTER:
 if (roleId !== 'jules') {
-    // Prioritize terminal-derived names (locked to actual terminals)
     if (lastTerminalAgentNames[roleId]) {
+        // Prefer terminal-derived name (locked to actual running terminal, workspace-agnostic)
         name.innerText = `${label} - ${lastTerminalAgentNames[roleId]}`;
     } else if (lastStartupCommands[roleId]) {
-        // Fallback to workspace configuration
+        // Fallback: derive from workspace startup command config
         const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
         name.innerText = `${label} - ${cmd} CLI`;
     } else {
@@ -200,10 +325,18 @@ if (roleId !== 'jules') {
 }
 ```
 
-Also update the analyst agent display (around line 5515-5517):
+#### Step 4d: Update analyst agent display (lines 5515-5520)
 
 ```javascript
-// Update analyst display
+// BEFORE (lines 5515-5520):
+if (lastStartupCommands['analyst']) {
+    const cmd = lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase();
+    name.innerText = `ANALYST - ${cmd} CLI`;
+} else {
+    name.innerText = 'ANALYST';
+}
+
+// AFTER:
 if (lastTerminalAgentNames['analyst']) {
     name.innerText = `ANALYST - ${lastTerminalAgentNames['analyst']}`;
 } else if (lastStartupCommands['analyst']) {
@@ -211,34 +344,6 @@ if (lastTerminalAgentNames['analyst']) {
     name.innerText = `ANALYST - ${cmd} CLI`;
 } else {
     name.innerText = 'ANALYST';
-}
-```
-
-### Step 5: Send terminal agent names on terminal state changes
-
-In TaskViewerProvider.ts, send updated terminal agent names when terminals are created or closed:
-
-```typescript
-// In TaskViewerProvider.ts, around line 435 (setTerminalAgentInfo)
-public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
-    this._terminalAgentInfo.set(suffixedName, { role, displayName });
-    // NEW: Notify sidebar of updated terminal agent names
-    this._notifyTerminalAgentNamesChanged();
-}
-
-// In TaskViewerProvider.ts, around line 438 (clearTerminalAgentInfo)
-public clearTerminalAgentInfo(suffixedName: string): void {
-    this._terminalAgentInfo.delete(suffixedName);
-    // NEW: Notify sidebar of updated terminal agent names
-    this._notifyTerminalAgentNamesChanged();
-}
-
-// Add new helper method
-private _notifyTerminalAgentNamesChanged(): void {
-    if (this._view) {
-        const terminalAgentNames = this.getActualTerminalAgentNames();
-        this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
-    }
 }
 ```
 
@@ -265,10 +370,12 @@ private _notifyTerminalAgentNamesChanged(): void {
 
 ## Risks and Considerations
 
-1. **Terminal dispatch map persistence**: Not clearing `_registeredTerminals` on workspace switch means the dispatch map persists. This is correct behavior because terminals are still running and valid.
-2. **Message ordering**: Terminal agent names might arrive after startup commands on initial load — mitigated by prioritizing terminal names in display logic
-3. **Race conditions**: Workspace switch during terminal creation could cause temporary inconsistency — mitigated by fallback to workspace config
-4. **Backward compatibility**: If the sidebar doesn't receive terminal agent names (old extension version), it falls back to workspace config — no regression
+1. **Terminal dispatch map persistence**: Retaining `clearRegisteredTerminalsMap()` on workspace switch means the dispatch map is still reset for dispatch safety (not agent-name correctness — that is now handled by Step 2).
+2. **`renderAgentList()` in message handler**: Must be called inside `case 'terminalAgentNames':` — without it, the display does not update until the next `terminalStatuses` push.
+3. **Map mutation during iteration**: Safe per JavaScript specification; `_terminalAgentInfo.delete(name)` during `for...of` of the same map is well-defined.
+4. **`vscode.window.terminals` includes exited terminals**: Terminals that closed but haven't fired `onDidCloseTerminal` yet will still be in the array. The existing `clearTerminalAgentInfo` call-path handles cleanup; tolerate a brief staleness window.
+5. **Message ordering**: Terminal agent names might arrive after startup commands on initial load — mitigated by prioritizing terminal names in display logic.
+6. **Backward compatibility**: If the sidebar doesn't receive terminal agent names (e.g., old extension version hot-reloaded), it falls back to workspace config — no regression.
 
 ## Success Criteria
 
@@ -289,10 +396,14 @@ private _notifyTerminalAgentNamesChanged(): void {
 - Terminal creation causes both kanban and sidebar to update to terminal-derived name
 
 ### Automated Tests
-- Unit test: `getActualTerminalAgentNames()` works without `_registeredTerminals`
+- Unit test: `getActualTerminalAgentNames()` works without `_registeredTerminals` being populated
 - Unit test: `getActualTerminalAgentNames()` prunes stale entries for closed terminals
 - Unit test: terminal agent names are sent to sidebar on terminal creation
 - Unit test: terminal agent names are sent to sidebar on terminal closure
 - Unit test: sidebar prioritizes terminal-derived names over workspace config
 - Integration test: workspace switch does not change kanban agent names
 - Integration test: workspace switch does not change sidebar agent names
+
+---
+
+**Recommendation: Send to Coder**

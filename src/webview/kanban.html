@@ -6108,7 +6108,7 @@
 
             const antigravityDesc = document.createElement('div');
             antigravityDesc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
-            antigravityDesc.textContent = 'Select an agent and column, then copy a prompt (using prompts tab configuration) for the oldest plan in that column. Paste this prompt into the Antigravity automation timer (or similar IDE feature) to have Antigravity process all plans in a kanban column.';
+            antigravityDesc.textContent = 'Select an agent and column, then copy a general prompt that instructs the agent to process the oldest plan in that column each time the schedule runs. Paste this prompt into the Antigravity automation timer (or similar IDE feature) to have Antigravity process all plans in a kanban column sequentially. The agent will automatically cancel the schedule when no plans remain in the target column.';
             antigravitySection.appendChild(antigravityDesc);
 
             const antigravityActions = document.createElement('div');
