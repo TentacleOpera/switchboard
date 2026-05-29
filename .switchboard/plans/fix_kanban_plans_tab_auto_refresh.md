@@ -1,83 +1,220 @@
 # Fix: Auto-refresh for Kanban Plans Tab
 
-## Problem
-The Kanban Plans tab in `planning.html` does not automatically refresh when plan files are modified or new plans are added. Users must manually click the refresh button to see changes, which creates a poor UX and can lead to working with stale data.
+## Goal
+Automatically refresh the Kanban Plans tab in `planning.html` when plan files are created, modified, or deleted in `.switchboard/plans/` directories, eliminating the need for users to manually click the refresh button.
 
-## Root Cause
-The current implementation only refreshes the kanban plans list when:
-1. The user manually clicks the refresh button (`#kanban-refresh-btn`)
-2. The tab is initially loaded
+## Metadata
+- **Tags:** frontend, backend, reliability, UI
+- **Complexity:** 4
 
-There is no mechanism to detect file system changes in the `.switchboard/plans/` directories and trigger automatic refreshes.
+## User Review Required
+No breaking changes. The manual refresh button is preserved as a fallback. The optional auto-refresh toggle (originally listed as optional scope) has been deferred — it adds UI/state-management complexity not justified by the core fix.
 
-## Solution Overview
-Implement auto-refresh functionality by:
-1. Adding a file watcher on the extension side to monitor `.switchboard/plans/` directories
-2. Sending refresh messages to the webview when changes are detected
-3. Adding debouncing to prevent excessive refreshes during rapid file changes
-4. Optionally adding a visual indicator when auto-refresh occurs
+## Complexity Audit
 
-## Implementation Plan
+### Routine
+- Adding a new `FileSystemWatcher` field and setup method in `PlanningPanelProvider.ts` follows the exact same pattern as `_setupLocalFolderWatchers()` (line 326) and `_setupDocsFolderWatcher()` (line 301).
+- Reusing the existing `fetchKanbanPlans` → `kanbanPlansReady` message pipeline — no new message types needed.
+- The `_latestRequestIds` guard in the `fetchKanbanPlans` handler (line 1048) already handles race conditions from concurrent refresh requests.
+- Debounce pattern already present in `_activeDocWatcher` (line 440) and `kanbanSearch` (line 2654 of `planning.js`).
+- Webview-side (`planning.js`): no new handler required — `handleKanbanPlansReady` (line 2552) already processes the response correctly.
 
-### Phase 1: File Watcher Setup (Extension Side)
+### Complex / Risky
+- Multi-root workspace: watcher must iterate all workspace roots (not just active root), deduplicating paths — following `_setupLocalFolderWatchers` pattern, not `_setupDocsFolderWatcher` (which only handles single root).
+- Dispose cleanup: new `_kanbanPlansWatchers` array and `_kanbanPlansWatchDebounce` timer must be explicitly cleaned up in `dispose()` (line 2575) to avoid resource leaks.
+- Workspace folder change events: `onDidChangeWorkspaceFolders` handler (line 286) currently only re-registers adapters — it must also re-call `_setupKanbanPlansWatcher()` to pick up new roots.
 
-**File**: `src/services/PlanningPanelProvider.ts` (or appropriate service)
+## Edge-Case & Dependency Audit
 
-1. **Add file watcher for plans directories**
-   - Use VS Code's `FileSystemWatcher` API to monitor `.switchboard/plans/` directories
-   - Watch for file creation, modification, and deletion events
-   - Handle multiple workspace roots (multi-root support)
+### Race Conditions
+- `fetchKanbanPlans` uses `_latestRequestIds.get('kanban-plans')` guard (line 1048). Since we post `requestId: Date.now()`, any stale in-flight requests are automatically dropped by the guard — no additional protection needed.
+- If rapid file changes occur (e.g., agent writing multiple plans), the 800ms debounce ensures only one refresh fires per burst.
 
-2. **Implement debouncing mechanism**
-   - Add a debounce delay (e.g., 500-1000ms) to prevent rapid successive refreshes
-   - Clear pending refresh timer on new change events
+### Security
+- The watcher only monitors `**/*.md` files within `.switchboard/plans/` in workspace roots — no arbitrary file access.
+- The extension already validates `allRoots` paths on all `fetchKanbanPlans` requests.
 
-3. **Send refresh messages to webview**
-   - When changes are detected, post a message to the webview
-   - Reuse existing `fetchKanbanPlans` message type or add new `autoRefreshKanbanPlans` type
+### Side Effects
+- `_getKanbanPlans` (line 2601) reads from KanbanDatabase (SQLite), not directly from the filesystem. Watching plan files detects new/deleted plans and mtime changes (used for sorting). Column/project metadata changes from the Kanban UI already update the DB and reflect instantly in the UI — these do **not** need the file watcher.
+- If the webview is hidden (retainContextWhenHidden: true), `postMessage` calls are queued and delivered when panel regains visibility — no data loss.
+- If the watcher fires while the user is in edit mode on a plan, the list refreshes but `_kanbanSelectedPlan` state is preserved by the existing `handleKanbanPlansReady` logic.
 
-### Phase 2: Webview Updates
+### Dependencies & Conflicts
+- No external library dependencies. Uses `vscode.workspace.createFileSystemWatcher` with `vscode.RelativePattern` — same API used by all existing watchers.
+- Compatible with `retainContextWhenHidden: true` panel option.
+- No conflict with the manual refresh button — both paths call identical `postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() })`.
 
-**File**: `src/webview/planning.js`
+## Dependencies
+- None from previous sessions directly applicable.
 
-1. **Handle auto-refresh messages**
-   - Add message handler for auto-refresh events from extension
-   - Call existing `renderKanbanPlans()` with updated data
-   - Show subtle visual feedback (e.g., toast or status indicator) when auto-refresh occurs
+## Adversarial Synthesis
+Key risks: (1) multi-root watcher must use an array pattern (not a single watcher) to avoid missing plans directories in secondary workspace roots; (2) `dispose()` must explicitly clear the new watcher array and debounce timer, or the extension will leak `FileSystemWatcher` handles on panel close; (3) `onDidChangeWorkspaceFolders` must re-invoke the watcher setup or new roots will be silently ignored. Mitigations: follow `_setupLocalFolderWatchers` (line 326) exactly for multi-root iteration and disposal patterns; add `_setupKanbanPlansWatcher()` call in the existing `onDidChangeWorkspaceFolders` handler (line 286).
 
-2. **Optional: Add auto-refresh toggle**
-   - Add a toggle button in the kanban controls strip to enable/disable auto-refresh
-   - Persist user preference in `vscode.getState()`
+## Proposed Changes
 
-### Phase 3: Testing
+### `src/services/PlanningPanelProvider.ts`
 
-1. **Manual testing scenarios**
-   - Create a new plan file → verify it appears in kanban tab without manual refresh
-   - Modify an existing plan file → verify changes are reflected
-   - Delete a plan file → verify it's removed from the list
-   - Rapid file changes → verify debouncing prevents excessive refreshes
+#### Context
+The provider already has four FileSystemWatcher fields (lines 52–55) and three corresponding setup methods (lines 301, 326, 370). Adding the kanban plans watcher follows identical patterns.
 
-2. **Edge cases**
-   - Multi-root workspace with plans in multiple locations
-   - File system watcher failures (graceful degradation)
-   - Webview not focused (should still update in background)
+#### Logic
+1. **Field declarations** — add alongside existing watcher fields (~line 55):
+   ```ts
+   private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
+   private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
+   ```
 
-## Files to Modify
+2. **`_setupKanbanPlansWatcher()` method** — add after `_setupAntigravityWatcher()` (~line 398):
+   ```ts
+   private _setupKanbanPlansWatcher(): void {
+       // Dispose existing watchers
+       for (const w of this._kanbanPlansWatchers) {
+           w.dispose();
+           const idx = this._disposables.indexOf(w);
+           if (idx !== -1) { this._disposables.splice(idx, 1); }
+       }
+       this._kanbanPlansWatchers = [];
 
-1. `src/services/PlanningPanelProvider.ts` - Add file watcher logic
-2. `src/webview/planning.js` - Handle auto-refresh messages
-3. `src/webview/planning.html` - Optional: Add auto-refresh toggle UI
+       const allRoots = this._getWorkspaceRoots();
+       const watchedPaths = new Set<string>();
 
-## Success Criteria
+       for (const root of allRoots) {
+           const plansDir = path.join(root, '.switchboard', 'plans');
+           if (!fs.existsSync(plansDir)) { continue; }
+           if (watchedPaths.has(plansDir)) { continue; }
+           watchedPaths.add(plansDir);
 
-- [ ] Kanban plans tab automatically updates when plan files change
-- [ ] Auto-refresh works for file creation, modification, and deletion
-- [ ] Debouncing prevents excessive refreshes during rapid changes
-- [ ] Works correctly in multi-root workspaces
-- [ ] Optional: User can toggle auto-refresh on/off
-- [ ] Visual feedback indicates when auto-refresh occurs
+           const watcher = vscode.workspace.createFileSystemWatcher(
+               new vscode.RelativePattern(vscode.Uri.file(plansDir), '**/*.md')
+           );
 
-## Risks & Mitigations
+           const triggerRefresh = () => {
+               if (this._kanbanPlansWatchDebounce) {
+                   clearTimeout(this._kanbanPlansWatchDebounce);
+               }
+               this._kanbanPlansWatchDebounce = setTimeout(() => {
+                   this._kanbanPlansWatchDebounce = undefined;
+                   this._panel?.webview.postMessage({
+                       type: 'fetchKanbanPlans',
+                       requestId: Date.now()
+                   });
+               }, 800);
+           };
+
+           watcher.onDidCreate(triggerRefresh);
+           watcher.onDidChange(triggerRefresh);
+           watcher.onDidDelete(triggerRefresh);
+
+           this._kanbanPlansWatchers.push(watcher);
+           this._disposables.push(watcher);
+       }
+   }
+   ```
+
+3. **`open()` method** — call `_setupKanbanPlansWatcher()` alongside existing watcher setups (~line 295):
+   ```ts
+   this._setupDocsFolderWatcher(workspaceRoot);
+   this._setupLocalFolderWatchers();
+   this._setupAntigravityWatcher();
+   this._setupKanbanPlansWatcher();  // ← ADD
+   ```
+
+4. **`onDidChangeWorkspaceFolders` handler** (~line 286) — extend to also re-setup kanban plans watcher:
+   ```ts
+   vscode.workspace.onDidChangeWorkspaceFolders(() => {
+       console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
+       this._ensureAdaptersRegistered();
+       this._setupKanbanPlansWatcher();  // ← ADD
+   })
+   ```
+
+5. **`dispose()` method** (~line 2575) — add cleanup before `this._disposables.forEach(...)`:
+   ```ts
+   if (this._kanbanPlansWatchDebounce) {
+       clearTimeout(this._kanbanPlansWatchDebounce);
+       this._kanbanPlansWatchDebounce = undefined;
+   }
+   for (const w of this._kanbanPlansWatchers) {
+       try { w.dispose(); } catch (e) {}
+   }
+   this._kanbanPlansWatchers = [];
+   ```
+
+#### Edge Cases
+- `plansDir` doesn't exist yet (new workspace): skip via `fs.existsSync(plansDir)` guard. When the user creates their first plan, the watcher won't fire — but the kanban tab already requires a manual initial load (this is acceptable; the directory could be watched at a higher level as an enhancement later).
+- Watcher created for root with no `.switchboard/plans/` dir: guard prevents it.
+
+---
+
+### `src/webview/planning.js`
+
+#### Context
+No new message handler needed. `handleKanbanPlansReady` (line 2552) already handles `kanbanPlansReady` responses from any source.
+
+#### Logic (Optional — visual feedback only)
+Add a brief auto-refresh indicator in `handleKanbanPlansReady` by checking whether the refresh was user-initiated (via `requestId` from button click) vs. auto-triggered. Since both paths post `requestId: Date.now()`, the simplest approach is to show a transient "↻ Auto-refreshed" message in the controls strip, suppressing it when the webview is not visible:
+
+```js
+// In handleKanbanPlansReady, after renderKanbanPlans call:
+// (Only show toast if panel is focused — document.hasFocus() avoids noise during background refreshes)
+if (!document.hasFocus && typeof document.hasFocus === 'function' && !document.hasFocus()) {
+    // Background refresh — no toast
+} else {
+    const strip = document.querySelector('.kanban-controls-strip');
+    if (strip) {
+        let indicator = strip.querySelector('.kanban-auto-refresh-indicator');
+        if (!indicator) {
+            indicator = document.createElement('span');
+            indicator.className = 'kanban-auto-refresh-indicator';
+            indicator.style.cssText = 'font-size:11px; color:var(--vscode-descriptionForeground); margin-left:8px; opacity:0; transition:opacity 0.3s;';
+            strip.appendChild(indicator);
+        }
+        indicator.textContent = '↻ refreshed';
+        indicator.style.opacity = '1';
+        clearTimeout(indicator._fadeTimer);
+        indicator._fadeTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
+    }
+}
+```
+
+**Note:** The visual feedback is optional and can be omitted for a cleaner first pass. The core behaviour (list auto-updates) is entirely driven by the extension-side watcher.
+
+#### Edge Cases
+- User viewing a plan when auto-refresh fires: `_kanbanSelectedPlan` is not cleared by `handleKanbanPlansReady` — the preview pane is unaffected. The list re-renders with updated data.
+
+---
+
+### `src/webview/planning.html` *(No changes required)*
+The optional auto-refresh toggle mentioned in the original plan is deferred. The existing UI (refresh button + filter strip) is sufficient.
+
+## Verification Plan
+
+### Automated Tests
+*(Skipped per session directive)*
+
+### Manual Verification
+1. Open the Switchboard panel and navigate to the **Kanban** tab. Confirm initial load works.
+2. Using a file editor (outside VS Code or in a terminal), create a new `.md` file in `.switchboard/plans/`. Wait ~1 second. Verify the Kanban list updates without clicking refresh.
+3. Modify the content of an existing plan file (e.g., change a heading). Verify the list refreshes automatically (mtime-based sort may reorder the card).
+4. Delete a plan file from `.switchboard/plans/`. Verify the card disappears from the list automatically.
+5. In a multi-root workspace, repeat steps 2–4 for each workspace root's plans directory.
+6. Trigger rapid successive file writes (e.g., 5 saves in 500ms). Verify only one refresh fires (debounce working).
+7. Close and re-open the Switchboard panel. Verify watchers are re-established (modify a plan and check auto-refresh still works).
+8. Close the Switchboard panel entirely (dispose). Verify no watcher-related error logs in the Output channel.
+
+---
+
+**Send to: Coder** *(Complexity 4 — multi-file but routine patterns, well-scoped)*
+
+---
+
+## Original Notes (Preserved)
+
+- Reuse existing `fetchKanbanPlans` infrastructure where possible
+- Follow existing patterns in the codebase for file watching (check if other features already implement this)
+- Consider adding a small visual indicator (e.g., "Auto-refreshed just now" toast) for transparency
+
+## Original Risks & Mitigations (Preserved)
 
 **Risk**: File watcher may miss events on some file systems
 - **Mitigation**: Keep manual refresh button as fallback
@@ -88,8 +225,11 @@ Implement auto-refresh functionality by:
 **Risk**: Auto-refresh could interrupt user if they're viewing a plan
 - **Mitigation**: Only refresh the list, preserve currently selected plan if it still exists
 
-## Notes
+## Original Success Criteria (Preserved)
 
-- Reuse existing `fetchKanbanPlans` infrastructure where possible
-- Follow existing patterns in the codebase for file watching (check if other features already implement this)
-- Consider adding a small visual indicator (e.g., "Auto-refreshed just now" toast) for transparency
+- [ ] Kanban plans tab automatically updates when plan files change
+- [ ] Auto-refresh works for file creation, modification, and deletion
+- [ ] Debouncing prevents excessive refreshes during rapid changes
+- [ ] Works correctly in multi-root workspaces
+- [ ] Optional: User can toggle auto-refresh on/off
+- [ ] Visual feedback indicates when auto-refresh occurs

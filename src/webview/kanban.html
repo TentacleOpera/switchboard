@@ -6231,6 +6231,65 @@
             });
             antigravityActions.appendChild(copyPromptBtn);
 
+            // --- Schedule Selector ---
+            const scheduleInstruction = document.createElement('div');
+            scheduleInstruction.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px; margin-top:12px;';
+            scheduleInstruction.textContent = 'Select a schedule interval, then paste the cron expression into the "custom" schedule field in the Antigravity Scheduled Task modal.';
+            antigravitySection.appendChild(scheduleInstruction);
+
+            const scheduleSelector = document.createElement('div');
+            scheduleSelector.style.cssText = 'padding:0 8px; display:flex; gap:8px; align-items:center;';
+            antigravitySection.appendChild(scheduleSelector);
+
+            const intervalSelect = document.createElement('select');
+            intervalSelect.style.cssText = autobanSelectStyle + ' flex:1;';
+            guardInteraction(intervalSelect);
+
+            const intervals = [
+                { minutes: 5, cron: '*/5 * * * *' },
+                { minutes: 10, cron: '*/10 * * * *' },
+                { minutes: 15, cron: '*/15 * * * *' },
+                { minutes: 30, cron: '*/30 * * * *' }
+            ];
+
+            intervals.forEach(interval => {
+                const opt = document.createElement('option');
+                opt.value = interval.cron;
+                opt.textContent = `Every ${interval.minutes} minutes`;
+                intervalSelect.appendChild(opt);
+            });
+
+            scheduleSelector.appendChild(intervalSelect);
+
+            const cronDisplay = document.createElement('div');
+            cronDisplay.style.cssText = autobanSelectStyle + ' flex:1; min-width:120px; color:var(--accent-teal); user-select:all;';
+            cronDisplay.textContent = intervals[0].cron;
+            scheduleSelector.appendChild(cronDisplay);
+
+            intervalSelect.addEventListener('change', () => {
+                cronDisplay.textContent = intervalSelect.value;
+            });
+
+            const copyCronBtn = document.createElement('button');
+            copyCronBtn.className = 'strip-btn';
+            copyCronBtn.textContent = 'COPY';
+            copyCronBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px; padding:2px 6px;';
+            copyCronBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText(cronDisplay.textContent).then(() => {
+                    copyCronBtn.textContent = 'COPIED!';
+                    setTimeout(() => {
+                        copyCronBtn.textContent = 'COPY';
+                    }, 1500);
+                }).catch(err => {
+                    console.error('Failed to copy cron expression:', err);
+                    copyCronBtn.textContent = 'ERROR';
+                    setTimeout(() => {
+                        copyCronBtn.textContent = 'COPY';
+                    }, 1500);
+                });
+            });
+            scheduleSelector.appendChild(copyCronBtn);
+
             const automationRulesSection = document.createElement('div');
             automationRulesSection.className = 'db-subsection';
             container.appendChild(automationRulesSection);

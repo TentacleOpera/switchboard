@@ -188,3 +188,25 @@ Select an agent and column, then copy a general prompt that instructs the agent 
 ## Recommendation
 
 **Send to Coder** (Complexity 4 — routine multi-file change with one moderate risk around `buildKanbanBatchPrompt` empty-array behaviour and the cancellation mechanism)
+
+---
+
+## Implementation Review & Fixes
+
+### Stage 1: Grumpy Principal Engineer Review
+- **[CRITICAL] Custom Agent Crash**: `_generateAntigravityPrompt` blindly resolves a custom agent's role (e.g. `custom_agent_42`) and passes it to `buildKanbanBatchPrompt`. `buildKanbanBatchPrompt` explicitly throws an `Error` for unknown/custom roles! This is a guaranteed crash for any custom agent user clicking "COPY PROMPT". 
+- **[MAJOR] Empty Plans Noise**: `buildKanbanBatchPrompt(role, [], options)` prepends a `PLANS TO PROCESS:\n` section that is completely empty. We don't want this in the general scheduling instruction, it confuses the agent.
+- **[MAJOR] Misleading Instruction Context**: The code passes `instruction: 'low-complexity'` for Coder/Intern roles. Since we're passing an empty array, `buildKanbanBatchPrompt` produces the intro `"Please execute the following 0 low-complexity plans"`. This is contradictory and overrides the general scheduling logic.
+- **[NIT] Missing Workflow Instruction**: The scheduling block instructs the agent to use its "standard workflow", rather than providing the specific slash-command workflow (e.g., `/handoff-lead`) as originally promised in the plan. (The agent should still infer this, so it's a nit).
+
+### Stage 2: Balanced Synthesis
+- **Keep**: The overall shift to a generic scheduling instruction, the empty column guard, and the options fetching block.
+- **Fix Now**: 
+  1. Add a direct bypass for `custom_agent_*` roles so we construct a minimal preamble without calling `buildKanbanBatchPrompt`.
+  2. Strip the empty `PLANS TO PROCESS:` section from the generated preamble using a regex replacement.
+  3. Override `instruction: undefined` locally in `_generateAntigravityPrompt` so we don't inject the "0 low-complexity plans" sentence.
+- **Defer**: The explicit slash-command workflow injection (NIT) can be deferred, as the prompt's instruction to "use your standard workflow" is sufficient for the agent to rely on its default role instructions.
+
+### Validation & Updates
+- **Code Fixes Applied**: Modifed `src/services/KanbanProvider.ts` to implement the three fixes above.
+- **Verification**: Compilation and test suite execution were skipped as per the `SKIP COMPILATION` and `SKIP TESTS` directives. Manual inspection confirms the logic correctly mitigates the identified edge cases.

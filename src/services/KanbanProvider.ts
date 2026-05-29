@@ -2548,45 +2548,58 @@ export class KanbanProvider implements vscode.Disposable {
                     designDocContent = (await notionService.loadCachedContent()) || undefined;
                 } catch { /* non-fatal — fallback to URL */ }
             }
-            const options: any = {
-                workspaceRoot,
-                defaultPromptOverrides,
-                clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
-                cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
-                gitProhibitionEnabled: role === 'planner'
-                    ? promptsConfig.gitProhibitionEnabled
-                    : (promptsConfig.gitProhibitionByRole?.[role] ?? true),
-                switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? true,
-                advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
-                dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
-                aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
-                splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
-                skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
-                skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
-                plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
-                designDocLink,
-                designDocContent,
-                routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
-                sourceColumnLabel: this._getSourceColumnLabelForRole(role),
-                instruction: (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined,
-                accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
-                includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
-                pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
-                suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
-                    ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
-                    : undefined,
-                researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
-                ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
-                complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
-                localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
-            };
-
-            // Generate prompt using actual prompts tab configuration
-            const preamble = buildKanbanBatchPrompt(role, [], options);
             const schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
-            const prompt = preamble + schedulingBlock;
+
+            let prompt: string;
+            // Custom agent roles (custom_agent_*) are not supported by buildKanbanBatchPrompt
+            // (it throws for unknown roles). Compose a minimal preamble directly.
+            if (role.startsWith('custom_agent_')) {
+                prompt = `Please process plans as a custom agent.${schedulingBlock}`;
+            } else {
+                const options: any = {
+                    workspaceRoot,
+                    defaultPromptOverrides,
+                    clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
+                    cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
+                    gitProhibitionEnabled: role === 'planner'
+                        ? promptsConfig.gitProhibitionEnabled
+                        : (promptsConfig.gitProhibitionByRole?.[role] ?? true),
+                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
+                    useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? true,
+                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
+                    dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
+                    aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
+                    splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
+                    skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
+                    skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
+                    plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
+                    designDocLink,
+                    designDocContent,
+                    routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
+                    sourceColumnLabel: this._getSourceColumnLabelForRole(role),
+                    // Do NOT pass instruction for coder/intern: the empty-plans preamble would produce a
+                    // misleading "execute 0 low-complexity plans" intro that contradicts the scheduling block.
+                    instruction: undefined,
+                    accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
+                    includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
+                    pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
+                    suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
+                        ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
+                        : undefined,
+                    researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
+                    ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
+                    complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
+                    saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
+                    localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
+                };
+
+                // Build the role-configuration preamble, then strip the trailing empty
+                // "PLANS TO PROCESS:" section (produced when plans=[] — it's replaced
+                // by the scheduling block below and would be contradictory noise).
+                let preamble = buildKanbanBatchPrompt(role, [], options);
+                preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
+                prompt = preamble + schedulingBlock;
+            }
 
             this._panel?.webview.postMessage({
                 type: 'antigravityPrompt',
