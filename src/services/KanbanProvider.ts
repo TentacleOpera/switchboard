@@ -6207,94 +6207,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 }
                 break;
             }
-            case 'createWorktree': {
-                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
-                if (!workspaceRoot) break;
-                const role = msg.role;  // 'coder', 'lead', 'intern'
-                const agentCount = Math.max(1, Math.min(10, parseInt(msg.agentCount, 10) || 1));
-
-                const db = this._getKanbanDb(workspaceRoot);
-                if (!db || !await db.ensureReady()) break;
-
-                // Verify the role has a visible agent
-                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
-                if (!visibleAgents[role]) {
-                    vscode.window.showWarningMessage(`No ${role} agent configured. Enable it in Setup first.`);
-                    break;
-                }
-
-                // Check worktree cap
-                const worktreesCount = (await db.getWorktrees()).length;
-                const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
-                if (worktreesCount + agentCount > maxCap) {
-                    vscode.window.showWarningMessage(`Cannot create ${agentCount} worktree(s). Cap (${maxCap}) would be exceeded.`);
-                    break;
-                }
-
-                // Auto-generate worktree paths as siblings of workspace root
-                const parentDir = path.dirname(workspaceRoot);
-                const timestamp = Date.now();
-                const createdWorktrees: Array<{ id: number; path: string; branch: string }> = [];
-
-                const execFileAsync = promisify(cp.execFile);
-                try {
-                    for (let i = 0; i < agentCount; i++) {
-                        const worktreeDirName = `switchboard-${role}-${timestamp}-${i}`;
-                        const fullPath = path.join(parentDir, worktreeDirName);
-                        const branchName = `${role}-${timestamp}-${i}`;
-
-                        // Create DB entry — store role name in coder_agent_id
-                        const id = await db.createWorktree(branchName, role);
-                        if (id === -1) {
-                            throw new Error(`Failed to create DB entry for branch ${branchName}`);
-                        }
-
-                        // Create git worktree (SECURITY: execFile with args array, F-03)
-                        try {
-                            await execFileAsync('git', ['worktree', 'add', '-b', branchName, fullPath], { cwd: workspaceRoot });
-                        } catch (gitError: any) {
-                            // Rollback DB entry if git fails
-                            await db.deleteWorktree(id);
-                            throw gitError;
-                        }
-
-                        createdWorktrees.push({ id, path: fullPath, branch: branchName });
-                    }
-
-                    vscode.window.showInformationMessage(`Created ${agentCount} ${role} worktree(s)`);
-
-                    // Refresh worktrees list with enriched data
-                    const worktrees = await db.getWorktrees();
-                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-                    const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
-                    
-                    const worktreeModeEnabled = (await db.getMeta('worktree_mode_enabled')) === 'true';
-                    const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
-                    const autoMerge = (await db.getMeta('worktree_auto_merge')) === 'true';
-
-                    this._panel?.webview.postMessage({
-                        type: 'worktrees',
-                        worktrees: enriched,
-                        worktreeModeEnabled,
-                        worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
-                        worktreeAutoMerge: autoMerge
-                    });
-
-                } catch (e: any) {
-                    // Rollback: delete all created worktrees and DB entries
-                    vscode.window.showErrorMessage(`Failed to create worktrees: ${e.message}`);
-
-                    for (const wt of createdWorktrees) {
-                        try {
-                            await execFileAsync('git', ['worktree', 'remove', '--force', wt.path], { cwd: workspaceRoot });
-                            await execFileAsync('git', ['branch', '-D', wt.branch], { cwd: workspaceRoot });
-                        } catch { /* ignore cleanup errors */ }
-                        await db.deleteWorktree(wt.id);
-                    }
-                }
-                break;
-            }
+            // Manual worktree creation removed — worktrees are auto-created per plan when worktree mode is enabled
             case 'deleteWorktree': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
@@ -6684,98 +6597,52 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     }
 
     private async _assignWorktreeToCard(workspaceRoot: string, sessionId: string, targetColumn?: string): Promise<void> {
+        // Worktrees are one-and-done: only auto-created when worktree mode is enabled.
+        // When worktree mode is disabled, no worktree assignment happens at all.
+        // Worktrees are never reused across different plans.
+        const worktreeModeEnabled = await this._isWorktreeModeEnabled(workspaceRoot);
+        if (!worktreeModeEnabled) return;
+
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) return;
 
         const plan = await db.getPlanBySessionId(sessionId);
-        if (plan && plan.worktreeId) return;
+        if (plan && plan.worktreeId) return; // Already has a worktree — never reassign
 
-        const worktreeModeEnabled = await this._isWorktreeModeEnabled(workspaceRoot);
-        if (worktreeModeEnabled) {
-            try {
-                // Check cap
-                const worktreesCount = (await db.getWorktrees()).length;
-                const maxCapVal = await db.getMeta('worktree_max_cap');
-                const maxCap = parseInt(maxCapVal || '10', 10);
-                if (worktreesCount >= maxCap) {
-                    vscode.window.showWarningMessage(`Worktree cap (${maxCap}) reached. Cannot auto-create worktree.`);
-                    return;
-                }
+        try {
+            // Check cap
+            const worktreesCount = (await db.getWorktrees()).length;
+            const maxCapVal = await db.getMeta('worktree_max_cap');
+            const maxCap = parseInt(maxCapVal || '10', 10);
+            if (worktreesCount >= maxCap) {
+                vscode.window.showWarningMessage(`Worktree cap (${maxCap}) reached. Cannot auto-create worktree.`);
+                return;
+            }
 
-                const worktreeName = this._sanitizePlanName(plan?.topic || plan?.sessionId || sessionId);
-                const worktreeResult = await this._createWorktreeForPlan(workspaceRoot, worktreeName, targetColumn);
-                if (worktreeResult) {
-                    // Assign worktree to plan
-                    await db.updatePlanWorktree(sessionId, worktreeResult.id);
-                    // Spawn terminal inside worktree
-                    const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-                    const worktreePath = branchToPath.get(worktreeResult.branch);
-                    if (worktreePath) {
-                        try {
-                            const role = this._columnToRole(targetColumn || '') || 'coder';
-                            await this._taskViewerProvider?.addAutobanTerminalFromKanban(
-                                role,
-                                undefined,
-                                worktreePath
-                            );
-                        } catch (termErr: any) {
-                            console.warn(`[KanbanProvider] Terminal creation failed for worktree ${worktreeResult.branch}: ${termErr.message}`);
-                            vscode.window.showWarningMessage(`Worktree created but terminal failed: ${termErr.message}`);
-                        }
+            const worktreeName = this._sanitizePlanName(plan?.topic || plan?.sessionId || sessionId);
+            const worktreeResult = await this._createWorktreeForPlan(workspaceRoot, worktreeName, targetColumn);
+            if (worktreeResult) {
+                // Assign worktree to plan (one-and-done: this worktree is for this plan only)
+                await db.updatePlanWorktree(sessionId, worktreeResult.id);
+                // Spawn terminal inside worktree
+                const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
+                const worktreePath = branchToPath.get(worktreeResult.branch);
+                if (worktreePath) {
+                    try {
+                        const role = this._columnToRole(targetColumn || '') || 'coder';
+                        await this._taskViewerProvider?.addAutobanTerminalFromKanban(
+                            role,
+                            undefined,
+                            worktreePath
+                        );
+                    } catch (termErr: any) {
+                        console.warn(`[KanbanProvider] Terminal creation failed for worktree ${worktreeResult.branch}: ${termErr.message}`);
+                        vscode.window.showWarningMessage(`Worktree created but terminal failed: ${termErr.message}`);
                     }
                 }
-            } catch (err: any) {
-                console.warn(`[KanbanProvider] Failed to auto-create worktree for plan ${sessionId}: ${err.message}`);
             }
-            return;
-        }
-
-        const worktrees = await db.getWorktrees();
-
-        // Determine role from target column
-        let targetRole: string | null = null;
-        if (targetColumn) {
-            const columnDefs = this._buildKanbanColumns(
-                await this._getCustomAgents(workspaceRoot),
-                await this._getCustomKanbanColumns(workspaceRoot)
-            );
-            const colDef = columnDefs.find(c => c.id === targetColumn);
-            targetRole = colDef?.role || null;
-        }
-
-        // Filter worktrees by role (coder_agent_id stores the role name)
-        const availableWorktrees = targetRole
-            ? worktrees.filter(wt => wt.coderAgentId === targetRole)
-            : worktrees.filter(wt => wt.coderAgentId !== null);
-
-        if (availableWorktrees.length === 0) {
-            return; // No worktrees available, leave worktree_id null
-        }
-
-        const workspaceId = await db.getWorkspaceId();
-        if (!workspaceId) return;
-        const cards = await db.getBoard(workspaceId);
-        const assignmentCounts = new Map<number, number>();
-        availableWorktrees.forEach(wt => assignmentCounts.set(wt.id, 0));
-
-        cards.forEach(card => {
-            if (card.worktreeId && assignmentCounts.has(card.worktreeId)) {
-                assignmentCounts.set(card.worktreeId, (assignmentCounts.get(card.worktreeId) || 0) + 1);
-            }
-        });
-
-        // Find worktree with minimum assignments
-        let minCount = Infinity;
-        let selectedWorktreeId: number | null = null;
-        for (const [wtId, count] of assignmentCounts) {
-            if (count < minCount) {
-                minCount = count;
-                selectedWorktreeId = wtId;
-            }
-        }
-
-        if (selectedWorktreeId !== null) {
-            await db.updatePlanWorktree(sessionId, selectedWorktreeId);
+        } catch (err: any) {
+            console.warn(`[KanbanProvider] Failed to auto-create worktree for plan ${sessionId}: ${err.message}`);
         }
     }
 

@@ -7067,13 +7067,23 @@
             configHeader.appendChild(configSpan);
             configSection.appendChild(configHeader);
 
+            const descriptionDiv = document.createElement('div');
+            descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
+            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want isolated coding environments per plan — useful for parallel work, safe experimentation, or keeping changes separate until review.<br><br>' +
+                '<strong>Setup:</strong> Enable this toggle, then bulk-move plans to coder columns. Worktrees are auto-created with dedicated terminals. A MERGE column appears between CODE REVIEWED and COMPLETED.<br><br>' +
+                '<strong>Merge column role:</strong> Drag completed plans here to merge worktree changes back to main. With auto-merge on, merge executes automatically. With auto-merge off, you can trigger merge manually or send to an agent for review before merging.';
+            configSection.appendChild(descriptionDiv);
+
             const configRow = document.createElement('div');
-            configRow.style.cssText = 'display:flex; flex-direction:column; gap:8px; padding:8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+            configRow.style.cssText = 'display:flex; flex-direction:column; gap:12px; padding:8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
 
             // Toggle
+            const toggleWrapper = document.createElement('div');
+            toggleWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
             const toggleDiv = document.createElement('div');
             toggleDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
             const toggleLabel = document.createElement('span');
+            toggleLabel.style.cssText = 'color:var(--text-primary);';
             toggleLabel.textContent = 'ENABLE WORKTREE MODE:';
             const toggleInput = document.createElement('input');
             toggleInput.type = 'checkbox';
@@ -7087,12 +7097,20 @@
             });
             toggleDiv.appendChild(toggleLabel);
             toggleDiv.appendChild(toggleInput);
-            configRow.appendChild(toggleDiv);
+            toggleWrapper.appendChild(toggleDiv);
+            const toggleDesc = document.createElement('div');
+            toggleDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
+            toggleDesc.textContent = 'When on, automatically creates a dedicated git worktree for each plan when it moves to a coder column.';
+            toggleWrapper.appendChild(toggleDesc);
+            configRow.appendChild(toggleWrapper);
 
             // Cap
+            const capWrapper = document.createElement('div');
+            capWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
             const capDiv = document.createElement('div');
             capDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
             const capLabel = document.createElement('span');
+            capLabel.style.cssText = 'color:var(--text-primary);';
             capLabel.textContent = 'MAX WORKTREE CAP:';
             const capInput = document.createElement('input');
             capInput.type = 'number';
@@ -7105,12 +7123,20 @@
             });
             capDiv.appendChild(capLabel);
             capDiv.appendChild(capInput);
-            configRow.appendChild(capDiv);
+            capWrapper.appendChild(capDiv);
+            const capDesc = document.createElement('div');
+            capDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
+            capDesc.textContent = 'Maximum number of worktrees that can exist simultaneously. Bulk moves will fail if this cap is reached.';
+            capWrapper.appendChild(capDesc);
+            configRow.appendChild(capWrapper);
 
             // Merge Strategy
+            const mergeWrapper = document.createElement('div');
+            mergeWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
             const mergeDiv = document.createElement('div');
             mergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
             const mergeLabel = document.createElement('span');
+            mergeLabel.style.cssText = 'color:var(--text-primary);';
             mergeLabel.textContent = 'DEFAULT MERGE STRATEGY:';
             const mergeSelect = document.createElement('select');
             mergeSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
@@ -7128,12 +7154,20 @@
             });
             mergeDiv.appendChild(mergeLabel);
             mergeDiv.appendChild(mergeSelect);
-            configRow.appendChild(mergeDiv);
+            mergeWrapper.appendChild(mergeDiv);
+            const mergeDesc = document.createElement('div');
+            mergeDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
+            mergeDesc.textContent = 'SQUASH: Single commit from worktree. MERGE: Standard merge commit. FF-ONLY: Fast-forward only, fails if not possible.';
+            mergeWrapper.appendChild(mergeDesc);
+            configRow.appendChild(mergeWrapper);
 
             // Auto-merge
+            const autoMergeWrapper = document.createElement('div');
+            autoMergeWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
             const autoMergeDiv = document.createElement('div');
             autoMergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
             const autoMergeLabel = document.createElement('span');
+            autoMergeLabel.style.cssText = 'color:var(--text-primary);';
             autoMergeLabel.textContent = 'AUTO-MERGE ON COMPLETION:';
             const autoMergeInput = document.createElement('input');
             autoMergeInput.type = 'checkbox';
@@ -7143,7 +7177,12 @@
             });
             autoMergeDiv.appendChild(autoMergeLabel);
             autoMergeDiv.appendChild(autoMergeInput);
-            configRow.appendChild(autoMergeDiv);
+            autoMergeWrapper.appendChild(autoMergeDiv);
+            const autoMergeDesc = document.createElement('div');
+            autoMergeDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
+            autoMergeDesc.textContent = 'When on, automatically executes merge and advances plan to COMPLETED when it enters the MERGE column.';
+            autoMergeWrapper.appendChild(autoMergeDesc);
+            configRow.appendChild(autoMergeWrapper);
 
             function saveRules() {
                 postKanbanMessage({
@@ -7158,61 +7197,7 @@
             configSection.appendChild(configRow);
             container.appendChild(configSection);
 
-            // ── Create Section ──
-            const createSection = document.createElement('div');
-            createSection.className = 'db-subsection';
-
-            const createHeader = document.createElement('div');
-            createHeader.className = 'subsection-header';
-            const createSpan = document.createElement('span');
-            createSpan.textContent = 'CREATE WORKTREES';
-            createHeader.appendChild(createSpan);
-            createSection.appendChild(createHeader);
-
-            const createRow = document.createElement('div');
-            createRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            const roleLabel = document.createElement('span');
-            roleLabel.textContent = 'ROLE:';
-
-            const roleSelect = document.createElement('select');
-            roleSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
-            ['coder', 'lead', 'intern'].forEach(r => {
-                const opt = document.createElement('option');
-                opt.value = r;
-                opt.textContent = r.charAt(0).toUpperCase() + r.slice(1);
-                roleSelect.appendChild(opt);
-            });
-
-            const countLabel = document.createElement('span');
-            countLabel.textContent = 'AGENTS:';
-
-            const countInput = document.createElement('input');
-            countInput.type = 'number';
-            countInput.min = '1';
-            countInput.max = '10';
-            countInput.value = '1';
-            countInput.style.cssText = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-
-            const createBtn = document.createElement('button');
-            createBtn.className = 'strip-btn';
-            createBtn.textContent = 'CREATE';
-            createBtn.addEventListener('click', () => {
-                postKanbanMessage({
-                    type: 'createWorktree',
-                    role: roleSelect.value,
-                    agentCount: parseInt(countInput.value, 10) || 1,
-                    workspaceRoot: currentWorkspaceRoot
-                });
-            });
-
-            createRow.appendChild(roleLabel);
-            createRow.appendChild(roleSelect);
-            createRow.appendChild(countLabel);
-            createRow.appendChild(countInput);
-            createRow.appendChild(createBtn);
-            createSection.appendChild(createRow);
-            container.appendChild(createSection);
+            // ── Create Section removed — worktrees are auto-created per plan when worktree mode is enabled ──
 
             // ── Pools Section ──
             const poolsSection = document.createElement('div');
