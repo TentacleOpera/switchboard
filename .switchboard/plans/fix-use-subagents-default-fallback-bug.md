@@ -13,6 +13,20 @@ Fix the bug where the "Use Subagents for Multiple Plans" checkbox setting is not
 4. `TaskViewerProvider.ts` line 2808: `?? true` fallback in pair programming prompt
 5. `TaskViewerProvider.ts` lines 14822-14948: `buildKanbanBatchPrompt` calls in `_handleTriggerAgentActionInternal` MISSING parameters compared to Kanban board prompts
 
+**AUDIT FINDING #3 (ADDITIONAL LOCATIONS)**: The following `buildKanbanBatchPrompt` calls also need to be updated to use the shared methods and fix fallbacks:
+- `KanbanProvider.ts` line 2300: prompt preview (missing useSubagentsEnabled)
+- `KanbanProvider.ts` line 2759: scheduling block (missing useSubagentsEnabled)
+- `KanbanProvider.ts` line 2931: pair programming coder prompt (uses `?? true` fallback)
+- `KanbanProvider.ts` line 5702: pair programming lead prompt (uses `?? true` fallback)
+- `KanbanProvider.ts` line 5720: pair programming coder prompt (uses `?? true` fallback)
+- `KanbanProvider.ts` line 6110: prompt preview (missing useSubagentsEnabled)
+- `TaskViewerProvider.ts` line 2332: `_buildKanbanBatchPrompt` call (uses `?? true` fallback at line 6156)
+- `TaskViewerProvider.ts` line 2702: merge prompt (uses `?? true` fallback at line 6156)
+- `TaskViewerProvider.ts` line 2752: `_buildKanbanBatchPrompt` call (uses `?? true` fallback at line 6156)
+- `TaskViewerProvider.ts` line 3155: prompt preview (missing useSubagentsEnabled)
+- `TaskViewerProvider.ts` line 12797: clipboard prompt (missing useSubagentsEnabled)
+- `TaskViewerProvider.ts` lines 14682, 14695, 14709: team role dispatches (missing useSubagentsEnabled)
+
 **CRITICAL FINDING**: The implementation.html action buttons use a DIFFERENT code path (`_handleTriggerAgentActionInternal` in TaskViewerProvider.ts) than the Kanban board (`_generateBatchPlannerPrompt` in KanbanProvider.ts). Both call `buildKanbanBatchPrompt`, but they pass DIFFERENT parameters. This is wrong - they should pass IDENTICAL parameters so prompts are consistent across all UI surfaces.
 
 **ARCHITECTURAL FIX REQUIRED**: Having two separate prompt-building code paths in different files (`KanbanProvider.ts` vs `TaskViewerProvider.ts`) is unnecessary and error-prone. The proper fix is to consolidate these into a single shared prompt-building method. This plan includes the consolidation as part of the fix, not as future work.
@@ -75,12 +89,9 @@ No breaking changes. This is a bugfix to make the UI checkbox behavior match the
 ## Complexity Audit
 
 ### Routine
-- Change fallback from `?? true` to `?? false` in `KanbanProvider.ts` `useSubagentsByRole` map (line 2440-2450)
 - Change fallback from `?? true` to `?? false` in `agentPromptBuilder.ts` extraction (line 286)
-- Change fallback from `?? true` to `?? false` in `TaskViewerProvider.ts` line 6156
-- Change fallback from `?? true` to `?? false` in `TaskViewerProvider.ts` line 2808
-- **Consolidate prompt-building paths**: Move `_generateBatchPlannerPrompt`, `_generateBatchExecutionPrompt`, `_generateBatchReviewerPrompt`, `_generateBatchTesterPrompt` from `KanbanProvider.ts` to a shared location (e.g., `agentPromptBuilder.ts` or a new `promptBuilderHelpers.ts`)
-- Update `TaskViewerProvider.ts` `_handleTriggerAgentActionInternal` to call the shared prompt-building methods instead of duplicating the logic
+- **Consolidate prompt-building paths**: Move `_generateBatchPlannerPrompt`, `_generateBatchExecutionPrompt`, `_generateBatchReviewerPrompt`, `_generateBatchTesterPrompt` from `KanbanProvider.ts` to `agentPromptBuilder.ts` as shared exported functions
+- Update ALL `buildKanbanBatchPrompt` calls in both `KanbanProvider.ts` and `TaskViewerProvider.ts` to use the shared methods (13 additional locations identified in AUDIT FINDING #3)
 - Update unit test to reflect new default behavior (sequential instead of parallel)
 
 ## Edge-Case & Dependency Audit
