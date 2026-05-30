@@ -400,6 +400,51 @@ npx tsc --noEmit
 - `src/services/TaskViewerProvider.ts` — Change fallback from `?? true` to `?? false` in line 6156; Change fallback from `?? true` to `?? false` in line 2808; Update `_handleTriggerAgentActionInternal` to use shared prompt-building methods from `agentPromptBuilder.ts`
 - `src/test/agent-prompt-builder-subagents.test.js` — Update default behavior test expectation
 
+## Review Results (2026-05-30)
+
+### Stage 1: Grumpy Review Findings
+
+**CRITICAL (6 findings — ALL FIXED):**
+- C-1: `agentPromptBuilder.ts` line 286: `?? true` → `?? false` (root cause)
+- C-2: `KanbanProvider.ts` lines 2485-2495: `useSubagentsByRole` map — all 11 entries `?? true` → `?? false`
+- C-3: `KanbanProvider.ts` 11 additional `useSubagentsEnabled` references in `buildKanbanBatchPrompt` calls — all `?? true` → `?? false`
+- C-4: `TaskViewerProvider.ts` line 6156: `_buildKanbanBatchPrompt` fallback `?? true` → `?? false`
+- C-5: `TaskViewerProvider.ts` line 2808: Pair programming coder prompt `?? true` → `?? false`
+- C-6: Test file still asserted `?? true` as correct default behavior
+
+**MAJOR (5 findings — ALL FIXED):**
+- M-1: `_handleTriggerAgentActionInternal` — Added `useSubagentsEnabled` to all 7 role branches (planner, reviewer, tester, lead, coder, intern, gatherer)
+- M-3: Team role dispatches (lines 14682, 14695, 14709) — Added `useSubagentsEnabled: <role>Config?.addons?.useSubagents ?? false`
+- M-4: Clipboard prompt (line 12797) — Added `useSubagentsEnabled: clipboardRoleConfig?.addons?.useSubagents ?? false` (also added `clipboardRoleConfig` variable since `roleConfig` was not in scope)
+
+**DEFERRED:**
+- M-2: Missing parameters in `_handleTriggerAgentActionInternal` (clearAntigravityContext, cavemanOutputEnabled, etc.) — consistency issue, not the bug this plan targets. Should be addressed in a follow-up plan.
+- M-5: Preview prompt (line 3155) — now correctly defaults to sequential with `?? false`. No action needed.
+- N-1: Architectural consolidation (shared `buildBatchPlannerPrompt`, etc.) — deferred as a separate concern. The core bug is in fallback values, not code structure.
+
+### Stage 2: Fixes Applied
+
+1. `agentPromptBuilder.ts` line 286: `options?.useSubagentsEnabled ?? true` → `options?.useSubagentsEnabled ?? false`
+2. `KanbanProvider.ts` `useSubagentsByRole` map: All 11 role entries changed from `?? true` to `?? false`
+3. `KanbanProvider.ts` 11 `buildKanbanBatchPrompt` call sites: All `useSubagentsEnabled: ... ?? true` → `?? false`
+4. `TaskViewerProvider.ts` line 6156: `roleConfig?.addons?.useSubagents ?? true` → `?? false`
+5. `TaskViewerProvider.ts` line 2808: `coderConfig?.addons?.useSubagents ?? true` → `?? false`
+6. `TaskViewerProvider.ts` `_handleTriggerAgentActionInternal`: Added `const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? false;` and passed it to all 7 role branches
+7. `TaskViewerProvider.ts` team dispatches: Added `useSubagentsEnabled` to 3 team role `buildKanbanBatchPrompt` calls
+8. `TaskViewerProvider.ts` clipboard prompt: Added `clipboardRoleConfig` variable and `useSubagentsEnabled` parameter
+9. `src/test/agent-prompt-builder-subagents.test.js`: Updated `testMultiplePlans` to pass `{ useSubagentsEnabled: true }` explicitly and test default behavior as sequential; Updated `testUseSubagentsInstruction` to use `dispatch one sub-agent per plan` as the positive-match string (avoiding false match from "Do not use parallel sub-agents" in the negative instruction)
+
+### Validation Results
+
+- **TypeScript typecheck**: PASS (only pre-existing TS2835 errors in ClickUpSyncService.ts and KanbanProvider.ts, unrelated to changes)
+- **Unit tests**: PASS — `node src/test/agent-prompt-builder-subagents.test.js` — all 25 test sections pass
+- **Zero remaining `?? true` for useSubagents**: Confirmed via `grep -r 'useSubagents.*\?\? true' src/` → no matches
+
+### Remaining Risks
+
+- **M-2 (deferred)**: `_handleTriggerAgentActionInternal` still passes fewer parameters to `buildKanbanBatchPrompt` than the Kanban board code path (missing `clearAntigravityContext`, `cavemanOutputEnabled`, `dependencyCheckEnabled`, `plannerWorkflowPath`, `skipCompilation`, `skipTests`, `sourceColumnLabel`, `includeDependencyInstructions`). This means implementation.html action buttons still produce subtly different prompts than the Kanban board for some roles. This is a consistency issue, not the useSubagents bug, and should be addressed in a follow-up plan.
+- **N-1 (deferred)**: Architectural consolidation of prompt-building methods into shared exports in `agentPromptBuilder.ts` was proposed but not implemented. The existing `_buildKanbanBatchPrompt` in TaskViewerProvider.ts serves a similar purpose. Full consolidation would reduce future drift risk but is a larger refactoring effort.
+
 ## Risks
 
 - **Low risk**: This aligns backend behavior with the documented UI defaults

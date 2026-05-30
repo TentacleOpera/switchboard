@@ -2805,7 +2805,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled(),
                     defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                     workspaceRoot: resolvedWorkspaceRoot,
-                    useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? true
+                    useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? false
                 });
                 if (coderUsesIde) {
                     await vscode.env.clipboard.writeText(coderPrompt);
@@ -6153,7 +6153,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
-        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? true;
+        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? false;
         const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
         const ticketUpdateMode = roleConfig?.addons?.ticketUpdateMode
             ?? (roleConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
@@ -12788,6 +12788,9 @@ What would you like to find?`;
 
             const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
 
+            // Get role config for useSubagentsEnabled
+            const clipboardRoleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+
             // Use standard prompt generation
 
             let textToCopy: string;
@@ -12804,7 +12807,8 @@ What would you like to find?`;
                     advancedReviewerEnabled,
                     designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
                     defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: resolvedWorkspaceRoot
+                    workspaceRoot: resolvedWorkspaceRoot,
+                    useSubagentsEnabled: clipboardRoleConfig?.addons?.useSubagents ?? false
                 });
             }
 
@@ -14679,11 +14683,12 @@ What would you like to find?`;
                     dispatches.push({
                         role: 'lead',
                         agent: leadAgent,
-                        payload: buildKanbanBatchPrompt('lead', [teamPlan], { 
-                            defaultPromptOverrides: this._cachedDefaultPromptOverrides, 
+                        payload: buildKanbanBatchPrompt('lead', [teamPlan], {
+                            defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                             workspaceRoot: resolvedWorkspaceRoot,
                             gitProhibitionEnabled: leadConfig?.addons?.gitProhibition ?? true,
-                            switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true
+                            switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true,
+                            useSubagentsEnabled: leadConfig?.addons?.useSubagents ?? false
                         }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
                         metadata: { phase_gate: { enforce_persona: 'lead' } }
                     });
@@ -14692,11 +14697,12 @@ What would you like to find?`;
                         dispatches.push({
                             role: 'lead',
                             agent: leadAgent,
-                            payload: buildKanbanBatchPrompt('lead', [teamPlan], { 
-                                defaultPromptOverrides: this._cachedDefaultPromptOverrides, 
+                            payload: buildKanbanBatchPrompt('lead', [teamPlan], {
+                                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                                 workspaceRoot: resolvedWorkspaceRoot,
                                 gitProhibitionEnabled: leadConfig?.addons?.gitProhibition ?? true,
-                                switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true
+                                switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true,
+                                useSubagentsEnabled: leadConfig?.addons?.useSubagents ?? false
                             }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
                             metadata: { phase_gate: { enforce_persona: 'lead' } }
                         });
@@ -14711,7 +14717,8 @@ What would you like to find?`;
                                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                                 workspaceRoot: resolvedWorkspaceRoot,
                                 gitProhibitionEnabled: coderConfig?.addons?.gitProhibition ?? true,
-                                switchboardSafeguardsEnabled: coderConfig?.addons?.switchboardSafeguards ?? true
+                                switchboardSafeguardsEnabled: coderConfig?.addons?.switchboardSafeguards ?? true,
+                                useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? false
                             }) + `\n\nAdditional Instructions: only do Routine (Band A) work.`,
                             metadata: {}
                         });
@@ -14805,7 +14812,8 @@ What would you like to find?`;
         const customAgent = findCustomAgentByRole(customAgents, role);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
         const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
-        
+        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? false;
+
         let gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
         if (options?.gitProhibitionEnabled !== undefined) {
             gitProhibitionEnabled = options.gitProhibitionEnabled;
@@ -14829,6 +14837,7 @@ What would you like to find?`;
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
                 switchboardSafeguardsEnabled,
+                useSubagentsEnabled,
                 routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null)
             });
 
@@ -14855,7 +14864,8 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
-                switchboardSafeguardsEnabled
+                switchboardSafeguardsEnabled,
+                useSubagentsEnabled
             });
             messageMetadata.phase_gate = {
                 enforce_persona: 'reviewer',
@@ -14891,16 +14901,18 @@ Do NOT output the critiques or plan twice in your response; integrate this with 
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
-                switchboardSafeguardsEnabled
+                switchboardSafeguardsEnabled,
+                useSubagentsEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
-            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], { 
-                includeInlineChallenge, 
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides, 
+            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], {
+                includeInlineChallenge,
+                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
-                switchboardSafeguardsEnabled
+                switchboardSafeguardsEnabled,
+                useSubagentsEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
@@ -14919,7 +14931,8 @@ Create this file exactly as specified, then continue your work.`);
                     defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                     workspaceRoot: effectiveWorkspaceRoot,
                     gitProhibitionEnabled,
-                    switchboardSafeguardsEnabled
+                    switchboardSafeguardsEnabled,
+                    useSubagentsEnabled
                 });
             }
         } else if (role === 'intern') {
@@ -14930,14 +14943,16 @@ Create this file exactly as specified, then continue your work.`);
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
-                switchboardSafeguardsEnabled
+                switchboardSafeguardsEnabled,
+                useSubagentsEnabled
             });
         } else if (role === 'gatherer') {
             messagePayload = buildKanbanBatchPrompt('gatherer', [dispatchPlan], {
                 defaultPromptOverrides: this._cachedDefaultPromptOverrides,
                 workspaceRoot: effectiveWorkspaceRoot,
                 gitProhibitionEnabled,
-                switchboardSafeguardsEnabled
+                switchboardSafeguardsEnabled,
+                useSubagentsEnabled
             });
         } else if (customAgent) {
             messagePayload = this.buildCustomAgentPrompt([dispatchPlan], customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot);

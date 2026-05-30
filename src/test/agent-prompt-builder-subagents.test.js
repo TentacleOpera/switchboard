@@ -41,11 +41,17 @@ function testSinglePlan() {
 }
 
 function testMultiplePlans() {
-    console.log('Testing multiple plans (with subagent info)...');
+    console.log('Testing multiple plans (with subagent info when enabled)...');
     const roles = ['planner', 'reviewer', 'tester', 'lead', 'coder'];
     for (const role of roles) {
+        const prompt = buildKanbanBatchPrompt(role, plans2, { useSubagentsEnabled: true });
+        assert.ok(prompt.includes(subagentText), `Role ${role} SHOULD include subagent info for multiple plans when useSubagentsEnabled=true`);
+    }
+    // Default behavior (no useSubagentsEnabled) → sequential instruction
+    for (const role of roles) {
         const prompt = buildKanbanBatchPrompt(role, plans2);
-        assert.ok(prompt.includes(subagentText), `Role ${role} SHOULD include subagent info for multiple plans`);
+        assert.ok(!prompt.includes(subagentText), `Role ${role} should NOT include subagent info by default (useSubagentsEnabled defaults to false)`);
+        assert.ok(prompt.includes('Process each plan sequentially'), `Role ${role} SHOULD include sequential instruction by default`);
     }
     console.log('  PASS: Multiple plans correct for all roles');
 }
@@ -365,16 +371,17 @@ function testUseSubagentsInstruction() {
     
     // Multiple plans with useSubagentsEnabled=true → include parallel instruction
     const parallelPrompt = buildKanbanBatchPrompt('coder', plans2, { useSubagentsEnabled: true });
-    assert.ok(parallelPrompt.includes('parallel sub-agents'), 'Multiple plans with useSubagentsEnabled=true SHOULD include parallel instruction');
-    
+    assert.ok(parallelPrompt.includes('dispatch one sub-agent per plan'), 'Multiple plans with useSubagentsEnabled=true SHOULD include parallel dispatch instruction');
+
     // Multiple plans with useSubagentsEnabled=false → include sequential instruction
     const sequentialPrompt = buildKanbanBatchPrompt('coder', plans2, { useSubagentsEnabled: false });
     assert.ok(sequentialPrompt.includes('Process each plan sequentially'), 'Multiple plans with useSubagentsEnabled=false SHOULD include sequential instruction');
-    assert.ok(!sequentialPrompt.includes('parallel sub-agents'), 'Multiple plans with useSubagentsEnabled=false should NOT include parallel instruction');
-    
-    // Default behavior (no option passed) → should include parallel instruction (default true)
+    assert.ok(!sequentialPrompt.includes('dispatch one sub-agent per plan'), 'Multiple plans with useSubagentsEnabled=false should NOT include parallel dispatch instruction');
+
+    // Default behavior (no option passed) → should include sequential instruction (default false)
     const defaultPrompt = buildKanbanBatchPrompt('coder', plans2, {});
-    assert.ok(defaultPrompt.includes('parallel sub-agents'), 'Default (no useSubagentsEnabled) SHOULD include parallel instruction');
+    assert.ok(!defaultPrompt.includes('dispatch one sub-agent per plan'), 'Default (no useSubagentsEnabled) should NOT include parallel dispatch instruction');
+    assert.ok(defaultPrompt.includes('Process each plan sequentially'), 'Default (no useSubagentsEnabled) SHOULD include sequential instruction');
     
     console.log('Use subagents instruction tests PASSED!');
 }
