@@ -5008,6 +5008,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _persistAutobanState(): Promise<void> {
+        if (this._autobanState.automationMode === 'single-column') {
+            this._singleColumnAutobanState.enabled = this._autobanState.enabled;
+            this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
+            this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
+            this._singleColumnAutobanState.terminalPools = this._autobanState.terminalPools;
+            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules['PLAN REVIEWED']?.intervalMinutes ?? 15;
+            await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
+        }
         await this._context.workspaceState.update('autoban.state', this._autobanState);
     }
 
@@ -5836,11 +5844,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const enabled = msg.enabled === undefined ? this._singleColumnAutobanState.enabled : !!msg.enabled;
             const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 15;
             const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 3;
+            const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
+            const terminalPools = msg.terminalPools || this._singleColumnAutobanState.terminalPools || {};
 
             this._singleColumnAutobanState = {
                 enabled,
                 intervalMinutes,
-                batchSize
+                batchSize,
+                complexityFilter,
+                terminalPools
             };
             await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
 
@@ -5854,7 +5866,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 automationMode: 'single-column',
                 rules: singleColumnSyntheticRules,
                 batchSize,
-                complexityFilter: 'all',
+                complexityFilter,
+                terminalPools,
                 routingMode: 'dynamic'
             });
 
@@ -5877,6 +5890,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
         }
 
+        await this._persistAutobanState();
+        this._postAutobanStateNow();
+    }
+
+    public async updateAutobanConfigFromKanban(state: any): Promise<void> {
+        this._autobanState = normalizeAutobanConfigState({
+            ...this._autobanState,
+            ...state
+        });
         await this._persistAutobanState();
         this._postAutobanStateNow();
     }

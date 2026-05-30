@@ -5153,6 +5153,26 @@
             }
         }
 
+        // ── Forward-declare variables used by message handlers ────────────────
+        // These MUST be declared before the message listener is registered,
+        // otherwise the JS temporal dead zone (TDZ) causes ReferenceError when
+        // a message arrives before the script finishes executing top-to-bottom.
+        let lastTerminals = {};
+        let lastCustomAgents = [];
+        let isAutobanPanelInteracting = false;
+        let autobanPanelInteractionTimer = null;
+        let lastAntigravityAgent = '';
+        let lastAntigravityColumn = '';
+        let lastWorktreeModeEnabled = false;
+        let lastWorktreeMaxCap = 10;
+        let lastWorktreeDefaultMergeStrategy = 'squash';
+        let lastControlPlaneConfigured = true;
+        let lastWorktrees = [];
+        let currentAutomationMode = 'single-column';
+        let lastAntigravityBatchSize = 5;
+        let managedTerminalPools = {};
+        const inFlightMerges = new Set();
+
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
             const msg = event.data;
@@ -6132,13 +6152,8 @@
         // ─── End Routing Map ──────────────────────────────────────────────────────
 
         // ─── Autoban Config Panel (ported from sidebar implementation.html) ────────
+        // (lastTerminals, lastCustomAgents, isAutobanPanelInteracting, etc. are forward-declared above the message listener)
 
-        let lastTerminals = {};
-        let lastCustomAgents = [];
-        let isAutobanPanelInteracting = false;
-        let autobanPanelInteractionTimer = null; // debounce timer for re-render guard
-        let lastAntigravityAgent = '';
-        let lastAntigravityColumn = '';
                function createAutobanPanel() {
             const container = document.createElement('div');
             container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
@@ -6174,6 +6189,10 @@
                 // Note: blur is intentionally omitted — the timeout handles guard clearance
             };
 
+            const emitAutobanState = () => {
+                postKanbanMessage({ type: 'updateAutobanConfig', state: { ...state } });
+            };
+
             // Mode Selector
             const modeRow = document.createElement('div');
             modeRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary); margin-bottom:8px;';
@@ -6198,6 +6217,16 @@
             modeRow.appendChild(modeSelect);
             container.appendChild(modeRow);
 
+            const modeDescriptions = {
+                'single-column': 'Automates a single kanban column transition. Best for simple workflows with one agent role.',
+                'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
+                'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.'
+            };
+            const modeHelpText = document.createElement('div');
+            modeHelpText.style.cssText = 'padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+            modeHelpText.textContent = modeDescriptions[currentAutomationMode] || '';
+            container.appendChild(modeHelpText);
+
             modeSelect.addEventListener('change', () => {
                 const newMode = modeSelect.value;
                 if (state.enabled && currentAutomationMode !== newMode) {
@@ -6207,6 +6236,7 @@
                     }
                 }
                 currentAutomationMode = newMode;
+                modeHelpText.textContent = modeDescriptions[newMode] || '';
                 try {
                     const wsState = vscode.getState() || {};
                     wsState.currentAutomationMode = currentAutomationMode;
@@ -6224,12 +6254,51 @@
                 renderAutobanPanel();
             });
 
+            const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
+            const resolveTerminalLiveness = (terminalName) => {
+                const terminal = lastTerminals[terminalName];
+                if (!terminal) {
+                    return { terminal: null, alive: false };
+                }
+                const heartbeatThresholdMs = 60_000;
+                const lastSeenMs = Date.parse(terminal.lastSeen || '');
+                const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < heartbeatThresholdMs;
+                const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
+                return { terminal, alive: !!alive };
+            };
+            const getRolePoolEntries = (role) => {
+                const configuredPool = Array.isArray(state.terminalPools?.[role]) ? state.terminalPools[role].filter(Boolean) : [];
+                const managedPool = new Set(Array.isArray(state.managedTerminalPools?.[role]) ? state.managedTerminalPools[role] : []);
+                const aliveRoleTerminals = Object.keys(lastTerminals)
+                    .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
+                    .filter(name => resolveTerminalLiveness(name).alive)
+                    .sort((a, b) => a.localeCompare(b));
+                const alivePrimaryRoleTerminals = aliveRoleTerminals
+                    .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
+                const effectivePool = (
+                    configuredPool.length > 0
+                        ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
+                        : alivePrimaryRoleTerminals
+                ).slice(0, 5);
+                return effectivePool.map(name => {
+                    const status = resolveTerminalLiveness(name);
+                    const count = Number(state.sendCounts?.[name] || 0);
+                    return {
+                        name,
+                        count,
+                        managed: managedPool.has(name),
+                        alive: status.alive,
+                        terminal: status.terminal
+                    };
+                });
+            };
+
             if (currentAutomationMode === 'single-column') {
                 const singleColumnContainer = document.createElement('div');
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
 
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 15, batchSize: 3 };
+                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 15, batchSize: 3, complexityFilter: 'all', terminalPools: {} };
 
                 // Status row
                 const scStatusRow = document.createElement('div');
@@ -6239,62 +6308,254 @@
                 scStatusRow.appendChild(scStatusText);
                 singleColumnContainer.appendChild(scStatusRow);
 
-                // Interval Slider
-                const scIntervalRow = document.createElement('div');
-                scIntervalRow.style.cssText = 'display:flex; flex-direction:column; gap:4px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-                const scIntervalLabel = document.createElement('div');
-                scIntervalLabel.textContent = `CHECK INTERVAL: ${singleColumnConfig.intervalMinutes} min`;
-                const scIntervalSlider = document.createElement('input');
-                scIntervalSlider.type = 'range';
-                scIntervalSlider.min = '5';
-                scIntervalSlider.max = '60';
-                scIntervalSlider.step = '5';
-                scIntervalSlider.value = String(singleColumnConfig.intervalMinutes);
-                scIntervalSlider.style.cssText = 'width:100%;';
-                guardInteraction(scIntervalSlider);
-                scIntervalSlider.addEventListener('input', () => {
-                    scIntervalLabel.textContent = `CHECK INTERVAL: ${scIntervalSlider.value} min`;
-                });
-                scIntervalSlider.addEventListener('change', () => {
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'single-column',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: Number(scIntervalSlider.value),
-                        batchSize: Number(scBatchSelect.value)
-                    });
-                });
-                scIntervalRow.appendChild(scIntervalLabel);
-                scIntervalRow.appendChild(scIntervalSlider);
-                singleColumnContainer.appendChild(scIntervalRow);
+                // --- Automation Rules Section ---
+                const automationRulesSectionSc = document.createElement('div');
+                automationRulesSectionSc.className = 'db-subsection';
+                singleColumnContainer.appendChild(automationRulesSectionSc);
+
+                const automationRulesHeaderSc = document.createElement('div');
+                automationRulesHeaderSc.className = 'subsection-header';
+                const automationRulesSpanSc = document.createElement('span');
+                automationRulesSpanSc.textContent = 'KANBAN AUTOMATION RULES';
+                automationRulesHeaderSc.appendChild(automationRulesSpanSc);
+                automationRulesSectionSc.appendChild(automationRulesHeaderSc);
 
                 // Batch Size Selector
-                const scBatchRow = document.createElement('div');
-                scBatchRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-                const scBatchLabel = document.createElement('span');
-                scBatchLabel.textContent = 'MAX BATCH SIZE:';
-                const scBatchSelect = document.createElement('select');
-                scBatchSelect.style.cssText = autobanSelectStyle;
-                guardInteraction(scBatchSelect);
+                const batchRowSc = document.createElement('div');
+                batchRowSc.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                const batchLabelSc = document.createElement('span');
+                batchLabelSc.textContent = 'MAX BATCH SIZE:';
+                const batchSelectSc = document.createElement('select');
+                batchSelectSc.style.cssText = autobanSelectStyle;
+                guardInteraction(batchSelectSc);
                 [1, 2, 3, 4, 5].forEach(val => {
                     const opt = document.createElement('option');
                     opt.value = String(val);
                     opt.textContent = String(val);
                     if (val === singleColumnConfig.batchSize) opt.selected = true;
-                    scBatchSelect.appendChild(opt);
+                    batchSelectSc.appendChild(opt);
                 });
-                scBatchSelect.addEventListener('change', () => {
+                batchSelectSc.addEventListener('change', () => {
+                    singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 3;
                     postKanbanMessage({
                         type: 'setAutomationMode',
                         mode: 'single-column',
                         enabled: singleColumnConfig.enabled,
-                        intervalMinutes: Number(scIntervalSlider.value),
-                        batchSize: Number(scBatchSelect.value)
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter
                     });
                 });
-                scBatchRow.appendChild(scBatchLabel);
-                scBatchRow.appendChild(scBatchSelect);
-                singleColumnContainer.appendChild(scBatchRow);
+                batchRowSc.appendChild(batchLabelSc);
+                batchRowSc.appendChild(batchSelectSc);
+                automationRulesSectionSc.appendChild(batchRowSc);
+
+                // Complexity Selector
+                const complexityRowSc = document.createElement('div');
+                complexityRowSc.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                const complexityLabelSc = document.createElement('span');
+                complexityLabelSc.textContent = 'COMPLEXITY:';
+                const complexitySelectSc = document.createElement('select');
+                complexitySelectSc.style.cssText = autobanSelectStyle;
+                guardInteraction(complexitySelectSc);
+                [
+                    { value: 'all', label: 'All' },
+                    { value: 'low_and_below', label: 'Low and below (1-4)' },
+                    { value: 'medium_and_below', label: 'Medium and below (1-6)' },
+                    { value: 'medium_and_above', label: 'Medium and above (5-10)' },
+                    { value: 'high_and_above', label: 'High and above (7-10)' }
+                ].forEach(({ value, label }) => {
+                    const opt = document.createElement('option');
+                    opt.value = value;
+                    opt.textContent = label;
+                    if (value === singleColumnConfig.complexityFilter) opt.selected = true;
+                    complexitySelectSc.appendChild(opt);
+                });
+                complexitySelectSc.title = 'Unknown complexity is treated as High (8). Low and below excludes Unknown.';
+                complexitySelectSc.addEventListener('change', () => {
+                    singleColumnConfig.complexityFilter = complexitySelectSc.value || 'all';
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'single-column',
+                        enabled: singleColumnConfig.enabled,
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter
+                    });
+                });
+                complexityRowSc.appendChild(complexityLabelSc);
+                complexityRowSc.appendChild(complexitySelectSc);
+                automationRulesSectionSc.appendChild(complexityRowSc);
+
+                // --- Column Rules Section ---
+                const columnRulesSectionSc = document.createElement('div');
+                columnRulesSectionSc.className = 'db-subsection';
+                singleColumnContainer.appendChild(columnRulesSectionSc);
+
+                const rulesHeaderSc = document.createElement('div');
+                rulesHeaderSc.className = 'subsection-header';
+                const rulesSpanSc = document.createElement('span');
+                rulesSpanSc.textContent = 'COLUMN RULES';
+                rulesHeaderSc.appendChild(rulesSpanSc);
+                columnRulesSectionSc.appendChild(rulesHeaderSc);
+
+                const timingExplanationSc = document.createElement('div');
+                timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                timingExplanationSc.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+                columnRulesSectionSc.appendChild(timingExplanationSc);
+
+                const ruleRowSc = document.createElement('div');
+                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
+
+                const ruleLblSc = document.createElement('span');
+                ruleLblSc.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                ruleLblSc.textContent = 'CREATED -> COMPLETED';
+
+                const everyLblSc = document.createElement('span');
+                everyLblSc.style.cssText = 'color:var(--text-secondary);';
+                everyLblSc.textContent = 'every';
+
+                const minInputSc = document.createElement('input');
+                minInputSc.type = 'number';
+                minInputSc.min = '5';
+                minInputSc.max = '60';
+                minInputSc.value = String(singleColumnConfig.intervalMinutes);
+                minInputSc.style.cssText = autobanNumberInputStyle;
+                guardInteraction(minInputSc);
+                minInputSc.addEventListener('change', () => {
+                    const val = Math.max(5, Math.min(60, parseInt(minInputSc.value, 10) || 15));
+                    singleColumnConfig.intervalMinutes = val;
+                    minInputSc.value = String(val);
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'single-column',
+                        enabled: singleColumnConfig.enabled,
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter
+                    });
+                });
+
+                const minLblSc = document.createElement('span');
+                minLblSc.style.cssText = 'color:var(--text-secondary);';
+                minLblSc.textContent = 'min';
+
+                ruleRowSc.appendChild(ruleLblSc);
+                ruleRowSc.appendChild(everyLblSc);
+                ruleRowSc.appendChild(minInputSc);
+                ruleRowSc.appendChild(minLblSc);
+                columnRulesSectionSc.appendChild(ruleRowSc);
+
+                // --- Terminal Pools Section ---
+                const terminalPoolsSectionSc = document.createElement('div');
+                terminalPoolsSectionSc.className = 'db-subsection';
+                singleColumnContainer.appendChild(terminalPoolsSectionSc);
+
+                const poolsHeaderSc = document.createElement('div');
+                poolsHeaderSc.className = 'subsection-header';
+                const poolsSpanSc = document.createElement('span');
+                poolsSpanSc.textContent = 'TERMINAL POOLS';
+                poolsHeaderSc.appendChild(poolsSpanSc);
+                terminalPoolsSectionSc.appendChild(poolsHeaderSc);
+
+                const poolsHelpSc = document.createElement('div');
+                poolsHelpSc.style.cssText = 'padding:0 8px; font-family:var(--font-mono); font-size:9px; color:var(--text-secondary); line-height:1.4;';
+                poolsHelpSc.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
+                terminalPoolsSectionSc.appendChild(poolsHelpSc);
+
+                // Single Coder Pool Block
+                const coderPoolEntriesSc = getRolePoolEntries('coder');
+                const roleBlockSc = document.createElement('div');
+                roleBlockSc.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
+
+                const roleHeaderSc = document.createElement('div');
+                roleHeaderSc.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+
+                const roleTitleWrapSc = document.createElement('div');
+                roleTitleWrapSc.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
+
+                const roleTitleSc = document.createElement('span');
+                roleTitleSc.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
+                roleTitleSc.textContent = 'Coder';
+
+                const roleCapacitySc = document.createElement('span');
+                roleCapacitySc.style.cssText = chipStyle + ' flex-shrink:0;';
+                roleCapacitySc.textContent = 'POOL ' + coderPoolEntriesSc.length + '/5';
+
+                roleTitleWrapSc.appendChild(roleTitleSc);
+                roleTitleWrapSc.appendChild(roleCapacitySc);
+
+                const addButtonSc = document.createElement('button');
+                addButtonSc.className = 'action-btn';
+                addButtonSc.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
+                addButtonSc.textContent = 'ADD TERMINAL';
+                addButtonSc.disabled = coderPoolEntriesSc.length >= 5;
+                addButtonSc.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'addAutobanTerminal', role: 'coder' });
+                });
+
+                roleHeaderSc.appendChild(roleTitleWrapSc);
+                roleHeaderSc.appendChild(addButtonSc);
+                roleBlockSc.appendChild(roleHeaderSc);
+
+                if (coderPoolEntriesSc.length === 0) {
+                    const emptyState = document.createElement('div');
+                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
+                    emptyState.textContent = 'No live terminals available for this role yet.';
+                    roleBlockSc.appendChild(emptyState);
+                } else {
+                    coderPoolEntriesSc.forEach(entry => {
+                        const terminalRow = document.createElement('div');
+                        terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+
+                        const left = document.createElement('div');
+                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+
+                        const nameSpan = document.createElement('span');
+                        nameSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                        nameSpan.textContent = entry.name;
+
+                        const statusBadge = document.createElement('span');
+                        statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
+                        statusBadge.textContent = entry.alive ? 'READY' : 'OFFLINE';
+
+                        const kindBadge = document.createElement('span');
+                        kindBadge.style.cssText = chipStyle;
+                        kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
+
+                        left.appendChild(nameSpan);
+                        left.appendChild(statusBadge);
+                        left.appendChild(kindBadge);
+
+                        const right = document.createElement('div');
+                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                        if (entry.terminal) {
+                            const focusButton = document.createElement('button');
+                            focusButton.style.cssText = smallButtonStyle;
+                            focusButton.textContent = 'FOCUS';
+                            focusButton.addEventListener('click', () => {
+                                postKanbanMessage({ type: 'focusTerminal', terminalName: entry.name });
+                            });
+                            right.appendChild(focusButton);
+                        }
+
+                        if (entry.managed) {
+                            const removeButton = document.createElement('button');
+                            removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
+                            removeButton.textContent = 'REMOVE';
+                            removeButton.addEventListener('click', () => {
+                                postKanbanMessage({ type: 'removeAutobanTerminal', role: 'coder', terminalName: entry.name });
+                            });
+                            right.appendChild(removeButton);
+                        }
+
+                        terminalRow.appendChild(left);
+                        terminalRow.appendChild(right);
+                        roleBlockSc.appendChild(terminalRow);
+                    });
+                }
+                terminalPoolsSectionSc.appendChild(roleBlockSc);
 
                 // Clear Before Prompt Toggle
                 const scClearRow = document.createElement('div');
@@ -6332,8 +6593,9 @@
                         type: 'setAutomationMode',
                         mode: 'single-column',
                         enabled: true,
-                        intervalMinutes: Number(scIntervalSlider.value),
-                        batchSize: Number(scBatchSelect.value)
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter
                     });
                 });
 
@@ -6380,7 +6642,6 @@
                         .map(agent => ({ role: agent.role, label: agent.name }))
                 ];
 
-                const getAutobanRuleIdSuffix = (column) => column.toLowerCase().replace(/[^a-z0-9]+/g, '-');
                 const columnTransitions = [
                     { column: 'CREATED', label: 'CREATED -> PLAN REVIEWED', defaultMin: 10, floorPerPlan: 3 },
                     { column: 'PLAN REVIEWED', label: 'PLAN REVIEWED -> INTERN/CODER/LEAD', defaultMin: 20, floorPerPlan: 5 },
@@ -6388,52 +6649,6 @@
                     { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
                     { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
                 ];
-
-                const resolveTerminalLiveness = (terminalName) => {
-                    const terminal = lastTerminals[terminalName];
-                    if (!terminal) {
-                        return { terminal: null, alive: false };
-                    }
-                    const heartbeatThresholdMs = 60_000;
-                    const lastSeenMs = Date.parse(terminal.lastSeen || '');
-                    const heartbeatAlive = !isNaN(lastSeenMs) && (Date.now() - lastSeenMs) < heartbeatThresholdMs;
-                    const alive = terminal.alive !== undefined ? terminal.alive : (terminal._isLocal || heartbeatAlive);
-                    return { terminal, alive: !!alive };
-                };
-
-                const getRolePoolEntries = (role) => {
-                    const configuredPool = Array.isArray(state.terminalPools?.[role]) ? state.terminalPools[role].filter(Boolean) : [];
-                    const managedPool = new Set(Array.isArray(state.managedTerminalPools?.[role]) ? state.managedTerminalPools[role] : []);
-                    const aliveRoleTerminals = Object.keys(lastTerminals)
-                        .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
-                        .filter(name => resolveTerminalLiveness(name).alive)
-                        .sort((a, b) => a.localeCompare(b));
-                    const alivePrimaryRoleTerminals = aliveRoleTerminals
-                        .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
-                    const effectivePool = (
-                        configuredPool.length > 0
-                            ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
-                            : alivePrimaryRoleTerminals
-                    ).slice(0, 5);
-                    return effectivePool.map(name => {
-                        const status = resolveTerminalLiveness(name);
-                        const count = Number(state.sendCounts?.[name] || 0);
-                        return {
-                            name,
-                            count,
-                            managed: managedPool.has(name),
-                            alive: status.alive,
-                            terminal: status.terminal
-                        };
-                    });
-                };
-
-                const automationRulesSection = document.createElement('div');
-                automationRulesSection.className = 'db-subsection';
-                multiColumnContainer.appendChild(automationRulesSection);
-
-                const automationRulesHeader = document.createElement('div');
-                automationRulesHeader.className = 'subsection-header';
                 const automationRulesSpan = document.createElement('span');
                 automationRulesSpan.textContent = 'KANBAN AUTOMATION RULES';
                 automationRulesHeader.appendChild(automationRulesSpan);
@@ -7631,12 +7846,8 @@
             return container;
         }
 
-        let lastWorktrees = [];
-        let lastWorktreeModeEnabled = false;
-        let lastWorktreeMaxCap = 10;
-        let lastWorktreeDefaultMergeStrategy = 'squash';
-        let lastControlPlaneConfigured = true;
-        const inFlightMerges = new Set();
+        // (lastWorktrees, lastWorktreeModeEnabled, lastWorktreeMaxCap, lastWorktreeDefaultMergeStrategy,
+        //  lastControlPlaneConfigured, inFlightMerges are forward-declared above the message listener)
 
         function renderWorktreePanel() {
             try {

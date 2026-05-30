@@ -4481,6 +4481,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
+            case 'updateAutobanConfig': {
+                if (this._taskViewerProvider && msg.state) {
+                    await this._taskViewerProvider.updateAutobanConfigFromKanban(msg.state);
+                }
+                break;
+            }
             case 'toggleAutoban': {
                 const enabled = !!msg.enabled;
                 if (this._autobanState) {

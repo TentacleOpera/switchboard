@@ -17,19 +17,29 @@ export type SingleColumnAutobanConfig = {
     enabled: boolean;
     intervalMinutes: number;
     batchSize: number;
+    complexityFilter: AutobanComplexityFilter;
+    terminalPools: Record<string, string[]>;
 };
 
 export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     enabled: false,
     intervalMinutes: 15,
-    batchSize: 3
+    batchSize: 3,
+    complexityFilter: 'all',
+    terminalPools: {}
 };
 
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
     return {
         enabled: state?.enabled === true,
         intervalMinutes: Math.max(5, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 15)),
-        batchSize: normalizeAutobanBatchSize(state?.batchSize)
+        batchSize: normalizeAutobanBatchSize(state?.batchSize),
+        complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
+            ? state!.complexityFilter!
+            : 'all',
+        terminalPools: (typeof state?.terminalPools === 'object' && state!.terminalPools !== null)
+            ? Object.fromEntries(Object.entries(state!.terminalPools).map(([k, v]) => [k, Array.isArray(v) ? v.filter(Boolean) : []]))
+            : {}
     };
 }
 
@@ -234,9 +244,7 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         aggressivePairProgramming: state?.aggressivePairProgramming === true,
         automationMode: (['single-column', 'multi-column', 'antigravity-batch'] as const).includes(state?.automationMode as any)
             ? state!.automationMode!
-            : (state?.enabled === true || Object.keys(state?.rules ?? {}).length > 1)
-                ? 'multi-column'
-                : 'single-column',
+            : 'single-column',
         singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig)
     };
 }
