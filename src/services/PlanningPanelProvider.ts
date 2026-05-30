@@ -54,6 +54,8 @@ export class PlanningPanelProvider {
     private _antigravityWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
+    private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
+    private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
     private _activePreviewPath: string | null = null;
@@ -286,6 +288,7 @@ export class PlanningPanelProvider {
             vscode.workspace.onDidChangeWorkspaceFolders(() => {
                 console.log('[PlanningPanel] Workspace folders changed, re-registering adapters');
                 this._ensureAdaptersRegistered();
+                this._setupKanbanPlansWatcher();
             })
         );
 
@@ -293,6 +296,7 @@ export class PlanningPanelProvider {
         this._setupDocsFolderWatcher(workspaceRoot);
         this._setupLocalFolderWatchers();
         this._setupAntigravityWatcher();
+        this._setupKanbanPlansWatcher();
 
         // Send initial active design doc state
         await this._sendActiveDesignDocState();
@@ -395,6 +399,53 @@ export class PlanningPanelProvider {
         this._antigravityWatcher.onDidCreate(refresh);
         this._antigravityWatcher.onDidDelete(refresh);
         this._disposables.push(this._antigravityWatcher);
+    }
+
+    private _setupKanbanPlansWatcher(): void {
+        // Dispose existing watchers
+        for (const w of this._kanbanPlansWatchers) {
+            w.dispose();
+            const idx = this._disposables.indexOf(w);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+        }
+        this._kanbanPlansWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        const watchedPaths = new Set<string>();
+
+        for (const root of allRoots) {
+            const plansDir = path.join(root, '.switchboard', 'plans');
+            if (!fs.existsSync(plansDir)) { continue; }
+            if (watchedPaths.has(plansDir)) { continue; }
+            watchedPaths.add(plansDir);
+
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(vscode.Uri.file(plansDir), '**/*.md')
+            );
+
+            const triggerRefresh = () => {
+                if (!this._panel) { return; }
+                if (this._kanbanPlansWatchDebounce) {
+                    clearTimeout(this._kanbanPlansWatchDebounce);
+                }
+                this._kanbanPlansWatchDebounce = setTimeout(() => {
+                    this._kanbanPlansWatchDebounce = undefined;
+                    this._handleMessage({
+                        type: 'fetchKanbanPlans',
+                        requestId: Date.now()
+                    }).catch(err => {
+                        console.error('[PlanningPanel] Error auto-refreshing kanban plans:', err);
+                    });
+                }, 800);
+            };
+
+            watcher.onDidCreate(triggerRefresh);
+            watcher.onDidChange(triggerRefresh);
+            watcher.onDidDelete(triggerRefresh);
+
+            this._kanbanPlansWatchers.push(watcher);
+            this._disposables.push(watcher);
+        }
     }
 
     private _setupActiveDocWatcher(filePath: string | null): void {
@@ -2590,6 +2641,14 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._localFolderWatchers = [];
+        if (this._kanbanPlansWatchDebounce) {
+            clearTimeout(this._kanbanPlansWatchDebounce);
+            this._kanbanPlansWatchDebounce = undefined;
+        }
+        for (const watcher of this._kanbanPlansWatchers) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._kanbanPlansWatchers = [];
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
         if (this._panel) {

@@ -2023,7 +2023,7 @@ export class KanbanProvider implements vscode.Disposable {
             || await db.getWorkspaceId()
             || await db.getDominantWorkspaceId();
         if (workspaceId) {
-            const plans = await db.getPlansWithDependencies(workspaceId);
+            const plans = await db.getPlansWithDependencies(workspaceId, ['CREATED', 'PLAN REVIEWED'], this._projectFilter);
             this._panel.webview.postMessage({ type: 'dependencyMapData', plans });
         }
     }
@@ -2072,25 +2072,44 @@ export class KanbanProvider implements vscode.Disposable {
         }).join('\n');
     }
 
-    private _cardsToPromptPlans(
+    private async _cardsToPromptPlans(
         cards: KanbanCard[],
         workspaceRoot: string,
         repoScopeMap?: Map<string, string>  // sessionId → repoScope
-    ): BatchPromptPlan[] {
-        return cards.map(card => {
+    ): Promise<BatchPromptPlan[]> {
+        const db = this._getKanbanDb(workspaceRoot);
+        const hasDb = db && await db.ensureReady();
+        const branchToPath = hasDb ? await this._resolveWorktreePaths(workspaceRoot) : new Map<string, string>();
+
+        const promptPlans: BatchPromptPlan[] = [];
+        for (const card of cards) {
             const repoScope = repoScopeMap?.get(card.sessionId) || '';
             const workingDir = repoScope
                 ? resolveWorkingDir(workspaceRoot, repoScope)
                 : '';
-            return {
+            
+            let worktreePath: string | undefined;
+            if (hasDb) {
+                const plan = await db.getPlanBySessionId(card.sessionId);
+                if (plan && plan.worktreeId) {
+                    const worktree = await db.getWorktreeById(plan.worktreeId);
+                    if (worktree) {
+                        worktreePath = branchToPath.get(worktree.branch);
+                    }
+                }
+            }
+
+            promptPlans.push({
                 topic: card.topic,
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
                 complexity: card.complexity,
                 workingDir,
                 sessionId: card.sessionId,
-                dependencies: card.dependencies?.join(', ') || undefined
-            };
-        });
+                dependencies: card.dependencies?.join(', ') || undefined,
+                worktreePath
+            });
+        }
+        return promptPlans;
     }
 
     private async _getDefaultPromptOverrides(
@@ -2211,7 +2230,7 @@ export class KanbanProvider implements vscode.Disposable {
 
                 if (cards.length > 0) {
                     const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                    plans = this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                    plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
                 }
 
                 // Design doc loading for planner and tester (matching actual dispatch)
@@ -2550,9 +2569,28 @@ export class KanbanProvider implements vscode.Disposable {
             }
             const schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
 
-            const nextColumn = await this._getNextColumnId(column, workspaceRoot) ?? 'CODED';
-            const oldestPlan = columnPlans[columnPlans.length - 1];
-            const sqlInstruction = `
+            const oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
+            const resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot, oldestPlan?.worktreeId, oldestPlan?.sessionId);
+            // Guard: if _getNextColumnId returns null the source column is at the end of the
+            // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
+            // with a made-up fallback column would silently corrupt the plan record, so we emit
+            // a warning instruction instead.
+            const sqlInstruction = resolvedNextColumn === null
+                ? `
+
+---
+
+**NOTE: No next column could be determined for the \`${column}\` column in this workspace's pipeline.**
+
+Do NOT run a SQL UPDATE to move the plan — the target column is unknown and writing an incorrect value would corrupt the kanban board. Instead, manually verify the plan's final state in Switchboard and move it via the UI.
+
+To inspect the current plan record:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}';"
+\`\`\`
+`
+                : `
 
 ---
 
@@ -2561,7 +2599,7 @@ export class KanbanProvider implements vscode.Disposable {
 Run the following command (uses the sqlite3 CLI — it must be installed):
 
 \`\`\`bash
-sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${nextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; SELECT changes();"
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}'; SELECT changes();"
 \`\`\`
 
 Verify that the output is \`1\` (one row updated). If it is \`0\`, the plan_file path may not match — check the DB with:
@@ -2571,7 +2609,7 @@ sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column FROM plans WHERE workspa
 \`\`\`
 
 Database: \`${db.dbPath}\`
-Target column: \`${nextColumn}\`
+Target column: \`${resolvedNextColumn}\`
 
 This step is what moves the plan forward in the Switchboard pipeline.
 `;
@@ -2702,7 +2740,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             } catch { /* non-fatal — fallback to URL */ }
         }
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('planner', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+        return buildKanbanBatchPrompt('planner', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
             clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.planner ?? false,
             cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.planner ?? false,
             aggressivePairProgramming,
@@ -2753,7 +2791,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
         const pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+        return buildKanbanBatchPrompt(role, await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
             clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
             cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
             instruction,
@@ -2794,7 +2832,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const coderUsesIde = mode === 'cli-ide' || mode === 'ide-ide';
         const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        const coderPrompt = buildKanbanBatchPrompt('coder', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+        const coderPrompt = buildKanbanBatchPrompt('coder', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
             clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.coder ?? false,
             cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.coder ?? false,
             pairProgrammingEnabled: true,
@@ -2834,7 +2872,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
     }
 
     /** Get the next column ID in the pipeline, or null for the last column. */
-    private async _getNextColumnId(column: string, workspaceRoot: string, planWorktreeId?: number | null): Promise<string | null> {
+    private async _getNextColumnId(column: string, workspaceRoot: string, planWorktreeId?: number | null, sessionId?: string): Promise<string | null> {
         const normalizedColumn = this._normalizeLegacyKanbanColumn(column);
         const [customAgents, customKanbanColumns] = await Promise.all([
             this._getCustomAgents(workspaceRoot),
@@ -2844,6 +2882,15 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const acceptanceTesterActive = visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
         const allColumns = this._buildKanbanColumns(customAgents, customKanbanColumns);
 
+        let resolvedWorktreeId = planWorktreeId;
+        if (!resolvedWorktreeId && sessionId) {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (db && await db.ensureReady()) {
+                const plan = await db.getPlanBySessionId(sessionId);
+                resolvedWorktreeId = plan?.worktreeId ?? null;
+            }
+        }
+
         const idx = allColumns.findIndex(c => c.id === normalizedColumn);
         if (idx < 0 || idx >= allColumns.length - 1) { return null; }
 
@@ -2852,8 +2899,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (col.id === 'ACCEPTANCE TESTED' && !acceptanceTesterActive) {
                 return true;
             }
-            if (col.id === 'MERGE' && !planWorktreeId) {
-                return true;
+            if (col.id === 'MERGE') {
+                return !resolvedWorktreeId;
             }
             if (col.dragDropMode === 'disabled') {
                 return true;
@@ -3001,7 +3048,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             const promptsConfig = await this._getPromptsConfig(workspaceRoot);
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-            return buildKanbanBatchPrompt('reviewer', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            return buildKanbanBatchPrompt('reviewer', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
                 clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.reviewer ?? false,
                 cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.reviewer ?? false,
                 advancedReviewerEnabled: promptsConfig.advancedReviewerEnabled,
@@ -3033,7 +3080,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             }
             const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
             const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-            return buildKanbanBatchPrompt(role, this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+            return buildKanbanBatchPrompt(role, await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
                 clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
                 cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
                 defaultPromptOverrides,
@@ -3063,7 +3110,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
             }
-            const { planList } = buildPromptDispatchContext(this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap));
+            const { planList } = buildPromptDispatchContext(await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap));
 
             const customAgents = await this._getCustomAgents(workspaceRoot);
             const agentId = role.replace('custom_agent_', '');
@@ -3833,15 +3880,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!plan?.worktreeId) {
                     return await this.moveCardToColumn(workspaceRoot, sessionId, 'COMPLETED');
                 }
-                const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const moved = await db.updateColumn(sessionId, targetColumn);
                 if (moved) {
                     await this.queueIntegrationSyncForSession(workspaceRoot, sessionId, targetColumn);
-                    this._executeMergeRule(workspaceRoot, sessionId, defaultMergeStrategy).then(async () => {
-                        await vscode.commands.executeCommand('switchboard.kanbanForwardMove', [sessionId], 'COMPLETED', workspaceRoot);
-                    }).catch(err => {
-                        console.error('[KanbanProvider] Merge execution failed:', err);
-                    });
                 }
                 return moved;
             }
@@ -3849,9 +3890,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
             if (coderColumns.includes(targetColumn)) {
                 await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
-            }
-            if (targetColumn === 'CODE REVIEWED') {
-                await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
             }
             if (targetColumn === 'COMPLETED') {
                 await this._cleanupWorktreeAfterReview(workspaceRoot, sessionId);
@@ -3894,15 +3932,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 if (!plan?.worktreeId) {
                     return await this.moveCardToColumnByPlanFile(workspaceRoot, planFile, 'COMPLETED');
                 }
-                const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const moved = await db.updateColumnByPlanFile(planFile, workspaceId, targetColumn);
                 if (moved) {
                     await this.queueIntegrationSyncForPlanFile(workspaceRoot, planFile, targetColumn);
-                    this._executeMergeRule(workspaceRoot, sessionId, defaultMergeStrategy).then(async () => {
-                        await vscode.commands.executeCommand('switchboard.kanbanForwardMove', [sessionId], 'COMPLETED', workspaceRoot);
-                    }).catch(err => {
-                        console.error('[KanbanProvider] Merge execution failed:', err);
-                    });
                 }
                 return moved;
             }
@@ -3911,9 +3943,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const coderColumns = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
                 if (coderColumns.includes(targetColumn)) {
                     await this._assignWorktreeToCard(workspaceRoot, sessionId, targetColumn);
-                }
-                if (targetColumn === 'CODE REVIEWED') {
-                    await this._appendWorktreeContextToPlan(workspaceRoot, sessionId);
                 }
                 if (targetColumn === 'COMPLETED') {
                     await this._cleanupWorktreeAfterReview(workspaceRoot, sessionId);
@@ -4371,7 +4400,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         const db = this._getKanbanDb(workspaceRoot);
                         const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
                         if (workspaceId) {
-                            const plans = await db.getPlansWithDependencies(workspaceId);
+                            const plans = await db.getPlansWithDependencies(workspaceId, ['CREATED', 'PLAN REVIEWED'], this._projectFilter);
                             if (plans.length > 0) {
                                 let prompt = "## Dependency Map Rebuild Request\n\n";
                                 prompt += "Rebuild the dependency relationships for the following plans currently in NEW (CREATED) and PLANNED (PLAN REVIEWED) columns:\n\n";
@@ -4404,7 +4433,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const db = this._getKanbanDb(workspaceRoot);
                     const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
                     if (workspaceId) {
-                        const plans = await db.getPlansWithDependencies(workspaceId);
+                        const plans = await db.getPlansWithDependencies(workspaceId, ['CREATED', 'PLAN REVIEWED'], this._projectFilter);
                         const success = await this._taskViewerProvider.handleRebuildDependencyMap(plans);
                         this._panel?.webview.postMessage({ type: 'actionTriggered', role: 'analystMap', success });
                     }
@@ -4988,7 +5017,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                     }
                 } else {
-                    const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                    const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, msg.sessionIds[0]);
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
@@ -5080,7 +5109,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     const skippedSuffix = skippedCount > 0 ? ` (${skippedCount} skipped — unknown complexity)` : '';
                     this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Moved ${knownIds.length} plans from ${column}: ${movedParts.join(', ')}.${skippedSuffix}`, isError: false });
                 } else {
-                    const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                    const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, sessionIds[0]);
                     if (!nextCol) { break; }
                     const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                     if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
@@ -5167,7 +5196,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
 
                 // Get next column BEFORE generating prompt so we can use destination role
-                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, msg.sessionIds[0]);
 
                 // Generate prompt — if nextCol is a custom column, its role overrides source role
                 const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
@@ -5245,7 +5274,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
 
                 // Get next column BEFORE generating prompt so we can use destination role
-                const nextCol = await this._getNextColumnId(column, workspaceRoot);
+                const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, sourceCards[0]?.sessionId);
 
                 // Generate prompt — if nextCol is a custom column, its role overrides source role
                 const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
@@ -5552,7 +5581,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
 
-                const plans = this._cardsToPromptPlans([card], this._currentWorkspaceRoot, repoScopeMap);
+                const plans = await this._cardsToPromptPlans([card], this._currentWorkspaceRoot, repoScopeMap);
                 const promptsConfig = await this._getPromptsConfig(this._currentWorkspaceRoot);
                 const aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
 
@@ -5924,7 +5953,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                             c.workspaceRoot === workspaceRoot && sessionIds.includes(c.sessionId)
                         );
                         const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                        plans = this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                        plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
                         planCount = plans.length;
                     } else {
                         const cards = this._lastCards.filter(c => {
@@ -5954,7 +5983,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
                         if (cards.length > 0) {
                             const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
-                            plans = this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+                            plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
                             planCount = plans.length;
                         }
                     }
@@ -6184,8 +6213,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const db = this._getKanbanDb(workspaceRoot);
                     const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
                     if (workspaceId) {
-                        const reviewedPlans = await db.getPlansByColumn(workspaceId, 'CODE REVIEWED');
-                        const acceptancePlans = await db.getPlansByColumn(workspaceId, 'ACCEPTANCE TESTED');
+                        const reviewedPlans = await db.getPlansByColumn(workspaceId, 'CODE REVIEWED', this._projectFilter);
+                        const acceptancePlans = await db.getPlansByColumn(workspaceId, 'ACCEPTANCE TESTED', this._projectFilter);
                         const allPlans = [...reviewedPlans, ...acceptancePlans];
                         const plansWithSteps = [];
                         for (const plan of allPlans) {
@@ -6264,14 +6293,21 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
+                    const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+                    const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+                    let worktreeModeEnabled = (await db.getMeta('worktree_mode_enabled')) === 'true';
+                    if (worktreeModeEnabled && status.mode !== 'explicit' && !hasDb) {
+                        vscode.window.showWarningMessage('Worktree mode requires an explicit control plane. Configure one in the workspace selector.');
+                        worktreeModeEnabled = false;
+                        await db.setMeta('worktree_mode_enabled', 'false');
+                    }
+
                     const worktrees = await db.getWorktrees();
                     const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
                     const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
                     
-                    const worktreeModeEnabled = (await db.getMeta('worktree_mode_enabled')) === 'true';
                     const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
                     const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
-                    const autoMerge = (await db.getMeta('worktree_auto_merge')) === 'true';
 
                     this._worktreeModeEnabledMap.set(workspaceRoot, worktreeModeEnabled);
 
@@ -6280,8 +6316,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
-                        worktreeAutoMerge: autoMerge
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy
                     });
                 }
                 break;
@@ -6334,15 +6369,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const worktreeModeEnabled = (await db.getMeta('worktree_mode_enabled')) === 'true';
                     const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
                     const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
-                    const autoMerge = (await db.getMeta('worktree_auto_merge')) === 'true';
 
                     this._panel?.webview.postMessage({
                         type: 'worktrees',
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
-                        worktreeAutoMerge: autoMerge
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy
                     });
                 }
                 break;
@@ -6352,8 +6385,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
-                    await db.setMeta('worktree_mode_enabled', msg.enabled ? 'true' : 'false');
-                    this._worktreeModeEnabledMap.set(workspaceRoot, msg.enabled);
+                    let enabled = msg.enabled;
+                    if (enabled) {
+                        const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+                        const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+                        if (status.mode !== 'explicit' && !hasDb) {
+                            vscode.window.showWarningMessage('Worktree mode requires an explicit control plane. Configure one in the workspace selector.');
+                            enabled = false;
+                        }
+                    }
+                    await db.setMeta('worktree_mode_enabled', enabled ? 'true' : 'false');
+                    this._worktreeModeEnabledMap.set(workspaceRoot, enabled);
                     this._scheduleBoardRefresh(workspaceRoot);
 
                     const worktrees = await db.getWorktrees();
@@ -6361,15 +6403,13 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
                     const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
                     const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
-                    const autoMerge = (await db.getMeta('worktree_auto_merge')) === 'true';
 
                     this._panel?.webview.postMessage({
                         type: 'worktrees',
                         worktrees: enriched,
-                        worktreeModeEnabled: msg.enabled,
+                        worktreeModeEnabled: enabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
-                        worktreeAutoMerge: autoMerge
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy
                     });
                 }
                 break;
@@ -6381,7 +6421,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (db && await db.ensureReady()) {
                     await db.setMeta('worktree_max_cap', String(msg.maxCap));
                     await db.setMeta('worktree_default_merge_strategy', msg.defaultMergeStrategy);
-                    await db.setMeta('worktree_auto_merge', msg.autoMerge ? 'true' : 'false');
 
                     const worktrees = await db.getWorktrees();
                     const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
@@ -6393,8 +6432,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: msg.maxCap,
-                        worktreeDefaultMergeStrategy: msg.defaultMergeStrategy,
-                        worktreeAutoMerge: msg.autoMerge
+                        worktreeDefaultMergeStrategy: msg.defaultMergeStrategy
                     });
                 }
                 break;
@@ -6402,10 +6440,74 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'executeMerge': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) break;
-                try {
-                    await this._executeMergeRule(workspaceRoot, msg.sessionId, msg.rule || 'squash');
-                } catch (err: any) {
-                    vscode.window.showErrorMessage(`Merge failed: ${err.message}`);
+                const sessionIds = Array.isArray(msg.sessionIds) ? msg.sessionIds : (msg.sessionId ? [msg.sessionId] : []);
+                const rule = msg.rule || 'squash';
+                for (const sessionId of sessionIds) {
+                    try {
+                        await this._executeMergeRule(workspaceRoot, sessionId, rule);
+                        await this.moveCardToColumn(workspaceRoot, sessionId, 'COMPLETED');
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`Merge failed for session ${sessionId}: ${err.message}`);
+                        break;
+                    }
+                }
+                this._scheduleBoardRefresh(workspaceRoot);
+                break;
+            }
+            case 'mergeSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                const rule = await db.getMeta('worktree_default_merge_strategy') || 'squash';
+                const sessionIds = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                for (const sessionId of sessionIds) {
+                    try {
+                        await this._executeMergeRule(workspaceRoot, sessionId, rule);
+                        await this.moveCardToColumn(workspaceRoot, sessionId, 'COMPLETED');
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`Merge failed for session ${sessionId}: ${err.message}`);
+                        break;
+                    }
+                }
+                this._scheduleBoardRefresh(workspaceRoot);
+                break;
+            }
+            case 'mergeAll': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const db = this._getKanbanDb(workspaceRoot);
+                const workspaceId = await this._readWorkspaceId(workspaceRoot) || await db.getWorkspaceId() || await db.getDominantWorkspaceId();
+                if (!workspaceId) break;
+                const rule = await db.getMeta('worktree_default_merge_strategy') || 'squash';
+                const dbRows = await db.getBoard(workspaceId);
+                const sessionIds = dbRows.filter(row => row.column === 'MERGE').map(row => row.sessionId).filter(Boolean);
+                for (const sessionId of sessionIds) {
+                    try {
+                        await this._executeMergeRule(workspaceRoot, sessionId, rule);
+                        await this.moveCardToColumn(workspaceRoot, sessionId, 'COMPLETED');
+                    } catch (err: any) {
+                        vscode.window.showErrorMessage(`Merge failed for session ${sessionId}: ${err.message}`);
+                        break;
+                    }
+                }
+                this._scheduleBoardRefresh(workspaceRoot);
+                break;
+            }
+            case 'sendToAgentFromMerge': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const sessionIds = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                if (sessionIds.length > 0) {
+                    await vscode.commands.executeCommand('switchboard.triggerBatchAgentFromKanban', 'reviewer', sessionIds, undefined, workspaceRoot);
+                }
+                break;
+            }
+            case 'copyMergePrompt': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) break;
+                const sessionIds = Array.isArray(msg.sessionIds) ? msg.sessionIds : [];
+                if (sessionIds.length > 0 && this._taskViewerProvider) {
+                    await this._taskViewerProvider.copyMergePrompt(sessionIds, workspaceRoot);
                 }
                 break;
             }
@@ -6553,7 +6655,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('tester', this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
+        return buildKanbanBatchPrompt('tester', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
             clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.tester ?? false,
             cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.tester ?? false,
             designDocLink,
@@ -6703,22 +6805,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             if (worktreeResult) {
                 // Assign worktree to plan (one-and-done: this worktree is for this plan only)
                 await db.updatePlanWorktree(sessionId, worktreeResult.id);
-                // Spawn terminal inside worktree
-                const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-                const worktreePath = branchToPath.get(worktreeResult.branch);
-                if (worktreePath) {
-                    try {
-                        const role = this._columnToRole(targetColumn || '') || 'coder';
-                        await this._taskViewerProvider?.addAutobanTerminalFromKanban(
-                            role,
-                            undefined,
-                            worktreePath
-                        );
-                    } catch (termErr: any) {
-                        console.warn(`[KanbanProvider] Terminal creation failed for worktree ${worktreeResult.branch}: ${termErr.message}`);
-                        vscode.window.showWarningMessage(`Worktree created but terminal failed: ${termErr.message}`);
-                    }
-                }
             }
         } catch (err: any) {
             console.warn(`[KanbanProvider] Failed to auto-create worktree for plan ${sessionId}: ${err.message}`);
@@ -6728,6 +6814,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
     private async _isWorktreeModeEnabled(workspaceRoot: string): Promise<boolean> {
         const db = this._getKanbanDb(workspaceRoot);
         if (!db || !await db.ensureReady()) return false;
+        const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+        const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+        if (status.mode !== 'explicit' && !hasDb) {
+            return false;
+        }
         const val = await db.getMeta('worktree_mode_enabled');
         const enabled = val === 'true';
         this._worktreeModeEnabledMap.set(workspaceRoot, enabled);
@@ -6801,8 +6892,23 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             throw new Error('Worktree record not found');
         }
 
-        // Execute git command from MAIN worktree (workspaceRoot), NOT from the worktree itself
         const execFileAsync = promisify(cp.execFile);
+
+        // Bug 3: Idempotency Guard (checking if branch is already merged)
+        try {
+            const { stdout: mergedBranches } = await execFileAsync(
+                'git', ['branch', '--merged', 'HEAD'], { cwd: workspaceRoot }
+            );
+            const alreadyMerged = mergedBranches.split('\n').map(b => b.trim().replace(/^\*\s*/, ''));
+            if (alreadyMerged.includes(worktree.branch)) {
+                await this._cleanupWorktreeAfterMerge(workspaceRoot, plan, worktree);
+                return;
+            }
+        } catch (e: any) {
+            console.warn(`Idempotency check failed: ${e.message}`);
+        }
+
+        // Execute git command from MAIN worktree (workspaceRoot), NOT from the worktree itself
         const gitArgs = rule === 'squash' ? ['merge', '--squash', worktree.branch]
                       : rule === 'ff-only' ? ['merge', '--ff-only', worktree.branch]
                       : ['merge', worktree.branch];
@@ -6827,14 +6933,41 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             await this._cleanupWorktreeAfterMerge(workspaceRoot, plan, worktree);
         } catch (err: any) {
             if (err.message?.includes('conflict') || err.stderr?.includes('CONFLICT')) {
-                vscode.window.showWarningMessage(
-                    `Merge conflict for plan "${plan.topic || plan.sessionId}". Manual resolution required in the main branch.`
-                );
-                // Abort the merge to leave main branch clean
+                // Bug 2: File-type-aware conflict detection
                 try {
-                    await execFileAsync('git', ['merge', '--abort'], { cwd: workspaceRoot });
-                } catch { /* ignore abort failure */ }
-                // Leave worktree in place for manual resolution
+                    const { stdout: unmergedFiles } = await execFileAsync(
+                        'git', ['diff', '--name-only', '--diff-filter=U'], { cwd: workspaceRoot }
+                    );
+                    const conflicted = unmergedFiles.trim().split('\n').filter(Boolean);
+                    const allPlanFiles = conflicted.every(f => f.includes('.switchboard/plans/') || (f.includes('.switchboard/') && f.endsWith('.md')));
+                    if (allPlanFiles && conflicted.length > 0) {
+                        vscode.window.showWarningMessage(
+                            `Plan file conflict for "${plan.topic || plan.sessionId}". Resolve manually in the main branch, then re-press Merge.`
+                        );
+                        // Do NOT abort standard merge, allow manual resolving
+                        throw new Error('Plan file conflict');
+                    } else {
+                        try {
+                            await execFileAsync('git', ['merge', '--abort'], { cwd: workspaceRoot });
+                        } catch { /* ignore abort failure */ }
+                        vscode.window.showWarningMessage(
+                            `Code file conflict for "${plan.topic || plan.sessionId}". Manual resolution required.`
+                        );
+                        throw new Error('Code file conflict');
+                    }
+                } catch (diffErr: any) {
+                    if (diffErr.message === 'Plan file conflict' || diffErr.message === 'Code file conflict') {
+                        throw diffErr;
+                    }
+                    // Fallback to aborting
+                    try {
+                        await execFileAsync('git', ['merge', '--abort'], { cwd: workspaceRoot });
+                    } catch { /* ignore */ }
+                    vscode.window.showWarningMessage(
+                        `Merge conflict for plan "${plan.topic || plan.sessionId}". Manual resolution required.`
+                    );
+                    throw new Error('Merge conflict');
+                }
             } else {
                 throw err;
             }
@@ -6873,44 +7006,6 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         if (db) {
             await db.deleteWorktree(worktree.id);
             await db.updatePlanWorktree(plan.sessionId, null);
-        }
-    }
-
-    private async _appendWorktreeContextToPlan(workspaceRoot: string, sessionId: string): Promise<void> {
-        const db = this._getKanbanDb(workspaceRoot);
-        if (!db || !await db.ensureReady()) return;
-
-        const plan = await db.getPlanBySessionId(sessionId);
-        if (!plan || !plan.worktreeId) return;
-
-        const worktree = await db.getWorktreeById(plan.worktreeId);
-        if (!worktree) return;
-
-        const planPath = this._resolvePlanFilePath(workspaceRoot, plan.planFile);
-        if (!planPath) return;
-
-        // Idempotency: skip if section already exists (card may be moved back and forth)
-        try {
-            const existing = await fs.promises.readFile(planPath, 'utf8');
-            if (existing.includes('## Worktree Context')) return;
-        } catch { /* file may not exist yet, proceed to append */ }
-
-        // Derive absolute path from git (source of truth) instead of DB
-        const branchToPath = await this._resolveWorktreePaths(workspaceRoot);
-        const absoluteWorktreePath = branchToPath.get(worktree.branch) || worktree.branch;
-        const worktreeContext = `
-
-## Worktree Context
-This work was done in a git worktree.
-- Worktree path: ${absoluteWorktreePath}
-- Branch: ${worktree.branch}
-- To merge: cd ${absoluteWorktreePath} && git checkout main && git merge ${worktree.branch}
-`;
-
-        try {
-            await fs.promises.appendFile(planPath, worktreeContext, 'utf8');
-        } catch (e: any) {
-            console.error(`Failed to append worktree context to plan: ${e.message}`);
         }
     }
 

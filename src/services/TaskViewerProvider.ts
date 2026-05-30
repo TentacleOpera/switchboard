@@ -2682,6 +2682,20 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await vscode.commands.executeCommand('switchboard.refreshUI', resolvedWorkspaceRoot);
     }
 
+    public async copyMergePrompt(sessionIds: string[], workspaceRoot?: string): Promise<void> {
+        const resolvedWorkspaceRoot = workspaceRoot
+            ? this._resolveWorkspaceRoot(workspaceRoot)
+            : (sessionIds[0] ? await this._resolveWorkspaceRootForSession(sessionIds[0]) : null);
+        if (!resolvedWorkspaceRoot) return;
+        const validPlans = await this._resolveKanbanDispatchPlans(sessionIds, resolvedWorkspaceRoot);
+        if (validPlans.length === 0) {
+            return;
+        }
+        const prompt = await this._buildKanbanBatchPrompt('reviewer', validPlans, undefined, resolvedWorkspaceRoot);
+        await vscode.env.clipboard.writeText(prompt);
+        vscode.window.showInformationMessage(`Merge prompt copied for ${validPlans.length} plans.`);
+    }
+
     /**
      * Called by the Autoban engine to trigger a batched agent action on multiple plan sessions.
      * Sequentially updates runsheets to avoid file-lock contention, then constructs

@@ -2197,19 +2197,30 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    public async getPlansByColumn(workspaceId: string, column: string): Promise<KanbanPlanRecord[]> {
+    public async getPlansByColumn(
+        workspaceId: string,
+        column: string,
+        projectFilter?: string | null
+    ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         // For COMPLETED column, show status='completed' plans
         // For other columns, show status='active' plans
         const statusFilter = column === 'COMPLETED'
             ? `status = 'completed'`
             : `status = 'active'`;
-        const stmt = this._db.prepare(
-            `SELECT ${PLAN_COLUMNS} FROM plans
-             WHERE workspace_id = ? AND ${statusFilter} AND kanban_column = ?
-             ORDER BY updated_at DESC`,
-            [workspaceId, column]
-        );
+        const effectiveProject = projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectFilter;
+
+        let sql = `SELECT ${PLAN_COLUMNS} FROM plans
+                   WHERE workspace_id = ? AND ${statusFilter} AND kanban_column = ?`;
+        const params: unknown[] = [workspaceId, column];
+
+        if (effectiveProject !== null && effectiveProject !== undefined) {
+            sql += ' AND project = ?';
+            params.push(effectiveProject);
+        }
+
+        sql += ' ORDER BY updated_at DESC';
+        const stmt = this._db.prepare(sql, params);
         return this._readRows(stmt);
     }
 
@@ -2219,17 +2230,25 @@ export class KanbanDatabase {
      */
     public async getPlansWithDependencies(
         workspaceId: string,
-        columns: string[] = ['CREATED', 'PLAN REVIEWED']
+        columns: string[] = ['CREATED', 'PLAN REVIEWED'],
+        projectFilter?: string | null
     ): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
         const placeholders = columns.map(() => '?').join(',');
-        const stmt = this._db.prepare(
-            `SELECT plan_id, session_id, topic, kanban_column, dependencies 
-             FROM plans
-             WHERE workspace_id = ? AND status = 'active' AND kanban_column IN (${placeholders})
-             ORDER BY kanban_column, updated_at DESC`,
-            [workspaceId, ...columns]
-        );
+        const effectiveProject = projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectFilter;
+
+        let sql = `SELECT plan_id, session_id, topic, kanban_column, dependencies 
+                   FROM plans
+                   WHERE workspace_id = ? AND status = 'active' AND kanban_column IN (${placeholders})`;
+        const params: unknown[] = [workspaceId, ...columns];
+
+        if (effectiveProject !== null && effectiveProject !== undefined) {
+            sql += ' AND project = ?';
+            params.push(effectiveProject);
+        }
+
+        sql += ' ORDER BY kanban_column, updated_at DESC';
+        const stmt = this._db.prepare(sql, params);
         return this._readRows(stmt);
     }
 

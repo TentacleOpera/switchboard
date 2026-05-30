@@ -1981,6 +1981,48 @@
         #status-message.flashing {
             animation: statusFlash 3s ease-in-out forwards;
         }
+
+        .col-merge-btn {
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            border: 1px solid var(--border-color);
+            color: var(--accent-teal);
+            cursor: pointer;
+            padding: 4px 8px;
+            font-size: 11px;
+            font-weight: 500;
+            border-radius: 3px;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            transition: all 0.15s;
+        }
+
+        .col-merge-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        .col-merge-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            color: var(--text-muted);
+            border-color: transparent;
+        }
+
+        .merge-spinner {
+            display: inline-block;
+            width: 10px;
+            height: 10px;
+            border: 2px solid currentColor;
+            border-top-color: transparent;
+            border-radius: 50%;
+            animation: merge-spin 0.6s linear infinite;
+            margin-right: 4px;
+        }
+
+        @keyframes merge-spin {
+            to { transform: rotate(360deg); }
+        }
     </style>
 </head>
 
@@ -3831,13 +3873,18 @@
                         </button>
                     </div>`;
                 } else if (isMerge) {
-                    // Merge column: only merge-selected and merge-all (progress to completed)
-                    buttonArea = `<div class="column-button-area">
-                        <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Merge selected plans (execute git merge and move to Completed)">
-                            <img src="${ICON_MOVE_SELECTED}" alt="Merge Selected">
+                    buttonArea = `<div class="column-button-area" style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: space-between; padding: 4px 0;">
+                        <button id="btn-merge-all" class="col-merge-btn" style="flex: 1 1 45%; margin-bottom: 4px;" data-tooltip="Merge all plans in MERGE column">
+                            Merge All
                         </button>
-                        <button class="column-icon-btn" data-action="moveAll" data-column="${escapeAttr(def.id)}" data-tooltip="Merge all plans in this column (execute git merge and move to Completed)">
-                            <img src="${ICON_MOVE_ALL}" alt="Merge All">
+                        <button id="btn-merge-selected" class="col-merge-btn" style="flex: 1 1 45%; margin-bottom: 4px;" data-tooltip="Merge selected plans">
+                            Merge Selected
+                        </button>
+                        <button id="btn-send-to-agent" class="col-merge-btn" style="flex: 1 1 45%;" data-tooltip="Send selected plans to reviewer agent">
+                            Send to Agent
+                        </button>
+                        <button id="btn-copy-merge-prompt" class="col-merge-btn" style="flex: 1 1 45%;" data-tooltip="Copy merge prompt to clipboard">
+                            Copy Prompt
                         </button>
                     </div>`;
                 } else {
@@ -4187,6 +4234,7 @@
             hideTooltip();
             const viewState = captureBoardViewState();
             currentCards = cards;
+            inFlightMerges.clear();
             const buckets = {};
             columns.forEach(c => buckets[c] = []);
 
@@ -4394,7 +4442,51 @@
                 });
             });
 
+            // Column-level Merge handlers
+            const btnMergeAll = document.getElementById('btn-merge-all');
+            if (btnMergeAll) {
+                btnMergeAll.onclick = () => {
+                    const ids = getAllInColumn('MERGE');
+                    if (ids.length === 0) return;
+                    ids.forEach(id => inFlightMerges.add(id));
+                    updateMergeButtons();
+                    postKanbanMessage({ type: 'mergeAll', workspaceRoot: getActiveWorkspaceRoot() });
+                };
+            }
 
+            const btnMergeSelected = document.getElementById('btn-merge-selected');
+            if (btnMergeSelected) {
+                btnMergeSelected.onclick = () => {
+                    const ids = getSelectedInColumn('MERGE');
+                    if (ids.length === 0) return;
+                    ids.forEach(id => inFlightMerges.add(id));
+                    updateMergeButtons();
+                    postKanbanMessage({ type: 'mergeSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                    ids.forEach(id => selectedCards.delete(id));
+                };
+            }
+
+            const btnSendToAgent = document.getElementById('btn-send-to-agent');
+            if (btnSendToAgent) {
+                btnSendToAgent.onclick = () => {
+                    const ids = getSelectedInColumn('MERGE');
+                    if (ids.length === 0) return;
+                    postKanbanMessage({ type: 'sendToAgentFromMerge', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                    ids.forEach(id => selectedCards.delete(id));
+                };
+            }
+
+            const btnCopyMergePrompt = document.getElementById('btn-copy-merge-prompt');
+            if (btnCopyMergePrompt) {
+                btnCopyMergePrompt.onclick = () => {
+                    const ids = getSelectedInColumn('MERGE');
+                    if (ids.length === 0) return;
+                    postKanbanMessage({ type: 'copyMergePrompt', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
+                    ids.forEach(id => selectedCards.delete(id));
+                };
+            }
+
+            updateMergeButtons();
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
@@ -5167,7 +5259,6 @@
                     lastWorktreeModeEnabled = msg.worktreeModeEnabled || false;
                     lastWorktreeMaxCap = msg.worktreeMaxCap || 10;
                     lastWorktreeDefaultMergeStrategy = msg.worktreeDefaultMergeStrategy || 'squash';
-                    lastWorktreeAutoMerge = msg.worktreeAutoMerge || false;
                     renderWorktreePanel();
                     break;
                 }
@@ -5628,6 +5719,41 @@
                     btn.disabled = true;
                     btn.textContent = 'ASSIGN';
                 }
+            }
+            updateMergeButtons();
+        }
+
+        function updateMergeButtons() {
+            const btnMergeAll = document.getElementById('btn-merge-all');
+            const btnMergeSelected = document.getElementById('btn-merge-selected');
+            const btnSendToAgent = document.getElementById('btn-send-to-agent');
+            const btnCopyMergePrompt = document.getElementById('btn-copy-merge-prompt');
+
+            const allMerge = getAllInColumn('MERGE');
+            const selectedMerge = getSelectedInColumn('MERGE');
+
+            const isAnyInFlight = inFlightMerges.size > 0;
+
+            if (btnMergeAll) {
+                btnMergeAll.disabled = allMerge.length === 0 || isAnyInFlight;
+                const spinner = isAnyInFlight ? '<span class="merge-spinner"></span>' : '';
+                btnMergeAll.innerHTML = `${spinner}Merge All (${allMerge.length})`;
+            }
+
+            if (btnMergeSelected) {
+                btnMergeSelected.disabled = selectedMerge.length === 0 || isAnyInFlight;
+                const spinner = isAnyInFlight ? '<span class="merge-spinner"></span>' : '';
+                btnMergeSelected.innerHTML = `${spinner}Merge Selected (${selectedMerge.length})`;
+            }
+
+            if (btnSendToAgent) {
+                btnSendToAgent.disabled = selectedMerge.length === 0;
+                btnSendToAgent.innerHTML = `Send to Agent (${selectedMerge.length})`;
+            }
+
+            if (btnCopyMergePrompt) {
+                btnCopyMergePrompt.disabled = selectedMerge.length === 0;
+                btnCopyMergePrompt.innerHTML = `Copy Prompt (${selectedMerge.length})`;
             }
         }
 
@@ -7219,36 +7345,11 @@
             mergeDesc.textContent = 'SQUASH: Single commit from worktree. MERGE: Standard merge commit. FF-ONLY: Fast-forward only, fails if not possible.';
             mergeWrapper.appendChild(mergeDesc);
             configRow.appendChild(mergeWrapper);
-
-            // Auto-merge
-            const autoMergeWrapper = document.createElement('div');
-            autoMergeWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
-            const autoMergeDiv = document.createElement('div');
-            autoMergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
-            const autoMergeLabel = document.createElement('span');
-            autoMergeLabel.style.cssText = 'color:var(--text-primary);';
-            autoMergeLabel.textContent = 'AUTO-MERGE ON COMPLETION:';
-            const autoMergeInput = document.createElement('input');
-            autoMergeInput.type = 'checkbox';
-            autoMergeInput.checked = lastWorktreeAutoMerge || false;
-            autoMergeInput.addEventListener('change', () => {
-                saveRules();
-            });
-            autoMergeDiv.appendChild(autoMergeLabel);
-            autoMergeDiv.appendChild(autoMergeInput);
-            autoMergeWrapper.appendChild(autoMergeDiv);
-            const autoMergeDesc = document.createElement('div');
-            autoMergeDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
-            autoMergeDesc.textContent = 'When on, automatically executes merge and advances plan to COMPLETED when it enters the MERGE column.';
-            autoMergeWrapper.appendChild(autoMergeDesc);
-            configRow.appendChild(autoMergeWrapper);
-
             function saveRules() {
                 postKanbanMessage({
                     type: 'setWorktreeRules',
                     maxCap: parseInt(capInput.value, 10) || 10,
                     defaultMergeStrategy: mergeSelect.value,
-                    autoMerge: autoMergeInput.checked,
                     workspaceRoot: currentWorkspaceRoot
                 });
             }
@@ -7400,7 +7501,7 @@
         let lastWorktreeModeEnabled = false;
         let lastWorktreeMaxCap = 10;
         let lastWorktreeDefaultMergeStrategy = 'squash';
-        let lastWorktreeAutoMerge = false;
+        const inFlightMerges = new Set();
 
         function renderWorktreePanel() {
             const root = document.getElementById('worktree-panel-root');

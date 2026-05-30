@@ -2565,6 +2565,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         populateKanbanFilters();
         updateKanbanColumnFilter();  // NEW: populate column dropdown
         renderKanbanPlans(_kanbanPlansCache, kanbanFilters);
+
+        // Show transient "↻ refreshed" indicator
+        if (typeof document.hasFocus === 'function' && document.hasFocus()) {
+            const strip = document.querySelector('.kanban-controls-strip');
+            if (strip) {
+                let indicator = strip.querySelector('.kanban-auto-refresh-indicator');
+                if (!indicator) {
+                    indicator = document.createElement('span');
+                    indicator.className = 'kanban-auto-refresh-indicator';
+                    indicator.style.cssText = 'font-size:11px; color:var(--vscode-descriptionForeground); margin-left:8px; opacity:0; transition:opacity 0.3s;';
+                    strip.appendChild(indicator);
+                }
+                indicator.textContent = '↻ refreshed';
+                indicator.style.opacity = '1';
+                clearTimeout(indicator._fadeTimer);
+                indicator._fadeTimer = setTimeout(() => { indicator.style.opacity = '0'; }, 2000);
+            }
+        }
     }
 
     function handleKanbanPlanPreviewReady(msg) {

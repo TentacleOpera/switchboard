@@ -16,6 +16,7 @@ export interface BatchPromptPlan {
     dependencies?: string;
     workingDir?: string;
     sessionId?: string;
+    worktreePath?: string;
 }
 
 /**
@@ -429,6 +430,21 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         let baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+        }
+
+        // Inject worktree path instructions for reviewer
+        let worktreeInstructionBlock = '';
+        for (const plan of plans) {
+            if (plan.worktreePath) {
+                worktreeInstructionBlock += `\nWorktree path: ${plan.worktreePath}\n` +
+                    `IMPORTANT: This work was done in a git worktree at ${plan.worktreePath}. ` +
+                    `Read the plan file from that location (not the main directory). ` +
+                    `Make your review changes to the worktree plan file. ` +
+                    `The merge will bring both code and plan changes to the main branch.\n`;
+            }
+        }
+        if (worktreeInstructionBlock) {
+            baseInstructions += '\n\n' + worktreeInstructionBlock.trim();
         }
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';

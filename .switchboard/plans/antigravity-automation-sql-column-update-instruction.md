@@ -191,3 +191,59 @@ Pass the SQL instruction as a `postCompletionSqlInstruction` option.
 
 ## Recommendation
 Complexity 3 → **Send to Coder**
+
+---
+
+## Reviewer Pass — 2026-05-29
+
+### Files Changed
+- `src/services/KanbanProvider.ts` — `_generateAntigravityPrompt` method (lines ~2553–2596)
+  - 24 insertions, 5 deletions
+  - Replaced unconditional `?? 'CODED'` fallback with a null-guard ternary
+  - Renamed `nextColumn` → `resolvedNextColumn` for clarity
+  - Added `// oldest by updated_at` comment on `oldestPlan` selection
+
+### Stage 1: Grumpy Review Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **MAJOR** | `?? 'CODED'` fallback on `_getNextColumnId` could inject a phantom column name (`'CODED'`) when the source column is at the end of the pipeline (e.g. `CODE REVIEWED` without acceptance tester). This silently corrupts the plan's `kanban_column` in the DB. |
+| 2 | NIT | Scheduling block says "oldest by creation timestamp" but code picks oldest by `updated_at`. Pre-existing spec drift, not a logic bug. |
+| 3 | NIT | `sqlInstruction` and `schedulingBlock` both say "move the plan" — minor redundancy, acceptable. |
+| 4 | NIT | Empty `planFile` guard missing for legacy pre-V18 plans. Edge case; verification `SELECT changes()` handles it. |
+
+### Stage 2: Balanced Synthesis
+
+- **MAJOR #1 Fixed**: null-guard ternary replaces `?? 'CODED'`. When `resolvedNextColumn === null`, a safe warning block is emitted instead of a broken SQL UPDATE command.
+- NITs #2–#4: Left as-is (pre-existing or acceptable edge cases).
+- All correct aspects of the implementation retained: `db.dbPath` getter, relative `planFile` from DB, `workspaceId` scoping, `SELECT changes()` verification step, `custom_agent_*` handling.
+
+### Stage 3: Code Fix Applied
+
+```diff
+-            const nextColumn = await this._getNextColumnId(column, workspaceRoot) ?? 'CODED';
+-            const oldestPlan = columnPlans[columnPlans.length - 1];
+-            const sqlInstruction = `
++            const resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot);
++            const oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
++            // Guard: if _getNextColumnId returns null the source column is at the end of the
++            // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
++            // with a made-up fallback column would silently corrupt the plan record, so we emit
++            // a warning instruction instead.
++            const sqlInstruction = resolvedNextColumn === null
++                ? `...warning block with SELECT-only inspect command...`
++                : `...original SQL UPDATE block using resolvedNextColumn...`;
+```
+
+### Verification
+
+- `git diff --stat HEAD` → `src/services/KanbanProvider.ts | 29 ++++++++++++++++++++++++-----` (1 file, 24 ins / 5 del)
+- Compilation: skipped per session policy
+- Tests: skipped per session policy
+- Manual verification path: unchanged (see Verification Plan above)
+
+### Remaining Risks
+
+- **Empty `planFile` for pre-V18 plans** (NIT): The `WHERE plan_file = ''` scenario produces a 0-row UPDATE; the `SELECT changes()` check in the instruction catches it at runtime.
+- **sqlite3 CLI not in PATH**: The instruction notes this requirement; no runtime guard possible at prompt-generation time.
+- **Scheduling block / sqlInstruction redundancy** (NIT): The scheduling block's step 5 says "move the plan" generically while sqlInstruction gives the concrete command. Minor UX noise; does not affect correctness.
