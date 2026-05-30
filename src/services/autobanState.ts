@@ -10,16 +10,34 @@ export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED'] as 
 
 export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const DEFAULT_AUTOBAN_BATCH_SIZE = 3;
-export const DEFAULT_AUTOBAN_MAX_SENDS_PER_TERMINAL = 10;
 export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
+
+export type SingleColumnAutobanConfig = {
+    enabled: boolean;
+    intervalMinutes: number;
+    batchSize: number;
+};
+
+export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
+    enabled: false,
+    intervalMinutes: 15,
+    batchSize: 3
+};
+
+export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
+    return {
+        enabled: state?.enabled === true,
+        intervalMinutes: Math.max(5, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 15)),
+        batchSize: normalizeAutobanBatchSize(state?.batchSize)
+    };
+}
 
 export type AutobanConfigState = {
     enabled: boolean;
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     routingMode: AutobanRoutingMode;
-    maxSendsPerTerminal: number;
     globalSessionCap: number;
     sessionSendCount: number;
     sendCounts: Record<string, number>;
@@ -30,6 +48,8 @@ export type AutobanConfigState = {
     lastTickAt?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
+    automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch';
+    singleColumnConfig?: SingleColumnAutobanConfig;
 };
 
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
@@ -190,12 +210,6 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         routingMode: state?.routingMode === 'all_coder' || state?.routingMode === 'all_lead'
             ? state.routingMode
             : 'dynamic',
-        maxSendsPerTerminal: normalizeFiniteCount(
-            state?.maxSendsPerTerminal,
-            DEFAULT_AUTOBAN_MAX_SENDS_PER_TERMINAL,
-            1,
-            100
-        ),
         globalSessionCap: normalizeFiniteCount(
             typeof state?.globalSessionCap === 'number' && Number.isFinite(state.globalSessionCap) && state.globalSessionCap >= 1
                 ? state.globalSessionCap
@@ -217,7 +231,13 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
             if (legacyEnabled === true) return 'cli-cli';
             return 'off';
         })((state as any)?.pairProgrammingMode, (state as any)?.pairProgrammingEnabled),
-        aggressivePairProgramming: state?.aggressivePairProgramming === true
+        aggressivePairProgramming: state?.aggressivePairProgramming === true,
+        automationMode: (['single-column', 'multi-column', 'antigravity-batch'] as const).includes(state?.automationMode as any)
+            ? state!.automationMode!
+            : (state?.enabled === true || Object.keys(state?.rules ?? {}).length > 1)
+                ? 'multi-column'
+                : 'single-column',
+        singleColumnConfig: normalizeSingleColumnConfig(state?.singleColumnConfig)
     };
 }
 

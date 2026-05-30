@@ -17,6 +17,9 @@ Fix the bug where new plan files created by the splitter agent always appear in 
 
 ## Complexity Audit
 
+**Manual Complexity Override:** 3
+
+
 ### Routine
 - Single-file change: only `src/services/agentPromptBuilder.ts`
 - Prompt string update — no logic, no type changes
@@ -24,9 +27,9 @@ Fix the bug where new plan files created by the splitter agent always appear in 
 - Two symmetric changes (complexity-scoring variant + non-complexity-scoring variant)
 
 ### Complex / Risky
-- Timing sensitivity: the file system watcher may register the new file in `CREATED` before the SQL UPDATE runs; the UPDATE must be issued *immediately after each file is created*, not batched at the end
-- Path format: the `WHERE plan_file = '...'` clause must use the workspace-root-relative path (e.g., `.switchboard/plans/my_plan.md`); incorrect path causes silent 0-row UPDATE
-- Silent failure: if the UPDATE matches no rows, the agent receives no error — the prompt should include a verification check
+- None.
+
+
 
 ## Edge-Case & Dependency Audit
 

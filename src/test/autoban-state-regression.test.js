@@ -18,7 +18,6 @@ async function run() {
         batchSize: 3,
         complexityFilter: 'all',
         routingMode: 'dynamic',
-        maxSendsPerTerminal: 7,
         globalSessionCap: 50,
         sessionSendCount: 9,
         sendCounts: { Reviewer: 4 },
@@ -42,7 +41,6 @@ async function run() {
     assert.strictEqual(broadcast.batchSize, 3, 'batch size should be preserved');
     assert.strictEqual(broadcast.complexityFilter, 'all', 'complexity filter should be preserved');
     assert.strictEqual(broadcast.routingMode, 'dynamic', 'routing mode should be preserved');
-    assert.strictEqual(broadcast.maxSendsPerTerminal, 7, 'per-terminal send caps should be preserved');
     assert.strictEqual(broadcast.globalSessionCap, 50, 'global session cap should be preserved');
     assert.strictEqual(broadcast.sessionSendCount, 9, 'session send count should be preserved');
     assert.deepStrictEqual(broadcast.sendCounts, { Reviewer: 4 }, 'send counters should be preserved');
@@ -77,7 +75,6 @@ async function run() {
     assert.strictEqual(normalizeAutobanBatchSize(9), 5, 'batch-size normalization should clamp oversized values to 5');
     assert.strictEqual(normalizedLegacy.complexityFilter, 'all', 'legacy states should default complexity filtering to all');
     assert.strictEqual(normalizedLegacy.routingMode, 'dynamic', 'legacy states should default routing mode to dynamic');
-    assert.strictEqual(normalizedLegacy.maxSendsPerTerminal, 10, 'legacy states should default per-terminal autoban caps to 10');
     assert.strictEqual(normalizedLegacy.globalSessionCap, 200, 'legacy states should default the global autoban session cap to 200');
     assert.strictEqual(normalizedLegacy.sessionSendCount, 0, 'legacy states should default the session send count to 0');
     assert.deepStrictEqual(normalizedLegacy.sendCounts, {}, 'legacy states should default send counters to an empty record');
@@ -118,7 +115,6 @@ async function run() {
 
     const normalizedNewConfig = normalizeAutobanConfigState({
         batchSize: 8,
-        maxSendsPerTerminal: 999,
         globalSessionCap: 0,
         sendCounts: { Reviewer: 2.9, '': 4 },
         terminalPools: { reviewer: ['Reviewer', 'Reviewer Backup', 'Reviewer', '', 'Three', 'Four', 'Five', 'Six'] },
@@ -126,7 +122,6 @@ async function run() {
         poolCursor: { reviewer: 2.4 }
     });
     assert.strictEqual(normalizedNewConfig.batchSize, 5, 'batch size should clamp to the supported 1..5 contract');
-    assert.strictEqual(normalizedNewConfig.maxSendsPerTerminal, 100, 'per-terminal caps should clamp to the supported UI range');
     assert.strictEqual(normalizedNewConfig.globalSessionCap, 200, 'invalid global caps should fall back to the default safety cap');
     assert.deepStrictEqual(normalizedNewConfig.sendCounts, { Reviewer: 2 }, 'send counts should be normalized to non-negative integers');
     assert.deepStrictEqual(
@@ -243,11 +238,10 @@ async function run() {
         'CLEAR & RESET should re-run autoban pool reconciliation after closing managed backup terminals'
     );
     assert.ok(
-        implementationSource.includes('MAX SENDS / TERMINAL') &&
         implementationSource.includes('TERMINAL POOLS') &&
         implementationSource.includes('CLEAR & RESET') &&
         implementationSource.includes("type: 'addAutobanTerminal'"),
-        'implementation.html should render the send-cap control and terminal-pool management actions'
+        'implementation.html should render the terminal-pool management actions'
     );
     assert.match(
         implementationSource,

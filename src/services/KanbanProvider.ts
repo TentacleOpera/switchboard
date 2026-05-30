@@ -2495,7 +2495,7 @@ export class KanbanProvider implements vscode.Disposable {
         };
     }
 
-    private async _generateAntigravityPrompt(agentName: string, workspaceRoot: string, column: string = 'CREATED'): Promise<void> {
+    private async _generateAntigravityPrompt(agentName: string, workspaceRoot: string, column: string = 'CREATED', batchSize?: number): Promise<void> {
         try {
             if (!agentName) {
                 this._panel?.webview.postMessage({
@@ -2567,16 +2567,65 @@ export class KanbanProvider implements vscode.Disposable {
                     designDocContent = (await notionService.loadCachedContent()) || undefined;
                 } catch { /* non-fatal — fallback to URL */ }
             }
-            const schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
+            let schedulingBlock = '';
+            let batchBlock = '';
+            let oldestPlan: any;
+            let batchPlans: any[] = [];
+            let resolvedNextColumn: string | null = null;
+            let sqlInstruction = '';
 
-            const oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
-            const resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot, oldestPlan?.worktreeId, oldestPlan?.sessionId);
-            // Guard: if _getNextColumnId returns null the source column is at the end of the
-            // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
-            // with a made-up fallback column would silently corrupt the plan record, so we emit
-            // a warning instruction instead.
-            const sqlInstruction = resolvedNextColumn === null
-                ? `
+            if (batchSize !== undefined) {
+                batchPlans = columnPlans.slice(-batchSize);
+                oldestPlan = batchPlans[batchPlans.length - 1];
+                resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot, oldestPlan?.worktreeId, oldestPlan?.sessionId);
+                
+                batchBlock = `\n\n---\n\nProcess the ${batchPlans.length} oldest plans in the **${column}** column using subagent delegation.\n\nFor each plan:\n1. Read the plan file from .switchboard/plans/\n2. Delegate execution to a subagent with the full plan context (use invoke_subagent)\n3. Wait for the subagent to complete\n4. Move the plan to the next column in the workflow\n5. Track completion status\n\nAfter all plans are processed, provide a summary:\n- Plans completed successfully\n- Plans that failed or need attention\n- Next column each plan was moved to\n\nAgent role for delegation context: **${role}**\nCancel this task immediately if no plans remain in **${column}**.\n\nIMPORTANT: Process plans in parallel using invoke_subagent for each plan simultaneously, not sequentially.`;
+
+                sqlInstruction = resolvedNextColumn === null
+                    ? `
+
+---
+
+**NOTE: No next column could be determined for the \`${column}\` column in this workspace's pipeline.**
+
+Do NOT run a SQL UPDATE to move the plans — the target column is unknown and writing an incorrect value would corrupt the kanban board. Instead, manually verify the plans' final state in Switchboard and move them via the UI.
+
+To inspect the current plans:
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE session_id IN (${batchPlans.map(p => `'${p.sessionId}'`).join(', ')}) AND workspace_id = '${workspaceId}';"
+\`\`\`
+`
+                    : `
+
+---
+
+**IMPORTANT: After completing the coding work for these plans, update the kanban database to move them to the next column.**
+
+Run the following command (uses the sqlite3 CLI — it must be installed):
+
+\`\`\`bash
+sqlite3 "${db.dbPath}" "UPDATE plans SET kanban_column = '${resolvedNextColumn}', updated_at = datetime('now') WHERE session_id IN (${batchPlans.map(p => `'${p.sessionId}'`).join(', ')}) AND workspace_id = '${workspaceId}'; SELECT changes();"
+\`\`\`
+
+Verify that the output matches the number of updated rows.
+
+Database: \`${db.dbPath}\`
+Target column: \`${resolvedNextColumn}\`
+
+This step is what moves the plans forward in the Switchboard pipeline.
+`;
+            } else {
+                schedulingBlock = `\n\n---\n\nYou are running on a scheduled Antigravity timer to process plans in the **${column}** column.\n\nEach time you run:\n1. Use skill: "query_switchboard_kanban" to get all plans currently in the **${column}** column\n2. If no plans exist in the column:\n   a. Call manage_task with action: 'list' to find this schedule's TaskId\n   b. Call manage_task with action: 'kill' and that TaskId to cancel all future runs\n   c. Stop.\n3. Identify the oldest plan by creation timestamp\n4. Process that plan as a **${role}** using your standard workflow\n5. When complete, move the plan to the next column in the pipeline\n\nAgent configuration: **${role}**\nTarget column: **${column}**`;
+
+                oldestPlan = columnPlans[columnPlans.length - 1]; // oldest by updated_at (ORDER BY updated_at DESC)
+                resolvedNextColumn = await this._getNextColumnId(column, workspaceRoot, oldestPlan?.worktreeId, oldestPlan?.sessionId);
+                // Guard: if _getNextColumnId returns null the source column is at the end of the
+                // pipeline (e.g. CODE REVIEWED without an acceptance tester). Emitting a SQL UPDATE
+                // with a made-up fallback column would silently corrupt the plan record, so we emit
+                // a warning instruction instead.
+                sqlInstruction = resolvedNextColumn === null
+                    ? `
 
 ---
 
@@ -2590,7 +2639,7 @@ To inspect the current plan record:
 sqlite3 "${db.dbPath}" "SELECT plan_file, kanban_column, status FROM plans WHERE plan_file = '${oldestPlan.planFile}' AND workspace_id = '${workspaceId}';"
 \`\`\`
 `
-                : `
+                    : `
 
 ---
 
@@ -2613,12 +2662,14 @@ Target column: \`${resolvedNextColumn}\`
 
 This step is what moves the plan forward in the Switchboard pipeline.
 `;
+            }
 
             let prompt: string;
+            const targetBlock = batchSize !== undefined ? batchBlock : schedulingBlock;
             // Custom agent roles (custom_agent_*) are not supported by buildKanbanBatchPrompt
             // (it throws for unknown roles). Compose a minimal preamble directly.
             if (role.startsWith('custom_agent_')) {
-                prompt = `Please process plans as a custom agent.${schedulingBlock}` + sqlInstruction;
+                prompt = `Please process plans as a custom agent.${targetBlock}` + sqlInstruction;
             } else {
                 const options: any = {
                     workspaceRoot,
@@ -2662,7 +2713,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // by the scheduling block below and would be contradictory noise).
                 let preamble = buildKanbanBatchPrompt(role, [], options);
                 preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
-                prompt = preamble + schedulingBlock + sqlInstruction;
+                prompt = preamble + targetBlock + sqlInstruction;
             }
 
             this._panel?.webview.postMessage({
@@ -2889,6 +2940,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const plan = await db.getPlanBySessionId(sessionId);
                 resolvedWorktreeId = plan?.worktreeId ?? null;
             }
+        }
+
+        if (normalizedColumn === 'CODE REVIEWED' && resolvedWorktreeId) {
+            return null;
         }
 
         const idx = allColumns.findIndex(c => c.id === normalizedColumn);
@@ -4375,6 +4430,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 break;
             }
+            case 'setAutomationMode': {
+                if (this._taskViewerProvider) {
+                    await this._taskViewerProvider.setAutomationModeFromKanban(msg);
+                }
+                break;
+            }
             case 'toggleAutoban': {
                 const enabled = !!msg.enabled;
                 if (this._autobanState) {
@@ -5823,13 +5884,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 await vscode.commands.executeCommand('switchboard.resetAutobanPoolsFromKanban');
                 break;
             }
-            case 'updateAutobanMaxSends': {
-                const maxSends = Number(msg.maxSendsPerTerminal);
-                if (Number.isFinite(maxSends)) {
-                    await vscode.commands.executeCommand('switchboard.updateAutobanMaxSendsFromKanban', maxSends);
-                }
-                break;
-            }
+
             case 'focusTerminal': {
                 const terminalName = String(msg.terminalName || '');
                 if (terminalName) {
@@ -6056,7 +6111,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || typeof msg.agent !== 'string') break;
                 const column = typeof msg.column === 'string' && msg.column.trim() ? msg.column.trim() : 'CREATED';
-                await this._generateAntigravityPrompt(msg.agent, workspaceRoot, column);
+                const batchSize = typeof msg.batchSize === 'number' && msg.batchSize > 0 ? msg.batchSize : undefined;
+                await this._generateAntigravityPrompt(msg.agent, workspaceRoot, column, batchSize);
                 break;
             }
             case 'getPersonaForRole': {
@@ -6308,6 +6364,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     
                     const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
                     const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
+                    const controlPlaneConfigured = status.mode === 'explicit' || hasDb;
 
                     this._worktreeModeEnabledMap.set(workspaceRoot, worktreeModeEnabled);
 
@@ -6316,7 +6373,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
+                        controlPlaneConfigured
                     });
                 }
                 break;
@@ -6370,12 +6428,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const maxCap = parseInt(await db.getMeta('worktree_max_cap') || '10', 10);
                     const defaultMergeStrategy = await db.getMeta('worktree_default_merge_strategy') || 'squash';
 
+                    const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+                    const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+                    const controlPlaneConfigured = status.mode === 'explicit' || hasDb;
+
                     this._panel?.webview.postMessage({
                         type: 'worktrees',
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
+                        controlPlaneConfigured
                     });
                 }
                 break;
@@ -6385,10 +6448,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceRoot) break;
                 const db = this._getKanbanDb(workspaceRoot);
                 if (db && await db.ensureReady()) {
+                    const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+                    const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+                    const controlPlaneConfigured = status.mode === 'explicit' || hasDb;
                     let enabled = msg.enabled;
                     if (enabled) {
-                        const status = this.getControlPlaneSelectionStatus(workspaceRoot);
-                        const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
                         if (status.mode !== 'explicit' && !hasDb) {
                             vscode.window.showWarningMessage('Worktree mode requires an explicit control plane. Configure one in the workspace selector.');
                             enabled = false;
@@ -6409,7 +6473,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         worktrees: enriched,
                         worktreeModeEnabled: enabled,
                         worktreeMaxCap: maxCap,
-                        worktreeDefaultMergeStrategy: defaultMergeStrategy
+                        worktreeDefaultMergeStrategy: defaultMergeStrategy,
+                        controlPlaneConfigured
                     });
                 }
                 break;
@@ -6427,12 +6492,17 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     const enriched = worktrees.map(wt => ({ ...wt, path: branchToPath.get(wt.branch) || '' }));
                     const worktreeModeEnabled = (await db.getMeta('worktree_mode_enabled')) === 'true';
 
+                    const status = this.getControlPlaneSelectionStatus(workspaceRoot);
+                    const hasDb = fs.existsSync(path.join(status.effectiveWorkspaceRoot, '.switchboard', 'kanban.db'));
+                    const controlPlaneConfigured = status.mode === 'explicit' || hasDb;
+
                     this._panel?.webview.postMessage({
                         type: 'worktrees',
                         worktrees: enriched,
                         worktreeModeEnabled,
                         worktreeMaxCap: msg.maxCap,
-                        worktreeDefaultMergeStrategy: msg.defaultMergeStrategy
+                        worktreeDefaultMergeStrategy: msg.defaultMergeStrategy,
+                        controlPlaneConfigured
                     });
                 }
                 break;

@@ -1,5 +1,6 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
+import * as os from 'os';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
 import {
@@ -575,6 +576,90 @@ export class PlanningPanelProvider {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
+    private _buildKanbanWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
+        let mappings: any[] = [];
+        let enabled = false;
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                mappings = cfg.mappings;
+                enabled = true;
+            }
+        } catch { /* ignore */ }
+
+        const items: Array<{ label: string; workspaceRoot: string }> = [];
+        const openRoots = this._getWorkspaceRoots();
+
+        // Check if ANY of the currently open workspace folders is mapped
+        let anyOpenFolderIsMapped = false;
+        if (enabled && mappings.length > 0) {
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                for (const m of mappings) {
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder
+                        || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
+                    if (parent) {
+                        const expandedParent = parent.startsWith('~')
+                            ? path.join(os.homedir(), parent.slice(1))
+                            : parent;
+                        if (path.resolve(expandedParent) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    for (const wf of m.workspaceFolders || []) {
+                        const expandedWf = wf.startsWith('~')
+                            ? path.join(os.homedir(), wf.slice(1))
+                            : wf;
+                        if (path.resolve(expandedWf) === resolvedRoot) {
+                            anyOpenFolderIsMapped = true;
+                            break;
+                        }
+                    }
+                    if (anyOpenFolderIsMapped) break;
+                }
+                if (anyOpenFolderIsMapped) break;
+            }
+        }
+
+        if (enabled && mappings.length > 0 && anyOpenFolderIsMapped) {
+            // Multi-root/mapped context: display the custom configured parent mapping names
+            const addedRoots = new Set<string>();
+            for (const m of mappings) {
+                const parent = m.parentFolder || (m as any).parentWorkspaceFolder
+                    || (Array.isArray(m.workspaceFolders) && m.workspaceFolders.length > 0 ? m.workspaceFolders[0] : undefined);
+                if (parent) {
+                    const expanded = parent.startsWith('~')
+                        ? path.join(os.homedir(), parent.slice(1))
+                        : parent;
+                    const resolvedParent = path.resolve(expanded);
+                    if (!addedRoots.has(resolvedParent)) {
+                        addedRoots.add(resolvedParent);
+                        items.push({
+                            label: m.name || path.basename(resolvedParent),
+                            workspaceRoot: resolvedParent
+                        });
+                    }
+                }
+            }
+        } else {
+            // Independent context or mappings disabled: display standard workspace folders
+            for (const root of openRoots) {
+                const resolvedRoot = path.resolve(root);
+                const folder = (vscode.workspace.workspaceFolders || []).find(
+                    f => path.resolve(f.uri.fsPath) === resolvedRoot
+                );
+                items.push({
+                    label: folder ? folder.name : path.basename(resolvedRoot),
+                    workspaceRoot: resolvedRoot
+                });
+            }
+        }
+
+        return items;
+    }
+
     private async _handleMessage(msg: any): Promise<void> {
         const allRoots = this._getWorkspaceRoots();
         if (allRoots.length === 0) {
@@ -1106,17 +1191,8 @@ export class PlanningPanelProvider {
                     const mergedColumns: { id: string; label: string; kind: string; order: number }[] = [];
                     const seenColumnIds = new Set<string>();
 
-                    // Build workspaceItems using VSCode folder names (not path.basename)
-                    const workspaceItems = allRoots.map(root => {
-                        const resolvedRoot = path.resolve(root);
-                        const folder = (vscode.workspace.workspaceFolders || []).find(
-                            f => path.resolve(f.uri.fsPath) === resolvedRoot
-                        );
-                        return {
-                            workspaceRoot: resolvedRoot,
-                            label: folder ? folder.name : path.basename(root)
-                        };
-                    });
+                    // Build workspaceItems using workspace mapping (or folder names as fallback)
+                    const workspaceItems = this._buildKanbanWorkspaceItems();
 
                     for (const root of allRoots) {
                         try {

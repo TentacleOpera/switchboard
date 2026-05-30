@@ -79,7 +79,10 @@ import {
     MAX_AUTOBAN_TERMINALS_PER_ROLE,
     normalizeAutobanBatchSize,
     normalizeAutobanConfigState,
-    shouldSkipSharedReviewerAutobanDispatch
+    shouldSkipSharedReviewerAutobanDispatch,
+    SingleColumnAutobanConfig,
+    normalizeSingleColumnConfig,
+    DEFAULT_SINGLE_COLUMN_CONFIG
 } from './autobanState';
 import { parseComplexityScore, scoreToRoutingRole, getFallbackRole, scoreToCategory } from './complexityScale';
 const { syncMirrorToBrain } = require('./mirrorSync') as {
@@ -302,6 +305,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
+    private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
     // Tracks session IDs currently dispatched, keyed by the source column that dispatched them.
     // Prevents duplicate dispatch within the same column while still allowing downstream column ticks.
@@ -404,6 +408,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         // Restore persisted Autoban state
         const savedAutoban = this._context.workspaceState.get<Partial<AutobanConfigState>>('autoban.state');
         this._autobanState = normalizeAutobanConfigState(savedAutoban);
+
+        // Restore persisted Single Column state
+        const savedSingleColumn = this._context.workspaceState.get<Partial<SingleColumnAutobanConfig>>('singleColumn.autoban.state');
+        this._singleColumnAutobanState = normalizeSingleColumnConfig(savedSingleColumn);
 
         // Ensure pair programming defaults to OFF on load regardless of previous session state
         this._autobanState.pairProgrammingMode = 'off';
@@ -5277,17 +5285,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return null;
         }
 
-        const maxSendsPerTerminal = Math.max(1, Number(this._autobanState.maxSendsPerTerminal) || 1);
         const available = effectivePool
             .map(name => {
                 const currentCount = this._autobanState.sendCounts[name] || 0;
                 return {
                     name,
                     count: currentCount,
-                    remaining: maxSendsPerTerminal - currentCount
+                    remaining: 999999
                 };
-            })
-            .filter(entry => entry.remaining > 0);
+            });
 
         if (available.length === 0) {
             return null;
@@ -5735,7 +5741,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _getAutobanBroadcastState(): AutobanConfigState {
-        return buildAutobanBroadcastState(this._autobanState, this._autobanLastTickAt.entries());
+        return buildAutobanBroadcastState({
+            ...this._autobanState,
+            singleColumnConfig: this._singleColumnAutobanState
+        }, this._autobanLastTickAt.entries());
     }
 
     /**
@@ -5805,6 +5814,67 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } else if (enabled) {
             // Preserve existing behavior when config changes while enabled.
             this._startAutobanEngine();
+        }
+
+        await this._persistAutobanState();
+        this._postAutobanStateNow();
+    }
+
+    /** Called by Kanban provider when a mode switch or configuration change occurs. */
+    public async setAutomationModeFromKanban(msg: any): Promise<void> {
+        const newMode = msg.mode;
+        if (!['single-column', 'multi-column', 'antigravity-batch'].includes(newMode)) return;
+
+        const wasEnabled = this._autobanState.enabled;
+
+        // If engine was enabled, stop it first.
+        if (wasEnabled) {
+            this._stopAutobanEngine();
+        }
+
+        if (newMode === 'single-column') {
+            const enabled = msg.enabled === undefined ? this._singleColumnAutobanState.enabled : !!msg.enabled;
+            const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 15;
+            const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 3;
+
+            this._singleColumnAutobanState = {
+                enabled,
+                intervalMinutes,
+                batchSize
+            };
+            await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
+
+            const singleColumnSyntheticRules = {
+                'PLAN REVIEWED': { enabled: true, intervalMinutes }
+            };
+
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                enabled,
+                automationMode: 'single-column',
+                rules: singleColumnSyntheticRules,
+                batchSize,
+                complexityFilter: 'all',
+                routingMode: 'dynamic'
+            });
+
+            if (enabled) {
+                this._resetAutobanSessionCounters();
+                this._startAutobanEngine();
+            }
+        } else {
+            // multi-column or antigravity-batch
+            const enabled = newMode === 'multi-column' ? (msg.enabled !== undefined ? !!msg.enabled : wasEnabled) : false;
+            this._autobanState = normalizeAutobanConfigState({
+                ...this._autobanState,
+                enabled,
+                automationMode: newMode
+            });
+
+            if (enabled) {
+                this._resetAutobanSessionCounters();
+                this._startAutobanEngine();
+            }
         }
 
         await this._persistAutobanState();
@@ -5889,16 +5959,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await this._resetAutobanPools();
     }
 
-    /** Called by Kanban automation panel to update max sends per terminal. */
-    public async updateAutobanMaxSendsFromKanban(maxSendsPerTerminal: number): Promise<void> {
-        const requestedMax = Number(maxSendsPerTerminal);
-        this._autobanState = normalizeAutobanConfigState({
-            ...this._autobanState,
-            maxSendsPerTerminal: Number.isFinite(requestedMax) ? requestedMax : this._autobanState.maxSendsPerTerminal
-        });
-        await this._persistAutobanState();
-        this._postAutobanStateNow();
-    }
+
 
     /** Dispatch a prompt to the Coder terminal for Routine pair programming. */
     public async dispatchToCoderTerminal(prompt: string): Promise<void> {
@@ -7022,11 +7083,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const selection = await this._selectAutobanTerminal(targetRole, workspaceRoot);
             if (!selection) {
                 console.warn(`[Autoban] No eligible terminal available for ${targetRole}; skipping ${requestedCards.length} queued plan(s).`);
-                if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
-                    const reason = this._getAutobanRemainingSessionCapacity() <= 0
-                        ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
-                        : `Autoban stopped: all enabled autoban terminals are exhausted (cap ${this._autobanState.maxSendsPerTerminal} per terminal).`;
-                    await this._stopAutobanForExhaustion(reason);
+                if (this._autobanState.automationMode !== 'single-column') {
+                    if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
+                        const reason = this._getAutobanRemainingSessionCapacity() <= 0
+                            ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
+                            : 'Autoban stopped: no eligible terminals available.';
+                        await this._stopAutobanForExhaustion(reason);
+                    }
                 }
                 return false;
             }
@@ -7056,11 +7119,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
             await this._announceAutobanDispatch(this._describeAutobanDispatchSourceColumns(cards), targetRole, sessionIds, workspaceRoot);
 
-            if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
-                const reason = this._getAutobanRemainingSessionCapacity() <= 0
-                    ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
-                    : `Autoban stopped: all enabled autoban terminals are exhausted (cap ${this._autobanState.maxSendsPerTerminal} per terminal).`;
-                await this._stopAutobanForExhaustion(reason);
+            if (this._autobanState.automationMode !== 'single-column') {
+                if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
+                    const reason = this._getAutobanRemainingSessionCapacity() <= 0
+                        ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
+                        : 'Autoban stopped: no eligible terminals available.';
+                    await this._stopAutobanForExhaustion(reason);
+                }
             }
             if (this._autobanState.enabled) {
                 await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
@@ -7119,11 +7184,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const selection = await this._selectAutobanTerminal(role, workspaceRoot);
         if (!selection) {
             console.warn(`[Autoban] ${sourceColumn}: all ${role} terminals are exhausted or unavailable.`);
-            if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
-                const reason = this._getAutobanRemainingSessionCapacity() <= 0
-                    ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
-                    : `Autoban stopped: all enabled autoban terminals are exhausted (cap ${this._autobanState.maxSendsPerTerminal} per terminal).`;
-                await this._stopAutobanForExhaustion(reason);
+            if (this._autobanState.automationMode !== 'single-column') {
+                if (await this._allEnabledAutobanRolesExhausted(workspaceRoot)) {
+                    const reason = this._getAutobanRemainingSessionCapacity() <= 0
+                        ? `Autoban stopped: session cap reached (${this._autobanState.sessionSendCount}/${this._autobanState.globalSessionCap}).`
+                        : 'Autoban stopped: no eligible terminals available.';
+                    await this._stopAutobanForExhaustion(reason);
+                }
             }
             return;
         }
@@ -8250,19 +8317,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                         break;
                     }
-                    case 'updateAutobanMaxSends': {
-                        const requestedMax = Number(data.maxSendsPerTerminal);
-                        this._autobanState = normalizeAutobanConfigState({
-                            ...this._autobanState,
-                            maxSendsPerTerminal: Number.isFinite(requestedMax) ? requestedMax : this._autobanState.maxSendsPerTerminal
-                        });
-                        if (this._autobanState.enabled) {
-                            this._startAutobanEngine();
-                        }
-                        await this._persistAutobanState();
-                        this._postAutobanState();
-                        break;
-                    }
+
                     case 'addAutobanTerminal': {
                         if (typeof data.role === 'string') {
                             await this._createAutobanTerminal(data.role, typeof data.name === 'string' ? data.name : undefined);

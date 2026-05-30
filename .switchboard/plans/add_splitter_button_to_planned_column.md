@@ -15,6 +15,9 @@ Add a splitter icon button to the top of the Planned (PLAN REVIEWED) column to t
 
 ## Complexity Audit
 
+**Manual Complexity Override:** 3
+
+
 ### Routine
 - Adding a conditional button to `kanban.html` button area (same pattern as `julesBtn`, `rePlanBtn`)
 - Removing a row from `ROLE_ADDONS` in `sharedDefaults.js`
@@ -22,9 +25,9 @@ Add a splitter icon button to the top of the Planned (PLAN REVIEWED) column to t
 - Adding a new `case 'splitterSelected'` handler in `KanbanProvider.ts` (mirrors existing handlers)
 
 ### Complex / Risky
-- **Scattered removal across 5 files**: `splitPlan` references exist at many sites in `KanbanProvider.ts`, `agentPromptBuilder.ts`, and `TaskViewerProvider.ts`; they must be removed atomically or TypeScript will emit type errors at runtime/compile time.
-- **Dead-code risk in TaskViewerProvider**: Lines 12717, 12734, 6203, 14756, and the `_isSplitPlanEnabled()` helper (14176-14180) are not called out in the original plan; partial removal leaves dead code.
-- **Backward compatibility**: Workspaces with `splitPlan: true` stored in `state.json` will silently ignore the setting post-change; no migration needed but worth documenting.
+- None.
+
+
 
 ## Edge-Case & Dependency Audit
 
