@@ -6157,22 +6157,22 @@
             const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
             const smallButtonStyle = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
             const guardInteraction = (el) => {
-                 const setInteracting = () => {
-                     isAutobanPanelInteracting = true;
-                     if (autobanPanelInteractionTimer) {
-                         clearTimeout(autobanPanelInteractionTimer);
-                     }
-                     // Block re-renders for 2 seconds after the last interaction event
-                     autobanPanelInteractionTimer = setTimeout(() => {
-                         isAutobanPanelInteracting = false;
-                         autobanPanelInteractionTimer = null;
-                     }, 2000);
-                 };
-                 el.addEventListener('focus', setInteracting);
-                 el.addEventListener('change', setInteracting); // also block on value change
-                 el.addEventListener('input', setInteracting);  // catch mid-typing on number inputs
-                 // Note: blur is intentionally omitted — the timeout handles guard clearance
-             };
+                const setInteracting = () => {
+                    isAutobanPanelInteracting = true;
+                    if (autobanPanelInteractionTimer) {
+                        clearTimeout(autobanPanelInteractionTimer);
+                    }
+                    // Block re-renders for 2 seconds after the last interaction event
+                    autobanPanelInteractionTimer = setTimeout(() => {
+                        isAutobanPanelInteracting = false;
+                        autobanPanelInteractionTimer = null;
+                    }, 2000);
+                };
+                el.addEventListener('focus', setInteracting);
+                el.addEventListener('change', setInteracting); // also block on value change
+                el.addEventListener('input', setInteracting);  // catch mid-typing on number inputs
+                // Note: blur is intentionally omitted — the timeout handles guard clearance
+            };
 
             // Mode Selector
             const modeRow = document.createElement('div');
@@ -6215,6 +6215,12 @@
 
                 postKanbanMessage({ type: 'setAutomationMode', mode: currentAutomationMode, enabled: false });
                 updateAutobanButtonState();
+                // Mode change is structural — clear the interaction guard so the panel re-renders immediately
+                isAutobanPanelInteracting = false;
+                if (autobanPanelInteractionTimer) {
+                    clearTimeout(autobanPanelInteractionTimer);
+                    autobanPanelInteractionTimer = null;
+                }
                 renderAutobanPanel();
             });
 
@@ -6873,14 +6879,18 @@
         }
 
         function renderAutobanPanel() {
-            const root = document.getElementById('automation-panel-root');
-            if (!root) return;
-            if (isAutobanPanelInteracting) {
-                console.log('[kanban] Skipping autoban panel re-render: user interaction guard active');
-                return;
+            try {
+                const root = document.getElementById('automation-panel-root');
+                if (!root) return;
+                if (isAutobanPanelInteracting) {
+                    console.log('[kanban] Skipping autoban panel re-render: user interaction guard active');
+                    return;
+                }
+                root.innerHTML = '';
+                root.appendChild(createAutobanPanel());
+            } catch (err) {
+                console.error('[kanban webview] error rendering autoban panel:', err);
             }
-            root.innerHTML = '';
-            root.appendChild(createAutobanPanel());
         }
 
         // Terminals and custom agents feed the terminal pool UI. Kanban webview
@@ -7629,10 +7639,14 @@
         const inFlightMerges = new Set();
 
         function renderWorktreePanel() {
-            const root = document.getElementById('worktree-panel-root');
-            if (!root) return;
-            root.innerHTML = '';
-            root.appendChild(createWorktreePanel());
+            try {
+                const root = document.getElementById('worktree-panel-root');
+                if (!root) return;
+                root.innerHTML = '';
+                root.appendChild(createWorktreePanel());
+            } catch (err) {
+                console.error('[kanban webview] error rendering worktree panel:', err);
+            }
         }
 
         function loadWorktrees() {

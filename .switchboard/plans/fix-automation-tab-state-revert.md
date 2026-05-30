@@ -210,3 +210,41 @@ maxSendsInput.addEventListener('change', () => {
 ---
 
 **Recommendation**: **Send to Intern** (Complexity 3 — routine single-file edits, well-understood pattern, low risk)
+
+## Review Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Change | Status | Severity | Finding |
+|---|--------|--------|----------|---------|
+| 1 | Add debounce timer variable | ✅ Implemented correctly | — | Line 6139: `autobanPanelInteractionTimer = null` correctly placed alongside `isAutobanPanelInteracting` |
+| 2 | Replace guardInteraction with timeout | ✅ Implemented correctly | NIT | Lines 6159-6175: Logic correct, but indentation was 1 space off throughout (17/21 instead of 16/20) |
+| 3 | Add console logging to renderAutobanPanel | ✅ Implemented correctly | — | Lines 6878-6881: Console log matches plan exactly |
+| 4 | Remove manual flag reset from maxSendsInput | ⚠️ Not applicable | MAJOR | `maxSendsInput` does not exist in kanban.html; the feature was never ported from implementation.html. No manual `isAutobanPanelInteracting = false` reset exists outside the timer callback. Change is a no-op. |
+| — | Mode change handler blocked by guard | 🔴 New bug | CRITICAL | Line 6218: `renderAutobanPanel()` called in mode select change handler was BLOCKED by guardInteraction's change listener (registered first at line 6184). Mode switch showed no visual feedback for up to 2 seconds — a regression introduced by Change 2. |
+| — | Dead code: autobanNumberInputStyle | — | NIT | Line 6156: Declared but never used (leftover from unported maxSendsInput) |
+
+### Stage 2: Balanced Synthesis
+
+- **CRITICAL — Mode change guard block**: Fix now. The mode select change handler must clear the guard before calling `renderAutobanPanel()`. This is a user-facing regression where switching automation modes produces no visual change for 2 seconds.
+- **MAJOR — Change 4 not applicable**: Update plan only. The `maxSendsInput` code referenced in the plan doesn't exist in the target file. No code fix needed.
+- **NIT — Indentation**: Fix now since we're already editing the area. The 1-space-off indentation in `guardInteraction` makes the code visually inconsistent with surrounding code.
+- **NIT — Dead code**: Defer. `autobanNumberInputStyle` may be needed when `maxSendsInput` is ported.
+- **NIT — input event on selects**: No fix. Harmless no-op that may become useful later.
+
+### Files Changed
+
+1. `src/webview/kanban.html` line 6216-6224: Added guard clearance before `renderAutobanPanel()` in mode change handler (CRITICAL fix)
+2. `src/webview/kanban.html` lines 6159-6175: Fixed 1-space-off indentation in `guardInteraction` function body (NIT fix)
+
+### Validation Results
+
+- No compilation or automated tests run (per review instructions)
+- Manual verification needed: Switch automation mode (single-column → multi-column → antigravity) and confirm panel re-renders immediately
+- The `maxSendsInput` feature from Change 4 does not exist in kanban.html — this change should be removed from the plan or marked as not applicable
+
+### Remaining Risks
+
+1. **Mode change guard clearance**: The fix clears the guard in the mode handler, but if a `terminalStatuses` message arrives in the ~100ms between the guard clearing and the re-render completing, it could cause a double re-render. This is harmless (second render is a no-op since state hasn't changed) but wastes a render cycle.
+2. **Future maxSendsInput port**: When the `maxSendsPerTerminal` feature is ported from `implementation.html` to `kanban.html`, the new number input handler must NOT manually reset `isAutobanPanelInteracting = false` or call `renderAutobanPanel()` — it should rely on the debounce timer (per Change 4's intent).
+3. **2-second staleness window**: Terminal alive/dead indicators are delayed by up to 2 seconds during active interaction. This is the known acceptable trade-off from the original plan.

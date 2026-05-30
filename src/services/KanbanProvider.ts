@@ -1021,8 +1021,23 @@ export class KanbanProvider implements vscode.Disposable {
             const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                 const planFile = row.planFile || '';
                 if (!planFile) return false;
-                const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
-                return fs.existsSync(planPath);
+                let planPath = planFile;
+                if (planPath.startsWith('file://')) {
+                    try {
+                        planPath = require('url').fileURLToPath(planPath);
+                    } catch (e) {
+                        planPath = planPath.replace(/^file:\/\/\/?/, '');
+                        if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                            planPath = '/' + planPath;
+                        }
+                    }
+                }
+                const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+                const exists = fs.existsSync(resolvedPath);
+                if (!exists) {
+                    console.log(`[KanbanProvider] filterGhostPlans (activeRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+                }
+                return exists;
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
@@ -1758,8 +1773,23 @@ export class KanbanProvider implements vscode.Disposable {
                 const activeRows = dbRows.filter(row => {
                     const planFile = row.planFile || '';
                     if (!planFile) return false;
-                    const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(effectiveRootForPaths, planFile);
-                    return fs.existsSync(planPath);
+                    let planPath = planFile;
+                    if (planPath.startsWith('file://')) {
+                        try {
+                            planPath = require('url').fileURLToPath(planPath);
+                        } catch (e) {
+                            planPath = planPath.replace(/^file:\/\/\/?/, '');
+                            if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                                planPath = '/' + planPath;
+                            }
+                        }
+                    }
+                    const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(effectiveRootForPaths, planPath);
+                    const exists = fs.existsSync(resolvedPath);
+                    if (!exists) {
+                        console.log(`[KanbanProvider] _refreshBoardImpl filterGhostPlans: file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+                    }
+                    return exists;
                 });
                 if (activeRows.length < dbRows.length) {
                     console.log(`[KanbanProvider] _refreshBoardImpl: filtered out ${dbRows.length - activeRows.length} ghost plans`);
@@ -1897,8 +1927,23 @@ export class KanbanProvider implements vscode.Disposable {
             const filterGhostPlans = (rows: import('./KanbanDatabase').KanbanPlanRecord[]) => rows.filter(row => {
                 const planFile = row.planFile || '';
                 if (!planFile) return false;
-                const planPath = path.isAbsolute(planFile) ? planFile : path.resolve(resolvedWorkspaceRoot, planFile);
-                return fs.existsSync(planPath);
+                let planPath = planFile;
+                if (planPath.startsWith('file://')) {
+                    try {
+                        planPath = require('url').fileURLToPath(planPath);
+                    } catch (e) {
+                        planPath = planPath.replace(/^file:\/\/\/?/, '');
+                        if (process.platform !== 'win32' && !planPath.startsWith('/')) {
+                            planPath = '/' + planPath;
+                        }
+                    }
+                }
+                const resolvedPath = path.isAbsolute(planPath) ? planPath : path.resolve(resolvedWorkspaceRoot, planPath);
+                const exists = fs.existsSync(resolvedPath);
+                if (!exists) {
+                    console.log(`[KanbanProvider] filterGhostPlans (completedRows): file does not exist: planFile=${planFile}, resolvedPath=${resolvedPath}`);
+                }
+                return exists;
             });
             const activeRowsFiltered = filterGhostPlans(activeRows);
             // Completed plans intentionally bypass file-existence check — DB is source of truth for completed state
@@ -6550,7 +6595,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceId) break;
                 const rule = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const dbRows = await db.getBoard(workspaceId);
-                const sessionIds = dbRows.filter(row => row.column === 'MERGE').map(row => row.sessionId).filter(Boolean);
+                const sessionIds = dbRows.filter(row => row.kanbanColumn === 'MERGE').map(row => row.sessionId).filter(Boolean);
                 for (const sessionId of sessionIds) {
                     try {
                         await this._executeMergeRule(workspaceRoot, sessionId, rule);

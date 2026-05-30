@@ -1102,11 +1102,6 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(resetAutobanPoolsDisposable);
 
-    const updateAutobanMaxSendsDisposable = vscode.commands.registerCommand('switchboard.updateAutobanMaxSendsFromKanban', async (maxSends: number) => {
-        await taskViewerProvider.updateAutobanMaxSendsFromKanban(maxSends);
-    });
-    context.subscriptions.push(updateAutobanMaxSendsDisposable);
-
     const dispatchToCoderTerminalDisposable = vscode.commands.registerCommand('switchboard.dispatchToCoderTerminal', async (prompt: string) => {
         await taskViewerProvider.dispatchToCoderTerminal(prompt);
     });

@@ -186,7 +186,6 @@ async function run() {
 
     assert.ok(
         providerSource.includes('_selectAutobanTerminal(') &&
-        providerSource.includes('updateAutobanMaxSends') &&
         providerSource.includes('addAutobanTerminal') &&
         providerSource.includes('resetAutobanPools'),
         'TaskViewerProvider should keep the pooled-autoban selection helper and new pool-management message handlers'

@@ -393,3 +393,54 @@ Key risks: (1) the Antigravity Batch prompt template is a near-total rewrite of 
 > **Recommendation:** Send to **Lead Coder**
 >
 > Complexity 7 — multi-file coordination, new backend message type, non-trivial prompt template branch, and a state migration heuristic for existing users. The highest risk is the Antigravity Batch prompt template rewrite in `KanbanProvider.ts`; implement and test that in isolation before wiring the mode selector.
+
+## Review Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Area | Status | Severity | Finding |
+|---|------|--------|----------|---------|
+| 1 | Mode selector UI | ✅ Implemented | — | Lines 6177-6219: Three options, persisted in vscode.getState(), confirmation dialog on mode switch while running |
+| 2 | Single Column mode UI | ✅ Implemented | — | Lines 6221+: Interval slider, batch size, start/stop/reset, separate state key |
+| 3 | Multi Column mode preserved | ✅ Implemented | — | Line 6366: Existing autoban panel wrapped in multi-column container |
+| 4 | Antigravity Batch mode UI | ✅ Implemented | — | Lines 6736+: Agent/column selectors, batch size (3/5/10), COPY PROMPT, updated description text |
+| 5 | btn-autoban visibility | ✅ Implemented | — | Line 4223: Hidden in antigravity-batch mode |
+| 6 | automationMode in AutobanConfigState | ✅ Implemented | — | autobanState.ts line 51: Type with three modes |
+| 7 | SingleColumnAutobanConfig type | ✅ Implemented | — | autobanState.ts lines 16-20 |
+| 8 | Upgrade heuristic for existing users | ✅ Implemented | — | autobanState.ts lines 235-239: Defaults to multi-column if enabled or multiple rules |
+| 9 | _generateAntigravityPrompt batchSize branch | ✅ Implemented | — | KanbanProvider.ts line 2498: Accepts batchSize, branches between batchBlock and schedulingBlock |
+| 10 | setAutomationMode handler | ✅ Implemented | — | TaskViewerProvider.ts line 5824: Validates mode, stops engine if running, persists state |
+| 11 | Single Column engine start with synthetic rules | ✅ Implemented | — | TaskViewerProvider.ts lines 5847-5864: Synthetic PLAN REVIEWED rule |
+| 12 | _allEnabledAutobanRolesExhausted guard for single-column | ✅ Implemented | — | TaskViewerProvider.ts lines 7086, 7122, 7187: Skipped in single-column mode |
+| 13 | maxSendsPerTerminal removal from autobanState.ts | ✅ Implemented | — | Type and normalizer cleaned |
+| 14 | updateAutobanMaxSends removed from KanbanProvider.ts | ✅ Implemented | — | No references found |
+| 15 | updateAutobanMaxSendsFromKanban removed from TaskViewerProvider.ts | ✅ Implemented | — | No references found |
+| 16 | Schedule selector (cron) removed from kanban.html | ✅ Implemented | — | No scheduleSelector/cronDisplay references found |
+| — | Dead command registration in extension.ts | 🔴 Runtime crash | CRITICAL | Lines 1105-1108: `switchboard.updateAutobanMaxSendsFromKanban` command registered, calling deleted method `taskViewerProvider.updateAutobanMaxSendsFromKanban()`. Will throw at runtime when invoked. |
+| — | Stale test assertion | 🔴 Test failure | CRITICAL | autoban-state-regression.test.js line 189: Asserts `providerSource.includes('updateAutobanMaxSends')` — will fail since method was deleted |
+| 17 | maxSendsPerTerminal in implementation.html | ⚠️ Residual | NIT | Line 2301: Still present but plan explicitly scopes this file out. Not a kanban.html concern. |
+
+### Stage 2: Balanced Synthesis
+
+- **CRITICAL — Dead command in extension.ts**: Fix now. The `updateAutobanMaxSendsFromKanban` command registration calls a method that no longer exists. Any code path that triggers this command will throw a runtime error. Removed the 4-line block.
+- **CRITICAL — Stale test assertion**: Fix now. The test greps for `updateAutobanMaxSends` in the provider source and will fail. Removed the assertion from the compound check.
+- **NIT — implementation.html residual**: Defer. The plan explicitly notes this file doesn't need changes. It's a separate webview with its own state management.
+
+### Files Changed
+
+1. `src/extension.ts` lines 1105-1108: Removed dead `updateAutobanMaxSendsFromKanban` command registration (CRITICAL fix)
+2. `src/test/autoban-state-regression.test.js` line 189: Removed `updateAutobanMaxSends` assertion from provider source check (CRITICAL fix)
+
+### Validation Results
+
+- No compilation or automated tests run (per review instructions)
+- Grep confirms `maxSendsPerTerminal` and `updateAutobanMaxSends` are fully removed from all src/ files except `implementation.html` (out of scope per plan)
+- All three `_allEnabledAutobanRolesExhausted` call sites in TaskViewerProvider.ts are properly guarded for single-column mode
+- Mode upgrade heuristic correctly defaults to `multi-column` for existing active configs
+- Batch prompt template correctly branches on `batchSize !== undefined`
+
+### Remaining Risks
+
+1. **implementation.html maxSendsPerTerminal**: Still present at line 2301. If this webview ever sends `updateAutobanMaxSends` messages, they will be unhandled. Low risk since this webview appears to be a legacy/alternate view.
+2. **Single Column terminal-offline resilience**: The guard at lines 7086/7122/7187 correctly skips `_allEnabledAutobanRolesExhausted` in single-column mode, but there's no logging when a tick is skipped due to terminal offline. Users may not realize automation is paused. Consider adding a console.warn in a future iteration.
+3. **Mode switch race**: If a `terminalStatuses` message arrives between the mode switch and the re-render, the old mode's UI may briefly flash. The guard fix from Plan 1 (clearing `isAutobanPanelInteracting` before `renderAutobanPanel()`) mitigates this.
