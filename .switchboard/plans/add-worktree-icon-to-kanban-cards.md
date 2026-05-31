@@ -324,3 +324,60 @@ await db.updatePlanWorktreeStatus(plan.sessionId, 'deleted'); // NEW
 **Complexity: 5 → Send to Coder**
 
 Elevated from 3 to 5 due to: the four-path status update requirement (one path previously unidentified), the migration backfill gap, and the icon display logic constraint (must gate on `worktreeStatus` not `worktreeId`). Changes are still well-scoped and follow existing patterns, but require careful attention to all deletion paths and the nulling-vs-status design decision.
+
+## Review Pass (2026-06-01)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **MAJOR** | `_cleanupWorktreeAfterReview`: `updatePlanWorktreeStatus('deleted')` trapped inside `if (worktree)` guard, but `updatePlanWorktree(null)` is outside it. If worktree DB record is missing or git ops throw, status stays `'active'` while `worktree_id` becomes NULL → icon shows "active" with tooltip "removed (active)" | `KanbanProvider.ts:6878-6898` |
+| 2 | NIT | Redundant `updatePlanWorktree(sessionId, null)` after `deleteWorktree()` which already NULLs `worktree_id`. Kept as safety net for missing-DB-record case with clarifying comment. | `KanbanProvider.ts:6898` |
+| 3 | NIT | Same redundant `updatePlanWorktree(null)` pattern in `_cleanupWorktreeAfterMerge`. Pre-existing, not introduced by this plan. Deferred. | `KanbanProvider.ts:6854` |
+
+### Stage 2: Balanced Synthesis
+
+- **Finding 1 (MAJOR)**: Fixed. Moved `updatePlanWorktreeStatus(sessionId, 'deleted')` outside `if (worktree)` block, inside `if (choice === 'Clean Up')`. Now always sets status to `'deleted'` when user chooses Clean Up, regardless of DB record existence or git operation success.
+- **Finding 2 (NIT)**: Kept the `updatePlanWorktree(null)` call with clarifying comment — it's needed when `deleteWorktree()` was never called (worktree record missing from DB).
+- **Finding 3 (NIT)**: Deferred. Pre-existing pattern, not a regression.
+
+### Files Changed
+
+- `src/services/KanbanProvider.ts` — Moved `updatePlanWorktreeStatus('deleted')` outside `if (worktree)` guard in `_cleanupWorktreeAfterReview` (lines 6896-6901). Added clarifying comments.
+
+### Verification
+
+- **Typecheck**: Ran `npx tsc --noEmit`. All 14 errors are pre-existing (in `ClickUpSyncService.ts`, `KanbanProvider.ts:2540-2550/4679`, `TaskViewerProvider.ts:2078`). Zero new errors introduced by this feature or the review fix.
+- **Tests**: Skipped per instructions (user will run separately).
+
+### Implementation Verification Summary
+
+All six phases verified against plan requirements:
+
+| Phase | Component | Status |
+|-------|-----------|--------|
+| 1 | V27 migration (ALTER TABLE + backfill UPDATE) | ✅ Present, correct |
+| 1 | V27 migration execution in `_runMigrations()` | ✅ Present, version-gated |
+| 1 | `worktreeStatus` in `KanbanPlanRecord` | ✅ Present, typed as `string` with union comment |
+| 1 | `PLAN_COLUMNS` includes `worktree_status` | ✅ Present |
+| 1 | `_readRows()` maps `worktree_status` → `worktreeStatus` | ✅ Present, defaults to `'none'` |
+| 1 | `updatePlanWorktreeStatus()` method | ✅ Present, correct signature |
+| 1 | `UPSERT_PLAN_SQL` excludes `worktree_status` | ✅ Correct per plan |
+| 2 | `icons/worktree-active.svg` | ✅ Present, `#4fc3f7` fill |
+| 2 | `icons/worktree-merged.svg` | ✅ Present, `#888888` fill |
+| 3 | `ICON_WORKTREE_ACTIVE` / `ICON_WORKTREE_MERGED` constants | ✅ Present in kanban.html |
+| 3 | `.card-worktree-icon` CSS | ✅ Present, all properties match plan |
+| 4 | Icon HTML gated on `worktreeStatus !== 'none'` | ✅ Correct, not gated on `worktreeId` |
+| 4 | `${worktreeIconHtml}` inserted before `.card-topic` | ✅ Correct placement |
+| 4 | `.kanban-card` has `position: relative` | ✅ Confirmed |
+| 5 | Icon injection map entries | ✅ Present in KanbanProvider.ts |
+| 6a | `_assignWorktreeToCard` → `updatePlanWorktreeStatus('active')` | ✅ Present |
+| 6b | `_cleanupWorktreeAfterMerge` → `updatePlanWorktreeStatus('merged')` | ✅ Present |
+| 6c | `deleteWorktree` handler → loop over `assignedCards` → `updatePlanWorktreeStatus('deleted')` | ✅ Present, reuses `allCards` |
+| 6d | `_cleanupWorktreeAfterReview` → `updatePlanWorktreeStatus('deleted')` | ✅ Fixed (moved outside `if(worktree)`) |
+
+### Remaining Risks
+
+1. **Pre-existing typecheck errors**: 14 pre-existing TS errors in the codebase unrelated to this feature. Should be addressed separately.
+2. **`_cleanupWorktreeAfterMerge` redundant null**: `updatePlanWorktree(null)` after `deleteWorktree()` is redundant but harmless. Low priority cleanup.
+3. **Upsert + worktree_id edge case**: If a plan is upserted with `worktree_id` already set (unusual path), `worktree_status` will be `'none'` (DEFAULT) while `worktree_id` is non-null. The icon won't show. This is a deliberate design decision per the plan's clarification note — `worktree_status` is managed exclusively by `updatePlanWorktreeStatus()`.

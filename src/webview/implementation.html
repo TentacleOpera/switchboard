@@ -2288,6 +2288,7 @@
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
         let lastStartupCommands = {};
+        let lastTerminalAgentNames = {}; // Terminal-derived agent names; workspace-agnostic
         let lastVisibleAgents = { ...DEFAULT_VISIBLE_AGENTS };
         let lastCustomAgents = [];
         let lastJulesAutoSyncEnabled = undefined;
@@ -3012,6 +3013,10 @@
                             if (input) input.value = message.commands[role] || '';
                         });
                     }
+                    break;
+                case 'terminalAgentNames':
+                    lastTerminalAgentNames = message.agentNames || {};
+                    renderAgentList(); // Re-render so terminal-derived names take effect immediately
                     break;
                 case 'visibleAgents':
                     if (message.agents) {
@@ -4801,9 +4806,15 @@
 
             const name = document.createElement('div');
             name.className = 'agent-name';
-            if (roleId !== 'jules' && lastStartupCommands[roleId]) {
-                const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
-                name.innerText = `${label} - ${cmd} CLI`;
+            if (roleId !== 'jules') {
+                if (lastTerminalAgentNames[roleId]) {
+                    name.innerText = `${label} - ${lastTerminalAgentNames[roleId]}`;
+                } else if (lastStartupCommands[roleId]) {
+                    const cmd = lastStartupCommands[roleId].trim().split(/\s+/)[0].toUpperCase();
+                    name.innerText = `${label} - ${cmd} CLI`;
+                } else {
+                    name.innerText = label;
+                }
             } else {
                 name.innerText = label;
             }
@@ -5510,7 +5521,9 @@ Work through all plans in the list, using the marker format above.`;
 
             const name = document.createElement('div');
             name.className = 'agent-name';
-            if (lastStartupCommands['analyst']) {
+            if (lastTerminalAgentNames['analyst']) {
+                name.innerText = `ANALYST - ${lastTerminalAgentNames['analyst']}`;
+            } else if (lastStartupCommands['analyst']) {
                 const cmd = lastStartupCommands['analyst'].trim().split(/\s+/)[0].toUpperCase();
                 name.innerText = `ANALYST - ${cmd} CLI`;
             } else {

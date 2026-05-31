@@ -125,12 +125,7 @@ function run() {
         );
     });
 
-    test('_workflowNameForDispatchRole includes intern and tester', () => {
-        assert.match(
-            taskViewerSource,
-            /'intern'\s*:\s*'handoff'/,
-            "Expected workflowMap to include 'intern': 'handoff'"
-        );
+    test('_workflowNameForDispatchRole includes tester', () => {
         assert.match(
             taskViewerSource,
             /'tester'\s*:\s*'tester-pass'/,

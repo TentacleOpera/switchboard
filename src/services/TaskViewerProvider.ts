@@ -425,14 +425,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
         this._terminalAgentInfo.set(suffixedName, { role, displayName });
+        this._notifyTerminalAgentNamesChanged();
     }
 
     public clearTerminalAgentInfo(suffixedName: string): void {
         this._terminalAgentInfo.delete(suffixedName);
+        this._notifyTerminalAgentNamesChanged();
     }
 
     public clearAllTerminalAgentInfo(): void {
         this._terminalAgentInfo.clear();
+    }
+
+    private _notifyTerminalAgentNamesChanged(): void {
+        if (this._view) {
+            const terminalAgentNames = this.getActualTerminalAgentNames();
+            this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
+        }
     }
 
     /**
@@ -457,20 +466,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     public getActualTerminalAgentNames(): Record<string, string> {
         const result: Record<string, string> = {};
 
-        if (!this._registeredTerminals) return result;
+        // Get all currently open VS Code terminals
+        const allTerminals = vscode.window.terminals;
+        const terminalNames = new Set(
+            allTerminals
+                .filter(t => t.exitStatus === undefined)
+                .map(t => t.name)
+        );
 
-        for (const [name, terminal] of this._registeredTerminals.entries()) {
-            // Skip exited terminals
-            if (terminal.exitStatus !== undefined) {
-                // Prune stale cache entry
+        // Iterate over cached agent info and check if terminal is still open
+        for (const [name, info] of this._terminalAgentInfo.entries()) {
+            // Skip if terminal is no longer open; prune stale cache entry
+            if (!terminalNames.has(name)) {
                 this._terminalAgentInfo.delete(name);
                 continue;
             }
 
-            const info = this._terminalAgentInfo.get(name);
-            if (!info) continue;
-
-            // First alive terminal per role wins (deterministic: Map iteration order)
+            // First alive terminal per role wins (deterministic: Map insertion order)
             if (!(info.role in result)) {
                 result[info.role] = info.displayName;
             }
@@ -2075,7 +2087,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 // Guard: only activate if effectiveRoot matches current selection, or if
                 // nothing is selected yet (initialization). Mirrors KanbanProvider.refreshIfShowing.
                 if (currentRoot && path.resolve(currentRoot) !== path.resolve(effectiveRoot)) {
-                    this._outputChannel?.appendLine(
+                    console.log(
                         `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from current ${currentRoot} — not switching workspace context`
                     );
                     return;
@@ -2208,9 +2220,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             'planner': 'sidebar-review',
             'reviewer': 'reviewer-pass',
             'tester': 'tester-pass',
-            'lead': 'handoff-lead',
-            'coder': 'handoff',
-            'intern': 'handoff',
             'jules': 'jules',
             'ticket_updater': 'ticket-update',
             'researcher': 'deep-research',
@@ -3349,6 +3358,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const startupState = await this.handleGetStartupCommands(workspaceRoot);
         this._view.webview.postMessage({ type: 'startupCommands', ...startupState });
+
+        // Send terminal-derived agent names (workspace-agnostic, locked to actual running terminals)
+        const terminalAgentNames = this.getActualTerminalAgentNames();
+        this._view.webview.postMessage({ type: 'terminalAgentNames', agentNames: terminalAgentNames });
 
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         this._view.webview.postMessage({ type: 'visibleAgents', agents: visibleAgents });
@@ -12657,7 +12670,7 @@ What would you like to find?`;
             const workflowName = effectiveColumn === 'CREATED'
                 ? 'improve-plan'
                 : effectiveColumn === 'PLAN REVIEWED'
-                    ? (role === 'lead' ? 'handoff-lead' : 'handoff')
+                    ? undefined
                     : this._isCompletedCodingColumn(effectiveColumn)
                         ? 'reviewer-pass'
                         : isTesterEligible
@@ -14080,11 +14093,7 @@ What would you like to find?`;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('pairProgramming.aggressive', false);
     }
 
-    private _isSplitPlanEnabled(): boolean {
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
-        if (plannerConfig?.addons?.splitPlan !== undefined) return plannerConfig.addons.splitPlan;
-        return false;
-    }
+
 
     private _isJulesAutoSyncEnabled(): boolean {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('jules.autoSync', false);

@@ -3291,9 +3291,10 @@
 
         const ICON_MOVE_SELECTED = '{{ICON_53}}';
         const ICON_MOVE_ALL = '{{ICON_54}}';
-        const ICON_PROMPT_SELECTED = '{{ICON_22}}';
+        const ICON_PROMPT_SELECTED = '{{ICON_PROMPT}}';
         const ICON_PROMPT_ALL = '{{ICON_115}}';
         const ICON_JULES = '{{ICON_28}}';
+        const ICON_SPLITTER = '{{ICON_28}}'; // Reuses ICON_JULES token; replace with dedicated token if available
         const ICON_ANALYST_MAP = '{{ICON_ANALYST_MAP}}';
         const ICON_IMPORT_CLIPBOARD = '{{ICON_IMPORT_CLIPBOARD}}';
         const ICON_CLI = '{{ICON_CLI}}';
@@ -4000,6 +4001,11 @@
                                <img src="${ICON_ANALYST_MAP}" alt="Re-plan">
                            </button>`
                         : '';
+                    const splitterBtn = (isPlanReviewed && lastVisibleAgents.splitter !== false)
+                        ? `<button class="column-icon-btn" data-action="splitterSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Split selected plans into Routine and Complex files">
+                               <img src="${ICON_SPLITTER}" alt="Splitter">
+                           </button>`
+                        : '';
                     const codeMapBtn = (isCreated && lastVisibleAgents.analyst !== false)
                         ? `<button class="column-icon-btn" data-action="codeMapSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Run code map on selected plans (or all if none selected)">
                                <img src="${ICON_CODE_MAP}" alt="Code Map">
@@ -4030,6 +4036,7 @@
                         </button>
                         ${julesBtn}
                         ${rePlanBtn}
+                        ${splitterBtn}
                         ${codeMapBtn}
                         ${testingFailBtn}
                         ${chatBtn}
@@ -4098,7 +4105,7 @@
                         nextColSource = visibleCodedIds[visibleCodedIds.length - 1] || 'CODER CODED';
                     }
                     const nextCol = getNextColumn(nextColSource);
-                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed') return;
+                    if (!nextCol && action !== 'julesSelected' && action !== 'rePlanSelected' && action !== 'completeSelected' && action !== 'completeAll' && action !== 'testingFailed' && action !== 'splitterSelected') return;
 
                     switch (action) {
                         case 'moveSelected': {
@@ -4179,6 +4186,16 @@
                             const ids = getSelectedInColumn(column);
                             if (ids.length === 0) return;
                             postKanbanMessage({ type: 'julesSelected', sessionIds: ids });
+                            ids.forEach(id => selectedCards.delete(id));
+                            break;
+                        }
+                        case 'splitterSelected': {
+                            const ids = getSelectedInColumn(column);
+                            if (ids.length === 0) {
+                                postKanbanMessage({ type: 'showWarning', message: 'Please select at least one plan to split.' });
+                                return;
+                            }
+                            postKanbanMessage({ type: 'splitterSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
@@ -4303,6 +4320,13 @@
         function updateJulesButtonVisibility() {
             const isVisible = lastVisibleAgents.jules !== false;
             document.querySelectorAll('[data-action="julesSelected"]').forEach(btn => {
+                btn.style.display = isVisible ? '' : 'none';
+            });
+        }
+
+        function updateSplitterButtonVisibility() {
+            const isVisible = lastVisibleAgents.splitter !== false;
+            document.querySelectorAll('[data-action="splitterSelected"]').forEach(btn => {
                 btn.style.display = isVisible ? '' : 'none';
             });
         }
@@ -5609,6 +5633,7 @@
                         lastVisibleAgents = { ...lastVisibleAgents, ...msg.agents };
                         updateAllColumnAgents();
                         updateJulesButtonVisibility();
+                        updateSplitterButtonVisibility();
                     }
                     break;
                 case 'copyPlanLinkResult': {
@@ -5747,6 +5772,7 @@
                     lastVisibleAgents = { ...lastVisibleAgents, ...vis };
                     updateAllColumnAgents();
                     updateJulesButtonVisibility();
+                    updateSplitterButtonVisibility();
                   }
                   break;
                 }

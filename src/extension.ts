@@ -588,7 +588,7 @@ export async function activate(context: vscode.ExtensionContext) {
         // control surface for git prohibition.
         const workspaceRoots = vscode.workspace.workspaceFolders?.map(f => f.uri.fsPath) || [];
         for (const root of workspaceRoots) {
-            await cleanupLegacyAgentRules(root);
+            await cleanupLegacyAgentFiles(root);
         }
 
         // Dispose orphaned Switchboard terminals from a previous session.
@@ -2682,21 +2682,26 @@ async function migrateLegacyPlans(workspaceRoot: string): Promise<void> {
 }
 
 /**
- * Remove legacy static rule files that are either dynamically injected via
- * agentPromptBuilder.ts (git prohibition) or superseded by the prompts tab
- * checkbox system (mode triggers).
+ * Clean up obsolete agent files from user workspaces.
+ * - no_git_for_agents.md: Git prohibition removed in favor of prompts tab
+ * - switchboard_modes.md: Mode triggers superseded by prompts tab checkboxes
+ * - handoff*.md: Delegation workflows superseded by prompts tab
  */
-async function cleanupLegacyAgentRules(workspaceRoot: string): Promise<void> {
+async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
     const legacyFiles = [
         '.agent/rules/no_git_for_agents.md',
         '.agent/rules/switchboard_modes.md',
+        '.agent/workflows/handoff.md',
+        '.agent/workflows/handoff-chat.md',
+        '.agent/workflows/handoff-lead.md',
+        '.agent/workflows/handoff-relay.md',
     ];
     for (const relativePath of legacyFiles) {
         const fullPath = path.join(workspaceRoot, relativePath);
         try {
             await fs.promises.access(fullPath);
             await fs.promises.unlink(fullPath);
-            outputChannel?.appendLine(`[Switchboard] Removed legacy rule file: ${relativePath}`);
+            outputChannel?.appendLine(`[Switchboard] Removed legacy file: ${relativePath}`);
         } catch {
             // File does not exist or cannot be removed — non-fatal
         }
@@ -2801,7 +2806,14 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     }
 
     // 2b. Blocklist: remove files that should never be distributed even if present in source
-    const blocklist = ['.agent/rules/no_git_for_agents.md', '.agent/rules/switchboard_modes.md'];
+    const blocklist = [
+        '.agent/rules/no_git_for_agents.md',
+        '.agent/rules/switchboard_modes.md',
+        '.agent/workflows/handoff.md',
+        '.agent/workflows/handoff-chat.md',
+        '.agent/workflows/handoff-lead.md',
+        '.agent/workflows/handoff-relay.md',
+    ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
         try {
@@ -2823,7 +2835,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     try {
         await vscode.workspace.fs.stat(readmeUri);
     } catch {
-        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use \`/handoff\` to delegate tasks to other agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.\n- Use \`/challenge\` for internal adversarial review without delegation.`;
+        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.\n- Use \`/challenge\` for internal adversarial review without delegation.`;
         await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(readmeContent, 'utf8'));
     }
 
@@ -3164,10 +3176,6 @@ This project uses the **Switchboard** protocol for cross-IDE agent collaboration
 
 | Trigger | Workflow | Description |
 |:--------|:---------|:------------|
-| \`/handoff\` | handoff | Delegate tasks to external agents |
-| \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
-| \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
-| \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
 | \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
 | \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |
@@ -3195,10 +3203,6 @@ This project uses the **Switchboard** protocol for cross-IDE agent collaboration
 
 | Trigger | Workflow | Description |
 |:--------|:---------|:------------|
-| \`/handoff\` | handoff | Delegate tasks to external agents |
-| \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
-| \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
-| \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
 | \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
 | \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |
@@ -3220,7 +3224,7 @@ When the Switchboard protocol is active, you have access to these skills:
 - **get_team_roster** — Discover registered terminals/chat agents and role assignments.
 
 ### Workflow Management
-- **start_workflow** — Begin a workflow (e.g., \`handoff\`, \`improve-plan\`, \`challenge\`, \`accuracy\`).
+- **start_workflow** — Begin a workflow (e.g., \`improve-plan\`, \`challenge\`, \`accuracy\`).
 - **get_workflow_state** — Inspect active workflow and phase state.
 - **complete_workflow_phase** — Mark a workflow phase as done (enforces step ordering and required artifacts).
 - **stop_workflow** — End the current workflow.
@@ -3240,10 +3244,6 @@ Messages are delivered via the filesystem:
 
 | Trigger | Workflow | Description |
 |:--------|:---------|:------------|
-| \`/handoff\` | handoff | Delegate tasks to external agents |
-| \`/handoff-chat\` | handoff-chat | Clipboard/chat delegation workflow |
-| \`/handoff-relay\` | handoff-relay | Execute-now, stage-rest relay workflow |
-| \`/handoff-lead\` | handoff-lead | One-shot lead execution workflow |
 | \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
 | \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
 | \`/accuracy\` | accuracy | High-accuracy solo mode |

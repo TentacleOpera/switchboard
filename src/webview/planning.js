@@ -2833,8 +2833,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Sync antigravity toggle state from JS state
         const modalToggle = document.getElementById('antigravity-toggle-modal');
         modalToggle.checked = !!state.antigravityEnabled;
-        // Render folder list in modal
+        // Render folder list from current state (fast-path for pre-warmed state)
         renderFolderListModal();
+        // Request fresh folder list from backend to ensure sync (catches startup race)
+        vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
     });
 
     // Folder modal close (X button)

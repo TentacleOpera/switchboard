@@ -25,13 +25,18 @@ async function run() {
         'Expected reviewer batch prompt to anchor review against implementation/code and plan requirements.'
     );
     assert.ok(
-        builderSource.includes('Run verification checks (typecheck/tests as applicable) and include results.'),
+        builderSource.includes('Run verification checks (typecheck/tests as applicable) and include results, unless specified otherwise in this prompt.'),
         'Expected reviewer batch prompt to request per-plan review findings/results.'
     );
 
     assert.ok(
         builderSource.includes('Stage 1 (Grumpy): adversarial findings'),
         'Expected reviewer prompt to include Grumpy adversarial critique instructions.'
+    );
+
+    assert.ok(
+        builderSource.includes('unless specified otherwise in this prompt'),
+        'Expected reviewer verification instruction to include conditional override clause for skipTests/skipCompilation add-ons.'
     );
 
     console.log('autoban reviewer prompt regression test passed');

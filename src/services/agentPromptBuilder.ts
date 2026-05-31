@@ -93,8 +93,6 @@ export interface PromptBuilderOptions {
     designDocLink?: string;
     /** When present, the full pre-fetched Notion page content to embed verbatim. Takes precedence over designDocLink. */
     designDocContent?: string;
-    /** When true, planner produces separate Routine and Complex plan files. */
-    splitPlan?: boolean;
     /** Per-role prompt customisations loaded from state.json. */
     defaultPromptOverrides?: Partial<Record<string, DefaultPromptOverride>>;
     /** The absolute path to the workspace root. Used for workspace type detection and working directory resolution. */
@@ -312,7 +310,6 @@ export function buildKanbanBatchPrompt(
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
     const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? false;
-    const splitPlan = options?.splitPlan ?? false;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
     const sourceColumnLabel = options?.sourceColumnLabel;
@@ -416,9 +413,6 @@ export function buildKanbanBatchPrompt(
         if (dependencyCheckEnabled) {
             plannerBase += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
         }
-        if (splitPlan) {
-            plannerBase += '\n\n' + SPLIT_PLAN_DIRECTIVE;
-        }
         if (skipCompilation) {
             plannerBase += '\n\n' + SKIP_COMPILATION_DIRECTIVE;
         }
@@ -464,7 +458,7 @@ export function buildKanbanBatchPrompt(
 2. Stage 1 (Grumpy): adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT), in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical).
 3. Stage 2 (Balanced): synthesize Stage 1 into actionable fixes — what to keep, what to fix now, what can defer.
 4. Apply code fixes for valid CRITICAL/MAJOR findings.
-5. Run verification checks (typecheck/tests as applicable) and include results.
+5. Run verification checks (typecheck/tests as applicable) and include results, unless specified otherwise in this prompt.
 6. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
 
 CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.`;
@@ -949,8 +943,18 @@ After ensuring the plan has a Complexity Audit, apply the following directive:
 
 STEP 3: Dispatch Instructions (for the USER, not automated)
 After creating both files:
-- Manually drag the original file (Complex) to the Lead Coder column
-- Manually drag the _routine.md file to the Coder column
+1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
+   a. Read workspace config:
+      WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
+      DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
+      [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
+   b. Run SQL UPDATE using the workspace-root-relative path:
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID';"
+   c. Verify: sqlite3 "$DB_PATH" "SELECT changes();"
+      - If output is 1: success (card moved to Planned column)
+      - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
+2. Manually drag the original file (Complex) to the Lead Coder column
+3. Manually drag the _routine.md file to the Coder column
 
 Create both files in the same directory as the original plan.`
             : `You are a Plan Splitter Agent.
@@ -961,8 +965,18 @@ Apply the following directive:
 
 STEP 2: Dispatch Instructions (for the USER, not automated)
 After creating both files:
-- Manually drag the original file (Complex) to the Lead Coder column
-- Manually drag the _routine.md file to the Coder column
+1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
+   a. Read workspace config:
+      WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
+      DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
+      [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
+   b. Run SQL UPDATE using the workspace-root-relative path:
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID';"
+   c. Verify: sqlite3 "$DB_PATH" "SELECT changes();"
+      - If output is 1: success (card moved to Planned column)
+      - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
+2. Manually drag the original file (Complex) to the Lead Coder column
+3. Manually drag the _routine.md file to the Coder column
 
 Create both files in the same directory as the original plan.`;
 
@@ -1118,7 +1132,6 @@ export function buildCustomAgentPrompt(
     if (addons?.complexityScoringSkill) {
         prompt += `\n\n${COMPLEXITY_SCORING_DIRECTIVE}`;
     }
-    if (addons?.splitPlan) prompt += '\n\n' + SPLIT_PLAN_DIRECTIVE;
 
     if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
 

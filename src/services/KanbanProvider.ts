@@ -137,6 +137,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _kanbanOrderOverrides: Record<string, number>;
     private _taskViewerProvider?: TaskViewerProvider;
     private _worktreeModeEnabledMap = new Map<string, boolean>();
+    private _mergeColumnCheckCache = new Map<string, boolean | null>();
     private _repoScopeFilter: string | null = null;
     private _projectFilter: string | null = null;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
@@ -384,13 +385,46 @@ export class KanbanProvider implements vscode.Disposable {
 
 
 
-    private _buildKanbanColumns(
+    /**
+     * Check if there are any active plans in the MERGE column for the current workspace.
+     * Used to determine whether to show the MERGE column even when worktree mode is disabled.
+     * Returns false on any error (conservative — if we can't check, don't show the column).
+     */
+    private async _hasPlansInMergeColumn(workspaceRoot: string): Promise<boolean> {
+        const cached = this._mergeColumnCheckCache.get(workspaceRoot);
+        if (cached !== null && cached !== undefined) { return cached; }
+        try {
+            const db = this._getKanbanDb(workspaceRoot);
+            if (!db || !await db.ensureReady()) {
+                this._mergeColumnCheckCache.set(workspaceRoot, false);
+                return false;
+            }
+            const workspaceId = await db.getWorkspaceId();
+            if (!workspaceId) {
+                this._mergeColumnCheckCache.set(workspaceRoot, false);
+                return false;
+            }
+            const plans = await db.getAllPlans(workspaceId);
+            const result = plans.some(plan => plan.kanbanColumn === 'MERGE');
+            this._mergeColumnCheckCache.set(workspaceRoot, result);
+            return result;
+        } catch {
+            this._mergeColumnCheckCache.set(workspaceRoot, false);
+            return false;
+        }
+    }
+
+    private async _buildKanbanColumns(
         customAgents: CustomAgentConfig[],
         customKanbanColumns: CustomKanbanColumnConfig[] = []
-    ): KanbanColumnDefinition[] {
+    ): Promise<KanbanColumnDefinition[]> {
         const columns = buildKanbanColumns(customAgents, customKanbanColumns, { orderOverrides: this._getEffectiveKanbanOrderOverrides() });
         const workspaceRoot = this._currentWorkspaceRoot;
-        if (workspaceRoot && this._worktreeModeEnabledMap.get(workspaceRoot)) {
+        // Show MERGE column if worktree mode is enabled OR if there are existing plans in MERGE.
+        // This prevents plans from disappearing when the user disables worktree mode.
+        const worktreeEnabled = workspaceRoot && this._worktreeModeEnabledMap.get(workspaceRoot);
+        const hasMergePlans = workspaceRoot ? await this._hasPlansInMergeColumn(workspaceRoot) : false;
+        if (worktreeEnabled || hasMergePlans) {
             const reviewerIdx = columns.findIndex(col => col.id === 'CODE REVIEWED');
             const insertIdx = reviewerIdx !== -1 ? reviewerIdx + 1 : columns.length - 1;
             columns.splice(insertIdx, 0, {
@@ -1080,6 +1114,9 @@ export class KanbanProvider implements vscode.Disposable {
             this._calculateBlockingDependencies(cards);
             this._lastCards = cards;
 
+            // Invalidate MERGE column check cache on each refresh
+            this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+
             // Build columns (with fallback to defaults)
             let columns;
             let visibleAgents: Record<string, boolean> = {};
@@ -1088,11 +1125,11 @@ export class KanbanProvider implements vscode.Disposable {
                     this._getCustomAgents(resolvedWorkspaceRoot),
                     this._getCustomKanbanColumns(resolvedWorkspaceRoot)
                 ]);
-                columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+                columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
                 visibleAgents = await this._getVisibleAgents(resolvedWorkspaceRoot);
                 columns = this._filterDynamicColumns(columns, visibleAgents, cards);
             } catch {
-                columns = this._buildKanbanColumns([]);
+                columns = await this._buildKanbanColumns([]);
             }
 
             const nextColumnsSignature = this._columnsSignature(columns);
@@ -1291,7 +1328,7 @@ export class KanbanProvider implements vscode.Disposable {
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        return this._buildKanbanColumns(customAgents, customKanbanColumns).map((column) => column.id);
+        return (await this._buildKanbanColumns(customAgents, customKanbanColumns)).map((column) => column.id);
     }
 
     private _setClickUpSyncWarning(workspaceRoot: string, result?: ClickUpSyncResult): void {
@@ -1740,6 +1777,9 @@ export class KanbanProvider implements vscode.Disposable {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) return;
 
+        // Invalidate MERGE column check cache on each refresh
+        this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+
         const completedLimit = Math.max(1, Math.min(
             vscode.workspace.getConfiguration('switchboard').get<number>('kanban.completedLimit', 100) ?? 100,
             500
@@ -1750,7 +1790,7 @@ export class KanbanProvider implements vscode.Disposable {
                 this._getCustomAgents(resolvedWorkspaceRoot),
                 this._getCustomKanbanColumns(resolvedWorkspaceRoot)
             ]);
-            const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+            const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
             const workspaceId = await this._readWorkspaceId(resolvedWorkspaceRoot);
 
             let cards: KanbanCard[] = [];
@@ -1914,12 +1954,15 @@ export class KanbanProvider implements vscode.Disposable {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) return;
 
+        // Invalidate MERGE column check cache on each refresh
+        this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+
         try {
             const [customAgents, customKanbanColumns] = await Promise.all([
                 this._getCustomAgents(resolvedWorkspaceRoot),
                 this._getCustomKanbanColumns(resolvedWorkspaceRoot)
             ]);
-            const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+            const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
             // Filter out ghost plans: plan files that don't exist in this workspace.
             // Only filter ACTIVE plans — completed plans may have been archived (file moved)
@@ -2371,7 +2414,6 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
             resolvedOptions.dependencyCheckEnabled = promptsConfig.dependencyCheckEnabled;
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
-            resolvedOptions.splitPlan = promptsConfig.splitPlan;
 
             const designDocEnabled = promptsConfig.designDocEnabled;
             const designDocLink = designDocEnabled ? (promptsConfig.designDocLink || '').trim() : undefined;
@@ -2463,7 +2505,6 @@ export class KanbanProvider implements vscode.Disposable {
             designDocEnabled: plannerConfig?.addons?.designDoc ?? config.get<boolean>('planner.designDocEnabled', false),
             designDocLink: config.get<string>('planner.designDocLink', ''),
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
-            splitPlan: plannerConfig?.addons?.splitPlan ?? false,
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
                 lead: leadConfig?.addons?.skipCompilation ?? false,
@@ -2537,17 +2578,17 @@ export class KanbanProvider implements vscode.Disposable {
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'default' ? false : (codeResearcherConfig?.addons?.useSubagents ?? false),
             },
             noSubagentsByRole: {
-                planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                lead: leadConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                coder: coderConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                reviewer: reviewerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                tester: testerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                intern: internConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
-                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
+                lead: leadConfig?.addons?.subagentPolicy === 'noSubagents',
+                coder: coderConfig?.addons?.subagentPolicy === 'noSubagents',
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'noSubagents',
+                tester: testerConfig?.addons?.subagentPolicy === 'noSubagents',
+                intern: internConfig?.addons?.subagentPolicy === 'noSubagents',
+                analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents',
+                researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents',
+                splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents',
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
@@ -2881,7 +2922,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         ]);
         const visibleAgents = await this._getVisibleAgents(workspaceRoot);
         const acceptanceTesterActive = visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
-        const allColumns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+        const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
         let resolvedWorktreeId = planWorktreeId;
         if (!resolvedWorktreeId && sessionId) {
@@ -2947,18 +2988,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return null;
     }
 
-    /** Determine the appropriate workflow name for advancing from a given column. */
-    private async _workflowForColumn(column: string, workspaceRoot: string): Promise<string | null> {
-        switch (column) {
-            case 'CREATED': return 'improve-plan';
-            case 'PLAN REVIEWED': return 'handoff';
-            case 'LEAD CODED': return 'review';
-            case 'CODER CODED': return 'review';
-            case 'CODE REVIEWED':
-                return await this._isAcceptanceTesterActive(workspaceRoot) ? 'tester-pass' : null;
-            default: return 'handoff';
-        }
-    }
+
 
     /** Generate a prompt appropriate for the given source column and cards. */
     private async _generatePromptForColumn(
@@ -2971,7 +3001,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        const allColumns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+        const allColumns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
 
         // When advancing to a destination column, the prompt should be for the
         // DESTINATION agent who receives the plans, not the source column agent.
@@ -3089,7 +3119,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         return eligible;
     }
 
-    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string, workspaceRoot?: string): Promise<string[]> {
+    private async _advanceSessionsInColumn(sessionIds: string[], expectedColumn: string, workflow: string | undefined, workspaceRoot?: string): Promise<string[]> {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot || sessionIds.length === 0) {
             return [];
@@ -3184,7 +3214,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._getCustomAgents(workspaceRoot),
             this._getCustomKanbanColumns(workspaceRoot)
         ]);
-        const column = this._buildKanbanColumns(customAgents, customKanbanColumns)
+        const column = (await this._buildKanbanColumns(customAgents, customKanbanColumns))
             .find((entry) => entry.id === targetColumn);
         if (!column) {
             return null;
@@ -3252,7 +3282,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             this._getCustomAgents(resolvedWorkspaceRoot),
             this._getCustomKanbanColumns(resolvedWorkspaceRoot)
         ]);
-        const columns = this._buildKanbanColumns(customAgents, customKanbanColumns);
+        const columns = await this._buildKanbanColumns(customAgents, customKanbanColumns);
         const validIds = new Set(columns.map((column) => column.id));
 
         const nextOrderOverrides = Object.fromEntries(
@@ -4901,7 +4931,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, repoScopeMap);
                 const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
-                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff', workspaceRoot);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', undefined, workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
@@ -5325,6 +5355,33 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
                 await this._refreshBoard(workspaceRoot);
                 vscode.window.showInformationMessage(`Dispatched ${dispatchedCount} plans to Jules.`);
+                break;
+            }
+            case 'splitterSelected': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot || !Array.isArray(msg.sessionIds) || msg.sessionIds.length === 0) {
+                    vscode.window.showWarningMessage('Please select at least one plan to split.');
+                    break;
+                }
+                const visibleAgents = await this._getVisibleAgents(workspaceRoot);
+                if (visibleAgents.splitter === false) {
+                    vscode.window.showWarningMessage('Splitter agent is currently disabled in setup.');
+                    break;
+                }
+                const eligibleSessionIds = await this._getEligibleSessionIds(msg.sessionIds, 'PLAN REVIEWED', workspaceRoot);
+                if (eligibleSessionIds.length === 0) {
+                    vscode.window.showWarningMessage('No selected plans are currently in the Planned column.');
+                    break;
+                }
+                await vscode.commands.executeCommand(
+                    'switchboard.triggerBatchAgentFromKanban',
+                    'splitter',
+                    eligibleSessionIds,
+                    undefined,
+                    workspaceRoot
+                );
+                await this._refreshBoard(workspaceRoot);
+                vscode.window.showInformationMessage(`Dispatched ${eligibleSessionIds.length} plan(s) to Splitter.`);
                 break;
             }
             case 'completePlan': {
@@ -6684,7 +6741,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Determine role from target column
         let targetRole: string | null = null;
         if (targetColumn) {
-            const columnDefs = this._buildKanbanColumns(
+            const columnDefs = await this._buildKanbanColumns(
                 await this._getCustomAgents(workspaceRoot),
                 await this._getCustomKanbanColumns(workspaceRoot)
             );
@@ -6889,12 +6946,15 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     }
                     await execFileAsync('git', ['branch', '-D', worktree.branch], { cwd: workspaceRoot });
                     await db.deleteWorktree(worktree.id);
-                    await db.updatePlanWorktreeStatus(sessionId, 'deleted');
                 } catch (e: any) {
                     console.warn(`Failed to cleanup worktree: ${e.message}`);
                 }
             }
-            // Only clear worktree association when user chose to clean up
+            // Always update status to 'deleted' when user chose Clean Up, even if
+            // worktree record was already gone from DB or git operations failed
+            await db.updatePlanWorktreeStatus(sessionId, 'deleted');
+            // Clear worktree_id: needed when worktree record was missing (deleteWorktree not called)
+            // When deleteWorktree was called above, this is a no-op (it already NULLs worktree_id)
             await db.updatePlanWorktree(sessionId, null);
         }
         // If user chose "Keep" or dismissed the dialog, preserve the worktree association
