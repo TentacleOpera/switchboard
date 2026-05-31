@@ -132,8 +132,8 @@
             border-radius: 2px;
         }
         .kanban-sub-bar .strip-icon-btn img {
-            width: 16px;
-            height: 16px;
+            width: 14px;
+            height: 14px;
         }
         .kanban-sub-bar .strip-icon-btn:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
@@ -273,15 +273,15 @@
         }
 
         .strip-icon-btn {
-            width: 32px;
-            height: 32px;
-            padding: 4px;
+            width: 20px;
+            height: 20px;
+            padding: 2px;
             display: flex;
             align-items: center;
             justify-content: center;
             border: 1px solid var(--border-color);
             background: var(--panel-bg2);
-            border-radius: 4px;
+            border-radius: 2px;
             cursor: pointer;
             transition: all 0.15s;
             flex-shrink: 0;
@@ -293,8 +293,8 @@
         }
 
         .strip-icon-btn img {
-            width: 24px;
-            height: 24px;
+            width: 14px;
+            height: 14px;
             object-fit: contain;
             pointer-events: none;
         }
@@ -2048,10 +2048,6 @@
             100% { opacity: 0; }
         }
 
-        #status-message.flashing {
-            animation: statusFlash 3s ease-in-out forwards;
-        }
-
         .col-merge-btn {
             background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
             border: 1px solid var(--border-color);
@@ -2115,16 +2111,18 @@
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
+            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
+                <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
+            </button>
+            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+                <img src="{{ICON_28}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
+            </button>
             <button id="btn-delete-project" class="strip-btn" data-tooltip="Select a project to delete" disabled>🗑</button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
 
             <!-- Right Side: Automation and view controls -->
-            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                <img src="{{ICON_28}}" alt="CLI Triggers" style="width: 24px; height: 24px;">
-            </button>
-
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
                 <option value="off">Pair Programming: Off</option>
                 <option value="cli-cli">CLI Lead + CLI Coder</option>
@@ -2132,10 +2130,6 @@
                 <option value="ide-cli">IDE Lead + CLI Coder</option>
                 <option value="ide-ide">IDE Lead + IDE Coder</option>
             </select>
-
-            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
-                <img src="{{ICON_41}}" alt="Collapse Coders" style="width: 24px; height: 24px;">
-            </button>
 
             <!-- Hidden elements (unchanged) -->
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
@@ -2148,7 +2142,7 @@
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
             <div class="kanban-sub-bar">
                 <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 16px; height: 16px;">
+                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 14px; height: 14px;">
                 </button>
                 <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
@@ -3341,8 +3335,8 @@
 
         // Icon URIs injected by extension
         const ICON_AUTOBAN = '{{ICON_22}}';           // Play/automation icon
-        const ICON_CLI_TRIGGERS = '{{ICON_28}}';      // Toggle-like icon
-        const ICON_COLLAPSE_CODERS = '{{ICON_41}}';   // Collapse/expand icon
+        const ICON_CLI_TRIGGERS = '{{ICON_CLI}}';      // Toggle-like icon
+        const ICON_COLLAPSE_CODERS = '{{ICON_28}}';   // Collapse/expand icon
 
         const ICON_MOVE_SELECTED = '{{ICON_53}}';
         const ICON_MOVE_ALL = '{{ICON_54}}';
@@ -5877,8 +5871,7 @@
             return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
         }
 
-        /** Update autoban timer badges inline in the controls strip. */
-        /** Update autoban timer badges inline in the controls strip. */
+        /** Update autoban timer badges inline in the sub-bar. */
         function updateAutobanIndicators(forceRebuild) {
             const container = document.getElementById('autoban-timers-inline');
             if (!container) { updateAutobanButtonState(); return; }
