@@ -5037,7 +5037,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _autobanPoolRoles(customAgentRoles?: string[]): string[] {
-        const builtIn = ['planner', 'coder', 'lead', 'reviewer'];
+        const builtIn = ['planner', 'coder', 'lead', 'reviewer', 'intern'];
         if (!customAgentRoles || customAgentRoles.length === 0) {
             return builtIn;
         }
@@ -5081,6 +5081,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'coder': return 'Coder';
             case 'lead': return 'Lead Coder';
             case 'reviewer': return 'Reviewer';
+            case 'intern': return 'Intern';
             default: return role.trim() || 'Agent';
         }
     }
@@ -5373,6 +5374,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 } else {
                     rolesToCheck.add('coder');
                     rolesToCheck.add('lead');
+                    rolesToCheck.add('intern');
                 }
                 continue;
             }
@@ -5872,6 +5874,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const terminalPools = msg.terminalPools || this._singleColumnAutobanState.terminalPools || {};
             const sourceColumn = msg.sourceColumn || this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
             const sourceColumnRole = columnToPromptRole(sourceColumn) || undefined;
+            const routingMode = msg.routingMode || this._autobanState.routingMode || 'dynamic';
 
             this._singleColumnAutobanState = {
                 enabled,
@@ -5896,7 +5899,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 batchSize,
                 complexityFilter,
                 terminalPools,
-                routingMode: 'dynamic'
+                routingMode
             });
 
             if (enabled) {
@@ -6066,20 +6069,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return true;
     }
 
-    /** Column-to-role mapping for Autoban dispatches. */
+    /** Column-to-role mapping for Autoban dispatches.
+     *  Delegates unconditionally to columnToPromptRole to avoid a dual source-of-truth.
+     *  columnToPromptRole handles all built-in columns and custom_agent_* columns;
+     *  returns null for unmapped custom columns. */
     private _autobanColumnToRole(column: string): string | null {
-        switch (column) {
-            case 'CREATED': return 'planner';
-            case 'PLAN REVIEWED': return 'lead';
-            case 'INTERN CODED':
-            case 'LEAD CODED':
-            case 'CODER CODED':
-            case 'CODED':
-                return 'reviewer';
-            default:
-                // Dynamic resolution for custom columns
-                return columnToPromptRole(column);
-        }
+        return columnToPromptRole(column);
     }
 
     private _autobanMatchesComplexityFilter(
