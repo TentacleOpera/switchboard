@@ -27,21 +27,9 @@ import {
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
 import {
-    buildKanbanBatchPrompt,
     BatchPromptPlan,
     columnToPromptRole,
-    resolveWorkingDir,
-    buildPromptDispatchContext,
-    FOCUS_DIRECTIVE,
-    GIT_PROHIBITION_DIRECTIVE,
-    INLINE_CHALLENGE_DIRECTIVE,
-    SPLIT_PLAN_DIRECTIVE,
-    DEPENDENCY_CHECK_DIRECTIVE,
-    ADVANCED_REVIEWER_DIRECTIVE,
-    AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE,
-    DEEP_RESEARCH_DIRECTIVE,
-    detectWorkspaceType,
-    normalizeNewlines
+    resolveWorkingDir
 } from './agentPromptBuilder';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
@@ -1464,7 +1452,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _codedColumnForRole(role: string): string | null {
         switch (role) {
             case 'lead':
-            case 'team':
                 return 'LEAD CODED';
             case 'coder':
             case 'jules':
@@ -1474,12 +1461,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             default:
                 return null;
         }
-    }
-
-    private _codedColumnForDispatchRoles(roles: string[]): string {
-        if (roles.includes('lead')) return 'LEAD CODED';
-        if (roles.includes('intern')) return 'INTERN CODED';
-        return 'CODER CODED';
     }
 
     private _isCompletedCodingColumn(column: string | null | undefined): boolean {
@@ -1501,7 +1482,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'coder':
             case 'intern':
             case 'jules':
-            case 'team':
                 return this._codedColumnForRole(role);
             case 'reviewer':
                 return 'CODE REVIEWED';
@@ -2327,20 +2307,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             return false;
         }
 
+        if (!this._kanbanProvider) {
+            return false;
+        }
         const validPlans = await this._resolveKanbanDispatchPlans(sessionIds, resolvedWorkspaceRoot);
         if (validPlans.length === 0) {
             return false;
         }
 
-        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'].includes(role);
-        const [customAgents, prompt] = await Promise.all([
-            this.getCustomAgents(resolvedWorkspaceRoot),
-            isBuiltInRole ? this._buildKanbanBatchPrompt(role, validPlans, options.instruction, resolvedWorkspaceRoot) : Promise.resolve('')
-        ]);
-        const customAgent = findCustomAgentByRole(customAgents, role);
-        const messagePayload = customAgent
-            ? this.buildCustomAgentPrompt(validPlans, customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot)
-            : this._appendAdditionalInstructions(prompt, undefined, options.additionalInstructions);
+        const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction: options.instruction });
+        const messagePayload = this._appendAdditionalInstructions(prompt, undefined, options.additionalInstructions);
 
         await vscode.env.clipboard.writeText(messagePayload);
 
@@ -2700,12 +2676,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : (sessionIds[0] ? await this._resolveWorkspaceRootForSession(sessionIds[0]) : null);
-        if (!resolvedWorkspaceRoot) return;
+        if (!resolvedWorkspaceRoot || !this._kanbanProvider) return;
         const validPlans = await this._resolveKanbanDispatchPlans(sessionIds, resolvedWorkspaceRoot);
         if (validPlans.length === 0) {
             return;
         }
-        const prompt = await this._buildKanbanBatchPrompt('reviewer', validPlans, undefined, resolvedWorkspaceRoot);
+        const prompt = await this._kanbanProvider.generateUnifiedPrompt('reviewer', validPlans, resolvedWorkspaceRoot);
         await vscode.env.clipboard.writeText(prompt);
         vscode.window.showInformationMessage(`Merge prompt copied for ${validPlans.length} plans.`);
     }
@@ -2727,7 +2703,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : await this._resolveWorkspaceRootForSession(sessionIds[0]);
-        if (!resolvedWorkspaceRoot) { return false; }
+        if (!resolvedWorkspaceRoot || !this._kanbanProvider) { return false; }
         await this._activateWorkspaceContext(resolvedWorkspaceRoot);
 
         const targetAgent = String(targetTerminalOverride || '').trim() || await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
@@ -2752,15 +2728,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const workflowName = this._workflowNameForDispatchRole(role, instruction);
-        const isBuiltInRole = ['planner', 'reviewer', 'tester', 'lead', 'coder', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter', 'gatherer'].includes(role);
-        const [customAgents, prompt] = await Promise.all([
-            this.getCustomAgents(resolvedWorkspaceRoot),
-            isBuiltInRole ? this._buildKanbanBatchPrompt(role, validPlans, instruction, resolvedWorkspaceRoot) : Promise.resolve('')
-        ]);
-        const customAgent = findCustomAgentByRole(customAgents, role);
-        const finalPrompt = customAgent
-            ? this.buildCustomAgentPrompt(validPlans, customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot)
-            : this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
+        const prompt = await this._kanbanProvider.generateUnifiedPrompt(role, validPlans, resolvedWorkspaceRoot, { instruction });
+        const finalPrompt = this._appendAdditionalInstructions(prompt, undefined, options?.additionalInstructions);
         const targetColumn = options?.targetColumn
             ? this._normalizeLegacyKanbanColumn(options.targetColumn)
             : this._targetColumnForRole(role);
@@ -2805,13 +2774,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (role === 'lead' && this._autobanState.pairProgrammingMode !== 'off') {
                 const coderUsesIde = this._autobanState.pairProgrammingMode === 'cli-ide'
                     || this._autobanState.pairProgrammingMode === 'ide-ide';
-                const coderConfig: any = this.getSetting('switchboard.prompts.roleConfig_coder', undefined);
-                const coderPrompt = buildKanbanBatchPrompt('coder', validPlans, {
+                const coderPrompt = await this._kanbanProvider.generateUnifiedPrompt('coder', validPlans, resolvedWorkspaceRoot, {
                     pairProgrammingEnabled: true,
-                    accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled(),
-                    defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: resolvedWorkspaceRoot,
-                    useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? false
+                    accurateCodingEnabled: coderUsesIde ? false : this._isAccurateCodingEnabled()
                 });
                 if (coderUsesIde) {
                     await vscode.env.clipboard.writeText(coderPrompt);
@@ -3151,6 +3116,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async handleGetDefaultPromptPreviews(): Promise<Record<string, string>> {
+        if (!this._kanbanProvider) {
+            return {};
+        }
+        const workspaceRoot = this._resolveWorkspaceRoot() || '';
         const roles: string[] = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst'];
         const placeholder: BatchPromptPlan = {
             topic: '[your selected plans]',
@@ -3158,7 +3127,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         };
         const previews: Record<string, string> = {};
         for (const previewRole of roles) {
-            previews[previewRole] = buildKanbanBatchPrompt(previewRole, [placeholder]);
+            previews[previewRole] = await this._kanbanProvider.generateUnifiedPrompt(previewRole, [placeholder], workspaceRoot);
         }
         return previews;
     }
@@ -6178,172 +6147,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
-    private async _buildKanbanBatchPrompt(
-        role: string,
-        plans: BatchPromptPlan[],
-        instruction?: string,
-        workspaceRoot?: string
-    ): Promise<string> {
-        const { includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
-        const accurateCodingEnabled = this._isAccurateCodingEnabled();
-        const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
-        const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
-        const splitPlan = this._isSplitPlanEnabled();
-        const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
-        const designDocEnabled = this._isDesignDocEnabled();
-        const designDocLink = designDocEnabled ? this._getDesignDocLink() : undefined;
-        const designDocContent = (designDocEnabled && workspaceRoot) ? (await this._getDesignDocContent(workspaceRoot)) || undefined : undefined;
 
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
-        const plannerWorkflowPath = plannerConfig?.workflowFilePath || vscode.workspace.getConfiguration('switchboard').get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md');
-
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
-        const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
-        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? false;
-        const gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
-        const ticketUpdateMode = roleConfig?.addons?.ticketUpdateMode
-            ?? (roleConfig?.addons?.ticketUpdateEnabled === true ? 'comment-only'
-                : roleConfig?.addons?.ticketUpdateEnabled === false ? 'disabled'
-                : 'disabled');
-        const complexityScoringSkill = roleConfig?.addons?.complexityScoringSkill ?? true;
-
-        return buildKanbanBatchPrompt(role, plans, {
-            instruction,
-            includeInlineChallenge,
-            accurateCodingEnabled,
-            pairProgrammingEnabled,
-            aggressivePairProgramming,
-            splitPlan,
-            advancedReviewerEnabled,
-            dependencyCheckEnabled: this._isDependencyCheckEnabled(),
-            plannerWorkflowPath,
-            designDocLink,
-            designDocContent,
-            defaultPromptOverrides,
-            workspaceRoot,
-            gitProhibitionEnabled,
-            switchboardSafeguardsEnabled,
-            useSubagentsEnabled,
-            researchDepth: roleConfig?.researchComplexity || 'deep',
-            saveToLocalDocs: role === 'researcher' ? (roleConfig?.saveToLocalDocs ?? false) : undefined,
-            localDocsPath: role === 'researcher' ? vscode.workspace.getConfiguration('switchboard').get<string[]>('research.localFolderPaths', [])[0] ?? undefined : undefined,
-            routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null),
-            ticketUpdateMode,
-            complexityScoringSkill,
-        });
-    }
-
-    private static readonly COMPLEXITY_SCORING_DIRECTIVE =
-        `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
-        `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
-        `### Routine and ### Complex / Risky subsections. ` +
-        `Classify each implementation step by complexity before splitting.`;
-
-    private static readonly TICKET_UPDATE_DIRECTIVE =
-        `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-        `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-        `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
-        `Do not modify the ticket description. Only add a comment. ` +
-        `If no ticket number is found, skip the ticket update and notify the user.`;
-
-    private static readonly TICKET_REFINE_DIRECTIVE =
-        `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-        `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-        `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
-        `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
-        `If no ticket number is found, skip the ticket update and notify the user.`;
-
-    private static readonly TICKET_RESEARCH_REFINE_DIRECTIVE =
-        `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
-        `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
-        `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
-        `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
-        `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
-        `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
-        `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
-        `If no ticket number is found, skip the ticket update and notify the user.`;
-
-    private buildCustomAgentPrompt(
-        plans: BatchPromptPlan[],
-        promptInstructions?: string,
-        addons?: CustomAgentAddons,
-        workspaceRoot?: string
-    ): string {
-        const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
-        const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
-
-        // Custom workflow: prepend read-workflow instruction
-        if (addons?.customWorkflowPath) {
-            return `Read ${addons.customWorkflowPath} and follow it step-by-step.\n\n` +
-                this.buildCustomAgentPrompt(plans, promptInstructions,
-                    { ...addons, customWorkflowPath: undefined }, workspaceRoot);
-        }
-
-        // Build safeguards block (batch rules + focus directive)
-        const safeguardsBlock = addons?.switchboardSafeguards
-            ? (() => {
-                const parallelInstruction = plans.length > 1
-                    ? (addons?.useSubagents !== false
-                        ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
-                        : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
-                    : '';
-                return `${parallelInstruction}CRITICAL INSTRUCTIONS:
-1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
-2. Execute each plan fully before moving to the next (if sequential).
-3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n${FOCUS_DIRECTIVE}`;
-            })()
-            : `${FOCUS_DIRECTIVE}`;
-
-        let prompt = `${dispatchContextPrefix}${safeguardsBlock}\n\nPLANS TO PROCESS:\n${planList}`;
-
-        // Apply directives in defined order
-        if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;
-        if (addons?.workspaceTypeDetection && workspaceRoot) {
-            const { isMultiRepo, subRepoNames } = detectWorkspaceType(workspaceRoot);
-            prompt += isMultiRepo
-                ? '\n\nWORKSPACE TYPE: multi-repo. Sub-repos: ' + subRepoNames.join(', ') + '.'
-                : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
-        }
-        if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
-        if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agent/workflows/accuracy.md step-by-step.`;
-        if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
-        if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
-        if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
-        if (addons?.dependencyCheckEnabled) prompt += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
-        if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
-            const directive = addons.ticketUpdateMode === 'refine-ticket'
-                ? TaskViewerProvider.TICKET_REFINE_DIRECTIVE
-                : addons.ticketUpdateMode === 'research-and-refine'
-                    ? TaskViewerProvider.TICKET_RESEARCH_REFINE_DIRECTIVE
-                    : TaskViewerProvider.TICKET_UPDATE_DIRECTIVE;
-            prompt += `\n\n${directive}`;
-        }
-        if (addons?.complexityScoringSkill) {
-            prompt += `\n\n${TaskViewerProvider.COMPLEXITY_SCORING_DIRECTIVE}`;
-        }
-        if (addons?.splitPlan) prompt += '\n\n' + SPLIT_PLAN_DIRECTIVE;
-
-        if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
-
-        if (addons?.designDocContent) {
-            prompt += `\n\nDESIGN DOC REFERENCE (pre-fetched):\n${addons.designDocContent}`;
-        } else if (addons?.designDocLink) {
-            prompt += `\n\nDESIGN DOC REFERENCE:\n${addons.designDocLink}`;
-        }
-
-        if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;
-
-        // Prompt override applied LAST
-        if (addons?.defaultPromptOverride) {
-            const { mode, text } = addons.defaultPromptOverride;
-            if (mode === 'prepend') prompt = `${text}\n\n${prompt}`;
-            else if (mode === 'append') prompt = `${prompt}\n\n${text}`;
-            else if (mode === 'replace') prompt = `${text}\n\nPLANS TO PROCESS:\n${planList}`;
-        }
-
-        return normalizeNewlines(prompt);
-    }
 
     private async _getDefaultPromptOverrides(
         workspaceRoot?: string
@@ -12817,6 +12621,9 @@ What would you like to find?`;
             }
             effectiveColumn = this._normalizeLegacyKanbanColumn(effectiveColumn || 'CREATED');
 
+            if (!this._kanbanProvider) {
+                return false;
+            }
             const customAgents = await this.getCustomAgents(resolvedWorkspaceRoot);
 
             // For PLAN REVIEWED, use complexity-based role selection
@@ -12832,38 +12639,14 @@ What would you like to find?`;
             const plan: BatchPromptPlan = { topic, absolutePath: planFileAbsolute, workingDir };
             const copyInstruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
             const { baseInstruction: resolvedInstruction } = this._getPromptInstructionOptions(role, copyInstruction);
-            const includeInlineChallenge = this._isLeadInlineChallengeEnabled();
-            const accurateCodingEnabled = this._isAccurateCodingEnabled();
-            const pairProgrammingEnabled = this._autobanState.pairProgrammingMode !== 'off';
-            const aggressivePairProgramming = this._isAggressivePairProgrammingEnabled();
-            const splitPlan = this._isSplitPlanEnabled();
-            const advancedReviewerEnabled = this._isAdvancedReviewerEnabled();
 
-            const customAgent = findCustomAgentByRole(customAgents, effectiveColumn);
-
-            // Get role config for useSubagentsEnabled
-            const clipboardRoleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
 
             // Use standard prompt generation
 
-            let textToCopy: string;
-            if (customAgent) {
-                textToCopy = this.buildCustomAgentPrompt([plan], customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot);
-            } else {
-                textToCopy = buildKanbanBatchPrompt(role, [plan], {
-                    instruction: resolvedInstruction,
-                    includeInlineChallenge,
-                    accurateCodingEnabled: false, // Always false for clipboard prompts
-                    pairProgrammingEnabled,
-                    aggressivePairProgramming,
-                    splitPlan,
-                    advancedReviewerEnabled,
-                    designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
-                    defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: resolvedWorkspaceRoot,
-                    useSubagentsEnabled: clipboardRoleConfig?.addons?.useSubagents ?? false
-                });
-            }
+            const textToCopy = await this._kanbanProvider.generateUnifiedPrompt(role, [plan], resolvedWorkspaceRoot, {
+                instruction: resolvedInstruction,
+                accurateCodingEnabled: false
+            });
 
             await vscode.env.clipboard.writeText(textToCopy);
 
@@ -14259,18 +14042,7 @@ What would you like to find?`;
             console.error('Failed to set chat agent role:', e);
         }
     }
-    private _detectPlanBandCoverage(planContent: string): { hasBandA: boolean; hasBandB: boolean } {
-        const splitMatch = planContent.match(/##\s+Task Split([\s\S]*?)(?:\n##\s+|$)/i);
-        const taskSplitContent = splitMatch ? splitMatch[1] : '';
 
-        if (!taskSplitContent.trim()) {
-            return { hasBandA: false, hasBandB: false };
-        }
-
-        const hasBandA = /(?:\bband\s*a\b|\broutine\b)/i.test(taskSplitContent);
-        const hasBandB = /(?:\bband\s*b\b|\bcomplex\b)/i.test(taskSplitContent);
-        return { hasBandA, hasBandB };
-    }
 
     private _isAccurateCodingEnabled(): boolean {
         const coderConfig: any = this.getSetting('switchboard.prompts.roleConfig_coder', undefined);
@@ -14616,7 +14388,7 @@ What would you like to find?`;
         const resolvedWorkspaceRoot = workspaceRoot
             ? this._resolveWorkspaceRoot(workspaceRoot)
             : await this._resolveWorkspaceRootForSession(sessionId);
-        if (!resolvedWorkspaceRoot) {
+        if (!resolvedWorkspaceRoot || !this._kanbanProvider) {
             clearDispatchLock();
             return false;
         }
@@ -14712,121 +14484,7 @@ What would you like to find?`;
             return true;
         }
 
-        // 2. Resolve Target Agent(s)
-        if (role === 'team') {
-            try {
-                const planContent = await fs.promises.readFile(planFileAbsolute, 'utf8');
-                const { hasBandA, hasBandB } = this._detectPlanBandCoverage(planContent);
 
-                const leadAgent = await this._getAgentNameForRole('lead', resolvedWorkspaceRoot);
-                const coderAgent = await this._getAgentNameForRole('coder', resolvedWorkspaceRoot);
-
-                const dispatches: Array<{ role: 'lead' | 'coder'; agent: string; payload: string; metadata: Record<string, any> }> = [];
-                const teamPlan: BatchPromptPlan = { topic: sessionTopic, absolutePath: planFileAbsolute, workingDir };
-                const leadConfig: any = this.getSetting('switchboard.prompts.roleConfig_lead', undefined);
-                const coderConfig: any = this.getSetting('switchboard.prompts.roleConfig_coder', undefined);
-
-                if (!hasBandA && !hasBandB) {
-                    if (!leadAgent) {
-                        vscode.window.showErrorMessage("No agent assigned to role 'lead'. Please assign a terminal first.");
-                        this._view?.webview.postMessage({ type: 'actionTriggered', role: 'team', success: false });
-                        clearDispatchLock();
-                        return false;
-                    }
-                    dispatches.push({
-                        role: 'lead',
-                        agent: leadAgent,
-                        payload: buildKanbanBatchPrompt('lead', [teamPlan], {
-                            defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                            workspaceRoot: resolvedWorkspaceRoot,
-                            gitProhibitionEnabled: leadConfig?.addons?.gitProhibition ?? true,
-                            switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true,
-                            useSubagentsEnabled: leadConfig?.addons?.useSubagents ?? false
-                        }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
-                        metadata: { phase_gate: { enforce_persona: 'lead' } }
-                    });
-                } else {
-                    if (hasBandB && leadAgent) {
-                        dispatches.push({
-                            role: 'lead',
-                            agent: leadAgent,
-                            payload: buildKanbanBatchPrompt('lead', [teamPlan], {
-                                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                                workspaceRoot: resolvedWorkspaceRoot,
-                                gitProhibitionEnabled: leadConfig?.addons?.gitProhibition ?? true,
-                                switchboardSafeguardsEnabled: leadConfig?.addons?.switchboardSafeguards ?? true,
-                                useSubagentsEnabled: leadConfig?.addons?.useSubagents ?? false
-                            }) + `\n\nAdditional Instructions: only do Complex (Band B) work.`,
-                            metadata: { phase_gate: { enforce_persona: 'lead' } }
-                        });
-                    }
-
-                    if (hasBandA && coderAgent) {
-                        dispatches.push({
-                            role: 'coder',
-                            agent: coderAgent,
-                            payload: buildKanbanBatchPrompt('coder', [teamPlan], {
-                                accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                                workspaceRoot: resolvedWorkspaceRoot,
-                                gitProhibitionEnabled: coderConfig?.addons?.gitProhibition ?? true,
-                                switchboardSafeguardsEnabled: coderConfig?.addons?.switchboardSafeguards ?? true,
-                                useSubagentsEnabled: coderConfig?.addons?.useSubagents ?? false
-                            }) + `\n\nAdditional Instructions: only do Routine (Band A) work.`,
-                            metadata: {}
-                        });
-                    }
-                }
-
-                if (dispatches.length === 0) {
-                    vscode.window.showErrorMessage('No eligible agents available for the detected complexity breakdown.');
-                    this._view?.webview.postMessage({ type: 'actionTriggered', role: 'team', success: false });
-                    clearDispatchLock();
-                    return false;
-                }
-
-                for (let i = 0; i < dispatches.length; i++) {
-                    const dispatch = dispatches[i];
-                    await this._dispatchExecuteMessage(resolvedWorkspaceRoot, dispatch.agent, dispatch.payload, dispatch.metadata);
-                    if (i === 0) {
-                        vscode.commands.executeCommand('switchboard.focusTerminalByName', dispatch.agent);
-                    }
-                }
-
-                // Dispatch succeeded — now update runsheet
-                const dispatchedRoles = dispatches.map(dispatch => dispatch.role);
-                const workflowName = dispatchedRoles.includes('lead') ? 'handoff-lead' : 'handoff';
-                await this._updateSessionRunSheet(sessionId, workflowName, undefined, false, resolvedWorkspaceRoot);
-                await this._updateKanbanColumnForSession(
-                    resolvedWorkspaceRoot,
-                    sessionId,
-                    this._codedColumnForDispatchRoles(dispatchedRoles)
-                );
-                this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);   // immediate board refresh
-
-                const summary = dispatches.map(d => `${d.role} (${d.agent})`).join(', ');
-                this._showTemporaryNotification(`Team coding started: ${summary}`);
-                this._view?.webview.postMessage({ type: 'actionTriggered', role: 'team', success: true });
-                await this._logEvent('dispatch', {
-                    event: 'team_dispatch',
-                    role: 'team',
-                    sessionId,
-                    dispatches: dispatches.map(d => ({ role: d.role, agent: d.agent }))
-                }, requestId);
-                return true;
-            } catch (e) {
-                vscode.window.showErrorMessage(`Failed to trigger team action: ${e}`);
-                this._view?.webview.postMessage({ type: 'actionTriggered', role: 'team', success: false });
-                await this._logEvent('dispatch', {
-                    event: 'team_dispatch_failed',
-                    role: 'team',
-                    sessionId,
-                    error: String(e)
-                }, requestId);
-                clearDispatchLock();
-                return false;
-            }
-        }
 
         let targetAgent: string | undefined;
         targetAgent = await this._getAgentNameForRole(role, resolvedWorkspaceRoot);
@@ -14858,14 +14516,11 @@ What would you like to find?`;
         let messagePayload = '';
         const messageMetadata: any = {};
         const teamStrictPrompts = vscode.workspace.getConfiguration('switchboard').get<boolean>('team.strictPrompts');
-        const strictPlannerPrompts = teamStrictPrompts ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.strictPrompts', false);
         const strictReviewPrompts = teamStrictPrompts ?? vscode.workspace.getConfiguration('switchboard').get<boolean>('review.strictPrompts', false);
         const { baseInstruction, includeInlineChallenge } = this._getPromptInstructionOptions(role, instruction);
         const customAgents = await this.getCustomAgents(resolvedWorkspaceRoot);
         const customAgent = findCustomAgentByRole(customAgents, role);
         const roleConfig: any = this.getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
-        const switchboardSafeguardsEnabled = roleConfig?.addons?.switchboardSafeguards ?? true;
-        const useSubagentsEnabled = roleConfig?.addons?.useSubagents ?? false;
 
         let gitProhibitionEnabled = roleConfig?.addons?.gitProhibition ?? true;
         if (options?.gitProhibitionEnabled !== undefined) {
@@ -14880,92 +14535,33 @@ What would you like to find?`;
 
         if (role === 'planner') {
             const plannerInstruction = (baseInstruction === 'improve-plan' || baseInstruction === 'enhance') ? baseInstruction : undefined;
-            messagePayload = buildKanbanBatchPrompt('planner', [dispatchPlan], {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('planner', [dispatchPlan], effectiveWorkspaceRoot, {
                 instruction: plannerInstruction,
-                aggressivePairProgramming: this._isAggressivePairProgrammingEnabled(),
-                splitPlan: this._isSplitPlanEnabled(),
-                designDocLink: this._isDesignDocEnabled() ? this._getDesignDocLink() : undefined,
-                designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled,
-                routingMapConfig: this.getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null)
+                gitProhibitionEnabled
             });
-
-            // Append dispatch-specific strict/light mode delivery extensions
-            const grumpyReviewPath = `.switchboard/reviews/grumpy_critique_${sessionId}.md`;
-            const balancedReviewPath = `.switchboard/reviews/balanced_review_${sessionId}.md`;
-            // NOTE: The Step 3 and Step 4 references here are coupled with the step numbering in improve-plan.md.
-            // If the workflow step numbering changes, these references must be updated in lockstep.
-            if (strictPlannerPrompts) {
-                messagePayload += `\n\nDispatch delivery (strict mode — INTEGRATE WITH WORKFLOW STEPS):
-- For workflow Step 3: Write the adversarial critique to ${grumpyReviewPath} and the balanced synthesis to ${balancedReviewPath} as files, and also post both directly in chat as instructed.
-- For workflow Step 4: Write the updated plan to the plan file.
-Do NOT output the critiques or plan twice in your response; integrate this file writing with your single step-by-step workflow execution.`;
-            } else {
-                messagePayload += `\n\nDispatch delivery (light mode — INTEGRATE WITH WORKFLOW STEPS):
-- For workflow Step 3: Post the adversarial critique and balanced synthesis directly in chat (do NOT write them to files).
-- For workflow Step 4: Write the updated plan to the plan file.
-Do NOT output the critiques or plan twice in your response; integrate this with your single step-by-step workflow execution.`;
-            }
         } else if (role === 'reviewer') {
-            messagePayload = buildKanbanBatchPrompt('reviewer', [dispatchPlan], {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('reviewer', [dispatchPlan], effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
-                advancedReviewerEnabled: this._isAdvancedReviewerEnabled(),
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled
+                gitProhibitionEnabled
             });
             messageMetadata.phase_gate = {
                 enforce_persona: 'reviewer',
                 review_mode: strictReviewPrompts ? 'direct_execute_strict' : 'direct_execute_light',
                 bypass_workflow_triggers: 'true'
             };
-
-            // Append dispatch-specific strict/light mode delivery extensions for normal reviews
-            const reviewerFindingsPath = `.switchboard/reviews/grumpy_findings_${sessionId}.md`;
-            const reviewerSynthesisPath = `.switchboard/reviews/balanced_synthesis_${sessionId}.md`;
-            if (strictReviewPrompts) {
-                messagePayload += `\n\nDispatch delivery (strict mode — COMPLETE ALL IN A SINGLE RESPONSE):
-- Write Stage 1 findings to ${reviewerFindingsPath}
-- Write Stage 2 synthesis to ${reviewerSynthesisPath}
-- Apply fixes and update the plan. Keep file outputs as archival artifacts.
-- Strict format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
-- Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
-            } else {
-                messagePayload += `\n\nDispatch delivery (light mode — COMPLETE ALL IN A SINGLE RESPONSE):
-- Do NOT write plan/review artifact files in light mode.
-- Apply fixes and update the plan after posting findings in chat.
-- Suggested format: Implemented Well / Issues Found / Fixes Applied / Validation Results / Remaining Risks / Final Verdict (Ready/Not Ready).
-- Use "Not Ready" only for unresolved code defects or unmet plan requirements, not for environment/tooling constraints.`;
-            }
         } else if (role === 'tester') {
             if (!await this._ensureAcceptanceTesterDispatchEligible(resolvedWorkspaceRoot)) {
                 clearDispatchLock();
                 return false;
             }
-            messagePayload = buildKanbanBatchPrompt('tester', [dispatchPlan], {
-                designDocLink: this._getDesignDocLink().trim(),
-                designDocContent: this._isDesignDocEnabled() ? await this._getDesignDocContent(resolvedWorkspaceRoot) || undefined : undefined,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('tester', [dispatchPlan], effectiveWorkspaceRoot, {
+                gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'tester' };
         } else if (role === 'lead') {
-            messagePayload = buildKanbanBatchPrompt('lead', [dispatchPlan], {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('lead', [dispatchPlan], effectiveWorkspaceRoot, {
                 includeInlineChallenge,
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled
+                gitProhibitionEnabled
             });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
@@ -14977,38 +14573,24 @@ File content: Plan: ${planFileAbsolute}
 
 Create this file exactly as specified, then continue your work.`);
             } else {
-                messagePayload = buildKanbanBatchPrompt('coder', [dispatchPlan], {
+                messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', [dispatchPlan], effectiveWorkspaceRoot, {
                     instruction: baseInstruction,
                     includeInlineChallenge,
-                    accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                    defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                    workspaceRoot: effectiveWorkspaceRoot,
-                    gitProhibitionEnabled,
-                    switchboardSafeguardsEnabled,
-                    useSubagentsEnabled
+                    gitProhibitionEnabled
                 });
             }
         } else if (role === 'intern') {
-            messagePayload = buildKanbanBatchPrompt('intern', [dispatchPlan], {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('intern', [dispatchPlan], effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
                 includeInlineChallenge,
-                accurateCodingEnabled: this._isAccurateCodingEnabled(),
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled
+                gitProhibitionEnabled
             });
         } else if (role === 'gatherer') {
-            messagePayload = buildKanbanBatchPrompt('gatherer', [dispatchPlan], {
-                defaultPromptOverrides: this._cachedDefaultPromptOverrides,
-                workspaceRoot: effectiveWorkspaceRoot,
-                gitProhibitionEnabled,
-                switchboardSafeguardsEnabled,
-                useSubagentsEnabled
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('gatherer', [dispatchPlan], effectiveWorkspaceRoot, {
+                gitProhibitionEnabled
             });
-        } else if (customAgent) {
-            messagePayload = this.buildCustomAgentPrompt([dispatchPlan], customAgent.promptInstructions, customAgent.addons, resolvedWorkspaceRoot);
+        } else if (customAgent || role.startsWith('custom_agent_')) {
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt(role, [dispatchPlan], effectiveWorkspaceRoot);
         } else {
             clearDispatchLock();
             vscode.window.showErrorMessage(`Unknown role: ${role}`);

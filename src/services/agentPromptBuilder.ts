@@ -7,7 +7,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { DefaultPromptOverride } from './agentConfig';
+import { DefaultPromptOverride, CustomAgentAddons } from './agentConfig';
 
 export interface BatchPromptPlan {
     topic: string;
@@ -228,6 +228,36 @@ export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any proj
 export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (unit, integration, or e2e) as part of the verification plan. The test suite will be run separately by the user.`;
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
+
+export const COMPLEXITY_SCORING_DIRECTIVE =
+    `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
+    `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
+    `### Routine and ### Complex / Risky subsections. ` +
+    `Classify each implementation step by complexity before splitting.`;
+
+export const TICKET_UPDATE_DIRECTIVE =
+    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+    `Analyze the plan, then use the clickup_api or linear_api skill to add an "AI Analysis" comment to the ticket. ` +
+    `Do not modify the ticket description. Only add a comment. ` +
+    `If no ticket number is found, skip the ticket update and notify the user.`;
+
+export const TICKET_REFINE_DIRECTIVE =
+    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+    `Analyze the plan, then use the clickup_api or linear_api skill to refine the ticket description. ` +
+    `Update the description to reflect the plan's current state, implementation details, and any changes from the original request. ` +
+    `If no ticket number is found, skip the ticket update and notify the user.`;
+
+export const TICKET_RESEARCH_REFINE_DIRECTIVE =
+    `RESEARCH MODE: Before updating the ticket, use the web_research skill to gather additional context. ` +
+    `Research the technical approach, dependencies, best practices, and any relevant recent developments. ` +
+    `If the web_research skill is unavailable, proceed with codebase-only analysis and note the gap.\n\n` +
+    `TICKET UPDATE MODE: You are authorized to update the associated ticket. ` +
+    `Extract the ticket number from the plan metadata field "**Ticket:**" (format: CU-XXXXX or LIN-XXXXX). ` +
+    `After completing research, use the clickup_api or linear_api skill to refine the ticket description. ` +
+    `Update the description to reflect the plan's current state, implementation details, research findings, and any changes from the original request. ` +
+    `If no ticket number is found, skip the ticket update and notify the user.`;
 
 
 export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
@@ -992,4 +1022,85 @@ export function columnToPromptRole(column: string): string | null {
         default:
             return column.startsWith('custom_agent_') ? column : null;
     }
+}
+
+export function buildCustomAgentPrompt(
+    plans: BatchPromptPlan[],
+    promptInstructions?: string,
+    addons?: CustomAgentAddons,
+    workspaceRoot?: string
+): string {
+    const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
+    const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
+
+    // Custom workflow: prepend read-workflow instruction
+    if (addons?.customWorkflowPath) {
+        return `Read ${addons.customWorkflowPath} and follow it step-by-step.\n\n` +
+            buildCustomAgentPrompt(plans, promptInstructions,
+                { ...addons, customWorkflowPath: undefined }, workspaceRoot);
+    }
+
+    // Build safeguards block (batch rules + focus directive)
+    const safeguardsBlock = addons?.switchboardSafeguards
+        ? (() => {
+            const parallelInstruction = plans.length > 1
+                ? (addons?.useSubagents !== false
+                    ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
+                    : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
+                : '';
+            return `${parallelInstruction}CRITICAL INSTRUCTIONS:
+1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
+2. Execute each plan fully before moving to the next (if sequential).
+3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n${FOCUS_DIRECTIVE}`;
+        })()
+        : `${FOCUS_DIRECTIVE}`;
+
+    let prompt = `${dispatchContextPrefix}${safeguardsBlock}\n\nPLANS TO PROCESS:\n${planList}`;
+
+    // Apply directives in defined order
+    if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;
+    if (addons?.workspaceTypeDetection && workspaceRoot) {
+        const { isMultiRepo, subRepoNames } = detectWorkspaceType(workspaceRoot);
+        prompt += isMultiRepo
+            ? '\n\nWORKSPACE TYPE: multi-repo. Sub-repos: ' + subRepoNames.join(', ') + '.'
+            : '\n\nWORKSPACE TYPE: single-repo. Do NOT include a **Repo:** line.';
+    }
+    if (addons?.includeInlineChallenge) prompt += `\n\n${INLINE_CHALLENGE_DIRECTIVE}`;
+    if (addons?.accurateCodingEnabled) prompt += `\n\nAccuracy Mode: Before coding, read and follow .agent/workflows/accuracy.md step-by-step.`;
+    if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
+    if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
+    if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
+    if (addons?.dependencyCheckEnabled) prompt += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
+    if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
+        const directive = addons.ticketUpdateMode === 'refine-ticket'
+            ? TICKET_REFINE_DIRECTIVE
+            : addons.ticketUpdateMode === 'research-and-refine'
+                ? TICKET_RESEARCH_REFINE_DIRECTIVE
+                : TICKET_UPDATE_DIRECTIVE;
+        prompt += `\n\n${directive}`;
+    }
+    if (addons?.complexityScoringSkill) {
+        prompt += `\n\n${COMPLEXITY_SCORING_DIRECTIVE}`;
+    }
+    if (addons?.splitPlan) prompt += '\n\n' + SPLIT_PLAN_DIRECTIVE;
+
+    if (addons?.researchEnabled) prompt += `\n\n${DEEP_RESEARCH_DIRECTIVE}`;
+
+    if (addons?.designDocContent) {
+        prompt += `\n\nDESIGN DOC REFERENCE (pre-fetched):\n${addons.designDocContent}`;
+    } else if (addons?.designDocLink) {
+        prompt += `\n\nDESIGN DOC REFERENCE:\n${addons.designDocLink}`;
+    }
+
+    if (promptInstructions) prompt += `\n\nAdditional Instructions: ${promptInstructions}`;
+
+    // Prompt override applied LAST
+    if (addons?.defaultPromptOverride) {
+        const { mode, text } = addons.defaultPromptOverride;
+        if (mode === 'prepend') prompt = `${text}\n\n${prompt}`;
+        else if (mode === 'append') prompt = `${prompt}\n\n${text}`;
+        else if (mode === 'replace') prompt = `${text}\n\nPLANS TO PROCESS:\n${planList}`;
+    }
+
+    return normalizeNewlines(prompt);
 }

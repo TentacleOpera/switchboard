@@ -16,7 +16,7 @@ import {
     parseDefaultPromptOverrides
 } from './agentConfig';
 import { deriveKanbanColumn } from './kanbanColumnDerivation';
-import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE } from './agentPromptBuilder';
+import { buildKanbanBatchPrompt, buildPromptDispatchContext, BatchPromptPlan, columnToPromptRole, resolveWorkingDir, SUPPRESS_WALKTHROUGH_DIRECTIVE, CAVEMAN_OUTPUT_DIRECTIVE, buildCustomAgentPrompt, PromptBuilderOptions } from './agentPromptBuilder';
 import { KanbanDatabase, type WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { legacyToScore, scoreToRoutingRole, parseComplexityScore } from './complexityScale';
@@ -2385,6 +2385,103 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
+    public async generateUnifiedPrompt(
+        role: string,
+        plans: BatchPromptPlan[],
+        workspaceRoot: string,
+        overrides?: Partial<PromptBuilderOptions>
+    ): Promise<string> {
+        if (role.startsWith('custom_agent_')) {
+            const customAgents = await this._getCustomAgents(workspaceRoot);
+            const agentId = role.replace('custom_agent_', '');
+            const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
+            return buildCustomAgentPrompt(
+                plans,
+                agentConfig?.promptInstructions,
+                agentConfig?.addons,
+                workspaceRoot
+            );
+        }
+
+        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
+        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+        const config = vscode.workspace.getConfiguration('switchboard');
+
+        const resolvedOptions: PromptBuilderOptions = {
+            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
+            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
+            skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
+            skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
+            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
+            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
+            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? false,
+            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
+            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            defaultPromptOverrides,
+            workspaceRoot,
+            routingMapConfig: this._routingMapConfig,
+        };
+
+        if (role === 'planner') {
+            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            resolvedOptions.dependencyCheckEnabled = promptsConfig.dependencyCheckEnabled;
+            resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
+            resolvedOptions.splitPlan = promptsConfig.splitPlan;
+
+            const designDocEnabled = promptsConfig.designDocEnabled;
+            const designDocLink = designDocEnabled ? (promptsConfig.designDocLink || '').trim() : undefined;
+            let designDocContent: string | undefined;
+            if (designDocEnabled && designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
+                try {
+                    const notionService = this._getNotionService(workspaceRoot);
+                    designDocContent = (await notionService.loadCachedContent()) || undefined;
+                } catch { /* non-fatal */ }
+            }
+            resolvedOptions.designDocLink = designDocLink || undefined;
+            resolvedOptions.designDocContent = designDocContent;
+        } else if (role === 'lead' || role === 'coder' || role === 'intern') {
+            resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
+            resolvedOptions.pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
+            resolvedOptions.accurateCodingEnabled = promptsConfig.accurateCodingEnabledByRole?.[role] ?? false;
+            resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
+            if (role === 'lead') {
+                resolvedOptions.includeInlineChallenge = promptsConfig.leadChallengeEnabled ?? false;
+            }
+        } else if (role === 'reviewer') {
+            resolvedOptions.advancedReviewerEnabled = promptsConfig.advancedReviewerEnabled;
+        } else if (role === 'tester') {
+            const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
+            const designDocLink = (config.get<string>('planner.designDocLink', '') || '').trim();
+            if (!designDocEnabled || !designDocLink) {
+                throw new Error('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
+            }
+            let designDocContent: string | undefined;
+            if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
+                try {
+                    const notionService = this._getNotionService(workspaceRoot);
+                    designDocContent = (await notionService.loadCachedContent()) || undefined;
+                } catch { /* non-fatal */ }
+            }
+            resolvedOptions.designDocLink = designDocLink;
+            resolvedOptions.designDocContent = designDocContent;
+        } else if (role === 'researcher' || role === 'code_researcher') {
+            resolvedOptions.researchDepth = role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : promptsConfig.researchDepth;
+            resolvedOptions.saveToLocalDocs = role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined;
+            resolvedOptions.localDocsPath = role === 'researcher' ? promptsConfig.localDocsPath : undefined;
+        } else if (role === 'ticket_updater') {
+            resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
+        } else if (role === 'splitter') {
+            resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
+        }
+
+        const mergedOptions = {
+            ...resolvedOptions,
+            ...overrides,
+        };
+
+        return buildKanbanBatchPrompt(role, plans, mergedOptions);
+    }
+
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
         const config = vscode.workspace.getConfiguration('switchboard');
         
@@ -2595,23 +2692,7 @@ export class KanbanProvider implements vscode.Disposable {
                 role = customAgent.role;
             }
 
-            // Use _getPromptsConfig for comprehensive role config loading
-            // (matches what the prompts tab preview uses — includes all addon flags)
-            const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-            const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
 
-            // Build options from prompts config (mirrors getPromptPreview handler logic)
-            const designDocEnabled = promptsConfig.designDocEnabled;
-            const designDocLink = (role === 'planner' || role === 'tester') && designDocEnabled
-                ? (promptsConfig.designDocLink || '').trim() || undefined
-                : undefined;
-            let designDocContent: string | undefined;
-            if (designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
-                try {
-                    const notionService = this._getNotionService(workspaceRoot);
-                    designDocContent = (await notionService.loadCachedContent()) || undefined;
-                } catch { /* non-fatal — fallback to URL */ }
-            }
             let schedulingBlock = '';
             let batchBlock = '';
             let oldestPlan: any;
@@ -2716,47 +2797,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (role.startsWith('custom_agent_')) {
                 prompt = `Please process plans as a custom agent.${targetBlock}` + sqlInstruction;
             } else {
-                const options: any = {
-                    workspaceRoot,
-                    defaultPromptOverrides,
-                    clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
-                    cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
-                    gitProhibitionEnabled: role === 'planner'
-                        ? promptsConfig.gitProhibitionEnabled
-                        : (promptsConfig.gitProhibitionByRole?.[role] ?? true),
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                    useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
-                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
-                    dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
-                    aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
-                    splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
-                    skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
-                    skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
-                    plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
-                    designDocLink,
-                    designDocContent,
-                    routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
-                    sourceColumnLabel: this._getSourceColumnLabelForRole(role),
-                    // Do NOT pass instruction for coder/intern: the empty-plans preamble would produce a
-                    // misleading "execute 0 low-complexity plans" intro that contradicts the scheduling block.
-                    instruction: undefined,
-                    accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
-                    includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
-                    pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
-                    suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
-                        ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
-                        : undefined,
-                    researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
-                    ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
-                    complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                    saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
-                    localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
-                };
-
                 // Build the role-configuration preamble, then strip the trailing empty
                 // "PLANS TO PROCESS:" section (produced when plans=[] — it's replaced
                 // by the scheduling block below and would be contradictory noise).
-                let preamble = buildKanbanBatchPrompt(role, [], options);
+                let preamble = await this.generateUnifiedPrompt(role, [], workspaceRoot, {
+                    sourceColumnLabel: this._getSourceColumnLabelForRole(role),
+                    instruction: undefined
+                });
                 preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
                 prompt = preamble + targetBlock + sqlInstruction;
             }
@@ -2812,100 +2859,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
         }
     }
 
-    private async _generateBatchPlannerPrompt(cards: KanbanCard[], workspaceRoot: string, sourceColumnLabel?: string): Promise<string> {
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
-                }
-            }
-        }
-
-        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-        const aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
-        const designDocEnabled = promptsConfig.designDocEnabled;
-        const designDocLink = designDocEnabled ? (promptsConfig.designDocLink || '').trim() : undefined;
-        let designDocContent: string | undefined;
-        if (designDocEnabled && designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
-            try {
-                const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = designDocEnabled ? (await notionService.loadCachedContent()) || undefined : undefined;
-            } catch { /* non-fatal — fallback to URL */ }
-        }
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('planner', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.planner ?? false,
-            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.planner ?? false,
-            aggressivePairProgramming,
-            dependencyCheckEnabled: promptsConfig.dependencyCheckEnabled,
-            plannerWorkflowPath: promptsConfig.plannerWorkflowPath,
-            designDocLink: designDocLink || undefined,
-            designDocContent,
-            splitPlan: promptsConfig.splitPlan,
-            skipCompilation: promptsConfig.skipCompilationByRole?.planner ?? false,
-            skipTests: promptsConfig.skipTestsByRole?.planner ?? false,
-            gitProhibitionEnabled: promptsConfig.gitProhibitionEnabled,
-            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.planner ?? true,
-            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.planner ?? false,
-            defaultPromptOverrides,
-            workspaceRoot,
-            sourceColumnLabel,
-            routingMapConfig: this._routingMapConfig
-        });
-    }
-
-    private async _generateBatchExecutionPrompt(cards: KanbanCard[], workspaceRoot: string, overrideRole?: 'lead' | 'coder' | 'intern', sourceColumnLabel?: string): Promise<string> {
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
-                }
-            }
-        }
-
-        let role: 'lead' | 'coder' | 'intern';
-        let instruction: string | undefined;
-        if (overrideRole) {
-            role = overrideRole;
-            instruction = overrideRole === 'coder' ? 'low-complexity' : undefined;
-        } else {
-            const hasHighComplexity = this._dynamicComplexityRoutingEnabled
-                ? cards.some(card => !this._isLowComplexity(card))
-                : true;  // When disabled, treat all as high complexity → route to lead
-            role = hasHighComplexity ? 'lead' : 'coder';
-            instruction = hasHighComplexity ? undefined : 'low-complexity';
-        }
-
-        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-        const aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
-
-        const pairProgrammingEnabled = (this._autobanState?.pairProgrammingMode ?? 'off') !== 'off';
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt(role, await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
-            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
-            instruction,
-            pairProgrammingEnabled,
-            aggressivePairProgramming,
-            defaultPromptOverrides,
-            workspaceRoot,
-            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
-            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
-            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
-            skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
-            skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
-            sourceColumnLabel,
-            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? false
-        });
-    }
-
     private async _dispatchWithPairProgrammingIfNeeded(
         cards: KanbanCard[],
         workspaceRoot: string
@@ -2927,21 +2880,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const promptsConfig = await this._getPromptsConfig(workspaceRoot);
         const coderUsesIde = mode === 'cli-ide' || mode === 'ide-ide';
         const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        const coderPrompt = buildKanbanBatchPrompt('coder', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.coder ?? false,
-            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.coder ?? false,
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        const coderPrompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, {
             pairProgrammingEnabled: true,
-            accurateCodingEnabled,
-            defaultPromptOverrides,
-            workspaceRoot,
-            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.coder ?? true,
-            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true,
-            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.coder ?? false,
-            suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false,
-            skipCompilation: promptsConfig.skipCompilationByRole?.coder ?? false,
-            skipTests: promptsConfig.skipTestsByRole?.coder ?? false,
-            includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? false
+            accurateCodingEnabled
         });
         if (coderUsesIde) {
             const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
@@ -3132,100 +3074,32 @@ This step is what moves the plan forward in the Switchboard pipeline.
         workspaceRoot: string,
         sourceColumnLabel?: string
     ): Promise<string> {
-        if (role === 'planner') {
-            return await this._generateBatchPlannerPrompt(cards, workspaceRoot, sourceColumnLabel);
+        let targetRole = role;
+        if (!targetRole || (
+            targetRole !== 'lead' && targetRole !== 'coder' && targetRole !== 'intern' &&
+            targetRole !== 'planner' && targetRole !== 'reviewer' && targetRole !== 'tester' &&
+            targetRole !== 'researcher' && targetRole !== 'splitter' && targetRole !== 'analyst' &&
+            targetRole !== 'ticket_updater' && targetRole !== 'code_researcher' && targetRole !== 'gatherer' &&
+            !targetRole.startsWith('custom_agent_')
+        )) {
+            const hasHighComplexity = this._dynamicComplexityRoutingEnabled
+                ? cards.some(card => !this._isLowComplexity(card))
+                : true;
+            targetRole = hasHighComplexity ? 'lead' : 'coder';
         }
-        if (role === 'reviewer') {
-            const repoScopeMap = new Map<string, string>();
-            const db = this._getKanbanDb(workspaceRoot);
-            if (await db.ensureReady()) {
-                for (const card of cards) {
-                    const plan = await db.getPlanBySessionId(card.sessionId);
-                    if (plan?.repoScope) {
-                        repoScopeMap.set(card.sessionId, plan.repoScope);
-                    }
+
+        const repoScopeMap = new Map<string, string>();
+        const db = this._getKanbanDb(workspaceRoot);
+        if (await db.ensureReady()) {
+            for (const card of cards) {
+                const plan = await db.getPlanBySessionId(card.sessionId);
+                if (plan?.repoScope) {
+                    repoScopeMap.set(card.sessionId, plan.repoScope);
                 }
             }
-            const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-            const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-            return buildKanbanBatchPrompt('reviewer', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-                clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.reviewer ?? false,
-                cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.reviewer ?? false,
-                advancedReviewerEnabled: promptsConfig.advancedReviewerEnabled,
-                defaultPromptOverrides,
-                workspaceRoot,
-                sourceColumnLabel,
-                gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.reviewer ?? true,
-                switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.reviewer ?? true,
-                useSubagentsEnabled: promptsConfig.useSubagentsByRole?.reviewer ?? false,
-                skipCompilation: promptsConfig.skipCompilationByRole?.reviewer ?? false,
-                skipTests: promptsConfig.skipTestsByRole?.reviewer ?? false
-            });
         }
-        if (role === 'tester') {
-            return await this._generateBatchTesterPrompt(cards, workspaceRoot, sourceColumnLabel);
-        }
-
-        // Built-in non-execution roles that buildKanbanBatchPrompt supports
-        if (role === 'researcher' || role === 'splitter' || role === 'analyst' || role === 'ticket_updater' || role === 'code_researcher' || role === 'gatherer') {
-            const repoScopeMap = new Map<string, string>();
-            const db = this._getKanbanDb(workspaceRoot);
-            if (await db.ensureReady()) {
-                for (const card of cards) {
-                    const plan = await db.getPlanBySessionId(card.sessionId);
-                    if (plan?.repoScope) {
-                        repoScopeMap.set(card.sessionId, plan.repoScope);
-                    }
-                }
-            }
-            const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-            const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-            return buildKanbanBatchPrompt(role, await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-                clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
-                cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
-                defaultPromptOverrides,
-                workspaceRoot,
-                sourceColumnLabel,
-                gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
-                switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
-                researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
-                ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
-                complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
-                localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
-            });
-        }
-
-        // Custom agent roles (custom_agent_*) — NOT routed through buildKanbanBatchPrompt
-        // which throws for unknown roles. Return a generic plan-file-link prompt.
-        if (role?.startsWith('custom_agent_')) {
-            const repoScopeMap = new Map<string, string>();
-            const db = this._getKanbanDb(workspaceRoot);
-            if (await db.ensureReady()) {
-                for (const card of cards) {
-                    const plan = await db.getPlanBySessionId(card.sessionId);
-                    if (plan?.repoScope) {
-                        repoScopeMap.set(card.sessionId, plan.repoScope);
-                    }
-                }
-            }
-            const { planList } = buildPromptDispatchContext(await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap));
-
-            const customAgents = await this._getCustomAgents(workspaceRoot);
-            const agentId = role.replace('custom_agent_', '');
-            const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
-            const suppressWalkthrough = agentConfig?.addons?.suppressWalkthrough === true;
-            const cavemanOutput = agentConfig?.addons?.cavemanOutput === true;
-            const cavemanBlock = cavemanOutput ? `\n\n${CAVEMAN_OUTPUT_DIRECTIVE}` : '';
-            const suppressBlock = suppressWalkthrough ? `\n\n${SUPPRESS_WALKTHROUGH_DIRECTIVE}` : '';
-            return `Please process the following plans.${cavemanBlock}${suppressBlock}\n\nPLANS TO PROCESS:\n${planList}`;
-        }
-
-        // For execution roles (e.g. 'lead', 'coder', 'intern'),
-        // use the batch execution prompt which handles role-specific templating
-        const overrideRole = (role === 'lead' || role === 'coder' || role === 'intern') ? role : undefined;
-        return await this._generateBatchExecutionPrompt(cards, workspaceRoot, overrideRole, sourceColumnLabel);
+        const plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
+        return this.generateUnifiedPrompt(targetRole, plans, workspaceRoot, { sourceColumnLabel });
     }
 
     private async _getEligibleSessionIds(sessionIds: string[], expectedColumn: string, workspaceRoot?: string): Promise<string[]> {
@@ -4599,7 +4473,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         // IDE Lead mode: copy lead prompt to clipboard instead of CLI dispatch
                         const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
                         if (card && workspaceRoot) {
-                            const leadPrompt = await this._generateBatchExecutionPrompt([card], workspaceRoot, 'lead');
+                            const plans = await this._cardsToPromptPlans([card], workspaceRoot, new Map());
+                            const leadPrompt = await this.generateUnifiedPrompt('lead', plans, workspaceRoot);
                             await vscode.env.clipboard.writeText(leadPrompt);
                             vscode.window.showInformationMessage('Lead prompt copied to clipboard (IDE mode).');
                             await this.moveCardToColumn(workspaceRoot, sessionId, targetColumn);
@@ -5031,7 +4906,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     vscode.window.showInformationMessage('No CREATED plans available for batch planner prompt.');
                     break;
                 }
-                const prompt = await this._generateBatchPlannerPrompt(sourceCards, workspaceRoot);
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, new Map());
+                const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, { instruction: 'improve-plan' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
@@ -5058,7 +4934,9 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
                 // Explicit low-complexity button always uses coder role, bypassing the toggle
-                const prompt = await this._generateBatchExecutionPrompt(sourceCards, workspaceRoot, 'coder');
+                const repoScopeMap = await this._buildRepoScopeMap(sourceCards, workspaceRoot);
+                const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, repoScopeMap);
+                const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
                 const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', 'handoff', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
@@ -5695,48 +5573,20 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 const plans = await this._cardsToPromptPlans([card], this._currentWorkspaceRoot, repoScopeMap);
                 const promptsConfig = await this._getPromptsConfig(this._currentWorkspaceRoot);
-                const aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
-
                 // Resolve effective Coder routing from Pair Programming mode
                 const ppMode = this._autobanState?.pairProgrammingMode ?? 'off';
                 const coderUsesIde = ppMode === 'cli-ide' || ppMode === 'ide-ide';
                 const accurateCodingEnabled = !coderUsesIde && (promptsConfig.accurateCodingEnabledByRole?.coder ?? false);
 
-                const defaultPromptOverrides = await this._getDefaultPromptOverrides(this._currentWorkspaceRoot);
-
                 // Build lead (Complex) prompt — with pair programming note
-                const leadPrompt = buildKanbanBatchPrompt('lead', plans, {
-                    clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.lead ?? false,
-                    cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.lead ?? false,
-                    pairProgrammingEnabled: true,
-                    accurateCodingEnabled: promptsConfig.accurateCodingEnabledByRole?.lead ?? false,
-                    aggressivePairProgramming,
-                    defaultPromptOverrides,
-                    workspaceRoot: this._currentWorkspaceRoot,
-                    gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.lead ?? true,
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.lead ?? true,
-                    useSubagentsEnabled: promptsConfig.useSubagentsByRole?.lead ?? false,
-                    suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.lead ?? false,
-                    skipCompilation: promptsConfig.skipCompilationByRole?.lead ?? false,
-                    skipTests: promptsConfig.skipTestsByRole?.lead ?? false,
-                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.lead ?? false
+                const leadPrompt = await this.generateUnifiedPrompt('lead', plans, this._currentWorkspaceRoot, {
+                    pairProgrammingEnabled: true
                 });
 
                 // Build coder (Routine) prompt
-                const coderPrompt = buildKanbanBatchPrompt('coder', plans, {
-                    clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.coder ?? false,
-                    cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.coder ?? false,
+                const coderPrompt = await this.generateUnifiedPrompt('coder', plans, this._currentWorkspaceRoot, {
                     pairProgrammingEnabled: true,
-                    accurateCodingEnabled,
-                    defaultPromptOverrides,
-                    workspaceRoot: this._currentWorkspaceRoot,
-                    gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.coder ?? true,
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.coder ?? true,
-                    useSubagentsEnabled: promptsConfig.useSubagentsByRole?.coder ?? false,
-                    suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.coder ?? false,
-                    skipCompilation: promptsConfig.skipCompilationByRole?.coder ?? false,
-                    skipTests: promptsConfig.skipTestsByRole?.coder ?? false,
-                    includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.coder ?? false
+                    accurateCodingEnabled
                 });
 
                 if (coderUsesIde) {
@@ -6048,8 +5898,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || typeof role !== 'string') break;
                 try {
-                    const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-                    const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
+
 
                     let plans: BatchPromptPlan[] = [];
                     let planCount = 0;
@@ -6094,63 +5943,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         }
                     }
 
-                    // Design doc loading for planner and tester (matching actual dispatch)
-                    const designDocEnabled = promptsConfig.designDocEnabled;
-                    const designDocLink = (role === 'planner' || role === 'tester') && designDocEnabled
-                        ? (promptsConfig.designDocLink || '').trim() || undefined
-                        : undefined;
-                    let designDocContent: string | undefined;
-                    if (designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
-                        try {
-                            const notionService = this._getNotionService(workspaceRoot);
-                            designDocContent = (await notionService.loadCachedContent()) || undefined;
-                        } catch { /* non-fatal — fallback to URL */ }
-                    }
-
-                    // Instruction for execution roles (matching _generateBatchExecutionPrompt)
-                    const instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
-
                     // Source column label (matching actual dispatch)
                     const sourceColumnLabel = this._getSourceColumnLabelForRole(role);
-
-                    const preview = buildKanbanBatchPrompt(role, plans, {
-                        workspaceRoot,
-                        clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role] ?? false,
-                        cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role] ?? false,
-                        defaultPromptOverrides,
-                        gitProhibitionEnabled: role === 'planner'
-                            ? promptsConfig.gitProhibitionEnabled
-                            : (promptsConfig.gitProhibitionByRole?.[role] ?? true),
-                        switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
-                        useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
-                        advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
-                        dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
-                        aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
-                        splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
-                        skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
-                        skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
-                        plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
-                        designDocLink,
-                        designDocContent,
-                        routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
+                    const preview = await this.generateUnifiedPrompt(role, plans, workspaceRoot, {
                         sourceColumnLabel,
-                        instruction,
-                        accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
-                        includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
-                        // Preview reads from role config addon (what the checkbox controls);
-                        // dispatch paths (_generateBatchExecutionPrompt etc.) correctly use autobanState.
-                        pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role] ?? false) : undefined,
-                        researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
-                        suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
-                            ? promptsConfig.suppressWalkthroughByRole?.[role] ?? false
-                            : undefined,
-                        includeDependencyInstructions: (role === 'lead' || role === 'coder' || role === 'intern')
-                            ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? false)
-                            : undefined,
-                        ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
-                        complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                        saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
-                        localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
+                        instruction: (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined
                     });
                     this._panel?.webview.postMessage({ type: 'promptPreviewResult', role, preview, planCount });
                 } catch (err) {
@@ -6745,50 +6542,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         return visibleAgents.tester !== false && this._isAcceptanceTesterDesignDocConfigured();
     }
 
-    private async _generateBatchTesterPrompt(cards: KanbanCard[], workspaceRoot: string, sourceColumnLabel?: string): Promise<string> {
-        const repoScopeMap = new Map<string, string>();
-        const db = this._getKanbanDb(workspaceRoot);
-        if (await db.ensureReady()) {
-            for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
-                if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
-                }
-            }
-        }
 
-        const config = vscode.workspace.getConfiguration('switchboard');
-        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
-        const designDocLink = (config.get<string>('planner.designDocLink', '') || '').trim();
-        if (!designDocEnabled || !designDocLink) {
-            throw new Error('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
-        }
-
-        let designDocContent: string | undefined;
-        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
-            try {
-                const notionService = this._getNotionService(workspaceRoot);
-                designDocContent = designDocEnabled ? (await notionService.loadCachedContent()) || undefined : undefined;
-            } catch {
-                designDocContent = undefined;
-            }
-        }
-
-        const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
-        return buildKanbanBatchPrompt('tester', await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap), {
-            clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.tester ?? false,
-            cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.tester ?? false,
-            designDocLink,
-            designDocContent,
-            defaultPromptOverrides,
-            workspaceRoot,
-            gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.tester ?? true,
-            switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.tester ?? true,
-            useSubagentsEnabled: promptsConfig.useSubagentsByRole?.tester ?? false,
-            sourceColumnLabel
-        });
-    }
 
 
 
