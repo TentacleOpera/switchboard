@@ -41,6 +41,7 @@ export interface KanbanPlanRecord {
     clickupTaskId?: string;
     linearIssueId?: string;
     worktreeId?: number;
+    worktreeStatus?: string; // 'none' | 'active' | 'merged' | 'deleted'
 }
 
 export interface ImportedDocEntry {
@@ -110,7 +111,9 @@ CREATE TABLE IF NOT EXISTS plans (
     dispatched_agent  TEXT DEFAULT '',
     dispatched_ide    TEXT DEFAULT '',
     clickup_task_id   TEXT DEFAULT '',
-    linear_issue_id   TEXT DEFAULT ''
+    linear_issue_id   TEXT DEFAULT '',
+    worktree_id       INTEGER,
+    worktree_status   TEXT DEFAULT 'none'
 );
 CREATE INDEX IF NOT EXISTS idx_plans_column ON plans(kanban_column);
 CREATE INDEX IF NOT EXISTS idx_plans_workspace ON plans(workspace_id);
@@ -428,6 +431,13 @@ const MIGRATION_V26_SQL = [
     `CREATE INDEX IF NOT EXISTS idx_plans_worktree ON plans(worktree_id)`,
 ];
 
+// V27: Add worktree_status column to plans table
+const MIGRATION_V27_SQL = [
+    `ALTER TABLE plans ADD COLUMN worktree_status TEXT DEFAULT 'none'`,
+    // Backfill: plans that already have a worktree assigned should start as 'active'
+    `UPDATE plans SET worktree_status = 'active' WHERE worktree_id IS NOT NULL`,
+];
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -473,7 +483,7 @@ const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                       clickup_task_id, linear_issue_id, worktree_id`;
+                       clickup_task_id, linear_issue_id, worktree_id, worktree_status`;
 
 // Parse column definitions from SCHEMA_SQL's plans table for schema reconciliation.
 // This ensures that databases created before a column was added to SCHEMA_SQL
@@ -1455,6 +1465,15 @@ export class KanbanDatabase {
         this._db.run(
             'UPDATE plans SET worktree_id = ? WHERE session_id = ?',
             [worktreeId, sessionId]
+        );
+        await this._persist();
+    }
+
+    public async updatePlanWorktreeStatus(sessionId: string, status: 'none' | 'active' | 'merged' | 'deleted'): Promise<void> {
+        if (!this._db) return;
+        this._db.run(
+            'UPDATE plans SET worktree_status = ? WHERE session_id = ?',
+            [status, sessionId]
         );
         await this._persist();
     }
@@ -3883,6 +3902,18 @@ export class KanbanDatabase {
             console.log('[KanbanDatabase] V26 migration completed: worktree_id column added to plans');
         }
 
+        // V27: add worktree_status column to plans table
+        const v27 = await this.getMigrationVersion();
+        if (v27 < 27) {
+            for (const sql of MIGRATION_V27_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V27 migration step skipped (already applied):', e);
+                }
+            }
+            await this.setMigrationVersion(27);
+            console.log('[KanbanDatabase] V27 migration completed: worktree_status column added');
+        }
+
 
     }
 
@@ -4627,7 +4658,8 @@ FROM plans
                     dispatchedIde: String(row.dispatched_ide || ""),
                     clickupTaskId: String(row.clickup_task_id || ""),
                     linearIssueId: String(row.linear_issue_id || ""),
-                    worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined
+                    worktreeId: row.worktree_id !== null && row.worktree_id !== undefined ? Number(row.worktree_id) : undefined,
+                    worktreeStatus: String(row.worktree_status || 'none') as 'none' | 'active' | 'merged' | 'deleted'
                 });
             }
         } finally {

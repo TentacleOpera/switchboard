@@ -61,13 +61,10 @@ import {
     AutobanConfigState,
     buildAutobanBroadcastState,
     DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP,
-    getEnabledSharedReviewerAutobanColumns,
     getNextAutobanTerminalName,
-    isSharedReviewerAutobanColumn,
     MAX_AUTOBAN_TERMINALS_PER_ROLE,
     normalizeAutobanBatchSize,
     normalizeAutobanConfigState,
-    shouldSkipSharedReviewerAutobanDispatch,
     SingleColumnAutobanConfig,
     normalizeSingleColumnConfig,
     DEFAULT_SINGLE_COLUMN_CONFIG
@@ -289,7 +286,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     // Autoban continuous background polling engine
     private _autobanTimers = new Map<string, NodeJS.Timeout>();
     private _autobanLastTickAt = new Map<string, number>();
-    private _autobanLaneLastDispatchAt = new Map<string, number>();
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
     private _autobanTickQueue: Promise<void> = Promise.resolve();
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
@@ -5408,10 +5404,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             .map(([column]) => column);
     }
 
-    private _getAutobanReviewerLaneColumns(sourceColumn: string): string[] {
-        return [sourceColumn];
-    }
-
     private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
         return [...cardsInColumn]
             .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
@@ -6895,7 +6887,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._autobanEmptyColumnSweepTimer = undefined;
         }
         this._autobanLastTickAt.clear();
-        this._autobanLaneLastDispatchAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
     }
@@ -6913,20 +6904,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const role = this._autobanColumnToRole(sourceColumn);
         if (!role) { return; }
         const instruction = this._autobanColumnToInstruction(sourceColumn);
-        const reviewerLaneColumns = this._getAutobanReviewerLaneColumns(sourceColumn);
-        const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, reviewerLaneColumns);
+        // With strict column isolation, each column ticks independently — no shared-reviewer
+        // lane dedup is needed. The tick queue serialization and active dispatch sessions
+        // already prevent concurrent/duplicate dispatch.
+        const { cardsInColumn, currentColumnBySession } = await this._collectKanbanCardsInColumns(workspaceRoot, [sourceColumn]);
         this._releaseSettledDispatchLocks(currentColumnBySession);
-
-        if (
-            isSharedReviewerAutobanColumn(sourceColumn) &&
-            shouldSkipSharedReviewerAutobanDispatch(
-                this._autobanLaneLastDispatchAt.get('coded-reviewer'),
-                this._autobanLastTickAt,
-                reviewerLaneColumns
-            )
-        ) {
-            return;
-        }
 
         if (cardsInColumn.length === 0) {
             await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
@@ -6977,9 +6959,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             await this._recordAutobanDispatch(targetRole, selection.terminalName, 1, selection.effectivePool);
-            if (targetRole === 'reviewer' && isSharedReviewerAutobanColumn(sourceColumn)) {
-                this._autobanLaneLastDispatchAt.set('coded-reviewer', Date.now());
-            }
             await this._announceAutobanDispatch(this._describeAutobanDispatchSourceColumns(cards), targetRole, sessionIds, workspaceRoot);
 
             if (this._autobanState.automationMode !== 'single-column') {

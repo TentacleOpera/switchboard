@@ -506,6 +506,22 @@
             opacity: 0.7;
             border-left: 3px solid var(--vscode-testing-iconPassed, #73c991);
         }
+        .card-worktree-icon {
+            position: absolute;
+            top: 8px;
+            right: 8px;
+            width: 14px;
+            height: 14px;
+            opacity: 0.85;
+            transition: opacity 0.2s;
+            pointer-events: auto;
+        }
+        .card-worktree-icon:hover {
+            opacity: 1;
+        }
+        .card-worktree-icon.merged {
+            opacity: 0.35;
+        }
         .kanban-card.completed:hover {
             opacity: 0.85;
         }
@@ -3288,6 +3304,8 @@
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
         const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
+        const ICON_WORKTREE_ACTIVE = '{{ICON_WORKTREE_ACTIVE}}';
+        const ICON_WORKTREE_MERGED = '{{ICON_WORKTREE_MERGED}}';
 
         // Tab switching logic
         const kanbanTabButtons = document.querySelectorAll('.kanban-tab-btn');
@@ -4638,6 +4656,15 @@
             const worktree = card.worktreeId ? (lastWorktrees || []).find(wt => wt.id === card.worktreeId) : null;
             const branchInfo = worktree ? `<div class="card-branch" style="font-family:var(--font-mono); font-size:8px; color:var(--accent-teal, #4fc3f7); margin-top:2px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="Branch: ${escapeAttr(worktree.branch)}">🌿 ${escapeHtml(worktree.branch)}</div>` : '';
 
+            // Worktree icon: gated on worktreeStatus (not worktreeId, which is NULLed on deletion)
+            const worktreeStatus = card.worktreeStatus || 'none';
+            const worktreeIconHtml = worktreeStatus !== 'none'
+                ? `<img src="${worktreeStatus === 'active' ? ICON_WORKTREE_ACTIVE : ICON_WORKTREE_MERGED}"
+                     class="card-worktree-icon ${worktreeStatus !== 'active' ? 'merged' : ''}"
+                     alt="Worktree"
+                     title="Worktree: ${worktree ? escapeHtml(worktree.branch) : 'removed'} (${escapeHtml(worktreeStatus)})">`
+                : '';
+
             // For completed cards, show a Recover button instead of Copy Prompt
             let primaryActionBtn;
             if (isCompleted) {
@@ -4711,6 +4738,7 @@
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
+                    ${worktreeIconHtml}
                     <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}${branchInfo}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">

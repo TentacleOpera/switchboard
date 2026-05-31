@@ -6228,6 +6228,9 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         } catch (e: any) {
                             console.warn(`Failed to remove worktree: ${e.message}`);
                         }
+                        for (const p of assignedCards) {
+                            await db.updatePlanWorktreeStatus(p.sessionId, 'deleted');
+                        }
                         await db.deleteWorktree(Number(msg.worktreeId));
                     }
                     // Enrich with git-derived paths before sending to webview
@@ -6572,6 +6575,8 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             '{{ICON_59}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-59.png')).toString(),
             '{{ICON_41}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-41.png')).toString(),
             '{{ICON_CODE_MAP}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, '25-1-100 Sci-Fi Flat icons-90.png')).toString(),
+            '{{ICON_WORKTREE_ACTIVE}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-active.svg')).toString(),
+            '{{ICON_WORKTREE_MERGED}}': webview.asWebviewUri(vscode.Uri.joinPath(iconDir, 'worktree-merged.svg')).toString(),
         };
         for (const [placeholder, uri] of Object.entries(iconMap)) {
             content = content.replace(new RegExp(placeholder.replace(/[{}]/g, '\\$&'), 'g'), uri);
@@ -6643,6 +6648,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             if (worktreeResult) {
                 // Assign worktree to plan (one-and-done: this worktree is for this plan only)
                 await db.updatePlanWorktree(sessionId, worktreeResult.id);
+                await db.updatePlanWorktreeStatus(sessionId, 'active');
             }
         } catch (err: any) {
             console.warn(`[KanbanProvider] Failed to auto-create worktree for plan ${sessionId}: ${err.message}`);
@@ -6846,6 +6852,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (await db.ensureReady()) {
                     await db.deleteWorktree(worktree.id);
                     await db.updatePlanWorktree(plan.sessionId, null);
+                    await db.updatePlanWorktreeStatus(plan.sessionId, 'merged');
                 } else {
                     console.warn(`[KanbanProvider] Kanban database not ready during merge cleanup for worktree ${worktree.id}`);
                 }
@@ -6882,6 +6889,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                     }
                     await execFileAsync('git', ['branch', '-D', worktree.branch], { cwd: workspaceRoot });
                     await db.deleteWorktree(worktree.id);
+                    await db.updatePlanWorktreeStatus(sessionId, 'deleted');
                 } catch (e: any) {
                     console.warn(`Failed to cleanup worktree: ${e.message}`);
                 }
