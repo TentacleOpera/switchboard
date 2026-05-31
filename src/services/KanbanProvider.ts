@@ -2241,11 +2241,8 @@ export class KanbanProvider implements vscode.Disposable {
         // Generate preview prompts for each role
         const previews: Record<string, string> = {};
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'code_researcher'];
-        const defaultPromptOverrides = await this._getDefaultPromptOverrides(workspaceRoot);
         for (const role of roles) {
             try {
-                const promptsConfig = await this._getPromptsConfig(workspaceRoot);
-
                 // Context-aware plan filtering
                 let plans: BatchPromptPlan[] = [];
                 const cards = this._lastCards.filter(c => {
@@ -2278,67 +2275,13 @@ export class KanbanProvider implements vscode.Disposable {
                     plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
                 }
 
-                // Design doc loading for planner and tester (matching actual dispatch)
-                const designDocEnabled = promptsConfig.designDocEnabled;
-                const designDocLink = (role === 'planner' || role === 'tester') && designDocEnabled
-                    ? (promptsConfig.designDocLink || '').trim() || undefined
-                    : undefined;
-                let designDocContent: string | undefined;
-                if (designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
-                    try {
-                        const notionService = this._getNotionService(workspaceRoot);
-                        designDocContent = (await notionService.loadCachedContent()) || undefined;
-                    } catch { /* non-fatal — fallback to URL */ }
-                }
-
-                // Instruction for execution roles (matching _generateBatchExecutionPrompt)
-                const instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
-
-                // Source column label (matching actual dispatch)
+                // Delegate to generateUnifiedPrompt for config resolution + prompt building
                 const sourceColumnLabel = this._getSourceColumnLabelForRole(role);
-
-                const preview = buildKanbanBatchPrompt(role as any, plans, {
-                    workspaceRoot,
-                    clearAntigravityContext: promptsConfig.clearAntigravityContextByRole?.[role as any] ?? false,
-                    cavemanOutputEnabled: promptsConfig.cavemanOutputByRole?.[role as any] ?? false,
-                    defaultPromptOverrides,
-                    gitProhibitionEnabled: role === 'planner'
-                        ? promptsConfig.gitProhibitionEnabled
-                        : (promptsConfig.gitProhibitionByRole?.[role as any] ?? true),
-                    switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role as any] ?? true,
-                    useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role as any] ?? false,
-                    researchDepth: role === 'code_researcher' ? promptsConfig.codeResearcher?.researchDepth : (role === 'researcher' ? promptsConfig.researchDepth : undefined),
+                const instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
+                previews[role] = await this.generateUnifiedPrompt(role, plans, workspaceRoot, {
                     sourceColumnLabel,
-                    instruction,
-                    // Planner-specific options (matching _generateBatchPlannerPrompt pattern)
-                    plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
-                    dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
-                    aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
-                    splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,
-                    skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
-                    skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
-                    designDocLink,
-                    designDocContent,
-                    routingMapConfig: role === 'planner' ? this._routingMapConfig : undefined,
-                    // Lead-specific options
-                    includeInlineChallenge: role === 'lead' ? (promptsConfig.leadChallengeEnabled ?? false) : undefined,
-                    pairProgrammingEnabled: (role === 'lead' || role === 'coder' || role === 'intern') ? (promptsConfig.pairProgrammingEnabled?.[role as any] ?? false) : undefined,
-                    // Coder/Lead/Intern-specific options
-                    accurateCodingEnabled: (role === 'coder' || role === 'lead' || role === 'intern') ? (promptsConfig.accurateCodingEnabledByRole?.[role] ?? false) : undefined,
-                    // Reviewer-specific options (matching _generateBatchReviewerPrompt pattern)
-                    advancedReviewerEnabled: role === 'reviewer' ? promptsConfig.advancedReviewerEnabled : undefined,
-                    suppressWalkthroughEnabled: (role === 'lead' || role === 'coder' || role === 'intern')
-                        ? promptsConfig.suppressWalkthroughByRole?.[role as any] ?? false
-                        : undefined,
-                    includeDependencyInstructions: (role === 'lead' || role === 'coder' || role === 'intern')
-                        ? (promptsConfig.includeDependencyInstructionsByRole?.[role as any] ?? false)
-                        : undefined,
-                    ticketUpdateMode: role === 'ticket_updater' ? promptsConfig.ticketUpdateMode : undefined,
-                    complexityScoringSkill: role === 'splitter' ? promptsConfig.complexityScoringSkill : undefined,
-                    saveToLocalDocs: role === 'researcher' ? promptsConfig.saveToLocalDocs : undefined,
-                    localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
+                    instruction
                 });
-                previews[role] = preview;
             } catch {
                 previews[role] = 'Preview not available';
             }
@@ -2792,21 +2735,13 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
             let prompt: string;
             const targetBlock = batchSize !== undefined ? batchBlock : schedulingBlock;
-            // Custom agent roles (custom_agent_*) are not supported by buildKanbanBatchPrompt
-            // (it throws for unknown roles). Compose a minimal preamble directly.
-            if (role.startsWith('custom_agent_')) {
-                prompt = `Please process plans as a custom agent.${targetBlock}` + sqlInstruction;
-            } else {
-                // Build the role-configuration preamble, then strip the trailing empty
-                // "PLANS TO PROCESS:" section (produced when plans=[] — it's replaced
-                // by the scheduling block below and would be contradictory noise).
-                let preamble = await this.generateUnifiedPrompt(role, [], workspaceRoot, {
-                    sourceColumnLabel: this._getSourceColumnLabelForRole(role),
-                    instruction: undefined
-                });
-                preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
-                prompt = preamble + targetBlock + sqlInstruction;
-            }
+            // Build the role-configuration preamble via generateUnifiedPrompt (handles
+            // both built-in roles and custom agents), then strip the trailing empty
+            // "PLANS TO PROCESS:" section (produced when plans=[] — it's replaced
+            // by the scheduling block below and would be contradictory noise).
+            let preamble = await this.generateUnifiedPrompt(role, [], workspaceRoot);
+            preamble = preamble.replace(/\n*PLANS TO PROCESS:\n?\s*$/, '').trimEnd();
+            prompt = preamble + targetBlock + sqlInstruction;
 
             this._panel?.webview.postMessage({
                 type: 'antigravityPrompt',

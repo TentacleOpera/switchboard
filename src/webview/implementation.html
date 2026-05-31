@@ -2284,7 +2284,6 @@
         let currentPlanMode = 'active';    // 'active' | 'completed'
         let lastTerminals = {};
         let lastAllOpenTerminals = [];
-        let lastTeamReady = false;
         let lastDispatchReadiness = {};
         let lastJulesActivePlans = [];
         let lastJulesSessions = [];
@@ -2573,7 +2572,6 @@
                 case 'terminalStatuses':
                     lastTerminals = message.terminals || {};
                     lastAllOpenTerminals = message.allOpenTerminals || [];
-                    if (message.teamReady !== undefined) { lastTeamReady = message.teamReady; }
                     if (message.dispatchReadiness !== undefined) { lastDispatchReadiness = message.dispatchReadiness || {}; }
                     renderAgentList();
                     updateTerminalButtonState(); // NEW

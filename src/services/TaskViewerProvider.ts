@@ -16311,16 +16311,12 @@ Create this file exactly as specified, then continue your work.`);
                     }
                 }
 
-                // Compute teamReady: both lead and coder must be terminal agents (not chat) and alive
-                const leadAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'lead' && t.type === 'terminal');
-                const coderAgent = Object.values(enrichedTerminals).find((t: any) => t.role === 'coder' && t.type === 'terminal');
-                const teamReady = !!(leadAgent && (leadAgent as any).alive && coderAgent && (coderAgent as any).alive);
                 const roles = ['lead', 'coder', 'reviewer', 'planner', 'analyst', ...customAgents.map(agent => agent.role)];
                 const roleCandidates = Object.fromEntries(customAgents.map(agent => [agent.role, [agent.name, agent.role]]));
                 const dispatchReadiness = this._computeDispatchReadiness(enrichedTerminals, terminalsMap, activeTerminals, roles, roleCandidates);
 
-                this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, teamReady, dispatchReadiness });
-                this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, teamReady, dispatchReadiness });
+                this._view.webview.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });
+                this._kanbanProvider?.postMessage({ type: 'terminalStatuses', terminals: enrichedTerminals, dispatchReadiness });
 
                 // Send ALL open terminals for the dropdown, with alias/friendlyName prioritized as displayName
                 const pidAliasMap = new Map<number, string>();
@@ -16344,14 +16340,12 @@ Create this file exactly as specified, then continue your work.`);
                 this._view.webview.postMessage({
                     type: 'terminalStatuses',
                     terminals: enrichedTerminals,
-                    teamReady,
                     dispatchReadiness,
                     allOpenTerminals
                 });
                 this._kanbanProvider?.postMessage({
                     type: 'terminalStatuses',
                     terminals: enrichedTerminals,
-                    teamReady,
                     dispatchReadiness,
                     allOpenTerminals
                 });
