@@ -8,9 +8,9 @@
     <style>
         :root {
             /* Kanban dark theme - matching kanban screen */
-            --kanban-bg: #1a1a1a;
-            --panel-bg: #1a1a1a;
-            --panel-bg2: #111111;
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
             --border-color: #333333;
             --border-bright: #444444;
 
@@ -666,7 +666,7 @@
         #preview-pane-online {
             display: flex;
             flex-direction: column;
-            background: var(--vscode-editor-background, var(--panel-bg));
+            background: var(--panel-bg, #000000);
             /* Removed dot-pattern — VS Code preview uses solid backgrounds */
             overflow-y: auto;
             padding: 0 16px 16px 16px;
@@ -721,8 +721,8 @@
             max-width: 800px; /* Clarification: kept for readability, VS Code uses full width */
             margin: 0 auto;
             font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
-            font-size: var(--vscode-font-size, 14px);
-            line-height: var(--vscode-font-line-height, 22px);
+            font-size: 13px;
+            line-height: 1.5;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground, #cccccc);
         }
@@ -730,8 +730,8 @@
         /* Kanban preview pane: inherits font/text styling but keeps its own layout */
         #kanban-preview-pane {
             font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
-            font-size: var(--vscode-font-size, 14px);
-            line-height: var(--vscode-font-line-height, 22px);
+            font-size: 13px;
+            line-height: 1.5;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground, #cccccc);
         }
@@ -739,11 +739,11 @@
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
         #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
         #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
-            margin-top: 24px;
-            margin-bottom: 16px;
+            margin-top: 16px;
+            margin-bottom: 8px;
             font-weight: 600;
             line-height: 1.25;
-            color: var(--vscode-editor-foreground, #cccccc); /* VS Code uses foreground, not accent */
+            color: #ffffff;
         }
 
         #markdown-preview h1,
@@ -790,9 +790,9 @@
         #markdown-preview p,
         #markdown-preview-online p,
         #kanban-preview-pane p {
-            margin-bottom: 0.7em; /* Match VS Code's markdown.css default */
+            margin-bottom: 10px;
             line-height: inherit; /* Inherits from container's var(--vscode-font-line-height, 22px) */
-            color: var(--vscode-editor-foreground, #cccccc);
+            color: var(--text-primary, #e0e0e0);
             font-size: inherit; /* Inherits from container's var(--vscode-font-size, 14px) */
         }
 
@@ -839,8 +839,10 @@
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
-            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
-            padding: 1px 4px;
+            color: #d29922;
+            background-color: rgba(210, 153, 34, 0.12);
+            border: 1px solid rgba(210, 153, 34, 0.25);
+            padding: 2px 6px;
             border-radius: 3px;
         }
 
@@ -1352,7 +1354,7 @@
         }
         #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
         #kanban-list-pane { flex: 1; overflow-y: auto; }
-        .kanban-preview-pane { flex: 2; overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); }
+        .kanban-preview-pane { flex: 2; overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
         .kanban-plan-item {
             position: relative;
             display: flex;
@@ -1438,7 +1440,7 @@
             position: fixed;
             z-index: 999;
             width: min(420px, calc(100vw - 24px));
-            background: var(--panel-bg, #1e1e2e);
+            background: var(--panel-bg, #000000);
             border: 1px solid var(--border-color, rgba(255,255,255,0.12));
             border-radius: 6px;
             padding: 10px;

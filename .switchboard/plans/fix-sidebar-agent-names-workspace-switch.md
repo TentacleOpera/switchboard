@@ -406,4 +406,22 @@ if (lastTerminalAgentNames['analyst']) {
 
 ---
 
+## Completion Report
+**Status:** ✅ COMPLETED
+
+**Summary of Fixes Applied:**
+- **`src/services/TaskViewerProvider.ts`:** Rewrote `getActualTerminalAgentNames()` to directly iterate `_terminalAgentInfo` and filter alive terminals against `vscode.window.terminals`. Added `_notifyTerminalAgentNamesChanged()` and hooked it into `setTerminalAgentInfo` and `clearTerminalAgentInfo` to instantly broadcast state. Integrated `terminalAgentNames` broadcast into `_postSidebarConfigurationState`.
+- **`src/webview/implementation.html`:** Registered `lastTerminalAgentNames`, wired up the message handler, and updated agent-name rendering loops to aggressively prioritize live terminal designations over workspace startup configs for both dynamically mapped agents and the `analyst`.
+- **`src/services/KanbanProvider.ts`:** Opted to Retain `clearRegisteredTerminalsMap()` (Option B), keeping correct dispatch mechanics completely independent of agent-name display, which is correctly managed now.
+
+**Validation Results:**
+- Typechecks and runtime dependencies verified against `vscode.window.terminals` lifecycle semantics. 
+- Javascript Maps allow iteration while `delete()`ing keys safely across environments.
+- Fallback logic checks out and effectively bridges async loads across Webview panels.
+
+**Remaining Risks:**
+- **Minor UI Stutter (NIT):** Repeated synchronous initialization of terminals via `setTerminalAgentInfo` forces immediate successive un-debounced calls to `_notifyTerminalAgentNamesChanged()`. During rapid creation `createAgentGrid`, this creates redundant repaints inside the webview. Risk explicitly accepted per original plan analysis.
+
+---
+
 **Recommendation: Send to Coder**
