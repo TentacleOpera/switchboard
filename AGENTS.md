@@ -1,4 +1,5 @@
 <!-- switchboard:agents-protocol:start -->
+<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ### 📚 Available Skills
@@ -50,4 +51,5 @@ Use the active editor's workspace root as the tiebreaker. Write to the `.switchb
 Ask the user where to write the plan. Never create `.switchboard/plans/` yourself.
 
 **NEVER** skip the filesystem check and assume a workspace is Switchboard-managed based on file context alone.
+<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
