@@ -6218,7 +6218,7 @@
             container.appendChild(modeRow);
 
             const modeDescriptions = {
-                'single-column': 'Automates a single kanban column transition. Best for simple workflows with one agent role.',
+                'single-column': 'Automates a single workflow stage. For example, code all plans in the PLANNED column overnight, ready for review the next day.',
                 'multi-column': 'Automates multiple column transitions with per-role terminal pools. Best for full pipeline automation.',
                 'antigravity-batch': 'Generates a one-shot batch prompt for Antigravity chat. No continuous automation — run manually as needed.'
             };
@@ -6270,26 +6270,26 @@
                 const configuredPool = Array.isArray(state.terminalPools?.[role]) ? state.terminalPools[role].filter(Boolean) : [];
                 const managedPool = new Set(Array.isArray(state.managedTerminalPools?.[role]) ? state.managedTerminalPools[role] : []);
                 const aliveRoleTerminals = Object.keys(lastTerminals)
-                    .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
-                    .filter(name => resolveTerminalLiveness(name).alive)
-                    .sort((a, b) => a.localeCompare(b));
+                     .filter(name => lastTerminals[name] && lastTerminals[name].role === role)
+                     .filter(name => resolveTerminalLiveness(name).alive)
+                     .sort((a, b) => a.localeCompare(b));
                 const alivePrimaryRoleTerminals = aliveRoleTerminals
-                    .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
+                     .filter(name => String(lastTerminals[name]?.purpose || '').trim().toLowerCase() !== 'autoban-backup');
                 const effectivePool = (
-                    configuredPool.length > 0
-                        ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
-                        : alivePrimaryRoleTerminals
+                     configuredPool.length > 0
+                          ? configuredPool.filter(name => aliveRoleTerminals.includes(name))
+                          : alivePrimaryRoleTerminals
                 ).slice(0, 5);
                 return effectivePool.map(name => {
-                    const status = resolveTerminalLiveness(name);
-                    const count = Number(state.sendCounts?.[name] || 0);
-                    return {
-                        name,
-                        count,
-                        managed: managedPool.has(name),
-                        alive: status.alive,
-                        terminal: status.terminal
-                    };
+                     const status = resolveTerminalLiveness(name);
+                     const count = Number(state.sendCounts?.[name] || 0);
+                     return {
+                          name,
+                          count,
+                          managed: managedPool.has(name),
+                          alive: status.alive,
+                          terminal: status.terminal
+                     };
                 });
             };
 
@@ -6298,7 +6298,18 @@
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
 
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 15, batchSize: 3, complexityFilter: 'all', terminalPools: {} };
+                // Overall Header: display "AUTOMATION" in a db-subsection container
+                const automationHeader = document.createElement('div');
+                automationHeader.className = 'db-subsection';
+                const automationHeaderTitle = document.createElement('div');
+                automationHeaderTitle.className = 'subsection-header';
+                const automationHeaderSpan = document.createElement('span');
+                automationHeaderSpan.textContent = 'AUTOMATION';
+                automationHeaderTitle.appendChild(automationHeaderSpan);
+                automationHeader.appendChild(automationHeaderTitle);
+                singleColumnContainer.appendChild(automationHeader);
+
+                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 15, batchSize: 3, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED' };
 
                 // Status row
                 const scStatusRow = document.createElement('div');
@@ -6308,7 +6319,107 @@
                 scStatusRow.appendChild(scStatusText);
                 singleColumnContainer.appendChild(scStatusRow);
 
-                // --- Automation Rules Section ---
+                // --- Column Rules Section (ordered first) ---
+                const columnRulesSectionSc = document.createElement('div');
+                columnRulesSectionSc.className = 'db-subsection';
+                singleColumnContainer.appendChild(columnRulesSectionSc);
+
+                const rulesHeaderSc = document.createElement('div');
+                rulesHeaderSc.className = 'subsection-header';
+                const rulesSpanSc = document.createElement('span');
+                rulesSpanSc.textContent = 'COLUMN RULES';
+                rulesHeaderSc.appendChild(rulesSpanSc);
+                columnRulesSectionSc.appendChild(rulesHeaderSc);
+
+                const timingExplanationSc = document.createElement('div');
+                timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                timingExplanationSc.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+                columnRulesSectionSc.appendChild(timingExplanationSc);
+
+                // Dropdown to choose which column to automate
+                const columnSelectRow = document.createElement('div');
+                columnSelectRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px 8px 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                const columnSelectLabel = document.createElement('span');
+                columnSelectLabel.textContent = 'SOURCE COLUMN:';
+                const columnSelect = document.createElement('select');
+                columnSelect.style.cssText = autobanSelectStyle;
+                guardInteraction(columnSelect);
+
+                // Populate from columnDefinitions, excluding COMPLETED
+                const selectableColumns = columnDefinitions.filter(col => col.id !== 'COMPLETED');
+                selectableColumns.forEach(col => {
+                    const opt = document.createElement('option');
+                    opt.value = col.id;
+                    opt.textContent = col.label || col.id;
+                    if (col.id === (singleColumnConfig.sourceColumn || 'PLAN REVIEWED')) opt.selected = true;
+                    columnSelect.appendChild(opt);
+                });
+
+                columnSelect.addEventListener('change', () => {
+                    singleColumnConfig.sourceColumn = columnSelect.value;
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'single-column',
+                        enabled: singleColumnConfig.enabled,
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn
+                    });
+                    renderAutobanPanel();
+                });
+
+                columnSelectRow.appendChild(columnSelectLabel);
+                columnSelectRow.appendChild(columnSelect);
+                columnRulesSectionSc.appendChild(columnSelectRow);
+
+                // Rule row
+                const ruleRowSc = document.createElement('div');
+                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
+
+                const ruleLblSc = document.createElement('span');
+                ruleLblSc.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                ruleLblSc.textContent = (singleColumnConfig.sourceColumn || 'PLAN REVIEWED') + ' → NEXT';
+
+                const everyLblSc = document.createElement('span');
+                everyLblSc.style.cssText = 'color:var(--text-secondary);';
+                everyLblSc.textContent = 'every';
+
+                const minInputSc = document.createElement('input');
+                minInputSc.type = 'number';
+                minInputSc.min = '5';
+                minInputSc.max = '60';
+                minInputSc.value = String(singleColumnConfig.intervalMinutes);
+                minInputSc.style.cssText = autobanNumberInputStyle;
+                guardInteraction(minInputSc);
+                minInputSc.addEventListener('change', () => {
+                    const val = Math.max(5, Math.min(60, parseInt(minInputSc.value, 10) || 15));
+                    singleColumnConfig.intervalMinutes = val;
+                    minInputSc.value = String(val);
+                    postKanbanMessage({
+                        type: 'setAutomationMode',
+                        mode: 'single-column',
+                        enabled: singleColumnConfig.enabled,
+                        intervalMinutes: singleColumnConfig.intervalMinutes,
+                        batchSize: singleColumnConfig.batchSize,
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED'
+                    });
+                });
+
+                const minLblSc = document.createElement('span');
+                minLblSc.style.cssText = 'color:var(--text-secondary);';
+                minLblSc.textContent = 'min';
+
+                ruleRowSc.appendChild(ruleLblSc);
+                ruleRowSc.appendChild(everyLblSc);
+                ruleRowSc.appendChild(minInputSc);
+                ruleRowSc.appendChild(minLblSc);
+                columnRulesSectionSc.appendChild(ruleRowSc);
+
+                // --- Automation Rules Section (ordered second) ---
                 const automationRulesSectionSc = document.createElement('div');
                 automationRulesSectionSc.className = 'db-subsection';
                 singleColumnContainer.appendChild(automationRulesSectionSc);
@@ -6343,7 +6454,9 @@
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED'
                     });
                 });
                 batchRowSc.appendChild(batchLabelSc);
@@ -6380,71 +6493,14 @@
                         enabled: singleColumnConfig.enabled,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED'
                     });
                 });
                 complexityRowSc.appendChild(complexityLabelSc);
                 complexityRowSc.appendChild(complexitySelectSc);
                 automationRulesSectionSc.appendChild(complexityRowSc);
-
-                // --- Column Rules Section ---
-                const columnRulesSectionSc = document.createElement('div');
-                columnRulesSectionSc.className = 'db-subsection';
-                singleColumnContainer.appendChild(columnRulesSectionSc);
-
-                const rulesHeaderSc = document.createElement('div');
-                rulesHeaderSc.className = 'subsection-header';
-                const rulesSpanSc = document.createElement('span');
-                rulesSpanSc.textContent = 'COLUMN RULES';
-                rulesHeaderSc.appendChild(rulesSpanSc);
-                columnRulesSectionSc.appendChild(rulesHeaderSc);
-
-                const timingExplanationSc = document.createElement('div');
-                timingExplanationSc.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanationSc.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
-                columnRulesSectionSc.appendChild(timingExplanationSc);
-
-                const ruleRowSc = document.createElement('div');
-                ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
-
-                const ruleLblSc = document.createElement('span');
-                ruleLblSc.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-                ruleLblSc.textContent = 'CREATED -> COMPLETED';
-
-                const everyLblSc = document.createElement('span');
-                everyLblSc.style.cssText = 'color:var(--text-secondary);';
-                everyLblSc.textContent = 'every';
-
-                const minInputSc = document.createElement('input');
-                minInputSc.type = 'number';
-                minInputSc.min = '5';
-                minInputSc.max = '60';
-                minInputSc.value = String(singleColumnConfig.intervalMinutes);
-                minInputSc.style.cssText = autobanNumberInputStyle;
-                guardInteraction(minInputSc);
-                minInputSc.addEventListener('change', () => {
-                    const val = Math.max(5, Math.min(60, parseInt(minInputSc.value, 10) || 15));
-                    singleColumnConfig.intervalMinutes = val;
-                    minInputSc.value = String(val);
-                    postKanbanMessage({
-                        type: 'setAutomationMode',
-                        mode: 'single-column',
-                        enabled: singleColumnConfig.enabled,
-                        intervalMinutes: singleColumnConfig.intervalMinutes,
-                        batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter
-                    });
-                });
-
-                const minLblSc = document.createElement('span');
-                minLblSc.style.cssText = 'color:var(--text-secondary);';
-                minLblSc.textContent = 'min';
-
-                ruleRowSc.appendChild(ruleLblSc);
-                ruleRowSc.appendChild(everyLblSc);
-                ruleRowSc.appendChild(minInputSc);
-                ruleRowSc.appendChild(minLblSc);
-                columnRulesSectionSc.appendChild(ruleRowSc);
 
                 // --- Terminal Pools Section ---
                 const terminalPoolsSectionSc = document.createElement('div');
@@ -6463,99 +6519,110 @@
                 poolsHelpSc.textContent = 'Autoban rotates across the stored pool for each role. Backup terminals created here are kept until you remove or reset them.';
                 terminalPoolsSectionSc.appendChild(poolsHelpSc);
 
-                // Single Coder Pool Block
-                const coderPoolEntriesSc = getRolePoolEntries('coder');
-                const roleBlockSc = document.createElement('div');
-                roleBlockSc.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
+                // Resolve the role for the source column dynamically
+                const resolvedRole = singleColumnConfig.sourceColumnRole;
 
-                const roleHeaderSc = document.createElement('div');
-                roleHeaderSc.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
-
-                const roleTitleWrapSc = document.createElement('div');
-                roleTitleWrapSc.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
-
-                const roleTitleSc = document.createElement('span');
-                roleTitleSc.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
-                roleTitleSc.textContent = 'Coder';
-
-                const roleCapacitySc = document.createElement('span');
-                roleCapacitySc.style.cssText = chipStyle + ' flex-shrink:0;';
-                roleCapacitySc.textContent = 'POOL ' + coderPoolEntriesSc.length + '/5';
-
-                roleTitleWrapSc.appendChild(roleTitleSc);
-                roleTitleWrapSc.appendChild(roleCapacitySc);
-
-                const addButtonSc = document.createElement('button');
-                addButtonSc.className = 'action-btn';
-                addButtonSc.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
-                addButtonSc.textContent = 'ADD TERMINAL';
-                addButtonSc.disabled = coderPoolEntriesSc.length >= 5;
-                addButtonSc.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'addAutobanTerminal', role: 'coder' });
-                });
-
-                roleHeaderSc.appendChild(roleTitleWrapSc);
-                roleHeaderSc.appendChild(addButtonSc);
-                roleBlockSc.appendChild(roleHeaderSc);
-
-                if (coderPoolEntriesSc.length === 0) {
-                    const emptyState = document.createElement('div');
-                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
-                    emptyState.textContent = 'No live terminals available for this role yet.';
-                    roleBlockSc.appendChild(emptyState);
+                if (!resolvedRole) {
+                    // Warning message
+                    const warningSc = document.createElement('div');
+                    warningSc.style.cssText = 'padding:8px 12px; font-family:var(--font-mono); font-size:10px; color:var(--accent-red, #e55); border:1px solid var(--accent-red, #e55); border-radius:6px; background:var(--panel-bg2); margin-top:8px; line-height:1.4;';
+                    warningSc.textContent = 'No agent role mapped for this column. Select a different column or configure a custom agent.';
+                    terminalPoolsSectionSc.appendChild(warningSc);
                 } else {
-                    coderPoolEntriesSc.forEach(entry => {
-                        const terminalRow = document.createElement('div');
-                        terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+                    // Dynamic Pool Block
+                    const rolePoolEntriesSc = getRolePoolEntries(resolvedRole);
+                    const roleBlockSc = document.createElement('div');
+                    roleBlockSc.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2);';
 
-                        const left = document.createElement('div');
-                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+                    const roleHeaderSc = document.createElement('div');
+                    roleHeaderSc.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
 
-                        const nameSpan = document.createElement('span');
-                        nameSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                        nameSpan.textContent = entry.name;
+                    const roleTitleWrapSc = document.createElement('div');
+                    roleTitleWrapSc.style.cssText = 'display:flex; align-items:center; gap:8px; min-width:0; flex:1 1 auto; overflow:hidden;';
 
-                        const statusBadge = document.createElement('span');
-                        statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
-                        statusBadge.textContent = entry.alive ? 'READY' : 'OFFLINE';
+                    const roleTitleSc = document.createElement('span');
+                    roleTitleSc.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis; flex-shrink:1; min-width:0;';
+                    roleTitleSc.textContent = resolvedRole.charAt(0).toUpperCase() + resolvedRole.slice(1);
 
-                        const kindBadge = document.createElement('span');
-                        kindBadge.style.cssText = chipStyle;
-                        kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
+                    const roleCapacitySc = document.createElement('span');
+                    roleCapacitySc.style.cssText = chipStyle + ' flex-shrink:0;';
+                    roleCapacitySc.textContent = 'POOL ' + rolePoolEntriesSc.length + '/5';
 
-                        left.appendChild(nameSpan);
-                        left.appendChild(statusBadge);
-                        left.appendChild(kindBadge);
+                    roleTitleWrapSc.appendChild(roleTitleSc);
+                    roleTitleWrapSc.appendChild(roleCapacitySc);
 
-                        const right = document.createElement('div');
-                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                        if (entry.terminal) {
-                            const focusButton = document.createElement('button');
-                            focusButton.style.cssText = smallButtonStyle;
-                            focusButton.textContent = 'FOCUS';
-                            focusButton.addEventListener('click', () => {
-                                postKanbanMessage({ type: 'focusTerminal', terminalName: entry.name });
-                            });
-                            right.appendChild(focusButton);
-                        }
-
-                        if (entry.managed) {
-                            const removeButton = document.createElement('button');
-                            removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
-                            removeButton.textContent = 'REMOVE';
-                            removeButton.addEventListener('click', () => {
-                                postKanbanMessage({ type: 'removeAutobanTerminal', role: 'coder', terminalName: entry.name });
-                            });
-                            right.appendChild(removeButton);
-                        }
-
-                        terminalRow.appendChild(left);
-                        terminalRow.appendChild(right);
-                        roleBlockSc.appendChild(terminalRow);
+                    const addButtonSc = document.createElement('button');
+                    addButtonSc.className = 'action-btn';
+                    addButtonSc.style.cssText = 'padding:3px 8px; font-size:9px; flex-shrink:0;';
+                    addButtonSc.textContent = 'ADD TERMINAL';
+                    addButtonSc.disabled = rolePoolEntriesSc.length >= 5;
+                    addButtonSc.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'addAutobanTerminal', role: resolvedRole });
                     });
+
+                    roleHeaderSc.appendChild(roleTitleWrapSc);
+                    roleHeaderSc.appendChild(addButtonSc);
+                    roleBlockSc.appendChild(roleHeaderSc);
+
+                    if (rolePoolEntriesSc.length === 0) {
+                        const emptyState = document.createElement('div');
+                        emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
+                        emptyState.textContent = 'No live terminals available for this role yet.';
+                        roleBlockSc.appendChild(emptyState);
+                    } else {
+                        rolePoolEntriesSc.forEach(entry => {
+                            const terminalRow = document.createElement('div');
+                            terminalRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+
+                            const left = document.createElement('div');
+                            left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+
+                            const nameSpan = document.createElement('span');
+                            nameSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
+                            nameSpan.textContent = entry.name;
+
+                            const statusBadge = document.createElement('span');
+                            statusBadge.style.cssText = chipStyle + (entry.alive ? '' : ' border-color:var(--accent-red, #e55); color:var(--accent-red, #e55);');
+                            statusBadge.textContent = entry.alive ? 'READY' : 'OFFLINE';
+
+                            const kindBadge = document.createElement('span');
+                            kindBadge.style.cssText = chipStyle;
+                            kindBadge.textContent = entry.managed ? 'BACKUP' : 'PRIMARY';
+
+                            left.appendChild(nameSpan);
+                            left.appendChild(statusBadge);
+                            left.appendChild(kindBadge);
+
+                            const right = document.createElement('div');
+                            right.style.cssText = 'display:flex; align-items:center; gap:6px;';
+
+                            if (entry.terminal) {
+                                const focusButton = document.createElement('button');
+                                focusButton.style.cssText = smallButtonStyle;
+                                focusButton.textContent = 'FOCUS';
+                                focusButton.addEventListener('click', () => {
+                                    postKanbanMessage({ type: 'focusTerminal', terminalName: entry.name });
+                                });
+                                right.appendChild(focusButton);
+                            }
+
+                            if (entry.managed) {
+                                const removeButton = document.createElement('button');
+                                removeButton.style.cssText = smallButtonStyle + ' color:var(--accent-red, #e55);';
+                                removeButton.textContent = 'REMOVE';
+                                removeButton.addEventListener('click', () => {
+                                    postKanbanMessage({ type: 'removeAutobanTerminal', role: resolvedRole, terminalName: entry.name });
+                                });
+                                right.appendChild(removeButton);
+                            }
+
+                            terminalRow.appendChild(left);
+                            terminalRow.appendChild(right);
+                            roleBlockSc.appendChild(terminalRow);
+                        });
+                    }
+                    terminalPoolsSectionSc.appendChild(roleBlockSc);
                 }
-                terminalPoolsSectionSc.appendChild(roleBlockSc);
 
                 // Clear Before Prompt Toggle
                 const scClearRow = document.createElement('div');
@@ -6587,7 +6654,7 @@
                 scStartBtn.className = 'strip-btn';
                 scStartBtn.textContent = 'START';
                 scStartBtn.style.cssText = 'font-family:var(--font-mono); font-size:10px; flex:1;';
-                scStartBtn.disabled = singleColumnConfig.enabled;
+                scStartBtn.disabled = singleColumnConfig.enabled || !resolvedRole;
                 scStartBtn.addEventListener('click', () => {
                     postKanbanMessage({
                         type: 'setAutomationMode',
@@ -6595,7 +6662,9 @@
                         enabled: true,
                         intervalMinutes: singleColumnConfig.intervalMinutes,
                         batchSize: singleColumnConfig.batchSize,
-                        complexityFilter: singleColumnConfig.complexityFilter
+                        complexityFilter: singleColumnConfig.complexityFilter,
+                        terminalPools: singleColumnConfig.terminalPools,
+                        sourceColumn: singleColumnConfig.sourceColumn || 'PLAN REVIEWED'
                     });
                 });
 
@@ -6649,6 +6718,12 @@
                     { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
                     { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
                 ];
+                const automationRulesSection = document.createElement('div');
+                automationRulesSection.className = 'db-subsection';
+                multiColumnContainer.appendChild(automationRulesSection);
+
+                const automationRulesHeader = document.createElement('div');
+                automationRulesHeader.className = 'subsection-header';
                 const automationRulesSpan = document.createElement('span');
                 automationRulesSpan.textContent = 'KANBAN AUTOMATION RULES';
                 automationRulesHeader.appendChild(automationRulesSpan);

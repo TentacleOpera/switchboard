@@ -1453,9 +1453,21 @@ export async function activate(context: vscode.ExtensionContext) {
             }));
 
             // 3. STATE SYNC: Watch state.json for server-side changes (e.g. agent registering or renaming terminals)
+            // Debounce: state.json is written frequently (terminal registrations, config updates).
+            // Without debounce, each write triggers a sync + refresh, which can race with
+            // the write itself and cause "Unexpected end of JSON input" parse errors.
+            let stateSyncTimer: NodeJS.Timeout | undefined;
+            const debouncedStateSync = () => {
+                if (stateSyncTimer) clearTimeout(stateSyncTimer);
+                stateSyncTimer = setTimeout(() => {
+                    void syncTerminalRegistryWithState(runtimeStateRoot).finally(() => {
+                        taskViewerProvider.refresh();
+                    });
+                }, 200);
+            };
             const stateWatcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(runtimeStateRoot, '.switchboard/state.json'));
-            stateWatcher.onDidChange(() => { syncTerminalRegistryWithState(runtimeStateRoot); taskViewerProvider.refresh(); });
-            stateWatcher.onDidCreate(() => { syncTerminalRegistryWithState(runtimeStateRoot); taskViewerProvider.refresh(); });
+            stateWatcher.onDidChange(debouncedStateSync);
+            stateWatcher.onDidCreate(debouncedStateSync);
             context.subscriptions.push(stateWatcher);
 
             // fs.watch fallback for state.json — VS Code's createFileSystemWatcher
@@ -1474,8 +1486,7 @@ export async function activate(context: vscode.ExtensionContext) {
                 }
                 const fsStateWatcher = fs.watch(switchboardDir, (_eventType, filename) => {
                     if (filename && filename.toString() === 'state.json') {
-                        void syncTerminalRegistryWithState(runtimeStateRoot);
-                        taskViewerProvider.refresh();
+                        debouncedStateSync();
                     }
                 });
                 context.subscriptions.push({ dispose: () => { try { fsStateWatcher.close(); } catch { } } });
@@ -1553,7 +1564,20 @@ export async function activate(context: vscode.ExtensionContext) {
         if (!fs.existsSync(statePath)) return;
 
         try {
-            const state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+            // Retry JSON parse up to 3 times with 50ms delay — state.json may be
+            // mid-write (truncated) when the file watcher triggers a re-sync.
+            let state: any;
+            let parseAttempts = 0;
+            while (parseAttempts < 3) {
+                try {
+                    state = JSON.parse(fs.readFileSync(statePath, 'utf8'));
+                    break;
+                } catch (parseErr) {
+                    parseAttempts++;
+                    if (parseAttempts >= 3) throw parseErr;
+                    await new Promise(r => setTimeout(r, 50));
+                }
+            }
             const stateTerminals = state.terminals || {};
             const openTerminals = vscode.window.terminals;
             const currentIdeName = (vscode.env.appName || '').toLowerCase();

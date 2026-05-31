@@ -1749,7 +1749,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
         if (this._kanbanProvider && typeof sheet.planFile === 'string' && sheet.planFile.trim()) {
             const complexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, sheet.planFile);
-            await db.updateComplexity(sessionId, complexity);
+            const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+            if (wsId) {
+                const planPath = this._getPlanPathFromSheet(workspaceRoot, sheet);
+                if (planPath) {
+                    await db.updateComplexityByPlanFile(planPath, wsId, complexity);
+                }
+            }
         }
     }
 
@@ -5013,7 +5019,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._singleColumnAutobanState.batchSize = this._autobanState.batchSize;
             this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
             this._singleColumnAutobanState.terminalPools = this._autobanState.terminalPools;
-            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules['PLAN REVIEWED']?.intervalMinutes ?? 15;
+            const sc = this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
+            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules[sc]?.intervalMinutes ?? 15;
+            this._singleColumnAutobanState.sourceColumnRole = columnToPromptRole(sc) || undefined;
             await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         }
         await this._context.workspaceState.update('autoban.state', this._autobanState);
@@ -5694,6 +5702,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         this._refreshTerminalStatuses();
+        this._syncSingleColumnTerminalPools();
         this._postAutobanState();
     }
 
@@ -5712,7 +5721,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         } else {
             this._refreshTerminalStatuses();
         }
+        this._syncSingleColumnTerminalPools();
         this._postAutobanState();
+    }
+
+    /** Sync terminalPools from the main autoban state into _singleColumnAutobanState when in single-column mode.
+     *  This ensures that terminal add/remove operations (which update _autobanState.terminalPools)
+     *  are reflected in the single-column config so that subsequent setAutomationModeFromKanban calls
+     *  don't overwrite the main state's terminalPools with stale single-column data. */
+    private _syncSingleColumnTerminalPools(): void {
+        if (this._autobanState.automationMode === 'single-column') {
+            this._singleColumnAutobanState = {
+                ...this._singleColumnAutobanState,
+                terminalPools: { ...this._autobanState.terminalPools }
+            };
+            this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
+        }
     }
 
     private async _resetAutobanPools(): Promise<void> {
@@ -5745,6 +5769,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         this._refreshTerminalStatuses();
+        this._syncSingleColumnTerminalPools();
         this._postAutobanState();
     }
 
@@ -5828,7 +5853,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._postAutobanStateNow();
     }
 
-    /** Called by Kanban provider when a mode switch or configuration change occurs. */
     public async setAutomationModeFromKanban(msg: any): Promise<void> {
         const newMode = msg.mode;
         if (!['single-column', 'multi-column', 'antigravity-batch'].includes(newMode)) return;
@@ -5846,18 +5870,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 3;
             const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
             const terminalPools = msg.terminalPools || this._singleColumnAutobanState.terminalPools || {};
+            const sourceColumn = msg.sourceColumn || this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
+            const sourceColumnRole = columnToPromptRole(sourceColumn) || undefined;
 
             this._singleColumnAutobanState = {
                 enabled,
                 intervalMinutes,
                 batchSize,
                 complexityFilter,
-                terminalPools
+                terminalPools,
+                sourceColumn,
+                sourceColumnRole
             };
             await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
 
             const singleColumnSyntheticRules = {
-                'PLAN REVIEWED': { enabled: true, intervalMinutes }
+                [sourceColumn]: { enabled: true, intervalMinutes }
             };
 
             this._autobanState = normalizeAutobanConfigState({
@@ -6048,7 +6076,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             case 'CODER CODED':
             case 'CODED':
                 return 'reviewer';
-            default: return null;
+            default:
+                // Dynamic resolution for custom columns
+                return columnToPromptRole(column);
         }
     }
 
@@ -12618,8 +12648,11 @@ What would you like to find?`;
                         await fs.promises.writeFile(planFileAbsolute, nextContent, 'utf8');
                     }
                     const db = await this._getKanbanDb(workspaceRoot);
-                    if (db) {
-                        await db.updateComplexity(sessionId, complexity);
+                    if (db && planFileAbsolute) {
+                        const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+                        if (wsId) {
+                            await db.updateComplexityByPlanFile(planFileAbsolute, wsId, complexity);
+                        }
                     }
                     break;
                 }
@@ -12707,7 +12740,10 @@ What would you like to find?`;
                         const nextComplexity = await this._kanbanProvider.getComplexityFromPlan(workspaceRoot, activePlanFileAbsolute);
                         const db = await this._getKanbanDb(workspaceRoot);
                         if (db) {
-                            await db.updateComplexity(sessionId, nextComplexity);
+                            const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+                            if (wsId) {
+                                await db.updateComplexityByPlanFile(activePlanFileAbsolute, wsId, nextComplexity);
+                            }
                         }
                     }
                     break;

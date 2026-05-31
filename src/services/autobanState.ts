@@ -19,6 +19,8 @@ export type SingleColumnAutobanConfig = {
     batchSize: number;
     complexityFilter: AutobanComplexityFilter;
     terminalPools: Record<string, string[]>;
+    sourceColumn: string;  // NEW: the Kanban column to automate
+    sourceColumnRole?: string; // NEW: dynamic role of the source column
 };
 
 export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
@@ -26,7 +28,9 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     intervalMinutes: 15,
     batchSize: 3,
     complexityFilter: 'all',
-    terminalPools: {}
+    terminalPools: {},
+    sourceColumn: 'PLAN REVIEWED',
+    sourceColumnRole: 'lead'
 };
 
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
@@ -39,7 +43,11 @@ export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanC
             : 'all',
         terminalPools: (typeof state?.terminalPools === 'object' && state!.terminalPools !== null)
             ? Object.fromEntries(Object.entries(state!.terminalPools).map(([k, v]) => [k, Array.isArray(v) ? v.filter(Boolean) : []]))
-            : {}
+            : {},
+        sourceColumn: (typeof state?.sourceColumn === 'string' && state!.sourceColumn!.trim().length > 0)
+            ? state!.sourceColumn!.trim()
+            : 'PLAN REVIEWED',
+        sourceColumnRole: typeof state?.sourceColumnRole === 'string' ? state.sourceColumnRole : undefined
     };
 }
 
