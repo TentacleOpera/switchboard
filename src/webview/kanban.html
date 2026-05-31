@@ -109,6 +109,60 @@
             background: var(--panel-bg2);
         }
 
+        .kanban-sub-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            padding: 4px 16px;
+            background: var(--panel-bg);
+            border-bottom: 1px solid var(--border-color);
+            min-height: 28px;
+            box-sizing: border-box;
+        }
+        .kanban-sub-bar .strip-icon-btn {
+            padding: 2px;
+            height: 20px;
+            width: 20px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: none;
+            cursor: pointer;
+            border-radius: 2px;
+        }
+        .kanban-sub-bar .strip-icon-btn img {
+            width: 16px;
+            height: 16px;
+        }
+        .kanban-sub-bar .strip-icon-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active img {
+            filter: brightness(1.2);
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off {
+            opacity: 0.6;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
+        }
+        .sub-bar-status {
+            font-size: 11px;
+            font-weight: 500;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-secondary);
+        }
+        #status-message.sub-bar-status.flashing {
+            animation: statusFlash 3s ease-in-out forwards;
+        }
+
         .settings-strip {
             display: flex;
             align-items: center;
@@ -317,7 +371,7 @@
             display: flex;
             gap: 12px;
             padding: 16px;
-            padding-top: 36px;
+            padding-top: 12px;
             flex: 1;
             min-height: 0;
             overflow-x: auto;
@@ -2067,11 +2121,6 @@
             <div style="flex: 1;"></div>
 
             <!-- Right Side: Automation and view controls -->
-            <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                <img src="{{ICON_22}}" alt="Start Automation" style="width: 24px; height: 24px;">
-            </button>
-            <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
-
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_28}}" alt="CLI Triggers" style="width: 24px; height: 24px;">
             </button>
@@ -2097,7 +2146,13 @@
             ⚠️ Database unavailable — card positions may not reflect manual moves
         </div>
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
-            <div id="status-message" role="status" aria-live="polite" style="display:none; position: absolute; top: 0; left: 0; right: 0; padding:6px 12px; font-size:12px; text-align:left; z-index: 100; background: var(--panel-bg);"></div>
+            <div class="kanban-sub-bar">
+                <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
+                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 16px; height: 16px;">
+                </button>
+                <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
+                <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
+            </div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
     </div>
@@ -5316,7 +5371,7 @@
                         statusEl.style.color = msg.isError
                             ? 'var(--vscode-errorForeground, #ff6b6b)'
                             : 'var(--text-secondary)';
-                        statusEl.style.display = '';
+                        statusEl.style.display = 'inline-block';
                         // Reset animation by removing class, forcing reflow, re-adding class
                         statusEl.classList.remove('flashing');
                         void statusEl.offsetWidth; // Trigger reflow to restart animation

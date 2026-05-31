@@ -4,6 +4,36 @@
 
 Fix bug where plan's `worktree_id` is not cleared after successful merge, causing plans to remain assigned to worktrees in the Worktrees tab.
 
+## Status
+
+**Completed** - The bug was found to be a phantom/stale issue. The underlying architectural issues (race conditions and missing error handlers) were already fixed by earlier worktree refactors (`control-plane-worktree-fixes.md` and `add-worktree-icon-to-kanban-cards.md`).
+
+---
+
+## Stage 1: Grumpy Review (Adversarial)
+
+- **CRITICAL - Phantom Bug / Stale Plan:** The entire premise of this plan is stale. `KanbanProvider.ts` ALREADY includes `deleteWorktree`, `updatePlanWorktree(null)`, and the exact `try/catch` block with `console.error` and `console.warn` that the plan proposes.
+- **MAJOR - Race Condition Already Fixed:** The described race condition (`_executeMergeRule` being fire-and-forgotten before column move) no longer exists in the codebase. `moveCardToColumn` to `MERGE` now safely avoids executing the merge, and dedicated sync handlers (`executeMerge`, `mergeSelected`) use standard `await` to process the merge sequentially before moving the card to `COMPLETED`.
+
+## Stage 2: Balanced Synthesis
+
+- **What to keep:** The codebase currently handles worktree cleanup safely and robustly. No code needs reverting.
+- **What to fix now:** Nothing in the code. The recommended diagnostic steps confirmed the bug is already patched.
+- **What to defer:** No further actions needed.
+
+## Validation Results
+
+- Audited `KanbanProvider.ts`: `_cleanupWorktreeAfterMerge` correctly applies database updates inside a `try/catch` and includes null guards. 
+- Audited `_executeMergeRule` and `executeMerge` message handlers: They are properly sequenced (`await _executeMergeRule` followed by `await moveCardToColumn`) eliminating the restart race condition.
+- The code matches exactly the "Proposed Changes" the plan was asking to introduce if reproducible. No further code edits required.
+
+## Remaining Risks
+- None. The bug is fully eradicated.
+
+---
+
+*(Original Plan Below)*
+
 ## Metadata
 
 - **Tags:** bugfix, reliability, database
