@@ -20,6 +20,8 @@ export interface CustomAgentAddons {
     suppressWalkthrough?: boolean;
     cavemanOutput?: boolean;
     useSubagents?: boolean;
+    subagentPolicy?: 'default' | 'noSubagents' | 'customSubagent';
+    customSubagentName?: string;
 
     // Design doc
     designDocLink?: string;

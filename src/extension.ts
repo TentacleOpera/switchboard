@@ -2165,13 +2165,15 @@ export async function activate(context: vscode.ExtensionContext) {
             agents.push({ name: 'Jules Monitor', role: 'jules_monitor' });
         }
         const normalizeGridTerminalName = (value: string | undefined): string => (value || '').trim();
+        const escapeRegex = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
         const matchesGridAgentName = (terminal: vscode.Terminal, agentName: string): boolean => {
             const creationName = (terminal.creationOptions as vscode.TerminalOptions | undefined)?.name;
             const terminalName = normalizeGridTerminalName(terminal.name);
             const createdName = normalizeGridTerminalName(creationName);
-            const prefixedTerminalName = terminalName.startsWith(`${agentName} `);
-            const prefixedCreatedName = createdName.startsWith(`${agentName} `);
-            return terminalName === agentName || createdName === agentName || prefixedTerminalName || prefixedCreatedName;
+            // Matches primary agent names (exact, or with VS Code duplicate suffix like " (2)")
+            // but excludes pool terminals which use bare number suffix like " 2"
+            const primaryPattern = new RegExp(`^${escapeRegex(agentName)}(?: \\(\\d+\\))?$`);
+            return primaryPattern.test(terminalName) || primaryPattern.test(createdName);
         };
         const clearGridBlockers = async () => {
             const agentNames = new Set(agents.map(a => a.name));

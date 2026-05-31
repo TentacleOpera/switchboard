@@ -36,7 +36,7 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
     return {
         enabled: state?.enabled === true,
-        intervalMinutes: Math.max(5, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 15)),
+        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 15)),
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
             ? state!.complexityFilter!

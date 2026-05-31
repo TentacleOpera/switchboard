@@ -2069,8 +2069,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * No file I/O. Used by kanban for post-action refreshes.
      */
     public async refreshUI(workspaceRoot?: string) {
-        const resolved = workspaceRoot ? this._resolveWorkspaceRoot(workspaceRoot) : this._resolveWorkspaceRoot();
-        console.log(`[TaskViewerProvider] refreshUI: resolved=${resolved}, requested=${workspaceRoot || 'undefined'}`);
         if (workspaceRoot) {
             const selectedRoot = this._resolveWorkspaceRoot(workspaceRoot);
             const effectiveRoot = selectedRoot
@@ -2078,6 +2076,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 : null;
             if (effectiveRoot) {
                 const currentRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+                // Guard: only activate if effectiveRoot matches current selection, or if
+                // nothing is selected yet (initialization). Mirrors KanbanProvider.refreshIfShowing.
+                if (currentRoot && path.resolve(currentRoot) !== path.resolve(effectiveRoot)) {
+                    this._outputChannel?.appendLine(
+                        `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from current ${currentRoot} — not switching workspace context`
+                    );
+                    return;
+                }
                 if (currentRoot !== effectiveRoot) {
                     this._workspaceId = null;
                     this._workspaceIdRoot = null;
@@ -5394,15 +5400,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private _getEnabledAutobanSourceColumns(): string[] {
+        if (this._autobanState.automationMode === 'single-column') {
+            return [this._singleColumnAutobanState.sourceColumn];
+        }
         return Object.entries(this._autobanState.rules)
             .filter(([, rule]) => rule.enabled)
             .map(([column]) => column);
     }
 
     private _getAutobanReviewerLaneColumns(sourceColumn: string): string[] {
-        return isSharedReviewerAutobanColumn(sourceColumn)
-            ? getEnabledSharedReviewerAutobanColumns(this._autobanState.rules)
-            : [sourceColumn];
+        return [sourceColumn];
     }
 
     private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
@@ -5868,7 +5875,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 batchSize,
                 complexityFilter,
                 terminalPools,
-                routingMode
+                routingMode,
+                singleColumnConfig: this._singleColumnAutobanState
             });
 
             if (enabled) {
@@ -6846,6 +6854,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         for (const [column, rule] of Object.entries(rules)) {
             if (!rule.enabled) { continue; }
+            if (this._autobanState.automationMode === 'single-column' &&
+                column !== this._singleColumnAutobanState.sourceColumn) {
+                continue;
+            }
             const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
             this._autobanLastTickAt.set(column, Date.now());
 
@@ -13928,6 +13940,14 @@ What would you like to find?`;
     }
 
     private async _deregisterAllTerminals(silent: boolean = false) {
+        // Reset autoban pools first: stops engine, clears pool state, closes pool terminals.
+        // Wrapped in try/catch so a partial autoban reset failure doesn't block the rest of deregistration.
+        try {
+            await this._resetAutobanPools();
+        } catch (e) {
+            console.error('[TaskViewerProvider] Failed to reset autoban pools during deregistration:', e);
+        }
+
         // Pre-fetch PIDs outside the state lock to avoid holding the file lock for multiple seconds.
         //
         // IMPORTANT: `vscode.Terminal.processId` is IPC-backed; each terminal that
@@ -13977,14 +13997,24 @@ What would you like to find?`;
             /^Switchboard -/,
 
             /^coder$/i,
+            /^coder \d+$/i,
             /^reviewer$/i,
+            /^reviewer \d+$/i,
             /^planner$/i,
+            /^planner \d+$/i,
             /^analyst$/i,
+            /^analyst \d+$/i,
             /^intern$/i,
+            /^intern \d+$/i,
             /^Lead Coder$/i,
+            /^Lead Coder \d+$/i,
             /^verification/,
             /^execution/,
             /^cortex/,
+            // NOTE: Custom agent pool terminals (e.g., "CustomAgent 2") are not covered by these
+            // static patterns. They are handled by _resetAutobanPools() (called above), which
+            // closes all managed pool terminals. The orphan sweep is a safety net for truly
+            // unmanaged orphans only.
         ];
 
         let orphanCount = 0;

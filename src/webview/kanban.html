@@ -2303,6 +2303,24 @@
                   <span>Enable Deep Research (50-100 sources, codebase + web)</span>
                 </label>
 
+                <div style="margin-top:8px;">
+                  <label class="modal-label" style="margin-bottom:4px;">Subagent Policy</label>
+                  <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;">
+                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
+                      <input type="radio" name="ca-subagent-policy" value="default" style="width:auto; margin:0;" checked>
+                      <span>Default (sequential)</span>
+                    </label>
+                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
+                      <input type="radio" name="ca-subagent-policy" value="noSubagents" style="width:auto; margin:0;">
+                      <span>No Subagents</span>
+                    </label>
+                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
+                      <input type="radio" name="ca-subagent-policy" value="customSubagent" style="width:auto; margin:0;">
+                      <span>Custom Subagent</span>
+                      <input id="ca-addon-custom-subagent-name" class="modal-input" type="text" placeholder="Custom subagent name..." style="margin-bottom:0; width:150px; display:none; padding:2px 4px; font-size:11px; margin-left:8px;">
+                    </label>
+                  </div>
+                </div>
 
                 <div style="margin-top:8px;">                  <label class="modal-label" style="margin-bottom:4px;">Design Doc Link</label>
                   <input id="ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
@@ -2768,6 +2786,7 @@
                     const wrapper = document.createElement('div');
                     wrapper.className = 'addon-radio-group';
                     wrapper.innerHTML = `<span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">${addon.label}</span>`;
+                    const textInputsToToggle = [];
                     addon.options.forEach(opt => {
                         const label = document.createElement('label');
                         label.className = 'checkbox-item';
@@ -2776,14 +2795,61 @@
                             <input type="radio" name="addon_${role}_${addon.id}" value="${opt.value}" ${currentValue === opt.value ? 'checked' : ''}>
                             <span>${opt.label}</span>
                         `;
-                        label.querySelector('input').addEventListener('change', (e) => {
+                        const radioInput = label.querySelector('input');
+                        wrapper.appendChild(label);
+
+                        if (opt.textInputOn) {
+                            const textInput = document.createElement('input');
+                            textInput.type = 'text';
+                            textInput.placeholder = 'Custom subagent name...';
+                            textInput.style.marginLeft = '8px';
+                            textInput.style.padding = '2px 6px';
+                            textInput.style.borderRadius = '4px';
+                            textInput.style.border = '1px solid var(--vscode-input-border, #ccc)';
+                            textInput.style.background = 'var(--vscode-input-background, #fff)';
+                            textInput.style.color = 'var(--vscode-input-foreground, #000)';
+                            textInput.style.display = currentValue === opt.textInputOn ? 'inline-block' : 'none';
+                            textInput.value = roleConfigs[role]?.addons?.customSubagentName || '';
+                            textInput.className = 'addon-text-input';
+                            
+                            textInput.addEventListener('input', (e) => {
+                                const sanitized = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
+                                e.target.value = sanitized;
+                                if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                                if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                                roleConfigs[role].addons.customSubagentName = sanitized;
+                                saveRoleConfig(role);
+                                refreshPreview();
+                            });
+                            wrapper.appendChild(textInput);
+                            textInputsToToggle.push({ input: textInput, triggerValue: opt.textInputOn });
+                        }
+
+                        radioInput.addEventListener('change', (e) => {
                             if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
                             if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
                             roleConfigs[role].addons[addon.id] = e.target.value;
+
+                            let isTextInputOptionSelected = false;
+                            textInputsToToggle.forEach(ti => {
+                                if (e.target.value === ti.triggerValue) {
+                                    ti.input.style.display = 'inline-block';
+                                    isTextInputOptionSelected = true;
+                                } else {
+                                    ti.input.style.display = 'none';
+                                }
+                            });
+
+                            if (!isTextInputOptionSelected) {
+                                roleConfigs[role].addons.customSubagentName = '';
+                                textInputsToToggle.forEach(ti => {
+                                    ti.input.value = '';
+                                });
+                            }
+
                             saveRoleConfig(role);
                             refreshPreview();
                         });
-                        wrapper.appendChild(label);
                     });
                     group.appendChild(wrapper);
                 } else {
@@ -2873,6 +2939,18 @@
           document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
           document.getElementById('ca-addon-workflow-path').value = addons.customWorkflowPath || '';
 
+          const subagentPolicy = addons.subagentPolicy || 'default';
+          const customSubagentName = addons.customSubagentName || '';
+          const subagentRadios = document.getElementsByName('ca-subagent-policy');
+          subagentRadios.forEach(radio => {
+            radio.checked = radio.value === subagentPolicy;
+          });
+          const customNameInput = document.getElementById('ca-addon-custom-subagent-name');
+          if (customNameInput) {
+            customNameInput.value = customSubagentName;
+            customNameInput.style.display = subagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
+          }
+
           // Close details by default when opening form
           document.getElementById('agents-tab-custom-agent-addons').removeAttribute('open');
 
@@ -2924,6 +3002,8 @@
                 researchEnabled: document.getElementById('ca-addon-research').checked,
                 designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
                 customWorkflowPath: document.getElementById('ca-addon-workflow-path').value.trim() || undefined,
+                subagentPolicy: Array.from(document.getElementsByName('ca-subagent-policy')).find(r => r.checked)?.value || 'default',
+                customSubagentName: document.getElementById('ca-addon-custom-subagent-name')?.value.trim() || '',
             }
           };
 
@@ -6413,13 +6493,13 @@
 
                 const minInputSc = document.createElement('input');
                 minInputSc.type = 'number';
-                minInputSc.min = '5';
+                minInputSc.min = '1';
                 minInputSc.max = '60';
                 minInputSc.value = String(singleColumnConfig.intervalMinutes);
                 minInputSc.style.cssText = autobanNumberInputStyle;
                 guardInteraction(minInputSc);
                 minInputSc.addEventListener('change', () => {
-                    const val = Math.max(5, Math.min(60, parseInt(minInputSc.value, 10) || 15));
+                    const val = Math.max(1, Math.min(60, parseInt(minInputSc.value, 10) || 15));
                     singleColumnConfig.intervalMinutes = val;
                     minInputSc.value = String(val);
                     postKanbanMessage({
@@ -8028,6 +8108,26 @@
             if (btnRefreshUAT) {
                 btnRefreshUAT.addEventListener('click', () => {
                     postKanbanMessage({ type: 'getUATData' });
+                });
+            }
+
+            // Custom agent subagent policy visibility toggle
+            const subagentRadios = document.getElementsByName('ca-subagent-policy');
+            const customNameInput = document.getElementById('ca-addon-custom-subagent-name');
+            if (subagentRadios && customNameInput) {
+                subagentRadios.forEach(radio => {
+                    radio.addEventListener('change', (e) => {
+                        if (e.target.checked && e.target.value === 'customSubagent') {
+                            customNameInput.style.display = 'inline-block';
+                            customNameInput.focus();
+                        } else {
+                            customNameInput.style.display = 'none';
+                            customNameInput.value = '';
+                        }
+                    });
+                });
+                customNameInput.addEventListener('input', (e) => {
+                    e.target.value = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
                 });
             }
         });

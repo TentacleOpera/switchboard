@@ -2357,6 +2357,8 @@ export class KanbanProvider implements vscode.Disposable {
             skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
             suppressWalkthroughEnabled: promptsConfig.suppressWalkthroughByRole?.[role] ?? false,
             useSubagentsEnabled: promptsConfig.useSubagentsByRole?.[role] ?? false,
+            noSubagentsEnabled: promptsConfig.noSubagentsByRole?.[role] ?? false,
+            customSubagentName: promptsConfig.customSubagentNameByRole?.[role] || undefined,
             includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? false,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
@@ -2522,17 +2524,43 @@ export class KanbanProvider implements vscode.Disposable {
                 code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
             },
             useSubagentsByRole: {
-                planner: plannerConfig?.addons?.useSubagents ?? false,
-                lead: leadConfig?.addons?.useSubagents ?? false,
-                coder: coderConfig?.addons?.useSubagents ?? false,
-                reviewer: reviewerConfig?.addons?.useSubagents ?? false,
-                tester: testerConfig?.addons?.useSubagents ?? false,
-                intern: internConfig?.addons?.useSubagents ?? false,
-                analyst: analystConfig?.addons?.useSubagents ?? false,
-                researcher: researcherConfig?.addons?.useSubagents ?? false,
-                splitter: splitterConfig?.addons?.useSubagents ?? false,
-                ticket_updater: ticketUpdaterConfig?.addons?.useSubagents ?? false,
-                code_researcher: codeResearcherConfig?.addons?.useSubagents ?? false,
+                planner: plannerConfig?.addons?.subagentPolicy === 'default' ? false : (plannerConfig?.addons?.useSubagents ?? false),
+                lead: leadConfig?.addons?.subagentPolicy === 'default' ? false : (leadConfig?.addons?.useSubagents ?? false),
+                coder: coderConfig?.addons?.subagentPolicy === 'default' ? false : (coderConfig?.addons?.useSubagents ?? false),
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'default' ? false : (reviewerConfig?.addons?.useSubagents ?? false),
+                tester: testerConfig?.addons?.subagentPolicy === 'default' ? false : (testerConfig?.addons?.useSubagents ?? false),
+                intern: internConfig?.addons?.subagentPolicy === 'default' ? false : (internConfig?.addons?.useSubagents ?? false),
+                analyst: analystConfig?.addons?.subagentPolicy === 'default' ? false : (analystConfig?.addons?.useSubagents ?? false),
+                researcher: researcherConfig?.addons?.subagentPolicy === 'default' ? false : (researcherConfig?.addons?.useSubagents ?? false),
+                splitter: splitterConfig?.addons?.subagentPolicy === 'default' ? false : (splitterConfig?.addons?.useSubagents ?? false),
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'default' ? false : (ticketUpdaterConfig?.addons?.useSubagents ?? false),
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'default' ? false : (codeResearcherConfig?.addons?.useSubagents ?? false),
+            },
+            noSubagentsByRole: {
+                planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                lead: leadConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                coder: coderConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                tester: testerConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                intern: internConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                analyst: analystConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                researcher: researcherConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents' ?? false,
+            },
+            customSubagentNameByRole: {
+                planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
+                lead: leadConfig?.addons?.subagentPolicy === 'customSubagent' ? (leadConfig?.addons?.customSubagentName || '') : '',
+                coder: coderConfig?.addons?.subagentPolicy === 'customSubagent' ? (coderConfig?.addons?.customSubagentName || '') : '',
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'customSubagent' ? (reviewerConfig?.addons?.customSubagentName || '') : '',
+                tester: testerConfig?.addons?.subagentPolicy === 'customSubagent' ? (testerConfig?.addons?.customSubagentName || '') : '',
+                intern: internConfig?.addons?.subagentPolicy === 'customSubagent' ? (internConfig?.addons?.customSubagentName || '') : '',
+                analyst: analystConfig?.addons?.subagentPolicy === 'customSubagent' ? (analystConfig?.addons?.customSubagentName || '') : '',
+                researcher: researcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (researcherConfig?.addons?.customSubagentName || '') : '',
+                splitter: splitterConfig?.addons?.subagentPolicy === 'customSubagent' ? (splitterConfig?.addons?.customSubagentName || '') : '',
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (codeResearcherConfig?.addons?.customSubagentName || '') : '',
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
@@ -6814,8 +6842,18 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // Update DB
         const db = this._getKanbanDb(workspaceRoot);
         if (db) {
-            await db.deleteWorktree(worktree.id);
-            await db.updatePlanWorktree(plan.sessionId, null);
+            try {
+                if (await db.ensureReady()) {
+                    await db.deleteWorktree(worktree.id);
+                    await db.updatePlanWorktree(plan.sessionId, null);
+                } else {
+                    console.warn(`[KanbanProvider] Kanban database not ready during merge cleanup for worktree ${worktree.id}`);
+                }
+            } catch (e: any) {
+                console.error(`[KanbanProvider] Failed to clear worktree DB state: ${e.message}`);
+            }
+        } else {
+            console.warn(`[KanbanProvider] No Kanban database found during merge cleanup for worktree ${worktree.id}`);
         }
     }
 

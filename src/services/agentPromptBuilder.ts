@@ -121,6 +121,10 @@ export interface PromptBuilderOptions {
     cavemanOutputEnabled?: boolean;
     /** When true (default), uses parallel sub-agent instruction for multi-plan batches. When false, uses sequential-only instruction. */
     useSubagentsEnabled?: boolean;
+    /** When true, injects strict no-subagent prohibition directive. Overrides useSubagentsEnabled. */
+    noSubagentsEnabled?: boolean;
+    /** When present and non-empty, injects directive authorizing use of this specific custom subagent. Overrides useSubagentsEnabled. */
+    customSubagentName?: string;
     /** When true (default), includes DEPENDENCY ORDER section in prompts when plans have dependencies. */
     includeDependencyInstructions?: boolean;
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
@@ -229,6 +233,10 @@ export const SKIP_TESTS_DIRECTIVE = `SKIP TESTS: Do NOT run automated tests (uni
 export const CAVEMAN_OUTPUT_DIRECTIVE = `CAVEMAN MODE: Talk like caveman. Drop filler, keep substance. Use fragments. Technical terms exact. Code unchanged. Pattern: [thing] [action] [reason]. [next step].`;
 export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT generate a walkthrough.md artifact at the end of this task. Omit the walkthrough creation step entirely.`;
 
+export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
+export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
+    `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
+
 export const COMPLEXITY_SCORING_DIRECTIVE =
     `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
     `(skill: "complexity_scoring") to add a ## Complexity Audit section with ` +
@@ -314,15 +322,27 @@ export function buildKanbanBatchPrompt(
     const suppressWalkthroughEnabled = options?.suppressWalkthroughEnabled ?? false;
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
+    const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
+    const customSubagentName = options?.customSubagentName?.trim() || undefined;
     const includeDependencyInstructions = options?.includeDependencyInstructions ?? false;
 
-    const parallelInstruction = plans.length > 1
-        ? (useSubagentsEnabled
-            ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
-            : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
-        : '';
+    let subagentBlock = '';
+    if (noSubagentsEnabled) {
+        subagentBlock = NO_SUBAGENTS_DIRECTIVE;
+    } else if (customSubagentName) {
+        subagentBlock = CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(customSubagentName);
+        if (plans.length > 1) {
+            subagentBlock += '\n\n' + `If your platform supports parallel sub-agents, dispatch one "${customSubagentName}" sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+        }
+    } else if (plans.length > 1) {
+        if (useSubagentsEnabled) {
+            subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+        } else {
+            subagentBlock = `Process each plan sequentially. Do not use parallel sub-agents.`;
+        }
+    }
 
-    const batchExecutionRules = `${parallelInstruction}CRITICAL INSTRUCTIONS:
+    const batchExecutionRules = `CRITICAL INSTRUCTIONS:
 1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
 2. Execute each plan fully before moving to the next (if sequential).
 3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.`;
@@ -419,7 +439,7 @@ export function buildKanbanBatchPrompt(
         // Add dispatch context and plan list
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -479,7 +499,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -528,7 +548,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -573,7 +593,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -613,7 +633,7 @@ For each plan:
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -647,7 +667,7 @@ For each plan:
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -675,7 +695,7 @@ For each plan:
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -799,7 +819,7 @@ Format the analysis as:
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -846,7 +866,7 @@ Format the analysis as:
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -893,7 +913,7 @@ Format the analysis as:
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -954,7 +974,7 @@ Create both files in the same directory as the original plan.`;
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -981,7 +1001,7 @@ Read the persona at \`.agent/personas/gatherer.md\` and follow it step-by-step.`
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
-        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock]
+        const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, subagentBlock]
             .filter(Boolean)
             .join('\n\n');
 
@@ -1040,22 +1060,38 @@ export function buildCustomAgentPrompt(
                 { ...addons, customWorkflowPath: undefined }, workspaceRoot);
     }
 
+    const noSubagentsEnabled = addons?.subagentPolicy === 'noSubagents';
+    const customSubagentName = addons?.subagentPolicy === 'customSubagent' ? addons?.customSubagentName?.trim() : undefined;
+    const useSubagentsEnabled = addons?.subagentPolicy === 'default' ? false : (addons?.useSubagents !== false);
+
+    let subagentBlock = '';
+    if (noSubagentsEnabled) {
+        subagentBlock = NO_SUBAGENTS_DIRECTIVE;
+    } else if (customSubagentName) {
+        subagentBlock = CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE(customSubagentName);
+        if (plans.length > 1) {
+            subagentBlock += '\n\n' + `If your platform supports parallel sub-agents, dispatch one "${customSubagentName}" sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+        }
+    } else if (plans.length > 1) {
+        if (useSubagentsEnabled) {
+            subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+        } else {
+            subagentBlock = `Process each plan sequentially. Do not use parallel sub-agents.`;
+        }
+    }
+
     // Build safeguards block (batch rules + focus directive)
     const safeguardsBlock = addons?.switchboardSafeguards
-        ? (() => {
-            const parallelInstruction = plans.length > 1
-                ? (addons?.useSubagents !== false
-                    ? `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.\n\n`
-                    : `Process each plan sequentially. Do not use parallel sub-agents.\n\n`)
-                : '';
-            return `${parallelInstruction}CRITICAL INSTRUCTIONS:
+        ? `CRITICAL INSTRUCTIONS:
 1. Treat each plan file path below as a completely isolated context. Do not mix requirements between plans.
 2. Execute each plan fully before moving to the next (if sequential).
-3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n${FOCUS_DIRECTIVE}`;
-        })()
+3. If one plan hits an issue, report it clearly but continue processing the remaining plans when safe to do so.\n\n${FOCUS_DIRECTIVE}`
         : `${FOCUS_DIRECTIVE}`;
 
     let prompt = `${dispatchContextPrefix}${safeguardsBlock}\n\nPLANS TO PROCESS:\n${planList}`;
+    if (subagentBlock) {
+        prompt += '\n\n' + subagentBlock;
+    }
 
     // Apply directives in defined order
     if (addons?.gitProhibitionEnabled) prompt += '\n\n' + GIT_PROHIBITION_DIRECTIVE;
