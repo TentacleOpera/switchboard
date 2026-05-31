@@ -1114,8 +1114,13 @@ export class KanbanProvider implements vscode.Disposable {
             this._calculateBlockingDependencies(cards);
             this._lastCards = cards;
 
-            // Invalidate MERGE column check cache on each refresh
+            // Invalidate MERGE column check cache on each refresh.
+            // Also invalidate _currentWorkspaceRoot in case it differs from the refresh target,
+            // since _buildKanbanColumns uses _currentWorkspaceRoot as the cache key.
             this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+            if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolvedWorkspaceRoot) {
+                this._mergeColumnCheckCache.delete(this._currentWorkspaceRoot);
+            }
 
             // Build columns (with fallback to defaults)
             let columns;
@@ -1777,8 +1782,13 @@ export class KanbanProvider implements vscode.Disposable {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) return;
 
-        // Invalidate MERGE column check cache on each refresh
+        // Invalidate MERGE column check cache on each refresh.
+        // Also invalidate _currentWorkspaceRoot in case it differs from the refresh target,
+        // since _buildKanbanColumns uses _currentWorkspaceRoot as the cache key.
         this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+        if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolvedWorkspaceRoot) {
+            this._mergeColumnCheckCache.delete(this._currentWorkspaceRoot);
+        }
 
         const completedLimit = Math.max(1, Math.min(
             vscode.workspace.getConfiguration('switchboard').get<number>('kanban.completedLimit', 100) ?? 100,
@@ -1954,8 +1964,13 @@ export class KanbanProvider implements vscode.Disposable {
         const resolvedWorkspaceRoot = this._resolveWorkspaceRoot(workspaceRoot);
         if (!resolvedWorkspaceRoot) return;
 
-        // Invalidate MERGE column check cache on each refresh
+        // Invalidate MERGE column check cache on each refresh.
+        // Also invalidate _currentWorkspaceRoot in case it differs from the refresh target,
+        // since _buildKanbanColumns uses _currentWorkspaceRoot as the cache key.
         this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+        if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolvedWorkspaceRoot) {
+            this._mergeColumnCheckCache.delete(this._currentWorkspaceRoot);
+        }
 
         try {
             const [customAgents, customKanbanColumns] = await Promise.all([

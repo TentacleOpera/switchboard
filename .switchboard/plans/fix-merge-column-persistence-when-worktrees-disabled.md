@@ -340,3 +340,59 @@ const columnDefs = await this._buildKanbanColumns(
 
 ## Recommendation
 Complexity 4 → **Send to Coder**
+
+---
+
+## Review Pass — 2026-06-01
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | Dead `!db` guard — `_getKanbanDb()` always returns a `KanbanDatabase`, so `!db` is unreachable | Line 397 |
+| 2 | NIT | Cache type `Map<string, boolean \| null>` doesn't reflect `undefined` from `Map.get()` for missing keys; `null` is never stored as a value | Line 140 |
+| 3 | **MAJOR** | Cache key mismatch: `_hasPlansInMergeColumn` uses `this._currentWorkspaceRoot` as cache key (from `_buildKanbanColumns`), but invalidation uses `resolvedWorkspaceRoot` from `_resolveWorkspaceRoot()`. When these differ (refresh for non-active workspace), the active workspace's cache entry is never invalidated, potentially causing stale MERGE column visibility | Lines 1120, 1788, 1970 (invalidation) vs. line 422 (lookup) |
+| 4 | NIT | Full-table scan via `getAllPlans()` just to check MERGE existence; mitigated by cache but could be O(1) with targeted query | Line 407-408 |
+| 5 | PASS | All 10 `await` call sites correctly converted, including parenthesized `.map()` and `.find()` chains | Lines 1128, 1132, 1331, 1793, 1965, 2925, 3004, 3217, 3285, 6744 |
+| 6 | PASS | `_getNextColumnId` MERGE skip logic preserved — cards don't auto-advance into MERGE without worktree | Line 2948-2949 |
+| 7 | PASS | `_resolveKanbanDispatchSpec` null check improved (split `!column` / `!column?.role`) — behavioral no-op, more explicit | Lines 3219, 3242 |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| 1. Dead `!db` guard | **Keep** | Defensive, harmless, not worth churn |
+| 2. Cache type mismatch | **Keep** | Works at runtime, not worth churn for a private field |
+| 3. Cache key mismatch | **Fix now** | Can cause stale MERGE column visibility when refresh targets differ from active workspace |
+| 4. Full-table scan | **Defer** | Cache mitigates; adding a targeted DB query method is out of scope |
+| 5-7. Correct conversions | **No action** | Verified correct |
+
+### Code Fixes Applied
+
+**Fix for Finding 3** — Added `_currentWorkspaceRoot` invalidation at all three cache invalidation sites:
+
+**File**: `src/services/KanbanProvider.ts`
+
+Three locations updated (lines ~1117-1123, ~1785-1791, ~1967-1973 after fix):
+
+```typescript
+// Invalidate MERGE column check cache on each refresh.
+// Also invalidate _currentWorkspaceRoot in case it differs from the refresh target,
+// since _buildKanbanColumns uses _currentWorkspaceRoot as the cache key.
+this._mergeColumnCheckCache.delete(resolvedWorkspaceRoot);
+if (this._currentWorkspaceRoot && this._currentWorkspaceRoot !== resolvedWorkspaceRoot) {
+    this._mergeColumnCheckCache.delete(this._currentWorkspaceRoot);
+}
+```
+
+### Verification Results
+
+- **TypeScript typecheck**: No new errors introduced. Pre-existing error at line 4724 (unrelated relative import path issue) unchanged.
+- **All 10 `await` call sites**: Confirmed present and correctly parenthesized.
+- **Cache invalidation coverage**: All three refresh methods now invalidate both `resolvedWorkspaceRoot` and `_currentWorkspaceRoot` (when they differ).
+
+### Remaining Risks
+
+1. **Performance**: `getAllPlans()` full-table scan on each refresh cycle (first call only; cached thereafter). For workspaces with very large plan counts (>500), this could add perceptible latency to the first board render after a refresh. Mitigated by cache; a targeted `SELECT EXISTS` query would be a future optimization.
+2. **Pre-existing design debt**: `_buildKanbanColumns` uses `this._currentWorkspaceRoot` internally rather than receiving it as a parameter. This means calls from non-refresh contexts (e.g., `_createWorktreeForPlan` at line 6744) check MERGE visibility for the *active* workspace, not the workspace passed to the caller. Not a regression from this change, but worth noting for future refactoring.
+3. **Debounced refresh gap**: External callers of `moveCardToColumn` (e.g., `TaskViewerProvider`) trigger debounced refreshes. Between the DB write and the refresh firing, `_buildKanbanColumns` calls from non-refresh paths could read a stale cache. Impact is minimal (MERGE column visibility is one refresh cycle behind at worst).
