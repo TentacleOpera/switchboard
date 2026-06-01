@@ -284,6 +284,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _tombstones: Set<string> = new Set();
     private _tombstonesReady: Promise<void> | null = null;
     // Autoban continuous background polling engine
+    // Note: _autobanTimers may contain mixed setTimeout (resume one-shot) and setInterval (regular tick) handles.
+    // V8's clearInterval/clearTimeout are interchangeable, so clearInterval works for both.
     private _autobanTimers = new Map<string, NodeJS.Timeout>();
     private _autobanLastTickAt = new Map<string, number>();
     // Serialization queue: ensures only one column tick runs at a time to prevent terminal dispatch contention.
@@ -6043,6 +6045,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._autobanTimers.set(column, timer);
         }
 
+        await this._persistAutobanState();
         this._postAutobanStateNow();
     }
 
@@ -6075,6 +6078,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         continue;
                     }
                     const rule = this._autobanState.rules[column];
+                    if (!rule?.enabled) { continue; }
                     const intervalMs = Math.max(rule?.intervalMinutes ?? 1, 1) * 60 * 1000;
                     this._autobanLastTickAt.set(column, Date.now() - (intervalMs - remainingMs));
                     const timeoutHandle = setTimeout(() => {
