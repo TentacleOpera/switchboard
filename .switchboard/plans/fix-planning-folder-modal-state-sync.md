@@ -129,11 +129,43 @@ document.getElementById('btn-manage-folders').addEventListener('click', () => {
 
 ### Files Changed
 
-- `src/webview/planning.js` — Modify folder modal open handler (line 2812–2819)
+- `src/webview/planning.js` — Modify folder modal open handler (now at lines 3075–3085; was 2812–2819 pre-implementation)
 
 ### Risk Assessment
 
-Low risk — the change adds a backend refresh when opening the modal, which ensures the modal always shows the current state. This is a defensive programming approach that should eliminate the race condition. The `refreshSource` → `_sendLocalDocsReady()` → `localDocsReady` → `renderFolderListModal()` chain is already exercised by the existing Refresh button at line 2853.
+Low risk — the change adds a backend refresh when opening the modal, which ensures the modal always shows the current state. This is a defensive programming approach that should eliminate the race condition. The `refreshSource` → `_sendLocalDocsReady()` → `localDocsReady` → `renderFolderListModal()` chain is already exercised by the existing Refresh button (now at line 3123; was line 2853 pre-implementation).
+
+---
+
+## Review Results (2026-06-01)
+
+### Reviewer: Grumpy Principal Engineer → Balanced Synthesis
+
+**Verdict: PASS — no code fixes required.**
+
+### Findings
+
+| # | Severity | Finding | Resolution |
+|---|----------|---------|------------|
+| 1 | MAJOR (process) | Commit `72a4095` bundles 53 files / +4,252 lines with this 2-line bugfix. Makes bisecting regressions difficult. | **Deferred** — process concern, not a code defect. Flag for user awareness. |
+| 2 | NIT | Plan line numbers stale (referenced 2811–2820; actual is now 3075–3085). | **Fixed** — updated in Files Changed section above. |
+| 3 | NIT (pre-existing) | `handleLocalFolderPathUpdated()` line 1572: `state.localFolderPaths = [folderPath]` overwrites array with single element when only `folderPath` is provided. Latent data-loss risk if backend sends single-path message with multiple folders configured. | **Deferred** — pre-existing, not introduced by this plan. Noted as remaining risk. |
+| 4 | — | Plan-specific change verified correct. Sync fast-path + async backend refresh chain complete and correct. | No fix needed. |
+
+### Verification (Structural)
+
+- `btn-manage-folders` button exists in `planning.html` (line 1621) ✓
+- `folder-modal` container exists in `planning.html` (line 1895) ✓
+- `folder-list-modal` target element exists in `planning.html` (line 1922) ✓
+- Backend `refreshSource` handler routes `local-folder` → `_sendLocalDocsReady()` (PlanningPanelProvider.ts lines 936–948) ✓
+- `_sendLocalDocsReady()` sends `localDocsReady` with `folderPaths` (PlanningPanelProvider.ts lines 1748–1755) ✓
+- `handleLocalDocsReady()` updates `state.localFolderPaths` and calls `renderFolderListModal()` (planning.js lines 1168–1188) ✓
+- Modal-open handler at planning.js lines 3075–3085 matches plan spec exactly ✓
+
+### Remaining Risks
+
+1. **Commit scope**: The auto-commit bundled unrelated features (HTML folder support, kanban changes, etc.) with this bugfix. If regression occurs, bisect will land on a large commit.
+2. **Pre-existing `handleLocalFolderPathUpdated` single-path overwrite**: If the backend ever sends a `localFolderPathUpdated` message with only `folderPath` (not `folderPaths`), the state array collapses to one element. Low probability — backend typically sends the full `folderPaths` array.
 
 ---
 
