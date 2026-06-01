@@ -108,7 +108,7 @@ function run() {
         );
         expectRegex(
             orchestratorSource,
-            /lastWorkflow\s*===\s*'challenge'\s*\|\|\s*lastWorkflow\s*===\s*'tester-pass'/,
+            /lastWorkflow\s*===\s*'tester-pass'/,
             'Expected tester-pass to be terminal in pipeline stage detection.'
         );
     });

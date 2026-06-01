@@ -6,7 +6,7 @@ export type AutobanRuleState = {
 export type AutobanComplexityFilter = 'all' | 'low_and_below' | 'medium_and_below' | 'medium_and_above' | 'high_and_above';
 export type AutobanRoutingMode = 'dynamic' | 'all_coder' | 'all_lead';
 
-export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED'] as const;
+export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'] as const;
 
 export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
 export const DEFAULT_AUTOBAN_BATCH_SIZE = 3;
@@ -64,6 +64,8 @@ export type AutobanConfigState = {
     poolCursor: Record<string, number>;
     rules: Record<string, AutobanRuleState>;
     lastTickAt?: Record<string, number>;
+    paused: boolean;
+    pausedRemainingMs?: Record<string, number>;
     pairProgrammingMode: 'off' | 'cli-cli' | 'cli-ide' | 'ide-cli' | 'ide-ide';
     aggressivePairProgramming: boolean;
     automationMode?: 'single-column' | 'multi-column' | 'antigravity-batch';
@@ -73,6 +75,7 @@ export type AutobanConfigState = {
 const DEFAULT_AUTOBAN_RULES: Record<string, AutobanRuleState> = {
     CREATED: { enabled: true, intervalMinutes: 10 },
     'PLAN REVIEWED': { enabled: true, intervalMinutes: 20 },
+    'INTERN CODED': { enabled: true, intervalMinutes: 15 },
     'LEAD CODED': { enabled: true, intervalMinutes: 15 },
     'CODER CODED': { enabled: true, intervalMinutes: 15 }
 };
@@ -197,7 +200,8 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         ...DEFAULT_AUTOBAN_RULES,
         ...rawRules,
         'LEAD CODED': rawRules['LEAD CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['LEAD CODED'],
-        'CODER CODED': rawRules['CODER CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['CODER CODED']
+        'CODER CODED': rawRules['CODER CODED'] ?? legacyCodedRule ?? DEFAULT_AUTOBAN_RULES['CODER CODED'],
+        'INTERN CODED': rawRules['INTERN CODED'] ?? DEFAULT_AUTOBAN_RULES['INTERN CODED']
     };
     const normalizedRules = Object.fromEntries(
         Object.entries(mergedRules)
@@ -242,6 +246,14 @@ export function normalizeAutobanConfigState(state?: Partial<AutobanConfigState> 
         poolCursor: normalizedPoolCursor,
         rules: normalizedRules,
         lastTickAt: state?.lastTickAt ? { ...state.lastTickAt } : undefined,
+        paused: state?.paused === true,
+        pausedRemainingMs: (typeof state?.pausedRemainingMs === 'object' && state!.pausedRemainingMs !== null)
+            ? Object.fromEntries(
+                Object.entries(state!.pausedRemainingMs)
+                    .filter(([, v]) => typeof v === 'number' && Number.isFinite(v) && v > 0)
+                    .map(([k, v]) => [String(k).trim(), v])
+              )
+            : undefined,
         pairProgrammingMode: (function(m: any, legacyEnabled: any) {
             const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
             if (valid.includes(m)) return m;

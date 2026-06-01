@@ -8,6 +8,7 @@ import { KanbanDatabase, type WorkspaceDatabaseMapping, type KanbanPlanRecord } 
 import { parsePlanMetadata } from './planMetadataUtils';
 import { isRuntimeMirrorPlanFile } from './PlanFileImporter';
 import type { ClickUpSyncService } from './ClickUpSyncService';
+import { resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 
 export class GlobalPlanWatcherService implements vscode.Disposable {
     private _watchers = new Map<string, vscode.FileSystemWatcher>();
@@ -41,10 +42,14 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         // Translate sentinel to empty string — the sentinel '__unassigned__' is a UI filter value
         // and must never be stored as a plan's project name.
         const effectiveProject = project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : project;
+        const effectiveRoot = resolveEffectiveWorkspaceRootFromMappings(workspaceRoot);
+        if (effectiveRoot !== workspaceRoot) {
+            this._outputChannel?.appendLine(`[GlobalPlanWatcher] setCurrentProject: resolved ${workspaceRoot} → ${effectiveRoot} for project "${effectiveProject}"`);
+        }
         if (effectiveProject) {
-            this._currentProjects.set(workspaceRoot, effectiveProject);
+            this._currentProjects.set(effectiveRoot, effectiveProject);
         } else {
-            this._currentProjects.delete(workspaceRoot);
+            this._currentProjects.delete(effectiveRoot);
         }
     }
 
@@ -177,6 +182,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     private async _refreshWatchers(): Promise<void> {
+        // Clear stale project filters when mappings change
+        this._currentProjects.clear();
         // Get all folders that should be watched
         const foldersToWatch = await this._getAllMappedFolders();
         

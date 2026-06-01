@@ -19,6 +19,8 @@
         filterRequestIds: {},
         researchMode: persistedState.researchMode || 'web',
         localFolderPaths: [],
+        htmlFolderPaths: [],
+        htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         editMode: { local: false, kanban: false },
@@ -30,10 +32,15 @@
 
     function toggleSidebarCollapsed() {
         state.docsListCollapsed = !state.docsListCollapsed;
+        state.htmlPreviewCollapsed = state.docsListCollapsed;
         
         // Persist state
         const currentPersisted = vscode.getState() || {};
-        vscode.setState({ ...currentPersisted, docsListCollapsed: state.docsListCollapsed });
+        vscode.setState({
+            ...currentPersisted,
+            docsListCollapsed: state.docsListCollapsed,
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed
+        });
         
         // Apply class to all content rows
         const contentRows = document.querySelectorAll('.content-row');
@@ -159,6 +166,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (statusEl) {
             statusEl.style.color = '';
             statusEl.textContent = 'Import in progress...';
+        }
+        const clipboardStatusEl = document.getElementById('clipboard-import-status');
+        if (clipboardStatusEl) {
+            clipboardStatusEl.style.color = '';
+            clipboardStatusEl.textContent = 'Import in progress...';
         }
 
         vscode.postMessage({
@@ -418,7 +430,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         const icon = document.createElement('span');
         icon.className = 'icon';
-        icon.textContent = (node.kind === 'folder' || node.isDirectory) ? '📁' : '📄';
+        icon.textContent = (node.kind === 'folder' || node.isDirectory) ? '📁' : (sourceId === 'html-folder' ? '🌐' : '📄');
 
         const label = document.createElement('span');
         label.className = 'label';
@@ -485,6 +497,34 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
+        if (sourceId === 'html-folder') {
+            if (state.selectedEl) {
+                state.selectedEl.classList.remove('selected');
+            }
+            const wrapper = findTreeNode(sourceId, docId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+            if (wrapper) {
+                wrapper.classList.add('selected');
+                state.selectedEl = wrapper;
+            }
+            state.activeSource = sourceId;
+            state.activeDocId = docId;
+            state.activeDocName = docName;
+            state.previewRequestId++;
+
+            const statusHtml = document.getElementById('status-html');
+            if (statusHtml) {
+                statusHtml.textContent = 'Loading...';
+            }
+            vscode.postMessage({
+                type: 'fetchPreview',
+                sourceId,
+                docId,
+                requestId: state.previewRequestId,
+                sourceFolder
+            });
+            return;
+        }
         if (state.dirtyFlags.local) {
             if (!confirm('You have unsaved changes in Local Docs. Discard them?')) {
                 return;
@@ -653,6 +693,169 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             row.appendChild(pathSpan);
             row.appendChild(removeBtn);
             folderListModal.appendChild(row);
+        });
+    }
+
+    function handleHtmlDocsReady(msg) {
+        console.log('[PlanningPanel Webview] handleHtmlDocsReady called:', msg);
+        state.htmlFolderPaths = msg.folderPaths || [];
+        renderHtmlDocs({
+            sourceId: msg.sourceId || 'html-folder',
+            nodes: msg.nodes || [],
+            folderPaths: msg.folderPaths || [],
+            error: msg.error
+        });
+        renderHtmlFolderListModal();
+    }
+
+    function renderHtmlFolderListModal() {
+        const folderListModal = document.getElementById('html-folder-list-modal');
+        if (!folderListModal) return;
+        folderListModal.innerHTML = '';
+
+        const folderPaths = state.htmlFolderPaths || [];
+
+        if (folderPaths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            folderListModal.appendChild(empty);
+            return;
+        }
+
+        folderPaths.forEach(path => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = path;
+            pathSpan.title = path;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vscode.postMessage({ type: 'removeHtmlFolder', folderPath: path });
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            folderListModal.appendChild(row);
+        });
+    }
+
+    function renderHtmlDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePaneHtml = document.getElementById('tree-pane-html');
+        if (!treePaneHtml) return;
+
+        treePaneHtml.innerHTML = '';
+
+        // Re-add sidebar toggle
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        toggleRow.appendChild(toggleBtn);
+        treePaneHtml.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = sourceId;
+        treePaneHtml.appendChild(docList);
+
+        if (!nodes || nodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No HTML preview folders configured or folders are empty. Click Folders to get started.</div>';
+            return;
+        }
+
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
+        const docNodes = (nodes || []).filter(n => n.kind === 'document');
+
+        // Group nodes by sourceFolder
+        const docsBySourceFolder = new Map();
+        const foldersBySourceFolder = new Map();
+
+        docNodes.forEach(d => {
+            const sourceFolder = d.metadata?.sourceFolder;
+            if (!sourceFolder) return;
+            if (!docsBySourceFolder.has(sourceFolder)) {
+                docsBySourceFolder.set(sourceFolder, []);
+            }
+            docsBySourceFolder.get(sourceFolder).push(d);
+        });
+
+        folderNodes.forEach(f => {
+            const sourceFolder = f.metadata?.sourceFolder;
+            if (!sourceFolder) return;
+            if (!foldersBySourceFolder.has(sourceFolder)) {
+                foldersBySourceFolder.set(sourceFolder, []);
+            }
+            foldersBySourceFolder.get(sourceFolder).push(f);
+        });
+
+        const sourceFolders = [...new Set([
+            ...(folderPaths || []),
+            ...docsBySourceFolder.keys()
+        ])];
+
+        sourceFolders.forEach(sourceFolder => {
+            const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
+            const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
+
+            if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+
+            const sourceHeader = document.createElement('div');
+            sourceHeader.className = 'folder-subheader source-folder-header';
+            const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
+            sourceHeader.textContent = folderName;
+            sourceHeader.title = sourceFolder;
+            docList.appendChild(sourceHeader);
+
+            const folderNameMap = new Map();
+            sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
+
+            const docsByFolder = new Map();
+            const rootDocs = [];
+            folderDocs.forEach(d => {
+                const docPath = d.id || d.relativePath || '';
+                const lastSlashIdx = docPath.lastIndexOf('/');
+                const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
+
+                if (parentFolderId && folderNameMap.has(parentFolderId)) {
+                    if (!docsByFolder.has(parentFolderId)) {
+                        docsByFolder.set(parentFolderId, []);
+                    }
+                    docsByFolder.get(parentFolderId).push(d);
+                } else {
+                    rootDocs.push(d);
+                }
+            });
+
+            sourceFolderNodes.forEach(folder => {
+                const folderDocsInSource = docsByFolder.get(folder.id) || [];
+                if (folderDocsInSource.length === 0) return;
+
+                const subheader = document.createElement('div');
+                subheader.className = 'folder-subheader';
+                subheader.textContent = folder.name;
+                docList.appendChild(subheader);
+
+                folderDocsInSource.forEach(doc => {
+                    const { wrapper } = renderNode(doc, sourceId);
+                    docList.appendChild(wrapper);
+                });
+            });
+
+            rootDocs.forEach(doc => {
+                const { wrapper } = renderNode(doc, sourceId);
+                docList.appendChild(wrapper);
+            });
         });
     }
 
@@ -1020,6 +1223,22 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handlePreviewReady(msg) {
         const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath } = msg;
+
+        if (sourceId === 'html-folder') {
+            const iframe = document.getElementById('html-preview-frame');
+            if (iframe && msg.webviewUri) {
+                if (iframe.src) {
+                    iframe.src = '';
+                }
+                iframe.src = msg.webviewUri;
+            }
+            const statusHtml = document.getElementById('status-html');
+            if (statusHtml) {
+                statusHtml.textContent = msg.docName || 'Loaded';
+                statusHtml.style.color = 'var(--accent-teal)';
+            }
+            return;
+        }
 
         // Auto-refresh notification
         if (isAutoRefreshed) {
@@ -1684,6 +1903,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'localDocsReady':
                 handleLocalDocsReady(msg);
                 break;
+            case 'htmlDocsReady':
+                handleHtmlDocsReady(msg);
+                break;
             case 'onlineDocsReady':
                 handleOnlineDocsReady(msg);
                 break;
@@ -1743,6 +1965,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'importResearchDocResult':
                 const docTitleInput = document.getElementById('research-doc-title');
                 const researchStatusEl = document.getElementById('research-import-status');
+                const clipboardStatusEl = document.getElementById('clipboard-import-status');
                 
                 const btnResearch = document.getElementById('btn-import-research-doc');
                 const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
@@ -1757,17 +1980,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 
                 if (msg.success) {
+                    const successText = `Imported: ${msg.docTitle || 'Research Doc'}`;
                     if (researchStatusEl) {
                         researchStatusEl.style.color = 'var(--accent-teal)';
-                        researchStatusEl.textContent = `Imported: ${msg.docTitle || 'Research Doc'}`;
+                        researchStatusEl.textContent = successText;
+                    }
+                    if (clipboardStatusEl) {
+                        clipboardStatusEl.style.color = 'var(--accent-teal)';
+                        clipboardStatusEl.textContent = successText;
                     }
                     if (docTitleInput) {
                         docTitleInput.value = '';
                     }
                 } else {
+                    const errorText = `Error: ${msg.error || 'Failed to import'}`;
                     if (researchStatusEl) {
                         researchStatusEl.style.color = '#f14c4c';
-                        researchStatusEl.textContent = `Error: ${msg.error || 'Failed to import'}`;
+                        researchStatusEl.textContent = errorText;
+                    }
+                    if (clipboardStatusEl) {
+                        clipboardStatusEl.style.color = '#f14c4c';
+                        clipboardStatusEl.textContent = errorText;
                     }
                 }
                 break;
@@ -1790,6 +2023,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.localFolderPaths = msg.paths || [];
                 renderFolderList(state.localFolderPaths);
                 renderFolderListModal();
+                break;
+            case 'htmlFoldersListed':
+                state.htmlFolderPaths = msg.paths || [];
+                renderHtmlFolderListModal();
                 break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
@@ -2141,10 +2378,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const complexityInput = document.querySelector('input[name="complexity"]:checked');
         const importToggle = document.getElementById('import-toggle');
         const promptInput = document.getElementById('research-prompt-input');
+        const contextInput = document.getElementById('research-context-input');
 
         const complexity = complexityInput ? complexityInput.value : 'quick';
         const importEnabled = importToggle ? importToggle.checked : false;
         const customPrompt = promptInput ? promptInput.value.trim() : '';
+        const contextValue = contextInput ? contextInput.value.trim() : '';
 
         const complexityLabels = {
             quick: 'Quick (5-10 sources)',
@@ -2153,35 +2392,41 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             academic: 'Academic (100-200+ sources)'
         };
 
-        const skillName = 'web_research';
-        const taskType = 'conduct comprehensive research on the following topic';
-        const depthLabel = 'Research depth';
+        const STRUCTURED_PROMPT_RE = /^(ROLE|CONTEXT|OBJECTIVE|TASK|INSTRUCTIONS):/m;
+        const isStructured = STRUCTURED_PROMPT_RE.test(customPrompt);
 
-        // Use configured local docs folder path with fallback
-        const configuredPaths = state.localFolderPaths || [];
-        const configuredPath = configuredPaths.length > 0 ? configuredPaths[0] : '';
-        const saveLocation = configuredPath || '[CONFIGURE LOCAL DOCS FOLDER]';
-        const saveAction = 'save the results';
-        const protocolAction = 'proposing a research plan';
-
-        let prompt = `Use the ${skillName} skill to ${taskType}`;
-        if (customPrompt) {
-            prompt += `:\n\n${customPrompt}\n\n`;
-        } else {
-            prompt += `.\n\n`;
+        if (isStructured) {
+            return customPrompt;
         }
 
-        prompt += `${depthLabel}: ${complexityLabels[complexity] || complexity}\n\n`;
+        const contextText = contextValue || "General software engineering and technology";
 
-        if (importEnabled) {
-            if (!configuredPath) {
-                prompt += `NOTE: Local docs folder not configured. Please configure it in the Local Docs tab before saving.\n\n`;
-            } else {
-                prompt += `IMPORTANT: After completing the research, ${saveAction} to ${saveLocation} using the write_to_file tool so I can review them later.\n\n`;
-            }
-        }
+        let prompt = `ROLE: You are a research analyst. Prefer authoritative primary sources over blogs and marketing copy; where sources conflict, say so explicitly.
 
-        prompt += `Please begin by ${protocolAction} for my approval, following the ${skillName} skill protocol.`;
+CONTEXT: ${contextText}. The reader is a software engineer — explain domain-specific concepts; do not assume specialist expertise.
+
+CENTRAL QUESTION: ${customPrompt}
+SUB-QUESTIONS (cover all, lead with the first three):
+  1. ${customPrompt} — core framing
+  2. What are the current best practices and authoritative standards?
+  3. What are the key trade-offs and failure modes?
+  4. What is the current state of the art and recent developments?
+
+SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.
+
+SCOPE: Primary focus is the central question above. Related domains and alternative approaches as clearly-labelled benchmarks only. Out of scope: unrelated technology stacks, unrelated jurisdictions, and pure marketing comparisons.
+
+OUTPUT:
+1) Executive summary (≤ 1 page)
+2) Tiered findings: required vs recommended vs optional — clearly distinguish compliance levels
+3) Focused trade-off evaluation (e.g. searchability vs confidentiality, cost vs coverage)
+4) Defence-in-Depth checklist
+5) Plain-English glossary of domain-specific terms
+6) Full source list with direct links and retrieval dates
+
+DECISION THIS FEEDS: General engineering guidance — end with a recommended default for a platform of typical scale.
+
+DEPTH: ${complexityLabels[complexity] || complexity}`;
 
         return prompt;
     }
@@ -2861,6 +3106,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (modal && modal.style.display !== 'none') {
                 modal.style.display = 'none';
             }
+            const modalHtml = document.getElementById('folder-modal-html');
+            if (modalHtml && modalHtml.style.display !== 'none') {
+                modalHtml.style.display = 'none';
+            }
         }
     });
 
@@ -2878,5 +3127,54 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         vscode.postMessage({ type: 'addLocalFolder' });
     });
 
+    // HTML Folder modal open
+    const btnManageHtmlFolders = document.getElementById('btn-manage-html-folders');
+    if (btnManageHtmlFolders) {
+        btnManageHtmlFolders.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-html');
+            if (modal) {
+                modal.style.display = 'flex';
+                renderHtmlFolderListModal();
+                vscode.postMessage({ type: 'listHtmlFolders' });
+            }
+        });
+    }
+
+    // HTML Folder modal close (X button)
+    const btnCloseHtmlFolderModal = document.getElementById('btn-close-html-folder-modal');
+    if (btnCloseHtmlFolderModal) {
+        btnCloseHtmlFolderModal.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-html');
+            if (modal) modal.style.display = 'none';
+        });
+    }
+
+    // HTML Folder modal close (backdrop click)
+    const folderModalHtml = document.getElementById('folder-modal-html');
+    if (folderModalHtml) {
+        folderModalHtml.addEventListener('click', (e) => {
+            if (e.target.id === 'folder-modal-html') {
+                e.target.style.display = 'none';
+            }
+        });
+    }
+
+    // Modal HTML folder management buttons
+    const btnRefreshHtmlFoldersModal = document.getElementById('btn-refresh-html-folders-modal');
+    if (btnRefreshHtmlFoldersModal) {
+        btnRefreshHtmlFoldersModal.addEventListener('click', () => {
+            vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
+        });
+    }
+
+    const btnAddHtmlFolderModal = document.getElementById('btn-add-html-folder-modal');
+    if (btnAddHtmlFolderModal) {
+        btnAddHtmlFolderModal.addEventListener('click', () => {
+            vscode.postMessage({ type: 'addHtmlFolder' });
+        });
+    }
+
     vscode.postMessage({ type: 'fetchRoots' });
+    vscode.postMessage({ type: 'listHtmlFolders' });
+    vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
 })();

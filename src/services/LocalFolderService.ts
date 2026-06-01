@@ -53,6 +53,11 @@ export class LocalFolderService {
         await fs.promises.writeFile(this._cachePath, markdown, 'utf8');
     }
 
+    private _getConfigurationTarget(): vscode.ConfigurationTarget {
+        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this._workspaceRoot));
+        return folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+    }
+
     // ── Folder Path Resolution (matches kanban.dbPath pattern) ──
 
     resolveFolderPath(folderPath: string): string {
@@ -67,6 +72,15 @@ export class LocalFolderService {
     getFolderPaths(): string[] {
         const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
         const paths = config.get<string[]>('research.localFolderPaths', []);
+
+        // Legacy fallback: read singular setting if array is empty
+        if (paths.length === 0) {
+            const legacyPath = config.get<string>('research.localFolderPath', '');
+            if (legacyPath) {
+                paths.push(legacyPath);
+            }
+        }
+
         const seen = new Set<string>();
         return paths
             .map(p => this.resolveFolderPath(p))
@@ -86,7 +100,7 @@ export class LocalFolderService {
         const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
         if (!isDuplicate) {
             const newPaths = [...currentPaths, folderPath];
-            await config.update('research.localFolderPaths', newPaths, vscode.ConfigurationTarget.Workspace);
+            await config.update('research.localFolderPaths', newPaths, this._getConfigurationTarget());
         }
     }
 
@@ -96,7 +110,7 @@ export class LocalFolderService {
         const resolvedToRemove = this.resolveFolderPath(folderPath);
         
         const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
-        await config.update('research.localFolderPaths', newPaths, vscode.ConfigurationTarget.Workspace);
+        await config.update('research.localFolderPaths', newPaths, this._getConfigurationTarget());
     }
 
     // ── File Listing ────────────────────────────────────────────
@@ -206,6 +220,148 @@ export class LocalFolderService {
     private _isTextFile(filename: string): boolean {
         const ext = path.extname(filename).toLowerCase();
         return ['.md', '.txt', '.markdown', '.rst', '.adoc'].includes(ext);
+    }
+
+    getHtmlFolderPaths(): string[] {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const paths = config.get<string[]>('research.htmlFolderPaths', []);
+        const seen = new Set<string>();
+        return paths
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    getHtmlFolderPath(): string {
+        const paths = this.getHtmlFolderPaths();
+        return paths[0] ?? '';
+    }
+
+    async addHtmlFolderPath(folderPath: string): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
+        const resolvedInput = this.resolveFolderPath(folderPath);
+        
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            const newPaths = [...currentPaths, folderPath];
+            await config.update('research.htmlFolderPaths', newPaths, this._getConfigurationTarget());
+        }
+    }
+
+    async removeHtmlFolderPath(folderPath: string): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+        
+        const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await config.update('research.htmlFolderPaths', newPaths, this._getConfigurationTarget());
+    }
+
+    async listHtmlFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+    }>> {
+        const folderPaths = this.getHtmlFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
+            try {
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanHtmlFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
+        }
+
+        return items;
+    }
+
+    private async _scanHtmlFolder(
+        root: string,
+        current: string,
+        results: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+        }>,
+        parentId: string | null,
+        folderIndex: number,
+        seenAbsolutePaths: Set<string>,
+        depth: number = 0
+    ): Promise<void> {
+        if (depth >= LocalFolderService._MAX_DEPTH) { return; }
+
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(current, { withFileTypes: true });
+        } catch { return; }
+
+        const subfolderScans: Promise<void>[] = [];
+
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) { continue; }
+            if (entry.isSymbolicLink()) { continue; }
+            if (entry.isDirectory() && LocalFolderService._EXCLUDED_DIRS.has(entry.name)) { continue; }
+
+            const fullPath = path.join(current, entry.name);
+            const resolvedPath = path.resolve(fullPath);
+
+            if (seenAbsolutePaths.has(resolvedPath)) { continue; }
+            seenAbsolutePaths.add(resolvedPath);
+
+            const relativePath = path.relative(root, fullPath);
+            const id = `${folderIndex}:${relativePath}`;
+            const parentIdVal = parentId ? `${folderIndex}:${parentId}` : undefined;
+
+            if (entry.isDirectory()) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: true,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+                subfolderScans.push(
+                    this._scanHtmlFolder(root, fullPath, results, relativePath, folderIndex, seenAbsolutePaths, depth + 1)
+                );
+            } else if (entry.isFile() && this._isHtmlFile(entry.name)) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: false,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+            }
+        }
+
+        await Promise.all(subfolderScans);
+    }
+
+    private _isHtmlFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.html', '.htm'].includes(ext);
     }
 
     // ── Delete ──────────────────────────────────────────────────

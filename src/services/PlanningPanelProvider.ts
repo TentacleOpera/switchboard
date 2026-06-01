@@ -52,6 +52,8 @@ export class PlanningPanelProvider {
     private _importInProgress = false;
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
     private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
+    private _htmlDocsDebounce: NodeJS.Timeout | undefined;
     private _antigravityWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
@@ -296,6 +298,7 @@ export class PlanningPanelProvider {
         // Watch the docs directory for changes and refresh imported docs list
         this._setupDocsFolderWatcher(workspaceRoot);
         this._setupLocalFolderWatchers();
+        this._setupHtmlFolderWatchers();
         this._setupAntigravityWatcher();
         this._setupKanbanPlansWatcher();
 
@@ -367,6 +370,50 @@ export class PlanningPanelProvider {
                 watcher.onDidChange(refreshLocalDocs);
 
                 this._localFolderWatchers.push(watcher);
+                this._disposables.push(watcher);
+            }
+        }
+    }
+
+    private _setupHtmlFolderWatchers(): void {
+        // Dispose and remove all existing watchers
+        for (const watcher of this._htmlFolderWatchers) {
+            watcher.dispose();
+            const idx = this._disposables.indexOf(watcher);
+            if (idx !== -1) { this._disposables.splice(idx, 1); }
+        }
+        this._htmlFolderWatchers = [];
+
+        const allRoots = this._getWorkspaceRoots();
+        const watchedPaths = new Set<string>();
+
+        for (const root of allRoots) {
+            const localFolderService = this._getLocalFolderService(root);
+            const folderPaths = localFolderService.getHtmlFolderPaths();
+
+            for (const folderPath of folderPaths) {
+                if (!folderPath) continue;
+                // Deduplicate: skip if already watching this absolute path
+                if (watchedPaths.has(folderPath)) continue;
+                watchedPaths.add(folderPath);
+
+                const folderUri = vscode.Uri.file(folderPath);
+
+                // Create watcher for the local HTML folder — recursive, html/htm
+                const watcher = vscode.workspace.createFileSystemWatcher(
+                    new vscode.RelativePattern(folderUri, '**/*.{html,htm}')
+                );
+
+                // Refresh HTML docs when files are created, deleted, or changed
+                const refreshHtmlDocs = () => {
+                    this._sendHtmlDocsReady();
+                };
+
+                watcher.onDidCreate(refreshHtmlDocs);
+                watcher.onDidDelete(refreshHtmlDocs);
+                watcher.onDidChange(refreshHtmlDocs);
+
+                this._htmlFolderWatchers.push(watcher);
                 this._disposables.push(watcher);
             }
         }
@@ -499,9 +546,9 @@ export class PlanningPanelProvider {
                     console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
                     this._isAutoRefreshing = true;
                     try {
-                        if (this._activePreviewSourceId === 'local-folder') {
-                            // Re-fetch local doc
-                            await this._handleFetchPreview(workspaceRoot, 'local-folder', this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
+                        if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
+                            // Re-fetch local doc or HTML doc
+                            await this._handleFetchPreview(workspaceRoot, this._activePreviewSourceId, this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
                         } else {
                             // Re-fetch imported doc via fetchDocsFile
                             await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
@@ -858,6 +905,34 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({ type: 'localFoldersListed', paths });
                 break;
             }
+            case 'addHtmlFolder': {
+                const result = await vscode.window.showOpenDialog({
+                    openLabel: 'Add HTML Folder',
+                    canSelectFiles: false,
+                    canSelectFolders: true,
+                    canSelectMany: false
+                });
+                if (result && result.length > 0) {
+                    const service = this._getLocalFolderService(workspaceRoot);
+                    await service.addHtmlFolderPath(result[0].fsPath);
+                    this._setupHtmlFolderWatchers();
+                    await this._sendHtmlDocsReady();
+                }
+                break;
+            }
+            case 'removeHtmlFolder': {
+                const service = this._getLocalFolderService(workspaceRoot);
+                await service.removeHtmlFolderPath(msg.folderPath);
+                this._setupHtmlFolderWatchers();
+                await this._sendHtmlDocsReady();
+                break;
+            }
+            case 'listHtmlFolders': {
+                const service = this._getLocalFolderService(workspaceRoot);
+                const paths = service.getHtmlFolderPaths();
+                this._panel?.webview.postMessage({ type: 'htmlFoldersListed', paths });
+                break;
+            }
             case 'refreshSource': {
                 const sourceId = msg.sourceId;
                 // Clear cache for this source to force fresh fetch
@@ -865,6 +940,8 @@ export class PlanningPanelProvider {
                 // Refresh only the affected pane to avoid cross-pane flicker
                 if (sourceId === 'local-folder') {
                     await this._sendLocalDocsReady();
+                } else if (sourceId === 'html-folder') {
+                    await this._sendHtmlDocsReady();
                 } else {
                     this._sendOnlineDocsReady();
                 }
@@ -1623,7 +1700,7 @@ export class PlanningPanelProvider {
                         if (folderPath) {
                             scannedPaths.add(folderPath);
                             // Prioritize the active root's folder paths for the webview
-                            if (root === activeRoot || !activeRoot) {
+                            if (!activeRoot || path.resolve(root) === path.resolve(activeRoot)) {
                                 configuredFolderPaths.push(folderPath);
                             }
                         }
@@ -1686,6 +1763,98 @@ export class PlanningPanelProvider {
                 error: String(err)
             });
         }
+    }
+
+    private async _sendHtmlDocsReady(): Promise<void> {
+        if (this._htmlDocsDebounce) {
+            clearTimeout(this._htmlDocsDebounce);
+        }
+        this._htmlDocsDebounce = setTimeout(async () => {
+            this._htmlDocsDebounce = undefined;
+            try {
+                const allRoots = this._getWorkspaceRoots();
+                const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string }> = [];
+                const scannedPaths = new Set<string>();
+                const activeRoot = this._getWorkspaceRoot();
+                let configuredFolderPaths: string[] = [];
+
+                const seenFilePaths = new Set<string>();
+
+                for (const root of allRoots) {
+                    try {
+                        const localFolderService = this._getLocalFolderService(root);
+                        const folderPaths = localFolderService.getHtmlFolderPaths();
+
+                        const allAlreadyScanned = folderPaths.length > 0 && folderPaths.every(p => p && scannedPaths.has(p));
+
+                        for (const folderPath of folderPaths) {
+                            if (folderPath && scannedPaths.has(folderPath)) {
+                                continue;
+                            }
+                            if (folderPath) {
+                                scannedPaths.add(folderPath);
+                                if (!activeRoot || path.resolve(root) === path.resolve(activeRoot)) {
+                                    configuredFolderPaths.push(folderPath);
+                                }
+                            }
+                        }
+
+                        if (!allAlreadyScanned) {
+                            const files = await localFolderService.listHtmlFiles();
+                            for (const f of files) {
+                                const absPath = path.resolve(f.sourceFolder, f.relativePath);
+                                if (!seenFilePaths.has(absPath)) {
+                                    seenFilePaths.add(absPath);
+                                    allFiles.push({ ...f, _root: root });
+                                }
+                            }
+                        }
+                    } catch (err) {
+                        console.debug('[PlanningPanel] Failed to list HTML files for root:', root, err);
+                    }
+                }
+
+                if (!this._panel) {
+                    return;
+                }
+
+                // Update webview localResourceRoots dynamically
+                const extensionUri = this._extensionUri;
+                const baseRoots = [
+                    vscode.Uri.joinPath(extensionUri, 'dist'),
+                    vscode.Uri.joinPath(extensionUri, 'webview'),
+                    vscode.Uri.joinPath(extensionUri, 'node_modules')
+                ];
+
+                const extraRoots: vscode.Uri[] = [];
+                for (const folderPath of scannedPaths) {
+                    if (folderPath && fs.existsSync(folderPath)) {
+                        extraRoots.push(vscode.Uri.file(folderPath));
+                    }
+                }
+
+                this._panel.webview.options = {
+                    ...this._panel.webview.options,
+                    localResourceRoots: [...baseRoots, ...extraRoots]
+                };
+
+                this._panel.webview.postMessage({
+                    type: 'htmlDocsReady',
+                    sourceId: 'html-folder',
+                    folderPaths: configuredFolderPaths,
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles)
+                });
+            } catch (err) {
+                console.error('[PlanningPanel] Failed to fetch html-folder roots:', err);
+                this._panel?.webview.postMessage({
+                    type: 'htmlDocsReady',
+                    sourceId: 'html-folder',
+                    folderPaths: [],
+                    nodes: [],
+                    error: String(err)
+                });
+            }
+        }, 300);
     }
 
     private async _sendOnlineDocsReady(): Promise<void> {
@@ -1753,6 +1922,35 @@ export class PlanningPanelProvider {
     private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number, sourceFolder?: string): Promise<void> {
         // Race guard — track latest request per source
         this._latestRequestIds.set(sourceId, requestId);
+
+        // Handle html-folder directly
+        if (sourceId === 'html-folder') {
+            if (!sourceFolder) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
+                return;
+            }
+            const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+            const resolvedPath = path.resolve(path.join(sourceFolder, cleanDocId));
+            if (!fs.existsSync(resolvedPath)) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'File not found' });
+                return;
+            }
+            const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(resolvedPath)).toString();
+            this._activePreviewPath = resolvedPath;
+            this._activePreviewSourceId = 'html-folder';
+            this._activePreviewDocId = docId;
+            this._activePreviewSourceFolder = sourceFolder;
+            this._setupActiveDocWatcher(resolvedPath);
+            this._panel?.webview.postMessage({
+                type: 'previewReady',
+                sourceId,
+                requestId,
+                webviewUri,
+                docName: path.basename(resolvedPath),
+                isAutoRefreshed: this._isAutoRefreshing
+            });
+            return;
+        }
 
         // Handle local-folder directly without adapter
         if (sourceId === 'local-folder') {
@@ -2395,7 +2593,8 @@ export class PlanningPanelProvider {
                     const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
                     await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, { 
                         remoteContentHash: contentHash,
-                        workspaceId: workspaceId
+                        workspaceId: workspaceId,
+                        filePath: writeResult.savedPath
                     });
                 } catch (regErr) {
                     console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
@@ -2420,7 +2619,8 @@ export class PlanningPanelProvider {
         docId: string,
         docName: string,
         content: string,
-        workspaceRoot: string
+        workspaceRoot: string,
+        filePath?: string
     ): Promise<void> {
         if (!cacheService) return;
         try {
@@ -2434,7 +2634,8 @@ export class PlanningPanelProvider {
             const workspaceId = await this._getWorkspaceId(workspaceRoot);
             await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
                 remoteContentHash: contentHash,
-                workspaceId: workspaceId
+                workspaceId: workspaceId,
+                filePath
             });
         } catch (regErr) {
             console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
@@ -2717,6 +2918,14 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._localFolderWatchers = [];
+        for (const watcher of this._htmlFolderWatchers) {
+            try { watcher.dispose(); } catch (e) {}
+        }
+        this._htmlFolderWatchers = [];
+        if (this._htmlDocsDebounce) {
+            clearTimeout(this._htmlDocsDebounce);
+            this._htmlDocsDebounce = undefined;
+        }
         if (this._kanbanPlansWatchDebounce) {
             clearTimeout(this._kanbanPlansWatchDebounce);
             this._kanbanPlansWatchDebounce = undefined;

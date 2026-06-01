@@ -167,7 +167,8 @@ parentDocName: ${options.parentDocName || docTitle}
                         const workspaceId = await this._getWorkspaceId(workspaceRoot);
                         await cacheService.registerImport(sourceId, docTitle, docTitle, rawSlug, { 
                             remoteContentHash: contentHash,
-                            workspaceId 
+                            workspaceId,
+                            filePath: result.savedPath
                         });
                     } catch (regErr) {
                         console.warn('[PlannerPromptWriter] Failed to register import:', regErr);
@@ -228,7 +229,8 @@ parentDocName: ${options.parentDocName || docTitle}
                         const workspaceId = await this._getWorkspaceId(workspaceRoot);
                         await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
                             remoteContentHash: contentHash,
-                            workspaceId 
+                            workspaceId,
+                            filePath: result.savedPath
                         });
                     } catch (regErr) {
                         console.warn('[PlannerPromptWriter] Failed to register import:', regErr);

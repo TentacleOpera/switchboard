@@ -7,6 +7,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import { GlobalPlanWatcherService } from '../GlobalPlanWatcherService';
 import { KanbanDatabase } from '../KanbanDatabase';
+import * as WorkspaceIdentityService from '../WorkspaceIdentityService';
 
 suite('GlobalPlanWatcherService', () => {
     let sandbox: sinon.SinonSandbox;
@@ -419,6 +420,75 @@ suite('GlobalPlanWatcherService', () => {
             const logCalls = outputChannelStub.appendLine.getCalls();
             const statFailedCall = logCalls.find((c: any) => c.args[0].includes('stat() failed'));
             assert.ok(statFailedCall, 'Expected output channel to log stat() failure');
+        });
+    });
+
+    suite('setCurrentProject', () => {
+        const workspaceRoot = '/parent/root';
+        const parentPlanPath = '/parent/root/.switchboard/plans/plan1.md';
+        const parentMockUri = { fsPath: parentPlanPath } as any;
+        const fixedMtime = new Date('2025-06-01T12:00:00.000Z');
+        const fixedBirthtime = new Date('2025-05-15T08:30:00.000Z');
+
+        let dbStub: any;
+        let upsertSpy: sinon.SinonStub;
+        let resolveStub: sinon.SinonStub;
+
+        setup(() => {
+            dbStub = {
+                ensureReady: sandbox.stub().resolves(),
+                getWorkspaceId: sandbox.stub().resolves('ws-123'),
+                getDominantWorkspaceId: sandbox.stub().resolves('ws-123'),
+            };
+            upsertSpy = sandbox.stub().resolves();
+            dbStub.upsertPlans = upsertSpy;
+            sandbox.stub(KanbanDatabase, 'forWorkspace').returns(dbStub as any);
+            resolveStub = sandbox.stub(WorkspaceIdentityService, 'resolveEffectiveWorkspaceRootFromMappings');
+        });
+
+        test('resolves child workspace root to parent before caching', () => {
+            resolveStub.withArgs('/child/root').returns('/parent/root');
+            service.setCurrentProject('/child/root', 'PII Data');
+            assert.strictEqual((service as any)._currentProjects.get('/parent/root'), 'PII Data');
+            assert.strictEqual((service as any)._currentProjects.has('/child/root'), false);
+        });
+
+        test('uses workspaceRoot as-is when no mapping exists', () => {
+            resolveStub.withArgs('/standalone/root').returns('/standalone/root');
+            service.setCurrentProject('/standalone/root', 'My Project');
+            assert.strictEqual((service as any)._currentProjects.get('/standalone/root'), 'My Project');
+        });
+
+        test('deletes project entry when filter is null', () => {
+            resolveStub.withArgs('/child/root').returns('/parent/root');
+            service.setCurrentProject('/child/root', 'PII Data');
+            service.setCurrentProject('/child/root', null);
+            assert.strictEqual((service as any)._currentProjects.has('/parent/root'), false);
+        });
+
+        test('translates UNASSIGNED sentinel to delete', () => {
+            resolveStub.withArgs('/child/root').returns('/parent/root');
+            service.setCurrentProject('/child/root', KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+            assert.strictEqual((service as any)._currentProjects.has('/parent/root'), false);
+        });
+
+        test('new plans detected by watcher inherit the project filter set via child workspace path', async () => {
+            resolveStub.withArgs('/child/root').returns('/parent/root');
+            service.setCurrentProject('/child/root', 'PII Data');
+
+            dbStub.getPlanByPlanFile = sandbox.stub().resolves(undefined);
+            sandbox.stub(fs.promises, 'stat').resolves({
+                mtime: fixedMtime,
+                birthtime: fixedBirthtime,
+            } as any);
+            sandbox.stub(fs.promises, 'readFile').resolves('# Plan\n\n## Topic\nTest topic');
+            const parseStub = sandbox.stub(await import('../planMetadataUtils'), 'parsePlanMetadata');
+            parseStub.resolves({ sessionId: 'sess-123', topic: 'Test topic', complexity: '3', tags: '', dependencies: '', kanbanColumn: 'CREATED' });
+
+            await (service as any)._handlePlanFile(parentMockUri, workspaceRoot);
+
+            const upserted = upsertSpy.getCall(0).args[0][0];
+            assert.strictEqual(upserted.project, 'PII Data');
         });
     });
 });

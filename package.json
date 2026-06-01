@@ -9,7 +9,7 @@
     "orchestration",
     "multi-agent"
   ],
-  "version": "1.7.1",
+  "version": "1.7.2",
   "main": "./dist/extension.js",
   "publisher": "TurnZero",
   "repository": {
@@ -323,6 +323,13 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Paths to local folders containing research files (.md, .txt, .markdown, .rst, .adoc). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
+          "scope": "resource"
+        },
+        "switchboard.research.htmlFolderPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Paths to local folders containing HTML prototype files (.html, .htm) for preview in the HTML Previews tab. Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "resource"
         },
         "switchboard.research.antigravityBrainEnabled": {

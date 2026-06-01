@@ -1042,6 +1042,10 @@ export class KanbanProvider implements vscode.Disposable {
 
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
+            if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot) !== resolvedWorkspaceRoot) {
+                console.log(`[KanbanProvider] refreshWithData: resolvedWorkspaceRoot ${resolvedWorkspaceRoot} differs from current ${this._currentWorkspaceRoot} — not refreshing board`);
+                return;
+            }
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
 
             const workspaceId = await db.getWorkspaceId();
@@ -2905,15 +2909,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             accurateCodingEnabled
         });
         if (coderUsesIde) {
-            const handoffDir = path.join(workspaceRoot, '.switchboard', 'handoff');
-            const sessionIds = cards.map(c => c.sessionId);
-            const backupPath = path.join(handoffDir, `coder_prompt_${sessionIds.join('_')}_${Date.now()}.md`);
-            try {
-                if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-                fs.writeFileSync(backupPath, coderPrompt, 'utf8');
-            } catch (err) {
-                console.error('[KanbanProvider] Failed to write Coder prompt backup:', err);
-            }
             const choice = await vscode.window.showInformationMessage(
                 'Pair Programming: Routine tasks identified. Click to copy Coder prompt.',
                 'Copy Coder Prompt'
@@ -2921,7 +2916,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
             if (choice === 'Copy Coder Prompt') {
                 await vscode.env.clipboard.writeText(coderPrompt);
                 vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-                try { fs.unlinkSync(backupPath); } catch { /* ignore */ }
             }
         } else {
             await vscode.commands.executeCommand('switchboard.dispatchToCoderTerminal', coderPrompt);
@@ -4377,6 +4371,14 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.commands.executeCommand('switchboard.setAutobanEnabledFromKanban', enabled);
                 break;
             }
+            case 'resetAutobanTimers': {
+                await vscode.commands.executeCommand('switchboard.resetAutobanTimersFromKanban');
+                break;
+            }
+            case 'toggleAutobanPause': {
+                await vscode.commands.executeCommand('switchboard.setAutobanPausedFromKanban', !!msg.paused);
+                break;
+            }
             case 'setPairProgrammingMode': {
                 const mode = msg.mode;
                 const valid = ['off', 'cli-cli', 'cli-ide', 'ide-cli', 'ide-ide'];
@@ -5155,7 +5157,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
 
-                const chatWorkflowPath = '.agent/workflows/chat.md';
+                const chatWorkflowPath = '.agent/workflows/switchboard-chat.md';
                 let planSection = '';
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
                     const selectedCards = this._lastCards.filter(card =>
@@ -5172,11 +5174,24 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }
                 }
 
-                const prompt = `/chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
+                const prompt = `/switchboard-chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
                 await vscode.env.clipboard.writeText(prompt);
                 const count = Array.isArray(msg.sessionIds) ? msg.sessionIds.length : 0;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
                 vscode.window.showInformationMessage(`Chat prompt copied to clipboard${planWord}.`);
+                break;
+            }
+            case 'copyChatWorkflow': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) { break; }
+                const workflowPath = path.join(workspaceRoot, '.agent', 'workflows', 'switchboard-chat.md');
+                try {
+                    const content = await fs.promises.readFile(workflowPath, 'utf8');
+                    await vscode.env.clipboard.writeText(content);
+                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied Switchboard Chat workflow to clipboard.', isError: false });
+                } catch {
+                    vscode.window.showWarningMessage('Switchboard Chat workflow file not found. Run Switchboard Setup to scaffold it.');
+                }
                 break;
             }
             case 'promptSelected': {
@@ -5628,16 +5643,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     // IDE Coder: Two-stage clipboard — Lead prompt first, Coder prompt on demand
                     await vscode.env.clipboard.writeText(leadPrompt);
 
-                    // Write Coder prompt backup to .switchboard/handoff/ in case notification is dismissed
-                    const handoffDir = path.join(this._currentWorkspaceRoot, '.switchboard', 'handoff');
-                    const backupPath = path.join(handoffDir, `coder_prompt_${msg.sessionId}.md`);
-                    try {
-                        if (!fs.existsSync(handoffDir)) { fs.mkdirSync(handoffDir, { recursive: true }); }
-                        fs.writeFileSync(backupPath, coderPrompt, 'utf8');
-                    } catch (err) {
-                        console.error('[KanbanProvider] Failed to write Coder prompt backup:', err);
-                    }
-
                     // Advance the card to LEAD CODED (before awaiting notification — don't block board update)
                     await vscode.commands.executeCommand('switchboard.kanbanForwardMove', [msg.sessionId], 'LEAD CODED', this._currentWorkspaceRoot);
 
@@ -5649,11 +5654,6 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     if (choice === 'Copy Coder Prompt') {
                         await vscode.env.clipboard.writeText(coderPrompt);
                         vscode.window.showInformationMessage('Coder prompt copied to clipboard.');
-                        // Clean up backup file after successful copy
-                        try { fs.unlinkSync(backupPath); } catch { /* ignore */ }
-                    } else {
-                        // User dismissed — backup file remains as safety net
-                        console.log(`[KanbanProvider] Pair programming: user dismissed Coder prompt notification. Backup at: ${backupPath}`);
                     }
                 } else {
                     // CLI Coder: Lead prompt to clipboard, Coder prompt to terminal

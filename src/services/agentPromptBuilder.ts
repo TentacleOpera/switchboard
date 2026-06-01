@@ -164,7 +164,7 @@ function buildReviewerExecutionModeLine(expectation: string): string {
     return `Mode:
 - You are the reviewer-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
-- Treat the challenge stage as inline analysis in this same prompt (no \`/challenge\` workflow).
+- Treat adversarial review as inline analysis in this same prompt.
 - ${expectation}`;
 }
 
@@ -223,7 +223,7 @@ export const INLINE_CHALLENGE_DIRECTIVE = `For each plan, before implementation:
 - perform a concise adversarial review of that specific plan,
 - list at least 2 concrete flaws/edge cases and how you'll address them,
 - then execute using those corrections,
-- do NOT start \`/challenge\` or any auxiliary workflow for this step.`;
+- do NOT start any auxiliary workflow for this step.`;
 
 export const SPLIT_PLAN_DIRECTIVE = `SPLIT PLAN MODE: Produce TWO files per plan. Original file = Complex / Risky only. Companion file (\`<stem>_routine.md\`) = Routine only. Both files must include full shared context (Goal, Metadata, Current State, Edge-Case audit, Dependencies). Original file notes: "Assume Routine items implemented by Coder agent." Read the full original file before writing either output. Create both files in the same directory as the original.`;
 export const SKIP_COMPILATION_DIRECTIVE = `SKIP COMPILATION: Do NOT run any project compilation step (e.g. tsc, mvn compile, gradle build, make) as part of the verification plan. The project is assumed to be in a pre-compiled or compilation-free state for this session.`;
@@ -287,8 +287,16 @@ export const DEEP_RESEARCH_DIRECTIVE =
     `PHASE 2: External Research — use search_web with dynamic date ranges. ` +
     `IF search_web is unavailable: complete with codebase-only analysis, note gap in "Knowledge Gaps" section, continue to Phase 3.\n` +
     `PHASE 3: Cross-Reference — compare internal and external findings; identify gaps, anti-patterns, security issues.\n` +
-    `PHASE 4: Synthesis — produce output with: Executive Summary, Current State Analysis, External Research Findings, ` +
-    `Proposed Implementation Plan, Impact Analysis, Source Credibility Assessment, Knowledge Gaps, Recommended Next Steps.\n` +
+    `PHASE 4: Synthesis — produce output following this structure:\n` +
+    `1) Executive summary (≤ 1 page)\n` +
+    `2) Tiered findings: required vs recommended vs optional — clearly distinguish compliance levels\n` +
+    `3) Focused trade-off evaluation (e.g. searchability vs confidentiality, cost vs coverage)\n` +
+    `4) Defence-in-Depth controls checklist\n` +
+    `5) Plain-English glossary of domain-specific terms\n` +
+    `6) Full source list with direct links and retrieval dates\n` +
+    `7) Current State Analysis, External Research Findings, Proposed Implementation Plan, Impact Analysis, Source Credibility Assessment, Knowledge Gaps, Recommended Next Steps.\n` +
+    `SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.\n` +
+    `DECISION THIS FEEDS: End with a recommended default for a platform of typical scale — do not just survey the field.\n` +
     `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;
 
 const DEFAULT_PLANNER_WORKFLOW = '.agent/workflows/improve-plan.md';

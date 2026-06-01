@@ -52,7 +52,7 @@ import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
 import { parsePlanDependencies } from './planDependencyParser';
-import { inferTopicFromPath } from './planMetadataUtils';
+import { inferTopicFromPath, parsePlanMetadata } from './planMetadataUtils';
 import {
     type ClickUpAutomationRule,
     type LinearAutomationRule
@@ -2635,7 +2635,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return `Mode:
 - You are the reviewer-executor for this task.
 - Do not start any auxiliary workflow; execute this task directly.
-- Treat the challenge stage as inline analysis in this same prompt (no \`/challenge\` workflow).
+- Treat adversarial review as inline analysis in this same prompt.
 - ${expectation}`;
     }
 
@@ -5812,7 +5812,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await this._reconcileAutobanPoolState(workspaceRoot, { pruneStaleBackupRegistry: true });
         }
         this._kanbanProvider?.updateAutobanConfig(this._getAutobanBroadcastState());
-        if (this._autobanState.enabled) {
+        if (this._autobanState.enabled && !this._autobanState.paused) {
             this._startAutobanEngine();
         }
     }
@@ -5826,6 +5826,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._resetAutobanSessionCounters();
             this._startAutobanEngine();
         } else if (!enabled && wasEnabled) {
+            this._autobanState.paused = false;
+            delete this._autobanState.pausedRemainingMs;
             this._stopAutobanEngine();
         } else if (enabled) {
             // Preserve existing behavior when config changes while enabled.
@@ -5912,6 +5914,18 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             ...this._autobanState,
             ...state
         });
+        if (this._autobanState.paused && this._autobanState.pausedRemainingMs) {
+            const updatedRemaining: Record<string, number> = {};
+            for (const [column, oldRemaining] of Object.entries(this._autobanState.pausedRemainingMs)) {
+                const rule = this._autobanState.rules[column];
+                if (rule?.enabled) {
+                    const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
+                    // Cap remaining time to the new interval
+                    updatedRemaining[column] = Math.min(oldRemaining, intervalMs);
+                }
+            }
+            this._autobanState.pausedRemainingMs = updatedRemaining;
+        }
         await this._persistAutobanState();
         this._postAutobanStateNow();
     }
@@ -5992,6 +6006,101 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     /** Called by Kanban automation panel to reset all autoban pools. */
     public async resetAutobanPoolsFromKanban(): Promise<void> {
         await this._resetAutobanPools();
+    }
+
+    /** Called by Kanban reset-timer button to restart countdown intervals and fire an immediate tick. */
+    public async resetAutobanTimersFromKanban(): Promise<void> {
+        if (!this._autobanState.enabled) { return; }
+
+        if (this._autobanState.paused) {
+            this._autobanState.paused = false;
+            delete this._autobanState.pausedRemainingMs;
+        }
+
+        // Clear only the setInterval timers — do NOT clear the tick queue or dispatch guards.
+        for (const [, timer] of this._autobanTimers) {
+            clearInterval(timer);
+        }
+        this._autobanTimers.clear();
+
+        // Restart each enabled column's interval with a fresh timestamp and immediate tick.
+        const { rules, batchSize } = this._autobanState;
+        for (const [column, rule] of Object.entries(rules)) {
+            if (!rule.enabled) { continue; }
+            if (this._autobanState.automationMode === 'single-column' &&
+                column !== this._singleColumnAutobanState.sourceColumn) {
+                continue;
+            }
+            const intervalMs = Math.max(rule.intervalMinutes, 1) * 60 * 1000;
+            this._autobanLastTickAt.set(column, Date.now());
+
+            // Enqueue immediate tick on the EXISTING queue (preserves serialization)
+            this._enqueueAutobanTick(column, batchSize);
+
+            const timer = setInterval(() => {
+                this._enqueueAutobanTick(column, batchSize);
+            }, intervalMs);
+            this._autobanTimers.set(column, timer);
+        }
+
+        this._postAutobanStateNow();
+    }
+
+    public async setAutobanPausedFromKanban(paused: boolean): Promise<void> {
+        if (paused) {
+            if (!this._autobanState.enabled) { return; }
+            this._autobanState.pausedRemainingMs = this._autobanState.pausedRemainingMs || {};
+            for (const [column, timer] of this._autobanTimers) {
+                const lastTickAt = this._autobanLastTickAt.get(column) ?? Date.now();
+                const rule = this._autobanState.rules[column];
+                const intervalMs = Math.max(rule?.intervalMinutes ?? 1, 1) * 60 * 1000;
+                const remainingMs = Math.max(0, (lastTickAt + intervalMs) - Date.now());
+                this._autobanState.pausedRemainingMs[column] = remainingMs;
+                clearInterval(timer);
+            }
+            this._autobanTimers.clear();
+            if (this._autobanEmptyColumnSweepTimer) {
+                clearInterval(this._autobanEmptyColumnSweepTimer);
+                this._autobanEmptyColumnSweepTimer = undefined;
+            }
+            this._autobanState.paused = true;
+        } else {
+            if (!this._autobanState.paused) { return; }
+            this._autobanState.paused = false;
+            const { batchSize } = this._autobanState;
+            if (this._autobanState.pausedRemainingMs) {
+                for (const [column, remainingMs] of Object.entries(this._autobanState.pausedRemainingMs)) {
+                    if (this._autobanState.automationMode === 'single-column' &&
+                        column !== this._singleColumnAutobanState.sourceColumn) {
+                        continue;
+                    }
+                    const rule = this._autobanState.rules[column];
+                    const intervalMs = Math.max(rule?.intervalMinutes ?? 1, 1) * 60 * 1000;
+                    this._autobanLastTickAt.set(column, Date.now() - (intervalMs - remainingMs));
+                    const timeoutHandle = setTimeout(() => {
+                        this._enqueueAutobanTick(column, batchSize);
+                        const intervalHandle = setInterval(() => {
+                            this._enqueueAutobanTick(column, batchSize);
+                        }, intervalMs);
+                        this._autobanTimers.set(column, intervalHandle);
+                    }, remainingMs);
+                    this._autobanTimers.set(column, timeoutHandle);
+                }
+            }
+            if (!this._autobanEmptyColumnSweepTimer) {
+                this._autobanEmptyColumnSweepTimer = setInterval(async () => {
+                    if (this._autobanState.enabled) {
+                        const workspaceRoot = this._resolveWorkspaceRoot();
+                        if (workspaceRoot) {
+                            await this._stopAutobanIfNoValidTicketsRemain(workspaceRoot);
+                        }
+                    }
+                }, 60_000);
+            }
+            delete this._autobanState.pausedRemainingMs;
+        }
+        await this._persistAutobanState();
+        this._postAutobanStateNow();
     }
 
 
@@ -6899,6 +7008,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             clearInterval(this._autobanEmptyColumnSweepTimer);
             this._autobanEmptyColumnSweepTimer = undefined;
         }
+        this._autobanState.paused = false;
+        delete this._autobanState.pausedRemainingMs;
         this._autobanLastTickAt.clear();
         this._activeDispatchSessions.clear();
         this._autobanTickQueue = Promise.resolve();
@@ -7906,7 +8017,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         break;
                     case 'executeRemote':
                         if (data.terminalName && data.command) {
-                            await this._executeRemote(data.terminalName, data.command);
+                            await this._executeLocal(data.terminalName, data.command);
                         }
                         break;
                     case 'executeLocal':
@@ -11615,7 +11726,27 @@ What would you like to find?`;
             if (db) {
                 const alreadyInDb = await db.hasPlan(runSheetId);
                 if (alreadyInDb) {
-                    console.log(`[TaskViewerProvider] Brain plan already in DB (session: ${runSheetId}), skipping runsheet creation`);
+                    console.log(`[TaskViewerProvider] Brain plan already in DB (session: ${runSheetId}), updating metadata`);
+
+                    // Parse updated metadata from the plan content (already read at line 11560)
+                    const metadata = await parsePlanMetadata(content, path.relative(resolvedWorkspaceRoot, mirrorPath));
+                    const planFileRelative = path.relative(resolvedWorkspaceRoot, mirrorPath).replace(/\\/g, '/');
+                    const wsId = await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot);
+                    const existingPlan = wsId ? await db.getPlanByPlanFile(planFileRelative, wsId) : null;
+
+                    if (existingPlan) {
+                        const updatedRecord: KanbanPlanRecord = {
+                            ...existingPlan,
+                            topic: metadata.topic || existingPlan.topic,
+                            complexity: metadata.complexity !== 'Unknown' ? metadata.complexity : existingPlan.complexity,
+                            tags: metadata.tags || existingPlan.tags,
+                            dependencies: metadata.dependencies || existingPlan.dependencies,
+                            updatedAt: new Date(mtimeMs).toISOString()
+                        };
+                        await db.upsertPlans([updatedRecord]);
+                        console.log(`[TaskViewerProvider] Updated brain plan metadata: topic="${metadata.topic}", complexity="${metadata.complexity}"`);
+                    }
+
                     if (!suppressFollowupSync) {
                         await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
                     }
@@ -13461,6 +13592,18 @@ What would you like to find?`;
         if (!selectedWorkspaceRoot) return;
         const resolvedWorkspaceRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(selectedWorkspaceRoot) || selectedWorkspaceRoot;
 
+        // Guard: only refresh if resolvedWorkspaceRoot matches the currently selected workspace root in the Kanban board
+        const currentRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+        if (currentRoot) {
+            const resolvedCurrentRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(currentRoot) || currentRoot;
+            if (path.resolve(resolvedCurrentRoot) !== path.resolve(resolvedWorkspaceRoot)) {
+                console.log(
+                    `[TaskViewerProvider] _refreshRunSheets: resolvedWorkspaceRoot ${resolvedWorkspaceRoot} differs from current ${resolvedCurrentRoot} — skipping runsheet refresh`
+                );
+                return;
+            }
+        }
+
         try {
             let workspaceId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
             if (!workspaceId) {
@@ -13614,69 +13757,7 @@ What would you like to find?`;
         }
     }
 
-    private async _executeRemote(terminalName: string, command: string) {
-        const workspaceRoot = this._resolveWorkspaceRoot();
-        if (!workspaceRoot) return;
 
-        // F-04 SECURITY: Validate agent name before using as path segment
-        if (!this._isValidAgentName(terminalName)) {
-            console.error(`[TaskViewerProvider] Rejected invalid agent name for inbox write: ${terminalName}`);
-            return;
-        }
-
-        const inboxDir = path.join(workspaceRoot, '.switchboard', 'inbox', terminalName);
-
-        try {
-            if (!fs.existsSync(inboxDir)) {
-                fs.mkdirSync(inboxDir, { recursive: true });
-            }
-
-            // Persona injection: resolve persona for this agent's role
-            const persona = await this._resolvePersona(terminalName);
-            const enrichedPayload = persona ? this._formatPersonaMessage(persona, command) : command;
-
-            const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-            const message: Record<string, any> = {
-                id: messageId,
-                action: 'execute',
-                sender: 'sidebar',
-                recipient: terminalName,
-                payload: enrichedPayload,
-                createdAt: new Date().toISOString()
-            };
-
-            // F-08 SECURITY: Inject session token for inbox auth
-            const sessionToken = await this._getSessionToken(workspaceRoot);
-            if (sessionToken) {
-                message.sessionToken = sessionToken;
-            }
-            this._attachDispatchAuthEnvelope(message);
-
-            // Add structured persona field for consumers that prefer it
-            if (persona) {
-                message.persona = persona;
-            }
-
-            const msgPath = path.join(inboxDir, `${messageId}.json`);
-            await fs.promises.writeFile(msgPath, JSON.stringify(message, null, 2));
-            console.log(`[TaskViewerProvider] Wrote execute message to ${msgPath}`);
-
-            this._view?.webview.postMessage({
-                type: 'executeResult',
-                terminalName,
-                success: true,
-                messageId
-            });
-        } catch (e) {
-            console.error('Failed to send remote execute:', e);
-            this._view?.webview.postMessage({
-                type: 'executeResult',
-                terminalName,
-                success: false,
-                error: String(e)
-            });
-        }
-    }
 
     private async _executeLocal(terminalName: string, command: string) {
         if (!this._registeredTerminals) return;
@@ -13694,10 +13775,7 @@ What would you like to find?`;
             // Fallback: try matching by name in VS Code terminals
             const found = vscode.window.terminals.find(t => t.name === terminalName || t.name === this._stripIdeSuffix(terminalName));
             if (!found) {
-                // Terminal not in VS Code — likely external. Route through executeRemote
-                // so the terminal-bridge.js script can pick it up from the inbox.
-                console.log(`[TaskViewerProvider] Terminal '${terminalName}' not found in VS Code, routing via inbox`);
-                await this._executeRemote(terminalName, command);
+                vscode.window.showWarningMessage(`Terminal '${terminalName}' not found. Please open the terminal in VS Code and try again.`);
                 return;
             }
             found.sendText(enrichedCommand, false);
@@ -14150,11 +14228,11 @@ What would you like to find?`;
         payload: string,
         metadata: Record<string, any>,
         sender: string = 'sidebar'
-    ): Promise<void> {
+    ): Promise<boolean> {
         // F-04 SECURITY: Validate agent name before using as path segment
         if (!this._isValidAgentName(targetAgent)) {
             console.error(`[TaskViewerProvider] Rejected invalid agent name for dispatch: ${targetAgent}`);
-            return;
+            return false;
         }
 
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
@@ -14166,33 +14244,10 @@ What would you like to find?`;
             action: 'execute',
             metadata
         });
-        if (pushed) return;
+        if (pushed) return true;
 
-        // Fallback: write to inbox for cross-window / offline delivery
-        const inboxDir = path.join(workspaceRoot, '.switchboard', 'inbox', targetAgent);
-        if (!fs.existsSync(inboxDir)) {
-            fs.mkdirSync(inboxDir, { recursive: true });
-        }
-
-        const message: Record<string, any> = {
-            id: messageId,
-            action: 'execute',
-            sender,
-            recipient: targetAgent,
-            payload,
-            metadata,
-            createdAt: new Date().toISOString()
-        };
-
-        // F-08 SECURITY: Inject session token for inbox auth
-        const sessionToken = await this._getSessionToken(workspaceRoot);
-        if (sessionToken) {
-            message.sessionToken = sessionToken;
-        }
-        this._attachDispatchAuthEnvelope(message);
-
-        const msgPath = path.join(inboxDir, `${messageId}.json`);
-        await fs.promises.writeFile(msgPath, JSON.stringify(message, null, 2));
+        vscode.window.showWarningMessage(`Could not deliver prompt to '${targetAgent}'. The terminal is not running in VS Code.`);
+        return false;
     }
 
     private async _focusTerminalByName(terminalName: string): Promise<boolean> {
@@ -14417,12 +14472,14 @@ What would you like to find?`;
         let workingDir = '';
 
         const db = await this._getKanbanDb(resolvedWorkspaceRoot);
+        let previousColumn: string | undefined;
         if (db) {
             const plan = await db.getPlanBySessionId(sessionId);
             if (plan && plan.planFile) {
                 planFileRelative = plan.planFile;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
+                previousColumn = plan.columnName;
             }
         }
 
@@ -14525,12 +14582,6 @@ What would you like to find?`;
         // Focus the terminal for immediate feedback
         vscode.commands.executeCommand('switchboard.focusTerminalByName', targetAgent);
 
-        // 3. Construct Payload & Side Effects
-        const inboxDir = path.join(resolvedWorkspaceRoot, '.switchboard', 'inbox', targetAgent);
-        if (!fs.existsSync(inboxDir)) {
-            fs.mkdirSync(inboxDir, { recursive: true });
-        }
-
         let messagePayload = '';
         const messageMetadata: any = {};
         const teamStrictPrompts = vscode.workspace.getConfiguration('switchboard').get<boolean>('team.strictPrompts');
@@ -14583,20 +14634,11 @@ What would you like to find?`;
             });
             messageMetadata.phase_gate = { enforce_persona: 'lead' };
         } else if (role === 'coder') {
-            if (baseInstruction === 'create-signal-file') {
-                messagePayload = this._withCoderAccuracyInstruction(`The first implementation phase has passed. As your next step, create a signal file to notify the Reviewer:
-
-Signal file path: .switchboard/inbox/Reviewer/${sessionId}.md
-File content: Plan: ${planFileAbsolute}
-
-Create this file exactly as specified, then continue your work.`);
-            } else {
-                messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', [dispatchPlan], effectiveWorkspaceRoot, {
-                    instruction: baseInstruction,
-                    includeInlineChallenge,
-                    gitProhibitionEnabled
-                });
-            }
+            messagePayload = await this._kanbanProvider.generateUnifiedPrompt('coder', [dispatchPlan], effectiveWorkspaceRoot, {
+                instruction: baseInstruction,
+                includeInlineChallenge,
+                gitProhibitionEnabled
+            });
         } else if (role === 'intern') {
             messagePayload = await this._kanbanProvider.generateUnifiedPrompt('intern', [dispatchPlan], effectiveWorkspaceRoot, {
                 instruction: baseInstruction,
@@ -14637,19 +14679,34 @@ Create this file exactly as specified, then continue your work.`);
 
         // 4. Send Message (Write to Inbox) — dispatch after column is moved
         try {
-            await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata);
+            const success = await this._dispatchExecuteMessage(resolvedWorkspaceRoot, targetAgent, messagePayload, messageMetadata);
 
-            // Dispatch succeeded — no additional state updates needed (already done above)
-            this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true });
-            await this._logEvent('dispatch', {
-                event: 'dispatch_sent',
-                role,
-                sessionId,
-                targetAgent
-            }, requestId);
-            return true;
+            if (success) {
+                // Dispatch succeeded — no additional state updates needed (already done above)
+                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: true });
+                await this._logEvent('dispatch', {
+                    event: 'dispatch_sent',
+                    role,
+                    sessionId,
+                    targetAgent
+                }, requestId);
+                return true;
+            } else {
+                // Dispatch failed — roll back the column move
+                if (previousColumn) {
+                    await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
+                    this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+                }
+                this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
+                clearDispatchLock();
+                return false;
+            }
         } catch (e) {
-            // Dispatch failed — card already moved, user can manually move back if needed
+            // Dispatch failed — roll back
+            if (previousColumn) {
+                await this._updateKanbanColumnForSession(resolvedWorkspaceRoot, sessionId, previousColumn);
+                this._scheduleSidebarKanbanRefresh(resolvedWorkspaceRoot);
+            }
             this._view?.webview.postMessage({ type: 'actionTriggered', role, success: false });
             clearDispatchLock();
             await this._logEvent('dispatch', {

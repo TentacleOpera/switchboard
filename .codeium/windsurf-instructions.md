@@ -8,8 +8,6 @@ This project uses the **Switchboard** protocol for cross-IDE agent collaboration
 
 ## Available Workflow Tools
 
-- **send_message** — Send structured messages for workflow actions (`execute`, `delegate_task`).
-- **check_inbox** — Read messages from inbox/outbox (`verbose=true` for full payloads).
 - **get_team_roster** — Discover registered terminals/chat agents and their roles.
 - **start_workflow** / **complete_workflow_phase** / **stop_workflow** — Workflow control.
 - **get_workflow_state** — Inspect active workflow and phase status.

@@ -26,18 +26,14 @@ At runtime:
 ### `.switchboard/` (core runtime data)
 
 - `state.json`: canonical shared state for session/workflow/agent data
-- `inbox/<agent>/`: incoming durable messages (JSON)
-- `outbox/<agent>/`: legacy/deprecated path still referenced by some tooling
 - `sessions/`: run sheets and `activity.jsonl` audit stream
 - `plans/`: locally created feature plans and mirrored Antigravity brain plans (unified root)
 - `brain_plan_blacklist.json`: setup-seeded blacklist of pre-existing Antigravity brain plan stable paths (hard excluded from mirror adoption and sidebar visibility)
   - persisted schema: `{ version, generatedAt, entries[] }` where `entries` are stable canonical base-plan paths
 - `context-maps/`: analyst-generated context map artifacts for planner handoff
 - `plan_tombstones.json`: deterministic hash tombstones used to block resurrecting archived/deleted Antigravity plan sessions
-- `handoff/`: staged delegation artifacts
-- `archive/YYYY-MM/...`: archived inbox/results/plan/session artifacts
+- `archive/YYYY-MM/...`: archived plan/session/log artifacts
 - `cooldowns/`: sender-recipient-action dispatch lock files
-- `housekeeping.policy.json`: retention policy
 
 ## 3) Activation and bootstrap (`activate`)
 
@@ -188,7 +184,6 @@ Primary tools:
 - `start_workflow`, `get_workflow_state`, `stop_workflow`
 - `run_in_terminal`
 - `get_team_roster`, `set_agent_status`, `handoff_clipboard`
-- `send_message`, `check_inbox`
 - `complete_workflow_phase`
 
 Dynamic schema note:
@@ -200,12 +195,7 @@ Action-level workflow gates:
 - `execute` allowed only in: `handoff`, `challenge`, `handoff-lead`
 - `delegate_task` allowed only in: `handoff`
 
-## 9) Dispatch pipeline (`send_message`)
-
-`send_message` only accepts actions:
-
-- `execute`
-- `delegate_task`
+## 9) Dispatch pipeline
 
 Pipeline:
 
@@ -213,64 +203,10 @@ Pipeline:
 2. Resolve recipient from workflow action routing.
 3. Enforce workflow + phase gate + recipient lock rules.
 4. Apply cooldown lock by sender/recipient/action (unless opt-out).
-5. Build metadata:
-   - normalized `phase_gate`
-   - dispatch metadata (`dispatch_id`, TTL, expires, queue mode)
-6. Inject security fields for dispatch actions:
-   - `sessionToken`
-   - `auth` envelope with `hmac-sha256-v1`, nonce, payloadHash, signature
-7. Attempt direct terminal push over IPC for `execute`.
-8. If direct push fails or not attempted, persist message to `.switchboard/inbox/<recipient>/msg_*.json`.
+5. Attempt direct terminal push over IPC for `execute`.
+6. If direct push fails, display warning notification.
 
-Important current behavior:
 
-- Message payload is intentionally kept raw (no persona/guardrail wrapping in payload text).
-- Persona and dispatch metadata travel in message fields/metadata.
-
-## 10) Inbox read semantics (`check_inbox`)
-
-`check_inbox` supports:
-
-- `box`: `inbox` or `outbox` (default currently `outbox`)
-- `filter`: `all` / `delegate_task` / `execute`
-- `since`, `limit`, `verbose`
-
-It reads message JSON files and truncates payload previews unless verbose mode is requested.
-
-## 11) Inbox execution path (`InboxWatcher`)
-
-Detection stack:
-
-- VS Code file watcher on inbox tree
-- native `fs.watch` fallback (gitignored path resilience)
-- periodic poll (60s heartbeat)
-
-Message handling:
-
-- Parses `msg_*.json` in each inbox folder.
-- Strict mode auth checks for dispatch actions:
-  - requires session token
-  - validates token against active session
-  - validates HMAC envelope
-  - replay protection via nonce cache (execute path)
-  - stale timestamp rejection for execute (>5 minutes)
-
-Action handling:
-
-- `execute`:
-  - resolves target terminal with role/name fallbacks
-  - sanitizes payload leading mode-trigger chars
-  - warns on shell metacharacters
-  - sends with robust pacing/chunking
-  - writes `.result.json`, then deletes original message
-- `delegate_task`:
-  - intentionally left in recipient inbox for file-based pickup (no greedy re-routing)
-
-Housekeeping:
-
-- archives processed and stale unprocessed inbox messages
-- prunes empty non-static dirs
-- rotates stale signals and old log artifacts
 
 ## 12) Sidebar/webview subsystem (`TaskViewerProvider`)
 
@@ -284,10 +220,8 @@ Core responsibilities:
 
 Dispatch behavior in sidebar:
 
-- tries direct terminal push first for local terminals
-- falls back to inbox message write for cross-window/offline delivery
-- attaches session token and signed auth envelope on file dispatch
-- internal dispatch path (`_handleTriggerAgentActionInternal`) returns success/failure so higher-level automation can fail fast
+- tries direct terminal push first for local terminals; if terminal not found, shows warning notification
+- internal dispatch path (`_handleTriggerAgentActionInternal`) returns success/failure so higher-level automation can fail fast and roll back column move on failure
 
 Role-driven payload construction:
 
@@ -299,7 +233,6 @@ Role-driven payload construction:
   - final verdict guardrail:
     - "Not Ready" is for unresolved defects/unmet requirements, not purely blocked test environments
 - `lead`/`coder`: execution payload with plan anchor and focus directives
-- `coder` (workflow helper mode): supports `create-signal-file` instruction for Coder -> Reviewer handoff (`.switchboard/inbox/Reviewer/<sessionId>.md`)
 - `team`: splits by plan Band A/B signals and dispatches to lead/coder targets
 - `jules`: triggers remote cloud session after git push verification checks
 
@@ -642,16 +575,13 @@ Typical maintainer checks:
 
 1. Workflow registry drift:
    - `.agent/workflows/enhance.md` exists but `enhance` is not in runtime `WORKFLOWS`.
-2. Inbox/outbox semantic drift:
-   - `send_message` is inbox-first with direct terminal push optimization.
-   - `check_inbox` still defaults `box='outbox'` and retains stale `request_review` filtering logic.
+
 3. Duplicate robust terminal send implementations:
    - one in `extension.ts`
    - another in `services/terminalUtils.ts`
    - behavior is similar but not identical (newline pacing differences).
-4. Persona payload formatting drift:
-   - `send_message` keeps raw payload + metadata/persona fields.
-   - Sidebar local/remote execute helpers can still inline persona wrappers in payload text.
+3. Persona payload formatting drift:
+    - Sidebar local execute helper can still inline persona wrappers in payload text.
 5. Setup template drift:
    - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names.
 

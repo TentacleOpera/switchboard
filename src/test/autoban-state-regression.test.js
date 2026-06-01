@@ -26,6 +26,7 @@ async function run() {
         poolCursor: { reviewer: 1 },
         rules: {
             CREATED: { enabled: true, intervalMinutes: 10 },
+            'INTERN CODED': { enabled: true, intervalMinutes: 15 },
             'LEAD CODED': { enabled: true, intervalMinutes: 15 },
             'CODER CODED': { enabled: true, intervalMinutes: 15 }
         }
@@ -33,6 +34,7 @@ async function run() {
 
     const broadcast = buildAutobanBroadcastState(baseState, new Map([
         ['CREATED', 1000],
+        ['INTERN CODED', 1500],
         ['LEAD CODED', 2000],
         ['CODER CODED', 3000]
     ]).entries());
@@ -49,7 +51,7 @@ async function run() {
     assert.deepStrictEqual(broadcast.poolCursor, { reviewer: 1 }, 'pool cursor should be preserved');
     assert.deepStrictEqual(
         broadcast.lastTickAt,
-        { CREATED: 1000, 'LEAD CODED': 2000, 'CODER CODED': 3000 },
+        { CREATED: 1000, 'INTERN CODED': 1500, 'LEAD CODED': 2000, 'CODER CODED': 3000 },
         'lastTickAt should be merged into broadcast state'
     );
 
@@ -87,6 +89,11 @@ async function run() {
         'legacy states should restore missing default column rules'
     );
     assert.deepStrictEqual(
+        normalizedLegacy.rules['INTERN CODED'],
+        { enabled: true, intervalMinutes: 15 },
+        'legacy states should restore the intern coded autoban rule with default 15-minute interval'
+    );
+    assert.deepStrictEqual(
         normalizedLegacy.rules['LEAD CODED'],
         { enabled: true, intervalMinutes: 15 },
         'legacy states should restore the lead coded autoban rule'
@@ -111,6 +118,11 @@ async function run() {
         normalizedLegacyCodedRule.rules['CODER CODED'],
         { enabled: false, intervalMinutes: 9 },
         'legacy CODED autoban rules should be remapped onto CODER CODED'
+    );
+    assert.deepStrictEqual(
+        normalizedLegacyCodedRule.rules['INTERN CODED'],
+        { enabled: true, intervalMinutes: 15 },
+        'legacy CODED autoban rules should NOT remap onto INTERN CODED (intern column postdates the split)'
     );
 
     const normalizedNewConfig = normalizeAutobanConfigState({
@@ -139,10 +151,11 @@ async function run() {
     assert.deepStrictEqual(
         getEnabledSharedReviewerAutobanColumns({
             'LEAD CODED': { enabled: true, intervalMinutes: 15 },
-            'CODER CODED': { enabled: false, intervalMinutes: 15 }
+            'CODER CODED': { enabled: true, intervalMinutes: 15 },
+            'INTERN CODED': { enabled: true, intervalMinutes: 15 }
         }),
-        ['LEAD CODED'],
-        'shared reviewer lane helpers should only include enabled coded columns'
+        ['LEAD CODED', 'CODER CODED', 'INTERN CODED'],
+        'shared reviewer lane helpers should include all three enabled coded columns'
     );
     assert.strictEqual(
         shouldSkipSharedReviewerAutobanDispatch(

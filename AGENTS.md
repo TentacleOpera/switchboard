@@ -9,7 +9,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 > [!IMPORTANT]
 > **Tool Preference Guidance**:
 > - **Prefer skill-based invocations** for ClickUp, Linear, and diagram operations.
-> - **Workflow tools** (`send_message`, `check_inbox`, `get_team_roster`, `start_workflow`, `complete_workflow_phase`, etc.) remain the primary interface for workflow and messaging coordination.
+> - **Workflow tools** (`get_team_roster`, `start_workflow`, `complete_workflow_phase`, etc.) remain the primary interface for workflow and messaging coordination.
 
 | Skill | When to Use |
 |-------|-------------|
@@ -37,6 +37,9 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 ### 📂 Workspace Detection for Plan Creation
 
 **MANDATORY**: Before writing any plan file, you MUST verify where to write it using this algorithm:
+
+**Step 0 — Check for Antigravity Brain Environment**
+If the directory `~/.gemini/antigravity/brain/` exists on the filesystem, you are likely running inside an Antigravity sandbox session. In this case, you MUST write the implementation plan *only* to the `implementation_plan.md` file inside the active conversation subdirectory under that brain folder (the subdirectory you are currently operating within). Do NOT manually write a second copy of the plan to `.switchboard/plans/` — the Switchboard extension's brain watcher will automatically mirror the brain file into the plans directory for you. Proceed no further through this algorithm.
 
 **Step 1 — Discover the Switchboard workspace**
 Check each open workspace root for the existence of `.switchboard/plans/`. Not every repo in a multi-root setup has this — only Switchboard-managed workspaces do. Run: `ls {workspaceRoot}/.switchboard/plans/` for each root.

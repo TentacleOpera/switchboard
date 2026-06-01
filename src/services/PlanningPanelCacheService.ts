@@ -352,7 +352,7 @@ cachedAt: ${new Date().toISOString()}
         docId: string,
         docName: string,
         slugPrefix: string,
-        options: { remoteContentHash?: string; workspaceId?: string }
+        options: { remoteContentHash?: string; workspaceId?: string; filePath?: string }
     ): Promise<void> {
         if (!this._kanbanDb) {
             const msg = 'Database not available. Please ensure Switchboard setup is complete.';
@@ -393,7 +393,9 @@ cachedAt: ${new Date().toISOString()}
         
         try {
             const docsDir = path.join(this._workspaceRoot, '.switchboard', 'docs');
-            const filePath = path.join(docsDir, `${slugPrefix}.md`);
+            const shortHash = options.remoteContentHash ? options.remoteContentHash.slice(0, 8) : '';
+            const fileName = shortHash ? `${slugPrefix}_${shortHash}.md` : `${slugPrefix}.md`;
+            const filePath = options.filePath || path.join(docsDir, fileName);
             const workspaceId = await this._getEffectiveWorkspaceId(options.workspaceId);
             
             await this._kanbanDb.registerImport({

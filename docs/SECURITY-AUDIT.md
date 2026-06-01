@@ -66,7 +66,7 @@ Immutable bundled runtime is default; mutable workspace mode requires explicit a
 All git operations use `cp.execFile(...)` with argument arrays. The `normalizePid()` function validates PID values before subprocess usage.
 
 ### F-04: Registration ingress / path traversal — Resolved
-`isValidAgentName()` regex (`/^[a-zA-Z0-9 _-]+$/`) enforced at all ingress points: `handleInternalRegistration`, `set_agent_status`, `check_inbox`, `send_message` recipient, and inbox write path. `isPathWithinRoot()` enforced before supersede scans and archive operations.
+`isValidAgentName()` regex (`/^[a-zA-Z0-9 _-]+$/`) enforced at all ingress points: `handleInternalRegistration`, `set_agent_status`, recipient check, and terminal push path. `isPathWithinRoot()` enforced before supersede scans and archive operations.
 
 ### F-05: Prefix-based root containment — Resolved
 `isPathWithinRoot()` uses `path.relative()` with `..` prefix check instead of string prefix matching.
@@ -160,23 +160,13 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 ### Authentication and Authorization Flow
 
 ```
-Agent (AI) → Tool Call (send_message)
+Agent (AI) → Action Dispatch
   ├─ Workflow gating: ACTION_REQUIRED_WORKFLOWS check
   ├─ Phase-gate enforcement: minimum workflow step required
   ├─ Recipient validation: isValidAgentName() regex + resolveAgentName()
   ├─ Cooldown check: per-triplet rate limiting
   ├─ Brain leakage check: private path detection
-  ├─ Session token injection: from active session state
-  ├─ Dispatch signing: HMAC-SHA256 envelope generation
-  └─ Delivery: terminal push (IPC) or inbox file (durable fallback)
-
-InboxWatcher (Extension) ← Inbox file pickup
-  ├─ Session token validation (strict: fail-closed)
-  ├─ Dispatch signature verification (HMAC-SHA256)
-  ├─ Replay protection (nonce dedup for execute actions)
-  ├─ Freshness check (5-min window for execute actions)
-  ├─ Payload sanitization (leading trigger char strip)
-  └─ Terminal delivery via VS Code sendText API
+  └─ Delivery: direct terminal push (IPC)
 ```
 
 ### Webview Security Model

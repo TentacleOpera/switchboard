@@ -1082,6 +1082,16 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(setAutobanFromKanbanDisposable);
 
+    const resetAutobanTimersDisposable = vscode.commands.registerCommand('switchboard.resetAutobanTimersFromKanban', async () => {
+        await taskViewerProvider.resetAutobanTimersFromKanban();
+    });
+    context.subscriptions.push(resetAutobanTimersDisposable);
+
+    const setAutobanPausedDisposable = vscode.commands.registerCommand('switchboard.setAutobanPausedFromKanban', async (paused: boolean) => {
+        await taskViewerProvider.setAutobanPausedFromKanban(!!paused);
+    });
+    context.subscriptions.push(setAutobanPausedDisposable);
+
     const setPairProgrammingModeDisposable = vscode.commands.registerCommand('switchboard.setPairProgrammingModeFromKanban', async (mode: string) => {
         await taskViewerProvider.setPairProgrammingMode(mode);
     });
@@ -2395,45 +2405,7 @@ async function hasSwitchboardConfigs(workspaceRoot: string): Promise<boolean> {
     return hasSwitchboardProtocolFiles(workspaceRoot);
 }
 
-/**
- * Detect which IDEs are installed
- */
-async function detectIDEs(workspaceRoot: string): Promise<{ key: string; name: string; path: string }[]> {
-    const ideConfigs: Array<{ key: string; name: string; path: string; globalPath?: string }> = [
-        { key: 'antigravity', name: 'Antigravity', path: '.agent' },
-        { key: 'github', name: 'GitHub Copilot', path: '.github' },
-        { key: 'cursor', name: 'Cursor (Composer)', path: '.cursorrules' },
-        { key: 'windsurf', name: 'Windsurf (Cascade)', path: '.codeium', globalPath: '.codeium/windsurf' }
-    ];
 
-    const results = await Promise.all(ideConfigs.map(async ide => {
-        // Check workspace-local marker
-        const wsUri = vscode.Uri.file(path.join(workspaceRoot, ide.path));
-        try {
-            await vscode.workspace.fs.stat(wsUri);
-            return ide;
-        } catch {
-            // Fall through to global check
-        }
-        // Check global (home-dir) marker if defined
-        if (ide.globalPath) {
-            const globalUri = vscode.Uri.file(path.join(os.homedir(), ide.globalPath));
-            try {
-                await vscode.workspace.fs.stat(globalUri);
-                return ide;
-            } catch {
-                // Not found globally either
-            }
-        }
-        return null;
-    }));
-
-    const detected = results
-        .filter((ide): ide is { key: string; name: string; path: string; globalPath?: string } => ide !== null)
-        .map(({ key, name, path }) => ({ key, name, path }));
-
-    return detected;
-}
 
 /**
  * Surgical setup of core workflow dependencies (Async & Production Safe)
@@ -2695,6 +2667,8 @@ async function cleanupLegacyAgentFiles(workspaceRoot: string): Promise<void> {
         '.agent/workflows/handoff-chat.md',
         '.agent/workflows/handoff-lead.md',
         '.agent/workflows/handoff-relay.md',
+        '.agent/workflows/challenge.md',
+        '.agent/workflows/chat.md', // Renamed to switchboard-chat.md
     ];
     for (const relativePath of legacyFiles) {
         const fullPath = path.join(workspaceRoot, relativePath);
@@ -2756,9 +2730,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     // 1. Core directories (project docs + runtime messaging)
     const dirs = [
         '.agent',
-        '.switchboard/inbox',
         '.switchboard/plans',
-        '.switchboard/handoff',
         '.switchboard/archive'
     ];
 
@@ -2813,6 +2785,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         '.agent/workflows/handoff-chat.md',
         '.agent/workflows/handoff-lead.md',
         '.agent/workflows/handoff-relay.md',
+        '.agent/workflows/challenge.md',
     ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);
@@ -2835,28 +2808,11 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     try {
         await vscode.workspace.fs.stat(readmeUri);
     } catch {
-        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.\n- Use \`/challenge\` for internal adversarial review without delegation.`;
+        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.`;
         await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(readmeContent, 'utf8'));
     }
 
-    const housekeepingPolicyUri = vscode.Uri.joinPath(workspaceUri, '.switchboard', 'housekeeping.policy.json');
-    try {
-        await vscode.workspace.fs.stat(housekeepingPolicyUri);
-    } catch {
-        const defaultPolicy = {
-            enabled: true,
-            runIntervalMinutes: 60,
-            processedMessageRetentionHours: 24,
-            keepRecentProcessedPerAgent: 50,
-            staleUnprocessedInboxRetentionHours: 72,
-            staleUnprocessedUnknownAgentsOnly: true,
-            staleSignalRetentionDays: 3
-        };
-        await vscode.workspace.fs.writeFile(
-            housekeepingPolicyUri,
-            Buffer.from(JSON.stringify(defaultPolicy, null, 2), 'utf8')
-        );
-    }
+
 }
 
 /**
@@ -2870,77 +2826,6 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
     }
 
     const switchboardConfig = vscode.workspace.getConfiguration('switchboard');
-
-    // Detect IDEs (metadata only — does not gate selection)
-    const detectedIDEs = await detectIDEs(workspaceRoot);
-    const detectedKeys = new Set(detectedIDEs.map(d => d.key));
-
-    const allIDEs = [
-        { key: 'github', name: 'GitHub Copilot', description: 'Copilot instructions + agent config' },
-        { key: 'antigravity', name: 'Antigravity', description: 'Core .agent workflows (auto-scaffolded)' },
-        { key: 'windsurf', name: 'Windsurf (Cascade)', description: 'Windsurf/Codeium AI IDE configuration' },
-        { key: 'cursor', name: 'Cursor (Composer)', description: 'Cursor AI IDE configuration' }
-    ];
-
-    // Build flattened quick pick — all options always visible
-    const items: vscode.QuickPickItem[] = [
-        {
-            label: '$(gear) Auto-Detect and Setup',
-            description: 'Detect installed IDEs and configure for them',
-            detail: `Detected: ${detectedIDEs.length > 0 ? detectedIDEs.map((d: any) => d.name).join(', ') : 'None'}`
-        },
-        {
-            label: '$(list-unordered) Setup All Platforms',
-            description: 'Create configurations for all supported IDEs',
-        },
-        { label: '', kind: vscode.QuickPickItemKind.Separator },
-        ...allIDEs.map(ide => {
-            const detected = detectedKeys.has(ide.key);
-            const icon = detected ? '$(check)' : '$(circle-outline)';
-            const hint = detected ? 'Detected' : 'Not detected';
-            return {
-                label: `${icon} ${ide.name}`,
-                description: `${hint} — Click to configure`,
-                detail: ide.description
-            };
-        }),
-    ];
-
-    const selected = await vscode.window.showQuickPick(items, {
-        placeHolder: 'Select IDEs to configure for Switchboard',
-        canPickMany: true,
-        title: 'Switchboard IDE Setup'
-    });
-
-    if (!selected || selected.length === 0) return;
-
-    // Selection flags (order-independent)
-    const selectedLabels = new Set(selected.map(s => s.label));
-    const autoDetectSelected = [...selectedLabels].some(label => label.includes('Auto-Detect'));
-    const allPlatformsSelected = [...selectedLabels].some(label => label.includes('All Platforms'));
-
-    // Determine IDE targets based on selection
-    const targetSet = new Set<string>();
-    if (autoDetectSelected) {
-        for (const detected of detectedIDEs) targetSet.add(detected.key);
-    }
-    if (allPlatformsSelected) {
-        for (const ide of allIDEs) targetSet.add(ide.key);
-    }
-    for (const item of selected) {
-        if (item.label.includes('Auto-Detect') || item.label.includes('All Platforms')) {
-            continue;
-        }
-        const ideName = item.label.replace(/\$\([^)]+\)\s*/, '');
-        const ideKey = allIDEs.find(a => a.name === ideName)?.key;
-        if (ideKey) targetSet.add(ideKey);
-    }
-    const targets = [...targetSet];
-
-    if (targets.length === 0) {
-        vscode.window.showInformationMessage('No IDEs selected for configuration');
-        return;
-    }
 
     // Persist Light-mode team prompt rigor (default for all setup flows)
     const persistTeamRigor = async () => {
@@ -2990,106 +2875,7 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
             }
         }
 
-        if (token.isCancellationRequested) return;
-        const templatesBaseUri = vscode.Uri.joinPath(context.extensionUri, 'templates');
-        const results = { success: [] as string[], skipped: [] as string[], errors: [] as string[] };
-        const absWorkspaceRoot = workspaceRoot.replace(/\\/g, '/');
-
-        for (const target of targets) {
-            try {
-                const configFiles = getConfigFilesForIDE(target);
-                for (const configFile of configFiles) {
-                    const templatePath = vscode.Uri.joinPath(templatesBaseUri, target, configFile.template);
-                    const destPath = vscode.Uri.file(
-                        configFile.isGlobal
-                            ? path.join(os.homedir(), configFile.destination)
-                            : path.join(workspaceRoot, configFile.destination)
-                    );
-                    const destDir = vscode.Uri.file(path.dirname(destPath.fsPath));
-
-                    // Ensure destination directory exists
-                    try {
-                        await vscode.workspace.fs.stat(destDir);
-                    } catch {
-                        await vscode.workspace.fs.createDirectory(destDir);
-                    }
-
-                    try {
-                        // Check if destination exists
-                        await vscode.workspace.fs.stat(destPath);
-                        results.skipped.push(configFile.destination);
-                    } catch {
-                        // Doesn't exist, copy it or create default
-                        try {
-                            await vscode.workspace.fs.stat(templatePath); // Check if template exists
-                            const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
-                            const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
-                            await vscode.workspace.fs.writeFile(destPath, Buffer.from(content, 'utf8'));
-                            results.success.push(configFile.destination);
-                        } catch {
-                            // Template doesn't exist, use default content
-                            const defaultContent = getDefaultTemplate(target);
-                            await vscode.workspace.fs.writeFile(destPath, Buffer.from(defaultContent, 'utf8'));
-                            results.success.push(configFile.destination);
-                        }
-                    }
-                }
-            } catch (error) {
-                results.errors.push(`${target}: ${error}`);
-            }
-        }
-
         progress.report({ increment: 100 });
-
-        // Show results
-        if (results.success.length > 0) {
-            const message = `✅ Created ${results.success.length} configuration files`;
-            vscode.window.showInformationMessage(message, 'View Details')
-                .then(selection => {
-                    if (selection === 'View Details') {
-                        const details = results.success.map(s => path.basename(s)).join(', ');
-                        vscode.window.showInformationMessage(`Created: ${details}`);
-                    }
-                });
-        }
-
-        if (results.skipped.length > 0) {
-            vscode.window.showWarningMessage(
-                `⚠️ ${results.skipped.length} files already exist`,
-                'Overwrite All'
-            ).then(async selection => {
-                if (selection === 'Overwrite All') {
-                    // Re-write all skipped files with force
-                    let overwritten = 0;
-                    for (const target of targets) {
-                        const configFiles = getConfigFilesForIDE(target);
-                        for (const configFile of configFiles) {
-                            if (!results.skipped.includes(configFile.destination)) continue;
-                            const absDestPath = configFile.isGlobal
-                                ? path.join(os.homedir(), configFile.destination)
-                                : path.join(workspaceRoot, configFile.destination);
-                            try {
-                                const templatePath = vscode.Uri.joinPath(templatesBaseUri, target, configFile.template);
-                                const destPath = vscode.Uri.file(absDestPath);
-                                try {
-                                    await vscode.workspace.fs.stat(templatePath);
-                                    const raw = Buffer.from(await vscode.workspace.fs.readFile(templatePath)).toString('utf8');
-                                    const content = raw.replace(/\{\{WORKSPACE_ROOT\}\}/g, absWorkspaceRoot);
-                                    await vscode.workspace.fs.writeFile(destPath, Buffer.from(content, 'utf8'));
-                                } catch {
-                                    const defaultContent = getDefaultTemplate(target);
-                                    await vscode.workspace.fs.writeFile(destPath, Buffer.from(defaultContent, 'utf8'));
-                                }
-                                overwritten++;
-                            } catch (e) {
-                                outputChannel?.appendLine(`[Setup] Overwrite failed for ${absDestPath}: ${e}`);
-                            }
-                        }
-                    }
-                    vscode.window.showInformationMessage(`✅ Overwrote ${overwritten} configuration file(s)`);
-                }
-            });
-        }
 
         // Hide status bar item if it exists
         if (setupStatusBarItem) {
@@ -3099,156 +2885,6 @@ async function showSetupWizard(context: vscode.ExtensionContext, taskViewerProvi
         // Refresh the webview to update UI
         vscode.commands.executeCommand('switchboard.refresh');
     });
-}
-
-/**
- * Get configuration files for an IDE
- */
-function getConfigFilesForIDE(ide: string): { template: string; destination: string; isGlobal?: boolean }[] {
-    const configs: Record<string, { template: string; destination: string; isGlobal?: boolean }[]> = {
-        github: [
-            { template: 'copilot-instructions.md.template', destination: '.github/copilot-instructions.md' },
-            { template: 'agents/switchboard.agent.md.template', destination: '.github/agents/switchboard.agent.md' }
-        ],
-        antigravity: [], // Handled by performSetup
-        windsurf: [
-            { template: 'windsurf-instructions.md.template', destination: '.codeium/windsurf-instructions.md' }
-        ],
-        cursor: [
-            { template: 'cursor-instructions.md.template', destination: '.cursorrules' }
-        ],
-        claude: [],
-        gemini: [],
-        kiro: []
-    };
-
-    return configs[ide] || [];
-}
-
-/**
- * Recursively crawl a directory to find all files (relative paths)
- */
-async function crawlDirectory(baseUri: vscode.Uri, relativeDir: string = '', depth: number = 0): Promise<string[]> {
-    if (depth > 5) return []; // Safety limit
-
-    const dirUri = vscode.Uri.joinPath(baseUri, relativeDir);
-    const files: string[] = [];
-
-    try {
-        const entries = await vscode.workspace.fs.readDirectory(dirUri);
-        for (const [name, type] of entries) {
-            const relativePath = path.join(relativeDir, name);
-            if (type === vscode.FileType.Directory) {
-                const subFiles = await crawlDirectory(baseUri, relativePath, depth + 1);
-                files.push(...subFiles);
-            } else if (type === vscode.FileType.File) {
-                files.push(relativePath);
-            }
-        }
-    } catch (e) {
-        console.warn(`Could not crawl directory ${dirUri.fsPath}:`, e);
-    }
-
-    return files;
-}
-
-/**
- * Get default template content
- */
-function getDefaultTemplate(target: string): string {
-    if (target === 'windsurf') {
-        return `# Switchboard Configuration for Windsurf (Cascade)
-
-This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-
-## Available Skills
-
-- **send_message** — Send structured messages for workflow actions (\`execute\`, \`delegate_task\`).
-- **check_inbox** — Read messages from inbox/outbox (\`verbose=true\` for full payloads).
-- **get_team_roster** — Discover registered terminals/chat agents and their roles.
-- **start_workflow** / **complete_workflow_phase** / **stop_workflow** — Workflow control.
-- **get_workflow_state** — Inspect active workflow and phase status.
-- **run_in_terminal** — Execute commands in a registered terminal.
-- **set_agent_status** — Update terminal/chat availability status.
-- **handoff_clipboard** — Copy prepared handoff artifacts to clipboard.
-
-## Workflow Triggers
-
-| Trigger | Workflow | Description |
-|:--------|:---------|:------------|
-| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
-| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
-| \`/accuracy\` | accuracy | High-accuracy solo mode |
-| \`/chat\` | chat | Product Manager consultation (no code) |
-`;
-    }
-
-    if (target === 'cursor') {
-        return `# Switchboard Configuration for Cursor (Composer)
-
-This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-
-## Available Skills
-
-- **send_message** — Send structured messages for workflow actions (\`execute\`, \`delegate_task\`).
-- **check_inbox** — Read messages from inbox/outbox (\`verbose=true\` for full payloads).
-- **get_team_roster** — Discover registered terminals/chat agents and their roles.
-- **start_workflow** / **complete_workflow_phase** / **stop_workflow** — Workflow control.
-- **get_workflow_state** — Inspect active workflow and phase status.
-- **run_in_terminal** — Execute commands in a registered terminal.
-- **set_agent_status** — Update terminal/chat availability status.
-- **handoff_clipboard** — Copy prepared handoff artifacts to clipboard.
-
-## Workflow Triggers
-
-| Trigger | Workflow | Description |
-|:--------|:---------|:------------|
-| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
-| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
-| \`/accuracy\` | accuracy | High-accuracy solo mode |
-| \`/chat\` | chat | Product Manager consultation (no code) |
-`;
-    }
-
-    return `# Switchboard Configuration for ${target}
-
-This project uses the **Switchboard** protocol for cross-IDE agent collaboration.
-
-## Available Skills
-
-When the Switchboard protocol is active, you have access to these skills:
-
-### Messaging (Cross-IDE)
-- **send_message** — Send structured messages to other agents. Actions: \`delegate_task\`, \`execute\`.
-- **check_inbox** — Read messages from an agent's inbox or outbox. Use \`verbose=true\` for full payloads.
-- **get_team_roster** — Discover registered terminals/chat agents and role assignments.
-
-### Workflow Management
-- **start_workflow** — Begin a workflow (e.g., \`improve-plan\`, \`challenge\`, \`accuracy\`).
-- **get_workflow_state** — Inspect active workflow and phase state.
-- **complete_workflow_phase** — Mark a workflow phase as done (enforces step ordering and required artifacts).
-- **stop_workflow** — End the current workflow.
-
-### Terminal Management
-- **run_in_terminal** — Send commands to a registered terminal.
-- **set_agent_status** — Update terminal/chat status.
-- **handoff_clipboard** — Copy staged handoff artifacts to clipboard.
-
-## Messaging Protocol
-
-Messages are delivered via the filesystem:
-- **Inbox**: \`.switchboard/inbox/<agent>/\` — Incoming commands (\`execute\`, \`delegate_task\`).
-- **Outbox**: \`.switchboard/outbox/<agent>/\` — Delivery artifacts and receipts.
-
-## Workflow Triggers
-
-| Trigger | Workflow | Description |
-|:--------|:---------|:------------|
-| \`/improve-plan\` | improve-plan | Deep planning, dependency checks, and adversarial review |
-| \`/challenge\` | challenge | Internal adversarial review (no Kanban auto-move) |
-| \`/accuracy\` | accuracy | High-accuracy solo mode |
-| \`/chat\` | chat | Product Manager consultation (no code) |
-`;
 }
 
 export function deactivate() {
