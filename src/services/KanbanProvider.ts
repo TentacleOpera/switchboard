@@ -2406,10 +2406,15 @@ export class KanbanProvider implements vscode.Disposable {
             const customAgents = await this._getCustomAgents(workspaceRoot);
             const agentId = role.replace('custom_agent_', '');
             const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
+            const roleConfigAddons = this._getSetting<any>(`switchboard.prompts.roleConfig_${role}`, undefined)?.addons;
+            const mergedAddons = {
+                ...agentConfig?.addons,
+                ...(roleConfigAddons || {}),
+            };
             return buildCustomAgentPrompt(
                 plans,
                 agentConfig?.promptInstructions,
-                agentConfig?.addons,
+                mergedAddons,
                 workspaceRoot
             );
         }
@@ -2430,6 +2435,8 @@ export class KanbanProvider implements vscode.Disposable {
             includeDependencyInstructions: promptsConfig.includeDependencyInstructionsByRole?.[role] ?? false,
             switchboardSafeguardsEnabled: promptsConfig.switchboardSafeguardsByRole?.[role] ?? true,
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
+            workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
+            workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,
@@ -2439,6 +2446,7 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.aggressivePairProgramming = promptsConfig.aggressivePairProgramming;
             resolvedOptions.dependencyCheckEnabled = promptsConfig.dependencyCheckEnabled;
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
+            resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
             const designDocEnabled = promptsConfig.designDocEnabled;
             const designDocLink = designDocEnabled ? (promptsConfig.designDocLink || '').trim() : undefined;
@@ -2513,6 +2521,34 @@ export class KanbanProvider implements vscode.Disposable {
         const gathererConfig: any = this._getSetting('switchboard.prompts.roleConfig_gatherer', undefined);
 
         return {
+            workflowFilePathEnabledByRole: {
+                planner: plannerConfig?.addons?.workflowFilePathEnabled ?? true,
+                lead: leadConfig?.addons?.workflowFilePathEnabled ?? false,
+                coder: coderConfig?.addons?.workflowFilePathEnabled ?? false,
+                reviewer: reviewerConfig?.addons?.workflowFilePathEnabled ?? false,
+                tester: testerConfig?.addons?.workflowFilePathEnabled ?? false,
+                intern: internConfig?.addons?.workflowFilePathEnabled ?? false,
+                analyst: analystConfig?.addons?.workflowFilePathEnabled ?? false,
+                researcher: researcherConfig?.addons?.workflowFilePathEnabled ?? false,
+                splitter: splitterConfig?.addons?.workflowFilePathEnabled ?? false,
+                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePathEnabled ?? false,
+                code_researcher: codeResearcherConfig?.addons?.workflowFilePathEnabled ?? false,
+                gatherer: gathererConfig?.addons?.workflowFilePathEnabled ?? false,
+            },
+            workflowFilePathByRole: {
+                planner: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
+                lead: leadConfig?.addons?.workflowFilePath || '',
+                coder: coderConfig?.addons?.workflowFilePath || '',
+                reviewer: reviewerConfig?.addons?.workflowFilePath || '',
+                tester: testerConfig?.addons?.workflowFilePath || '',
+                intern: internConfig?.addons?.workflowFilePath || '',
+                analyst: analystConfig?.addons?.workflowFilePath || '',
+                researcher: researcherConfig?.addons?.workflowFilePath || '',
+                splitter: splitterConfig?.addons?.workflowFilePath || '',
+                ticket_updater: ticketUpdaterConfig?.addons?.workflowFilePath || '',
+                code_researcher: codeResearcherConfig?.addons?.workflowFilePath || '',
+                gatherer: gathererConfig?.addons?.workflowFilePath || '',
+            },
             accurateCodingEnabledByRole: {
                 lead: leadConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),
                 coder: coderConfig?.addons?.accurateCoding ?? config.get<boolean>('accurateCoding.enabled', false),

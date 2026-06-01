@@ -2409,10 +2409,6 @@
                   <input id="ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
                 </div>
                 
-                <div>
-                  <label class="modal-label" style="margin-bottom:4px;">Custom Workflow Path</label>
-                  <input id="ca-addon-workflow-path" class="modal-input" type="text" placeholder=".agent/workflows/custom.md" style="margin-bottom:8px;">
-                </div>
               </div>
             </details>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
@@ -2464,17 +2460,25 @@
               <p class="section-desc">The workflow file defines the planning methodology.</p>
               
               <div class="input-group">
-                <label for="workflowFilePath">Workflow File Path:</label>
-                <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
-                <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
+                <label class="checkbox-item" title="Enable workflow file for planner">
+                  <input type="checkbox" id="plannerWorkflowEnabled" checked>
+                  <span>Enable Workflow File</span>
+                </label>
               </div>
-              <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
-              
-              <div class="example-paths">
-                <strong>Example paths:</strong>
-                <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
-                <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
-                <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+              <div id="plannerWorkflowFilePathGroup">
+                <div class="input-group">
+                  <label for="workflowFilePath">Workflow File Path:</label>
+                  <input type="text" id="workflowFilePath" value=".agent/workflows/improve-plan.md" />
+                  <button id="validateWorkflowPath" class="secondary-btn">Validate</button>
+                </div>
+                <div id="prompts-tab-workflow-path-status" style="font-size:11px; margin-top:4px; font-family:var(--font-mono);"></div>
+                
+                <div class="example-paths">
+                  <strong>Example paths:</strong>
+                  <code>.agent/workflows/improve-plan.md</code> (Switchboard Native)
+                  <code>.claude/get-shit-done/agents/gsd-planner.md</code> (GSD)
+                  <code>.claude/superpowers/skills/writing-plans.md</code> (Superpowers)
+                </div>
               </div>
             </div>
           </div>
@@ -2787,7 +2791,7 @@
             group.innerHTML = '';
             lastCustomAgents.forEach(agent => {
                 const opt = document.createElement('option');
-                opt.value = agent.id;
+                opt.value = agent.role || 'custom_agent_' + agent.id;
                 opt.textContent = agent.name;
                 group.appendChild(opt);
             });
@@ -2801,11 +2805,14 @@
 
             plannerConfig.style.display = currentRole === 'planner' ? 'block' : 'none';
             researchComplexityConfig.style.display = (currentRole === 'researcher' || currentRole === 'code_researcher') ? 'block' : 'none';
-            promptCustomization.style.display = (currentRole === 'planner' || currentRole === 'researcher' || currentRole === 'code_researcher') ? 'none' : 'block';
+            promptCustomization.style.display = currentRole === 'planner' ? 'none' : 'block';
 
             if (currentRole === 'planner') {
                 const config = roleConfigs.planner;
                 document.getElementById('workflowFilePath').value = config.workflowFilePath || '.agent/workflows/improve-plan.md';
+                const plannerWorkflowEnabled = config.addons?.workflowFilePathEnabled !== false;
+                document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
+                document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
                 document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
                 document.getElementById('plannerAddonDependencyCheck').checked = !!config.addons?.dependencyCheck;
                 document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
@@ -2847,7 +2854,11 @@
             if (!group || !desc) return;
             group.innerHTML = '';
 
-            const addons = ROLE_ADDONS[role] || [];
+            let addons = ROLE_ADDONS[role] || [];
+            if (addons.length === 0 && role.startsWith('custom_agent_')) {
+                addons = [{ id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }];
+            }
+
             if (addons.length === 0) {
                 desc.textContent = 'No add-ons available for this role.';
                 return;
@@ -2927,6 +2938,59 @@
                             refreshPreview();
                         });
                     });
+                    group.appendChild(wrapper);
+                } else if (addon.type === 'file') {
+                    // Checkbox toggles text input visibility
+                    const isEnabled = roleConfigs[role]?.addons?.[addon.id + 'Enabled'] ?? addon.default;
+                    const pathVal = roleConfigs[role]?.addons?.[addon.id] || '';
+
+                    const wrapper = document.createElement('div');
+                    wrapper.className = 'addon-file-group';
+                    wrapper.style.marginBottom = '12px';
+
+                    const label = document.createElement('label');
+                    label.className = 'checkbox-item';
+                    label.title = addon.tooltip;
+                    label.innerHTML = `
+                        <input type="checkbox" id="addon_${addon.id}_enabled" ${isEnabled ? 'checked' : ''}>
+                        <span>${addon.label}</span>
+                        <span class="tooltip">${addon.tooltip}</span>
+                    `;
+
+                    const textInput = document.createElement('input');
+                    textInput.type = 'text';
+                    textInput.id = `addon_${addon.id}_path`;
+                    textInput.placeholder = 'e.g. .agent/workflows/accuracy.md';
+                    textInput.style.display = isEnabled ? 'block' : 'none';
+                    textInput.style.marginTop = '4px';
+                    textInput.style.width = '100%';
+                    textInput.style.padding = '4px 8px';
+                    textInput.style.borderRadius = '4px';
+                    textInput.style.border = '1px solid var(--vscode-input-border, #ccc)';
+                    textInput.style.background = 'var(--vscode-input-background, #fff)';
+                    textInput.style.color = 'var(--vscode-input-foreground, #000)';
+                    textInput.value = pathVal;
+
+                    label.querySelector('input').addEventListener('change', (e) => {
+                        const enabled = e.target.checked;
+                        textInput.style.display = enabled ? 'block' : 'none';
+                        if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                        if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                        roleConfigs[role].addons[addon.id + 'Enabled'] = enabled;
+                        saveRoleConfig(role);
+                        refreshPreview();
+                    });
+
+                    textInput.addEventListener('input', (e) => {
+                        if (!roleConfigs[role]) roleConfigs[role] = { prompt: '', addons: {} };
+                        if (!roleConfigs[role].addons) roleConfigs[role].addons = {};
+                        roleConfigs[role].addons[addon.id] = e.target.value;
+                        saveRoleConfig(role);
+                        refreshPreview();
+                    });
+
+                    wrapper.appendChild(label);
+                    wrapper.appendChild(textInput);
                     group.appendChild(wrapper);
                 } else {
                     // Existing checkbox rendering
@@ -3012,7 +3076,6 @@
           document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
           document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
           document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
-          document.getElementById('ca-addon-workflow-path').value = addons.customWorkflowPath || '';
 
           const subagentPolicy = addons.subagentPolicy || 'default';
           const customSubagentName = addons.customSubagentName || '';
@@ -3075,7 +3138,6 @@
                 ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
                 researchEnabled: document.getElementById('ca-addon-research').checked,
                 designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
-                customWorkflowPath: document.getElementById('ca-addon-workflow-path').value.trim() || undefined,
                 subagentPolicy: Array.from(document.getElementsByName('ca-subagent-policy')).find(r => r.checked)?.value || 'default',
                 customSubagentName: document.getElementById('ca-addon-custom-subagent-name')?.value.trim() || '',
             }
@@ -3445,9 +3507,25 @@
             if (roleSelect) {
                 roleSelect.addEventListener('change', (e) => {
                     currentRole = e.target.value;
+                    if (currentRole.startsWith('custom_agent_') && !roleConfigs[currentRole]) {
+                        postKanbanMessage({ type: 'getSetting', key: `roleConfig_${currentRole}` });
+                    }
                     handleRoleChange();
                     updateRoleDescription();
                     postKanbanMessage({ type: 'saveSetting', key: 'selectedRole', value: currentRole });
+                });
+            }
+
+            const plannerWorkflowEnabled = document.getElementById('plannerWorkflowEnabled');
+            if (plannerWorkflowEnabled) {
+                plannerWorkflowEnabled.addEventListener('change', (e) => {
+                    const enabled = e.target.checked;
+                    document.getElementById('plannerWorkflowFilePathGroup').style.display = enabled ? 'block' : 'none';
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.workflowFilePathEnabled = enabled;
+                    saveRoleConfig('planner');
+                    refreshPreview();
                 });
             }
 
@@ -5491,12 +5569,15 @@
                             currentRole = value;
                             const roleSelect = document.getElementById('roleSelect');
                             if (roleSelect) roleSelect.value = value;
+                            if (currentRole.startsWith('custom_agent_') && !roleConfigs[currentRole]) {
+                                postKanbanMessage({ type: 'getSetting', key: `roleConfig_${currentRole}` });
+                            }
                         }
                         handleRoleChange();
                         updateRoleDescription();
                     } else if (key.startsWith('roleConfig_')) {
                         const role = key.replace('roleConfig_', '');
-                        roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role]));
+                        roleConfigs[role] = value || JSON.parse(JSON.stringify(DEFAULT_CONFIG[role] || { prompt: '', addons: {} }));
                         if (role === currentRole) {
                             handleRoleChange();
                         }

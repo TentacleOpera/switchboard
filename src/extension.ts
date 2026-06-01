@@ -2,7 +2,7 @@
 import * as vscode from 'vscode';
 import * as path from 'path';
 import * as fs from 'fs';
-import * as crypto from 'crypto';
+
 import * as os from 'os';
 import { TaskViewerProvider } from './services/TaskViewerProvider';
 import { SessionActionLog } from './services/SessionActionLog';
@@ -37,7 +37,6 @@ let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
 let outputChannel: vscode.OutputChannel | null = null;
 let kanbanProvider: KanbanProvider | null = null;
 let activeTaskViewerProvider: TaskViewerProvider | null = null;
-const DISPATCH_SIGNING_KEY_SECRET = 'switchboard.dispatchSigningKey.v1';
 
 // Agent File Opening Prevention: URIs explicitly allowed to stay open
 const allowedUrisToOpen = new Set<string>();
@@ -79,17 +78,6 @@ function getEnforcedSwitchboardBooleanSetting(key: string, defaultValue: boolean
         value,
         ignoredWorkspaceOverride: workspaceValueDefined
     };
-}
-
-async function getOrCreateDispatchSigningKey(context: vscode.ExtensionContext): Promise<string> {
-    const existing = await context.secrets.get(DISPATCH_SIGNING_KEY_SECRET);
-    if (existing && existing.trim().length >= 32) {
-        return existing.trim();
-    }
-
-    const generated = crypto.randomBytes(32).toString('hex');
-    await context.secrets.store(DISPATCH_SIGNING_KEY_SECRET, generated);
-    return generated;
 }
 
 // --- Agent version tracking ---
@@ -453,9 +441,7 @@ export async function activate(context: vscode.ExtensionContext) {
     // Wire the watcher into the already-created KanbanProvider
     await kanbanProvider!.setGlobalPlanWatcher(globalPlanWatcher);
 
-    const strictInboxAuthSetting = getEnforcedSwitchboardBooleanSetting('security.strictInboxAuth', true);
     const workspaceModeSetting = getEnforcedSwitchboardBooleanSetting('runtime.workspaceMode', false);
-    const dispatchSigningKey = await getOrCreateDispatchSigningKey(context);
 
     // Workspace exclusion management (replaces legacy _runGitignoreMigrationV1)
     if (workspaceRoot) {
@@ -493,10 +479,7 @@ export async function activate(context: vscode.ExtensionContext) {
         }));
     }
 
-    process.env.SWITCHBOARD_STRICT_INBOX_AUTH = strictInboxAuthSetting.value ? 'true' : 'false';
-    process.env.SWITCHBOARD_DISPATCH_SIGNING_KEY = dispatchSigningKey;
-
-    if (strictInboxAuthSetting.ignoredWorkspaceOverride || workspaceModeSetting.ignoredWorkspaceOverride) {
+    if (workspaceModeSetting.ignoredWorkspaceOverride) {
         console.warn('[Switchboard] Ignoring workspace-level overrides for security-critical settings; user-level values are enforced.');
     }
 

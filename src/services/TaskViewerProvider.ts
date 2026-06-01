@@ -1126,88 +1126,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return !rel.startsWith('..') && !path.isAbsolute(rel);
     }
 
-    // F-08 SECURITY: Read session token for inbox message authentication
-    private async _getSessionToken(workspaceRoot: string): Promise<string | undefined> {
-        try {
-            const statePath = this._resolveStateFilePath(workspaceRoot);
-            if (!statePath) {
-                return undefined;
-            }
-            const raw = await fs.promises.readFile(statePath, 'utf8');
-            const state = JSON.parse(raw);
-            return state?.session?.id || undefined;
-        } catch {
-            return undefined;
-        }
-    }
-
-    private _getDispatchSigningKey(): string | undefined {
-        const raw = process.env.SWITCHBOARD_DISPATCH_SIGNING_KEY;
-        if (typeof raw !== 'string') return undefined;
-        const key = raw.trim();
-        return key.length >= 32 ? key : undefined;
-    }
-
-    private _computeDispatchPayloadHash(payload: string): string {
-        return crypto.createHash('sha256').update(payload, 'utf8').digest('hex');
-    }
-
-    private _computeDispatchSignature(
-        message: { id: string; action: string; sender: string; recipient: string; createdAt: string; payload: string },
-        nonce: string,
-        payloadHash: string,
-        signingKey: string
-    ): string {
-        const canonical = [
-            'hmac-sha256-v1',
-            String(message.id || ''),
-            String(message.action || ''),
-            String(message.sender || ''),
-            String(message.recipient || ''),
-            String(message.createdAt || ''),
-            nonce,
-            payloadHash
-        ].join('|');
-        return crypto.createHmac('sha256', signingKey).update(canonical, 'utf8').digest('hex');
-    }
-
-    private _attachDispatchAuthEnvelope(message: Record<string, any>): void {
-        const signingKey = this._getDispatchSigningKey();
-        const strictInboxAuth = process.env.SWITCHBOARD_STRICT_INBOX_AUTH === 'true';
-
-        if (!signingKey) {
-            if (strictInboxAuth) {
-                throw new Error('Dispatch signing key unavailable. Secure inbox auth is enabled.');
-            }
-            return;
-        }
-
-        const nonce = typeof crypto.randomUUID === 'function'
-            ? crypto.randomUUID()
-            : `${Date.now()}_${Math.random().toString(16).slice(2)}`;
-        const payloadHash = this._computeDispatchPayloadHash(String(message.payload || ''));
-        const signature = this._computeDispatchSignature(
-            {
-                id: String(message.id || ''),
-                action: String(message.action || ''),
-                sender: String(message.sender || ''),
-                recipient: String(message.recipient || ''),
-                createdAt: String(message.createdAt || ''),
-                payload: String(message.payload || '')
-            },
-            nonce,
-            payloadHash,
-            signingKey
-        );
-
-        message.auth = {
-            version: 'hmac-sha256-v1',
-            nonce,
-            payloadHash,
-            signature
-        };
-    }
-
     private _roleNameCandidates(role: string): string[] {
         switch (role) {
             case 'lead':
@@ -14245,7 +14163,7 @@ What would you like to find?`;
 
         const messageId = `msg_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 
-        // Attempt direct terminal push (bypasses inbox for local terminals)
+        // Attempt direct terminal push
         const pushed = await this._attemptDirectTerminalPush(targetAgent, payload, messageId, {
             sender,
             recipient: targetAgent,
@@ -14299,7 +14217,7 @@ What would you like to find?`;
     }
 
     /**
-     * Attempt to send a payload directly to a local terminal, bypassing the inbox.
+     * Attempt to send a payload directly to a local terminal.
      * Returns true if delivery succeeded, false if the terminal is not local.
      */
     private async _attemptDirectTerminalPush(

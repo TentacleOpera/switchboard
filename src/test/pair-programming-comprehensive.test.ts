@@ -45,7 +45,7 @@ async function simulatePairButtonFlow(params: {
     workspaceRoot: string;
     aggressivePairProgramming?: boolean;
     accurateCodingEnabled?: boolean;
-}): Promise<{ leadPrompt: string; coderPrompt: string; backupPath: string | undefined }> {
+}): Promise<{ leadPrompt: string; coderPrompt: string }> {
     const {
         coderUsesIde, plans, sessionId, workspaceRoot,
         aggressivePairProgramming = false,
@@ -85,7 +85,7 @@ async function simulatePairButtonFlow(params: {
             );
         }
 
-        return { leadPrompt, coderPrompt, backupPath: undefined };
+        return { leadPrompt, coderPrompt };
     } else {
         // Hybrid — Lead to clipboard, Coder to terminal
         await vscode.env.clipboard.writeText(leadPrompt);
@@ -99,7 +99,7 @@ async function simulatePairButtonFlow(params: {
             'switchboard.kanbanForwardMove', [sessionId], 'LEAD CODED', workspaceRoot
         );
 
-        return { leadPrompt, coderPrompt, backupPath: undefined };
+        return { leadPrompt, coderPrompt };
     }
 }
 

@@ -18,7 +18,7 @@ Current result:
 
 All previously resolved findings (F-01 through F-10) remain resolved. The core security architecture is sound:
 
-- **Signed dispatch envelopes** (`HMAC-SHA256`) for inbox dispatch messages — intact and correctly implemented
+- **Signed dispatch envelopes** (`HMAC-SHA256`) for inbox dispatch messages — removed with inbox deprecation; direct terminal push replaces inbox IPC
 - **Mandatory strict auth gates** on the terminal execution path — fail-closed behavior confirmed
 - **Replay protection** (`nonce` + 5-minute freshness window) for `execute` dispatches — confirmed
 - **Recipient path-sink hardening** before supersede/archive scans — intact with `isPathWithinRoot` checks
@@ -33,7 +33,7 @@ All previously resolved findings (F-01 through F-10) remain resolved. The core s
 ### Reviewed surfaces
 
 - `src/extension.ts` — main extension activation, key management, terminal registry, lifecycle management
-- `src/services/InboxWatcher.ts` — inbox message processing, signature verification, replay protection, terminal execution
+- `src/services/InboxWatcher.ts` — removed (inbox IPC deprecated; direct terminal push replaces it)
 - `src/services/TaskViewerProvider.ts` — sidebar webview, pipeline orchestration, autoban, session management, git/jules CLI integration
 - `src/services/KanbanProvider.ts` — Kanban board webview, card management
 - `src/services/ReviewProvider.ts` — review panel webview (ticket view)
@@ -75,8 +75,8 @@ All git operations use `cp.execFile(...)` with argument arrays. The `normalizePi
 
 ### F-07: Workflow artifact path existence oracle — Resolved
 
-### F-08: Unsigned inbox dispatch execution — Resolved
-`buildDispatchAuthEnvelope()` signs messages with HMAC-SHA256 covering `id|action|sender|recipient|createdAt|nonce|payloadHash`. `InboxWatcher.validateDispatchSignature()` verifies on receipt. Replay protection via nonce tracking (`seenNonces` Set with periodic pruning). Freshness check: 5-minute window for `execute` actions.
+### F-08: Unsigned inbox dispatch execution — Resolved (superseded)
+`buildDispatchAuthEnvelope()` signed messages with HMAC-SHA256 covering `id|action|sender|recipient|createdAt|nonce|payloadHash`. The inbox IPC system has been removed entirely — direct terminal push replaces it. The signing key infrastructure and `InboxWatcher` have been removed as dead code.
 
 ### F-09: Supersede recipient sink traversal — Resolved
 `supersedePendingDelegateTasks()` validates recipient name and uses `isPathWithinRoot()` before scanning.
@@ -133,7 +133,7 @@ default-src 'none'; script-src 'nonce-{random}' {cspSource}; style-src 'unsafe-i
 
 ### N-F03: Shell metacharacter leading character strip hardened — REMEDIATED
 
-- Location: `src/services/InboxWatcher.ts`, `handleExecute()`
+- Location: `src/services/InboxWatcher.ts` (removed), `handleExecute()` — the InboxWatcher has been removed with the inbox IPC deprecation; this finding is now historical
 - Detail: The leading trigger character strip only covered `!`, `/`, `$`. Shell command separators (`;`, `|`, `&`) and redirectors (`<`, `>`) at the start of a payload could be dangerous if the target terminal is in shell mode.
 - Fix: Extended the leading character strip regex from `/^[!/$]+/` to `/^[!/$;|&<>]+/` to also strip shell command separators and redirectors from the payload start. This only affects leading characters — payload body content is unchanged, preserving functionality for chat-mode CLIs.
 - Status: **Resolved.** The warning log for remaining interior shell metacharacters is retained as defense-in-depth.
@@ -186,7 +186,6 @@ All Webviews (Sidebar, Kanban, Review)
 Workspace Root
   └─ .switchboard/ (gitignored, runtime state)
       ├─ state.json — locked with proper-lockfile for concurrent access
-      ├─ inbox/{agent}/ — dispatch messages (validated before processing)
       ├─ sessions/ — run sheets (read-only from webview perspective)
       ├─ plans/ — plan files (content treated as untrusted in rendering)
       ├─ cooldowns/ — rate limit lock files (ephemeral)
@@ -195,7 +194,7 @@ Workspace Root
 
 ## Reassessment Conclusion
 
-The Switchboard extension maintains a strong security posture. The core dispatch signing, session authentication, and replay protection mechanisms implemented in the prior audit cycle remain intact and correctly functioning. New features (Kanban board, pipeline orchestration, autoban, review panels) have been implemented with appropriate security controls including strict Content Security Policies, workflow enforcement gating, and brain leakage detection.
+The Switchboard extension maintains a strong security posture. The inbox-based IPC system (including `InboxWatcher`, dispatch signing envelopes, and session token authentication) has been removed entirely — all agent communication now uses direct terminal push, which eliminates the file-based dispatch attack surface. New features (Kanban board, pipeline orchestration, autoban, review panels) have been implemented with appropriate security controls including strict Content Security Policies, workflow enforcement gating, and brain leakage detection.
 
 The two medium-severity findings (N-F01: innerHTML escaping gaps, N-F03: shell metacharacter passthrough) represent the most actionable improvements. Neither is exploitable in default configuration without additional prerequisites (local file access), but addressing them would further harden the extension's defense-in-depth posture.
 

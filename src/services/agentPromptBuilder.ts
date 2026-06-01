@@ -133,6 +133,10 @@ export interface PromptBuilderOptions {
     saveToLocalDocs?: boolean;
     /** The local docs folder path for the save-to-local-docs instruction. */
     localDocsPath?: string;
+    /** When true, a non-planner role should prepend a workflow file instruction. */
+    workflowFilePathEnabled?: boolean;
+    /** Path to the workflow file for non-planner roles. */
+    workflowFilePath?: string;
 }
 
 export function resolveBaseInstructions(
@@ -141,13 +145,16 @@ export function resolveBaseInstructions(
     options?: PromptBuilderOptions
 ): string {
     const override = options?.defaultPromptOverrides?.[role];
-    const base = defaultBase;
+    let base = defaultBase;
     if (override?.text) {
         switch (override.mode) {
-            case 'replace': return override.text;
-            case 'prepend': return `${override.text}\n\n${base}`;
-            case 'append': return `${base}\n\n${override.text}`;
+            case 'replace': base = override.text; break;
+            case 'prepend': base = `${override.text}\n\n${base}`; break;
+            case 'append': base = `${base}\n\n${override.text}`; break;
         }
+    }
+    if (role !== 'planner' && options?.workflowFilePathEnabled && options?.workflowFilePath) {
+        base = `Read ${options.workflowFilePath} and follow it step-by-step.\n\n${base}`;
     }
     return base;
 }
@@ -399,7 +406,10 @@ export function buildKanbanBatchPrompt(
         }
 
         // Build default base instructions
-        let plannerBase = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+        let plannerBase = '';
+        if (options?.workflowFilePathEnabled !== false) {
+            plannerBase = `Read ${workflowPath} and follow it step-by-step.\n\n`;
+        }
 
         if (options?.routingMapConfig) {
             plannerBase += `ROUTING MAP CONFIGURATION:\nThe user has configured the following custom routing map for complexity scores. When recommending an agent at the end of the plan, you MUST use these exact thresholds instead of any default thresholds:\n- Intern: Complexity ${options.routingMapConfig.intern.join(', ')}\n- Coder: Complexity ${options.routingMapConfig.coder.join(', ')}\n- Lead Coder: Complexity ${options.routingMapConfig.lead.join(', ')}\n\n`;
@@ -1082,10 +1092,10 @@ export function buildCustomAgentPrompt(
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
     // Custom workflow: prepend read-workflow instruction
-    if (addons?.customWorkflowPath) {
-        return `Read ${addons.customWorkflowPath} and follow it step-by-step.\n\n` +
+    if (addons?.workflowFilePathEnabled && addons?.workflowFilePath) {
+        return `Read ${addons.workflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
-                { ...addons, customWorkflowPath: undefined }, workspaceRoot);
+                { ...addons, workflowFilePathEnabled: undefined, workflowFilePath: undefined }, workspaceRoot);
     }
 
     const noSubagentsEnabled = addons?.subagentPolicy === 'noSubagents';

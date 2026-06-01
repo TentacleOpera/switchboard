@@ -27,7 +27,8 @@ export interface CustomAgentAddons {
     designDocContent?: string;
 
     // Workflow
-    customWorkflowPath?: string;
+    workflowFilePathEnabled?: boolean;
+    workflowFilePath?: string;
 
     // Prompt override (applied LAST, after all directives)
     defaultPromptOverride?: DefaultPromptOverride;
@@ -181,7 +182,8 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         const content = String(s.designDocContent).trim();
         a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
     }
-    if (s.customWorkflowPath) a.customWorkflowPath = String(s.customWorkflowPath).trim();
+    if (s.workflowFilePathEnabled === true) a.workflowFilePathEnabled = true;
+    if (typeof s.workflowFilePath === 'string' && s.workflowFilePath.trim()) a.workflowFilePath = s.workflowFilePath.trim();
     if (s.defaultPromptOverride && typeof s.defaultPromptOverride === 'object') {
         const o = s.defaultPromptOverride as Record<string, unknown>;
         const mode = String(o.mode || '');

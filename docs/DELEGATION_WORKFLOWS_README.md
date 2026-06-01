@@ -37,7 +37,7 @@ Every delegated prompt MUST include:
 
 ## Artifact and Safety Requirements
 - Never leak private planning paths (`brain/`, private `task.md`) to delegates.
-- Stage sharable artifacts into `.switchboard/handoff/`.
+- Stage sharable artifacts into `.switchboard/plans/` or use `handoff_clipboard` for clipboard-based handoff.
 - Require `complete_workflow_phase(..., artifacts=[...])` gates where results are expected.
 
 ## Builder Checklist

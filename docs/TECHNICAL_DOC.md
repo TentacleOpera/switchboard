@@ -14,7 +14,7 @@ Switchboard is a local orchestration stack with three main layers:
 At runtime:
 
 - The extension owns UI, terminal references, startup/setup workflows, and file watchers.
-- Agents coordinate through filesystem artifacts and inbox messages under `.switchboard/`.
+- Agents coordinate through direct terminal push and filesystem artifacts under `.switchboard/`.
 
 ## 2) Persistent filesystem model
 
@@ -39,20 +39,14 @@ At runtime:
 
 On startup, the extension does all of the following:
 
-1. Reads enforced security/runtime settings:
-   - `switchboard.security.strictInboxAuth` (application scope)
+1. Reads enforced runtime settings:
    - `switchboard.runtime.workspaceMode` (application scope)
-2. Creates/loads a persistent dispatch signing key in `ExtensionContext.secrets`.
-3. Sets process env for child components:
-   - `SWITCHBOARD_STRICT_INBOX_AUTH`
-   - `SWITCHBOARD_DISPATCH_SIGNING_KEY`
-4. Runs lifecycle cleanup:
-   - removes transient dirs/files (`inbox`, `outbox`, `cooldowns`, debug log)
+2. Runs lifecycle cleanup:
+   - removes transient dirs/files (`inbox`, `outbox`, `cooldowns`, `handoff`, debug log, `housekeeping.policy.json`)
    - resets `state.json` baseline (preserving `startupCommands`)
    - disposes likely orphaned Switchboard terminals
-5. Initializes `TaskViewerProvider` and sidebar webview.
-6. Starts `InboxWatcher`.
-7. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
+3. Initializes `TaskViewerProvider` and sidebar webview.
+4. Starts heartbeat registration loop for local terminals (updates `lastSeen`).
 
 Setup wizard behavior (current):
 
@@ -153,14 +147,11 @@ Baseline state shape:
 Runtime workflows currently registered:
 
 - `accuracy` (5 phases)
-- `handoff-lead` (3 phases)
-- `handoff` (3 phases)
-- `handoff-chat` (3 phases)
-- `handoff-relay` (2 phases)
 - `improve-plan` (3 phases)
-- `challenge` (5 phases)
 - `chat` (4 phases)
 - `review` (used by Kanban CODE REVIEWED advance)
+
+> **Note:** `handoff`, `handoff-lead`, `handoff-chat`, `handoff-relay`, and `challenge` workflows are blocklisted during setup and removed from the workspace. They remain in the runtime registry for backward compatibility but are not distributed to new workspaces.
 
 Workflow state can be session-level or agent-level (`targetAgent`).
 
@@ -192,7 +183,7 @@ Dynamic schema note:
 
 Action-level workflow gates:
 
-- `execute` allowed only in: `handoff`, `challenge`, `handoff-lead`
+- `execute` allowed only in: `handoff`, `challenge`, `handoff-lead`, `improve-plan`
 - `delegate_task` allowed only in: `handoff`
 
 ## 9) Dispatch pipeline
@@ -550,9 +541,7 @@ Useful regression tests in `src/test`:
 
 - `workflow-contract-consistency.test.js`
 - `workflow-controls.test.js`
-- `send-message-guards.test.js`
 - `state-manager.test.js`
-- `inbox-watcher.test.js`
 - `session-action-log.test.ts`
 - `interactive-orchestrator.test.ts`
 - `pipeline-orchestrator-regression.test.js`
@@ -565,7 +554,6 @@ Typical maintainer checks:
 - `npx tsc -p . --noEmit`
 - `node src/test/workflow-contract-consistency.test.js`
 - `node src/test/workflow-controls.test.js`
-- `node src/test/send-message-guards.test.js`
 - `node src/test/pipeline-orchestrator-regression.test.js`
 - `node src/test/coder-reviewer-workflow.test.js`
 - `node src/test/tombstone-registry-regression.test.js`
@@ -583,7 +571,7 @@ Typical maintainer checks:
 3. Persona payload formatting drift:
     - Sidebar local execute helper can still inline persona wrappers in payload text.
 5. Setup template drift:
-   - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names.
+   - default generated setup text in `extension.ts` still documents legacy/removed tool/workflow names (partially addressed — `send_message`/`check_inbox` removed from agent-facing docs, but `.cursorrules` and some doc references may persist).
 
 6. Complexity classification:
    - The Band B parsing, agent recommendation regex, and manual override regex must be kept in sync manually.
