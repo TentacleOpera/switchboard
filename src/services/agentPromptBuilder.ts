@@ -328,7 +328,7 @@ export function buildKanbanBatchPrompt(
     const cavemanOutputEnabled = options?.cavemanOutputEnabled ?? false;
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
-    const customSubagentName = options?.customSubagentName?.trim() || undefined;
+    const customSubagentName = options?.customSubagentName?.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
     const includeDependencyInstructions = options?.includeDependencyInstructions ?? false;
 
     let subagentBlock = '';

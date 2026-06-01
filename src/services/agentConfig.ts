@@ -169,6 +169,13 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
     if (s.cavemanOutput === true) a.cavemanOutput = true;
     if (s.useSubagents === false) a.useSubagents = false;
+    if (s.subagentPolicy && ['default', 'noSubagents', 'customSubagent'].includes(s.subagentPolicy as string)) {
+        a.subagentPolicy = s.subagentPolicy as 'default' | 'noSubagents' | 'customSubagent';
+    }
+    if (s.customSubagentName && typeof s.customSubagentName === 'string') {
+        const sanitized = String(s.customSubagentName).replace(/[^a-zA-Z0-9_]/g, '').trim();
+        if (sanitized) a.customSubagentName = sanitized;
+    }
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();
