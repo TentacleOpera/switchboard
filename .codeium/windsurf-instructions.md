@@ -21,4 +21,4 @@ This project uses the **Switchboard** protocol for cross-IDE agent collaboration
 |:--------|:---------|:------------|
 | `/improve-plan` | improve-plan | Deep planning, dependency checks, and adversarial review |
 | `/accuracy` | accuracy | High-accuracy solo mode |
-| `/chat` | chat | Product Manager consultation (no code) |
+| `/switchboard-chat` | switchboard-chat | Product Manager consultation (no code) |

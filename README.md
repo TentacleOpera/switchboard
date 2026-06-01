@@ -165,7 +165,7 @@ Use these within Antigravity or Windsurf chat:
 
 | Command | What it does |
 | :--- | :--- |
-| `/chat` | Starts a planning conversation / product-manager style consultation. Use it for shaping scope and writing plans without jumping straight into code. |
+| `/switchboard-chat` | Starts a planning conversation / product-manager style consultation. Use it for shaping scope and writing plans without jumping straight into code. |
 | `/improve-plan` | Deep planning, dependency checks, and adversarial review in one pass |
 | `/archive` | Query or search the historical DuckDB plan archive |
 | `/export` | Export the current conversation to the plan archive database |
@@ -180,7 +180,7 @@ If you want to ingest plans from another tool or directory, use the **Plan Inges
 
 ### Collaborative planning
 
-The `/chat` workflow is useful when you want to refine a task before implementation:
+The `/switchboard-chat` workflow is useful when you want to refine a task before implementation:
 
 - break work into executable steps
 - assign complexity and likely routing
