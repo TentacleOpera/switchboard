@@ -11725,31 +11725,31 @@ What would you like to find?`;
             await fs.promises.writeFile(mirrorPath, content);
 
             // Create/update runsheet via DB-backed SessionActionLog
-            // DB-level dedup: if this brain plan's session already exists in kanban.db,
-            // skip runsheet creation. The mirror .md is still written (content may differ).
+            // DB-level dedup: if this brain plan already exists in kanban.db (by plan_file key),
+            // skip runsheet creation and instead update metadata. The mirror .md is still written.
             if (db) {
-                const alreadyInDb = await db.hasPlan(runSheetId);
-                if (alreadyInDb) {
-                    console.log(`[TaskViewerProvider] Brain plan already in DB (session: ${runSheetId}), updating metadata`);
+                const planFileRelative = path.relative(resolvedWorkspaceRoot, mirrorPath).replace(/\\/g, '/');
+                const wsId = await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot);
+                const existingPlan = wsId ? await db.getPlanByPlanFile(planFileRelative, wsId) : null;
 
-                    // Parse updated metadata from the plan content (already read at line 11560)
-                    const metadata = await parsePlanMetadata(content, path.relative(resolvedWorkspaceRoot, mirrorPath));
-                    const planFileRelative = path.relative(resolvedWorkspaceRoot, mirrorPath).replace(/\\/g, '/');
-                    const wsId = await this._getWorkspaceIdForRoot(resolvedWorkspaceRoot);
-                    const existingPlan = wsId ? await db.getPlanByPlanFile(planFileRelative, wsId) : null;
+                if (existingPlan) {
+                    console.log(`[TaskViewerProvider] Brain plan already in DB (planFile: ${planFileRelative}), updating metadata`);
 
-                    if (existingPlan) {
-                        const updatedRecord: KanbanPlanRecord = {
-                            ...existingPlan,
-                            topic: metadata.topic || existingPlan.topic,
-                            complexity: metadata.complexity !== 'Unknown' ? metadata.complexity : existingPlan.complexity,
-                            tags: metadata.tags || existingPlan.tags,
-                            dependencies: metadata.dependencies || existingPlan.dependencies,
-                            updatedAt: new Date(mtimeMs).toISOString()
-                        };
-                        await db.upsertPlans([updatedRecord]);
-                        console.log(`[TaskViewerProvider] Updated brain plan metadata: topic="${metadata.topic}", complexity="${metadata.complexity}"`);
-                    }
+                    // Parse updated metadata from the plan content (already read above)
+                    const metadata = await parsePlanMetadata(content, planFileRelative);
+
+                    const updatedRecord: KanbanPlanRecord = {
+                        ...existingPlan,
+                        topic: metadata.topic || existingPlan.topic,
+                        complexity: metadata.complexity !== 'Unknown' ? metadata.complexity : existingPlan.complexity,
+                        // Intentional falsy guard: empty tags/dependencies from a plan without those
+                        // headers should NOT overwrite previously scored values in the DB.
+                        tags: metadata.tags || existingPlan.tags,
+                        dependencies: metadata.dependencies || existingPlan.dependencies,
+                        updatedAt: new Date(mtimeMs).toISOString()
+                    };
+                    await db.upsertPlans([updatedRecord]);
+                    console.log(`[TaskViewerProvider] Updated brain plan metadata: topic="${metadata.topic}", complexity="${metadata.complexity}"`);
 
                     if (!suppressFollowupSync) {
                         await this._syncFilesAndRefreshRunSheets(resolvedWorkspaceRoot);
