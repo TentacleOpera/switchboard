@@ -225,11 +225,10 @@ async function run() {
         'autoban add-terminal flow should auto-name backups in the extension instead of prompting in the webview or VS Code'
     );
     assert.ok(
-        providerSource.includes('private _getAutobanReviewerLaneColumns(sourceColumn: string): string[]') &&
-        providerSource.includes("const reviewerLaneColumns = this._getAutobanReviewerLaneColumns(sourceColumn);") &&
-        providerSource.includes("this._collectKanbanCardsInColumns(workspaceRoot, reviewerLaneColumns)") &&
-        providerSource.includes("this._autobanLaneLastDispatchAt.set('coded-reviewer', Date.now());"),
-        'TaskViewerProvider should coordinate LEAD CODED and CODER CODED as one shared reviewer autoban lane'
+        providerSource.includes('private _autobanColumnToRole(column: string): string | null') &&
+        providerSource.includes('return columnToPromptRole(column);') &&
+        providerSource.includes('With strict column isolation, each column ticks independently'),
+        'TaskViewerProvider should delegate column-to-role mapping to columnToPromptRole and use strict column isolation for autoban ticks'
     );
     assert.ok(
         providerSource.includes('private async _reconcileAutobanPoolState(') &&
