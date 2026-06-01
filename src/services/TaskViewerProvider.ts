@@ -8791,7 +8791,7 @@ What would you like to find?`;
 
                 const handleBrainEvent = (uri: vscode.Uri, allowAutoClaim: boolean) => {
                     const fullPath = uri.fsPath;
-                    if (!this._isBrainMirrorCandidate(antigravityRoot, fullPath)) return;
+                    if (!this._isBrainMirrorCandidate(fullPath)) return;
 
                     const effectiveAutoClaim = allowAutoClaim;
 
@@ -8828,7 +8828,7 @@ What would you like to find?`;
                         if (!filename) return;
                         if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
                         const fullPath = path.join(antigravityRoot, filename);
-                        if (!this._isBrainMirrorCandidate(antigravityRoot, fullPath)) return;
+                        if (!this._isBrainMirrorCandidate(fullPath)) return;
 
                         const rawAutoClaim = _eventType === 'rename';
                         const effectiveAutoClaim = rawAutoClaim;
@@ -10799,8 +10799,7 @@ What would you like to find?`;
         }
     }
 
-    private _isBrainMirrorCandidate(brainDir: string, filePath: string): boolean {
-        const resolvedBrainDir = path.resolve(brainDir);
+    private _isBrainMirrorCandidate(filePath: string): boolean {
         const resolvedFilePath = path.resolve(filePath);
         const normalizedFilePath = this._getStablePath(resolvedFilePath);
         const matchingRoot = this._getAntigravityPlanRoots()
@@ -10846,7 +10845,7 @@ What would you like to find?`;
                     pendingDirs.push(fullPath);
                     continue;
                 }
-                if (!this._isBrainMirrorCandidate(brainDir, fullPath)) continue;
+                if (!this._isBrainMirrorCandidate(fullPath)) continue;
                 const baseBrainPath = this._getBaseBrainPath(fullPath);
                 entries.add(this._getStablePath(baseBrainPath));
             }
@@ -10874,7 +10873,7 @@ What would you like to find?`;
                     pendingDirs.push(fullPath);
                     continue;
                 }
-                if (!this._isBrainMirrorCandidate(rootDir, fullPath)) continue;
+                if (!this._isBrainMirrorCandidate(fullPath)) continue;
                 candidates.push(fullPath);
             }
         }

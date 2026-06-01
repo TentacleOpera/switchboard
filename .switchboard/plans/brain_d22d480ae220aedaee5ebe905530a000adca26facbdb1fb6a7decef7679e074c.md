@@ -278,3 +278,48 @@ Key risks: the `_resolveBrainSourcePathForMirrorHash` security check will silent
 ## Recommendation
 
 Complexity 6 → **Send to Coder**
+
+## Review Pass (2026-06-02)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| CRITICAL-1 | CRITICAL | `workspace-scope-regression.test.js` lines 70 and 75 had stale regexes matching the OLD 3-argument `_resolveBrainSourcePathForMirrorHash(workspaceRoot, hash, brainDir)` signature and OLD single-root `_isPathWithin(brainDir, resolvedBrainPath)` containment check. The plan only called out updating `brain-source-layout-regression.test.js` but missed this second test file entirely. Guaranteed CI break. |
+| NIT-1 | NIT | `_isBrainMirrorCandidate(brainDir, filePath)` had a vestigial `brainDir` parameter and dead `resolvedBrainDir` variable — unused since the method now determines matching root internally via `_getAntigravityPlanRoots()` / `_getAntigravityRoots()`. Misleading to future readers. |
+| NIT-2 | NIT | `_getAntigravityRoot()` and `detectAntigravityBrainPath()` convenience wrappers are dead code (zero callers outside their own definitions). Harmless but unnecessary. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action Taken |
+|---------|---------|-------------|
+| CRITICAL-1 | Fix now | Updated 3 regex patterns in `workspace-scope-regression.test.js` (lines 70, 75, 199) |
+| NIT-1 | Fix now (cheap) | Removed `brainDir` parameter and `resolvedBrainDir` variable; updated 4 call sites |
+| NIT-2 | Defer | Dead code, harmless; removal is a style choice for a cleanup pass |
+
+### Code Fixes Applied
+
+#### [MODIFY] workspace-scope-regression.test.js
+
+- **Line 70**: Changed `_resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash, brainDir\)` → `_resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash\)` (2-arg call)
+- **Line 75**: Changed method signature regex from 3-param `(workspaceRoot: string, hash: string, brainDir: string)` to 2-param `(workspaceRoot: string, hash: string)`, and changed containment check from `_isPathWithin\(brainDir, resolvedBrainPath\)` to `_getAntigravityRoots\(\)\.some\(root => this\._isPathWithin\(root, resolvedBrainPath\)\)`
+- **Line 199**: Changed `_isBrainMirrorCandidate\(brainDir, fullPath\)` → `_isBrainMirrorCandidate\(fullPath\)` and `entries\.add\(stableKey\)` → `entries\.add\(this\._getStablePath\(baseBrainPath\)\)` (pre-existing mismatch)
+
+#### [MODIFY] TaskViewerProvider.ts
+
+- **Line 10802**: Changed `_isBrainMirrorCandidate(brainDir: string, filePath: string)` → `_isBrainMirrorCandidate(filePath: string)`; removed dead `resolvedBrainDir` variable
+- **Lines 8794, 8831, 10848, 10876**: Updated 4 call sites from `_isBrainMirrorCandidate(someDir, fullPath)` → `_isBrainMirrorCandidate(fullPath)`
+
+### Verification Results
+
+- `brain-source-layout-regression.test.js`: 3/3 passing ✅
+- `brain-path-depth-regression.test.js`: 3/3 passing ✅
+- `workspace-scope-regression.test.js` (plan-relevant tests): "mirror write-back" ✅, "blacklist" ✅
+- 4 pre-existing failures in `workspace-scope-regression.test.js` (unrelated: `_mirrorBrainPlan`, `_refreshRunSheets`, workspace identity, merged plan registration) — not caused by this plan's changes
+- TypeScript: No compilation run (per session instructions), but signature consistency verified — all 4 call sites match the updated 1-parameter signature, no 2-argument calls remain
+
+### Remaining Risks
+
+1. **Dead convenience wrappers** (`_getAntigravityRoot()`, `detectAntigravityBrainPath()`) — zero callers, safe to remove in a cleanup pass but not urgent
+2. **Pre-existing test failures** in `workspace-scope-regression.test.js` (4 tests) — unrelated to this plan, should be tracked separately
+3. **Watcher overlap** concern from the plan is a false alarm: `~/.gemini/antigravity/` and `~/.gemini/antigravity-cli/` are sibling directories, not nested, so no duplicate events from the two watcher sets

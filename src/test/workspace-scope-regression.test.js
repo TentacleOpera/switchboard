@@ -67,13 +67,13 @@ describe('workspace scope enforcement regressions', () => {
     it('mirror write-back resolves brain path via runsheet lookup with active registry fallback', () => {
         assert.match(
             source,
-            /const resolvedBrainPath = await this\._resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash, brainDir\);[\s\S]*if \(!resolvedBrainPath\) return;/,
+            /const resolvedBrainPath = await this\._resolveBrainSourcePathForMirrorHash\(workspaceRoot, hash\);[\s\S]*if \(!resolvedBrainPath\) return;/,
             'Expected staging watcher to resolve brain path through helper before mirror write-back.'
         );
         assert.match(
             source,
-            /private async _resolveBrainSourcePathForMirrorHash\(workspaceRoot: string, hash: string, brainDir: string\): Promise<string \| undefined> \{[\s\S]*await this\._findExistingRunSheetPath\(workspaceRoot, sessionId\)[\s\S]*const entry = this\._planRegistry\.entries\[hash\];[\s\S]*entry\.sourceType === 'brain'[\s\S]*entry\.status === 'active'[\s\S]*this\._isPathWithin\(brainDir, resolvedBrainPath\)/,
-            'Expected helper to use runsheet resolution, active registry fallback, and brain-root containment.'
+            /private async _resolveBrainSourcePathForMirrorHash\(workspaceRoot: string, hash: string\): Promise<string \| undefined> \{[\s\S]*const entry = this\._planRegistry\.entries\[hash\];[\s\S]*entry\.sourceType === 'brain'[\s\S]*entry\.status === 'active'[\s\S]*this\._getAntigravityRoots\(\)\.some\(root => this\._isPathWithin\(root, resolvedBrainPath\)\)/,
+            'Expected helper to use active registry fallback and multi-root brain containment.'
         );
     });
 
@@ -196,7 +196,7 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
-            /private _collectBrainPlanBlacklistEntries\(brainDir: string\): Set<string> \{[\s\S]*this\._isBrainMirrorCandidate\(brainDir, fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*entries\.add\(stableKey\)/,
+            /private _collectBrainPlanBlacklistEntries\(brainDir: string\): Set<string> \{[\s\S]*this\._isBrainMirrorCandidate\(fullPath\)[\s\S]*this\._getBaseBrainPath\(fullPath\)[\s\S]*entries\.add\(this\._getStablePath\(baseBrainPath\)\)/,
             'Expected blacklist seeding scan to use mirror candidate filtering and stable base-brain keys.'
         );
         assert.match(
