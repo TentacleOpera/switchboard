@@ -54,7 +54,7 @@ export class PlanningPanelProvider {
     private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlDocsDebounce: NodeJS.Timeout | undefined;
-    private _antigravityWatcher: vscode.FileSystemWatcher | undefined;
+    private _antigravityWatchers: vscode.FileSystemWatcher[] = [];
     private _activeDocWatcher: vscode.FileSystemWatcher | undefined;
     private _activeDocWatchDebounce: NodeJS.Timeout | undefined;
     private _kanbanPlansWatchers: vscode.FileSystemWatcher[] = [];
@@ -421,12 +421,12 @@ export class PlanningPanelProvider {
 
     private _setupAntigravityWatcher(): void {
         // Dispose existing
-        if (this._antigravityWatcher) {
-            this._antigravityWatcher.dispose();
-            const idx = this._disposables.indexOf(this._antigravityWatcher);
+        for (const w of this._antigravityWatchers) {
+            w.dispose();
+            const idx = this._disposables.indexOf(w);
             if (idx !== -1) { this._disposables.splice(idx, 1); }
-            this._antigravityWatcher = undefined;
         }
+        this._antigravityWatchers = [];
 
         const config = vscode.workspace.getConfiguration('switchboard');
         const enabled = config.get<boolean>('research.antigravityBrainEnabled', false);
@@ -434,19 +434,28 @@ export class PlanningPanelProvider {
 
         const allRoots = this._getWorkspaceRoots();
         const service = this._getLocalFolderService(allRoots[0] || '');
-        const brainPath = service.detectAntigravityBrainPath();
-        if (!brainPath) { return; }
-
-        // CRITICAL: must use vscode.Uri.file for out-of-workspace paths
-        const brainUri = vscode.Uri.file(brainPath);
-        this._antigravityWatcher = vscode.workspace.createFileSystemWatcher(
-            new vscode.RelativePattern(brainUri, '*')  // Watch for new/deleted session directories
-        );
+        const brainPaths = service.detectAntigravityBrainPaths();
+        if (brainPaths.length === 0) { return; }
 
         const refresh = () => this._sendLocalDocsReady();
-        this._antigravityWatcher.onDidCreate(refresh);
-        this._antigravityWatcher.onDidDelete(refresh);
-        this._disposables.push(this._antigravityWatcher);
+        const watchedPaths = new Set<string>();
+
+        for (const brainPath of brainPaths) {
+            const resolvedPath = path.resolve(brainPath);
+            if (watchedPaths.has(resolvedPath)) { continue; }
+            watchedPaths.add(resolvedPath);
+
+            // CRITICAL: must use vscode.Uri.file for out-of-workspace paths
+            const brainUri = vscode.Uri.file(brainPath);
+            const watcher = vscode.workspace.createFileSystemWatcher(
+                new vscode.RelativePattern(brainUri, '*')  // Watch for new/deleted session directories
+            );
+
+            watcher.onDidCreate(refresh);
+            watcher.onDidDelete(refresh);
+            this._antigravityWatchers.push(watcher);
+            this._disposables.push(watcher);
+        }
     }
 
     private _setupKanbanPlansWatcher(): void {
@@ -2949,10 +2958,10 @@ export class PlanningPanelProvider {
             try { this._activeDocWatcher.dispose(); } catch (e) {}
             this._activeDocWatcher = undefined;
         }
-        if (this._antigravityWatcher) {
-            try { this._antigravityWatcher.dispose(); } catch (e) {}
-            this._antigravityWatcher = undefined;
+        for (const watcher of this._antigravityWatchers) {
+            try { watcher.dispose(); } catch (e) {}
         }
+        this._antigravityWatchers = [];
         for (const watcher of this._localFolderWatchers) {
             try { watcher.dispose(); } catch (e) {}
         }

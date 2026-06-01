@@ -241,8 +241,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _planWatcher?: vscode.FileSystemWatcher;
     private _fsStateWatcher?: fs.FSWatcher;
     private _fsPlansWatchers: fs.FSWatcher[] = [];
-    private _brainWatcher?: vscode.FileSystemWatcher;
-    private _brainFsWatcher?: fs.FSWatcher;
+    private _brainWatchers: vscode.FileSystemWatcher[] = [];
+    private _brainFsWatchers: fs.FSWatcher[] = [];
     private _configuredPlanWatcher?: vscode.FileSystemWatcher;
     private _stagingWatcher?: fs.FSWatcher;
     private _configuredPlanFsWatcher?: fs.FSWatcher;
@@ -1052,17 +1052,23 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return typeof name === 'string' && name.length > 0 && name.length <= 128 && TaskViewerProvider.SAFE_AGENT_NAME_RE.test(name);
     }
 
+    private _getAntigravityRoots(): string[] {
+        return [
+            path.join(os.homedir(), '.gemini', 'antigravity-cli'),
+            path.join(os.homedir(), '.gemini', 'antigravity')
+        ];
+    }
+
     private _getAntigravityRoot(): string {
-        return path.join(os.homedir(), '.gemini', 'antigravity');
+        return this._getAntigravityRoots()[0];
     }
 
     private _getAntigravityPlanRoots(): string[] {
-        const antigravityRoot = this._getAntigravityRoot();
-        return [
+        return this._getAntigravityRoots().flatMap(antigravityRoot => [
             path.join(antigravityRoot, 'brain', 'knowledge', 'artifacts'),
             path.join(antigravityRoot, 'knowledge', 'artifacts'),
             path.join(antigravityRoot, 'brain')
-        ];
+        ]);
     }
 
     private _isAntigravitySourcePath(candidate: string): boolean {
@@ -1072,21 +1078,19 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     private _getAntigravitySourceKind(candidate: string): 'brain' | 'artifact' | undefined {
         const resolvedCandidate = path.resolve(candidate);
-        const antigravityRoot = this._getAntigravityRoot();
-        const artifactRoots = [
-            path.join(antigravityRoot, 'brain', 'knowledge', 'artifacts'),
-            path.join(antigravityRoot, 'knowledge', 'artifacts')
-        ].map(root => path.resolve(root));
-
-        if (artifactRoots.some(root => this._isPathWithin(root, resolvedCandidate))) {
-            return 'artifact';
+        for (const antigravityRoot of this._getAntigravityRoots()) {
+            const artifactRoots = [
+                path.join(antigravityRoot, 'brain', 'knowledge', 'artifacts'),
+                path.join(antigravityRoot, 'knowledge', 'artifacts')
+            ].map(root => path.resolve(root));
+            if (artifactRoots.some(root => this._isPathWithin(root, resolvedCandidate))) {
+                return 'artifact';
+            }
+            const brainRoot = path.resolve(path.join(antigravityRoot, 'brain'));
+            if (this._isPathWithin(brainRoot, resolvedCandidate)) {
+                return 'brain';
+            }
         }
-
-        const brainRoot = path.resolve(path.join(antigravityRoot, 'brain'));
-        if (this._isPathWithin(brainRoot, resolvedCandidate)) {
-            return 'brain';
-        }
-
         return undefined;
     }
 
@@ -8836,21 +8840,15 @@ What would you like to find?`;
     }
 
     private _setupBrainWatcher() {
-        if (this._brainWatcher) {
-            try { this._brainWatcher.dispose(); } catch { }
-            this._brainWatcher = undefined;
-        }
-        if (this._brainFsWatcher) {
-            try { this._brainFsWatcher.close(); } catch { }
-            this._brainFsWatcher = undefined;
-        }
+        this._brainWatchers.forEach(w => { try { w.dispose(); } catch { } });
+        this._brainWatchers = [];
+        this._brainFsWatchers.forEach(w => { try { w.close(); } catch { } });
+        this._brainFsWatchers = [];
         if (this._stagingWatcher) {
             try { this._stagingWatcher.close(); } catch { }
             this._stagingWatcher = undefined;
         }
 
-        const antigravityRoot = this._getAntigravityRoot();
-        if (!fs.existsSync(antigravityRoot)) return;
         if (!this._getAntigravityPlanRoots().some(root => fs.existsSync(root))) return;
 
         const workspaceRoot = this._resolveWorkspaceRoot();
@@ -8866,84 +8864,86 @@ What would you like to find?`;
 
         this._loadBrainPlanBlacklist(workspaceRoot);
 
-        // Brain → Mirror: VS Code-managed watcher (cross-platform, lifecycle-safe)
-        try {
-            const brainUri = vscode.Uri.file(antigravityRoot);
-            const brainPattern = new vscode.RelativePattern(brainUri, '**/*.md{,.*}');
-            this._brainWatcher = vscode.workspace.createFileSystemWatcher(brainPattern);
+        const roots = this._getAntigravityRoots();
+        for (const antigravityRoot of roots) {
+            if (!fs.existsSync(antigravityRoot)) continue;
 
-            const handleBrainEvent = (uri: vscode.Uri, allowAutoClaim: boolean) => {
-                const fullPath = uri.fsPath;
-                if (!this._isBrainMirrorCandidate(antigravityRoot, fullPath)) return;
+            // Brain → Mirror: VS Code-managed watcher (cross-platform, lifecycle-safe)
+            try {
+                const brainUri = vscode.Uri.file(antigravityRoot);
+                const brainPattern = new vscode.RelativePattern(brainUri, '**/*.md{,.*}');
+                const watcher = vscode.workspace.createFileSystemWatcher(brainPattern);
 
-                const effectiveAutoClaim = allowAutoClaim;
-
-                const stablePath = this._getStablePath(fullPath);
-                // Debounce: Windows fires multiple events per save (rename + change)
-                const existing = this._brainDebounceTimers.get(stablePath);
-                if (existing) clearTimeout(existing);
-                this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
-                    try {
-                        this._brainDebounceTimers.delete(stablePath);
-                        // Skip if we wrote this brain file ourselves (mirror→brain direction)
-                        if (this._recentBrainWrites.has(stablePath)) return;
-                        if (fs.existsSync(fullPath)) {
-                            await this._ensureTombstonesLoaded(workspaceRoot);
-                            await this._mirrorBrainPlan(fullPath, effectiveAutoClaim, workspaceRoot);
-                        }
-                    } catch (e) {
-                        console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
-                    }
-                }, 300));
-            };
-
-            this._brainWatcher.onDidCreate((uri) => handleBrainEvent(uri, true));
-            this._brainWatcher.onDidChange((uri) => handleBrainEvent(uri, false));
-        } catch (e) {
-            console.error('[TaskViewerProvider] Brain watcher failed:', e);
-        }
-
-        // Brain → Mirror: native fs.watch fallback on the brain dir.
-        // VS Code's createFileSystemWatcher can miss events for directories outside
-        // the workspace (known limitation). This mirrors the pattern already used
-        // for the staging dir watcher in the opposite direction.
-        try {
-            const brainFsWatcher = fs.watch(antigravityRoot, { recursive: true }, (_eventType, filename) => {
-                try {
-                    if (!filename) return;
-                    if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
-                    const fullPath = path.join(antigravityRoot, filename);
+                const handleBrainEvent = (uri: vscode.Uri, allowAutoClaim: boolean) => {
+                    const fullPath = uri.fsPath;
                     if (!this._isBrainMirrorCandidate(antigravityRoot, fullPath)) return;
 
-                    const rawAutoClaim = _eventType === 'rename';
-                    const effectiveAutoClaim = rawAutoClaim;
+                    const effectiveAutoClaim = allowAutoClaim;
 
                     const stablePath = this._getStablePath(fullPath);
+                    // Debounce: Windows fires multiple events per save (rename + change)
                     const existing = this._brainDebounceTimers.get(stablePath);
                     if (existing) clearTimeout(existing);
                     this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
                         try {
                             this._brainDebounceTimers.delete(stablePath);
+                            // Skip if we wrote this brain file ourselves (mirror→brain direction)
                             if (this._recentBrainWrites.has(stablePath)) return;
                             if (fs.existsSync(fullPath)) {
                                 await this._ensureTombstonesLoaded(workspaceRoot);
                                 await this._mirrorBrainPlan(fullPath, effectiveAutoClaim, workspaceRoot);
                             }
                         } catch (e) {
-                            console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
+                            console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
                         }
                     }, 300));
-                } catch (e: any) {
-                    if (e?.code !== 'ENOENT') {
-                        console.error('[TaskViewerProvider] Brain fs.watch callback error:', e);
+                };
+
+                watcher.onDidCreate((uri) => handleBrainEvent(uri, true));
+                watcher.onDidChange((uri) => handleBrainEvent(uri, false));
+                this._brainWatchers.push(watcher);
+            } catch (e) {
+                console.error('[TaskViewerProvider] Brain watcher failed:', e);
+            }
+
+            // Brain → Mirror: native fs.watch fallback on the brain dir.
+            try {
+                const brainFsWatcher = fs.watch(antigravityRoot, { recursive: true }, (_eventType, filename) => {
+                    try {
+                        if (!filename) return;
+                        if (!/\.md(?:$|\.resolved(?:\.\d+)?$)/i.test(filename)) return;
+                        const fullPath = path.join(antigravityRoot, filename);
+                        if (!this._isBrainMirrorCandidate(antigravityRoot, fullPath)) return;
+
+                        const rawAutoClaim = _eventType === 'rename';
+                        const effectiveAutoClaim = rawAutoClaim;
+
+                        const stablePath = this._getStablePath(fullPath);
+                        const existing = this._brainDebounceTimers.get(stablePath);
+                        if (existing) clearTimeout(existing);
+                        this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
+                            try {
+                                this._brainDebounceTimers.delete(stablePath);
+                                if (this._recentBrainWrites.has(stablePath)) return;
+                                if (fs.existsSync(fullPath)) {
+                                    await this._ensureTombstonesLoaded(workspaceRoot);
+                                    await this._mirrorBrainPlan(fullPath, effectiveAutoClaim, workspaceRoot);
+                                }
+                            } catch (e) {
+                                console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
+                            }
+                        }, 300));
+                    } catch (e: any) {
+                        if (e?.code !== 'ENOENT') {
+                            console.error('[TaskViewerProvider] Brain fs.watch callback error:', e);
+                        }
                     }
-                }
-            });
-            // Tie the fs.watcher lifecycle to class field
-            this._brainFsWatcher = brainFsWatcher;
-            console.log('[TaskViewerProvider] Brain fs.watch fallback active');
-        } catch (e) {
-            console.error('[TaskViewerProvider] Brain fs.watch fallback failed (non-fatal):', e);
+                });
+                this._brainFsWatchers.push(brainFsWatcher);
+                console.log(`[TaskViewerProvider] Brain fs.watch fallback active for ${antigravityRoot}`);
+            } catch (e) {
+                console.error(`[TaskViewerProvider] Brain fs.watch fallback failed (non-fatal) for ${antigravityRoot}:`, e);
+            }
         }
 
         // Mirror → Brain: debounced watcher so edits in VS Code sync back
@@ -8988,7 +8988,7 @@ What would you like to find?`;
                     if (isBrainMirror) {
                         // Resolve brain source path from runsheet first, then registry fallback.
                         const hash = filename.replace(/^brain_/, '').replace(/\.md$/, '');
-                        const resolvedBrainPath = await this._resolveBrainSourcePathForMirrorHash(workspaceRoot, hash, antigravityRoot);
+                        const resolvedBrainPath = await this._resolveBrainSourcePathForMirrorHash(workspaceRoot, hash);
                         if (!resolvedBrainPath) return;
 
                         try {
@@ -9061,11 +9061,11 @@ What would you like to find?`;
         this._brainDebounceTimers.forEach(t => clearTimeout(t));
         this._brainDebounceTimers.clear();
         // Dispose VS Code FileSystemWatcher
-        try { this._brainWatcher?.dispose(); } catch { }
-        this._brainWatcher = undefined;
+        this._brainWatchers.forEach(w => { try { w.dispose(); } catch {} });
+        this._brainWatchers = [];
         // Close native fs.watch (brain dir)
-        try { this._brainFsWatcher?.close(); } catch { }
-        this._brainFsWatcher = undefined;
+        this._brainFsWatchers.forEach(w => { try { w.close(); } catch {} });
+        this._brainFsWatchers = [];
         // Close staging watcher (mirror → brain direction)
         try { this._stagingWatcher?.close(); } catch { }
         this._stagingWatcher = undefined;
@@ -9091,8 +9091,7 @@ What would you like to find?`;
             return 'Plan ingestion folder must be outside the current workspace.';
         }
 
-        const antigravityRoot = this._getAntigravityRoot();
-        if (this._isPathWithin(antigravityRoot, configuredPlanFolder)) {
+        if (this._getAntigravityRoots().some(root => this._isPathWithin(root, configuredPlanFolder))) {
             return 'Plan ingestion folder is already covered by the Antigravity brain watcher.';
         }
 
@@ -10892,7 +10891,9 @@ What would you like to find?`;
         const matchingRoot = this._getAntigravityPlanRoots()
             .map(root => path.resolve(root))
             .find(root => this._isPathWithin(root, resolvedFilePath))
-            || (this._isPathWithin(resolvedBrainDir, resolvedFilePath) ? resolvedBrainDir : undefined);
+            || this._getAntigravityRoots()
+                .map(root => path.resolve(root))
+                .find(root => this._isPathWithin(root, resolvedFilePath));
         if (!matchingRoot) return false;
 
         const relativePath = path.relative(this._getStablePath(matchingRoot), normalizedFilePath);
@@ -11133,10 +11134,13 @@ What would you like to find?`;
     public async seedBrainPlanBlacklistFromCurrentBrainSnapshot(): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) return;
-        const antigravityRoot = this._getAntigravityRoot();
-        const entries = fs.existsSync(antigravityRoot)
-            ? this._collectBrainPlanBlacklistEntries(antigravityRoot)
-            : new Set<string>();
+        const entries = this._getAntigravityRoots().reduce((acc, root) => {
+            if (fs.existsSync(root)) {
+                const rootEntries = this._collectBrainPlanBlacklistEntries(root);
+                for (const e of rootEntries) { acc.add(e); }
+            }
+            return acc;
+        }, new Set<string>());
         this._saveBrainPlanBlacklist(workspaceRoot, entries);
         this._brainPlanBlacklist = entries;
         console.log(`[TaskViewerProvider] Brain plan blacklist seeded: ${entries.size} entr${entries.size === 1 ? 'y' : 'ies'}`);
@@ -11485,7 +11489,7 @@ What would you like to find?`;
         return [...new Set(candidates)];
     }
 
-    private async _resolveBrainSourcePathForMirrorHash(workspaceRoot: string, hash: string, brainDir: string): Promise<string | undefined> {
+    private async _resolveBrainSourcePathForMirrorHash(workspaceRoot: string, hash: string): Promise<string | undefined> {
         const sessionId = `antigravity_${hash}`;
 
         let resolvedBrainPath: string | undefined;
@@ -11531,7 +11535,7 @@ What would you like to find?`;
 
         if (!resolvedBrainPath) return undefined;
         // Security: mirror write-back may only target files within the expected brain root.
-        if (!this._isPathWithin(brainDir, resolvedBrainPath)) return undefined;
+        if (!this._getAntigravityRoots().some(root => this._isPathWithin(root, resolvedBrainPath))) return undefined;
         return resolvedBrainPath;
     }
 
@@ -16736,9 +16740,9 @@ What would you like to find?`;
             clearTimeout(this._sessionSyncTimer);
             this._sessionSyncTimer = undefined;
         }
-        try { this._brainWatcher?.dispose(); } catch { }
+        this._brainWatchers.forEach(w => { try { w.dispose(); } catch {} });
         try { this._stagingWatcher?.close(); } catch { }
-        try { this._brainFsWatcher?.close(); } catch { }
+        this._brainFsWatchers.forEach(w => { try { w.close(); } catch {} });
         this._disposeConfiguredPlanWatcher();
         this._gitCommitDisposable?.dispose();
         this._terminalOpenDisposable?.dispose();

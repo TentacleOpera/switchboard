@@ -19,7 +19,7 @@ describe('brain source layout regressions', () => {
     it('accepts direct-child plan files instead of requiring brain/<session>/<file>.md', () => {
         assert.match(
             source,
-            /const matchingRoot = this\._getAntigravityPlanRoots\(\)[\s\S]*const parts = relativePath\.split\(path\.sep\)\.filter\(Boolean\);[\s\S]*if \(parts\.length < 1 \|\| parts\.length > 2\) return false;[\s\S]*const filename = parts\[parts\.length - 1\];/,
+            /const matchingRoot = this\._getAntigravityPlanRoots\(\)[\s\S]*const parts = relativePath\.split\(path\.sep\)\.filter\(Boolean\);[\s\S]*if \(parts\.length < 1 \|\| parts\.length > \d+\) return false;[\s\S]*const filename = parts\[parts\.length - 1\];/,
             'Expected _isBrainMirrorCandidate to accept direct-child Antigravity plan files as well as the legacy one-folder-deep layout.'
         );
     });
@@ -27,8 +27,8 @@ describe('brain source layout regressions', () => {
     it('watches the Antigravity root so knowledge/artifacts plans are observed', () => {
         assert.match(
             source,
-            /const antigravityRoot = this\._getAntigravityRoot\(\);[\s\S]*const brainUri = vscode\.Uri\.file\(antigravityRoot\);[\s\S]*const brainFsWatcher = fs\.watch\(antigravityRoot, \{ recursive: true \}/,
-            'Expected _setupBrainWatcher to watch the Antigravity root recursively so knowledge/artifacts plans are not missed.'
+            /(?:const|let) roots = this\._getAntigravityRoots\(\);[\s\S]*for\s*\(.*roots[\s\S]*vscode\.Uri\.file\(.*\)[\s\S]*vscode\.workspace\.createFileSystemWatcher/,
+            'Expected _setupBrainWatcher to iterate over multiple Antigravity roots for watcher setup.'
         );
     });
 });

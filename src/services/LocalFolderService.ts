@@ -426,14 +426,17 @@ export class LocalFolderService {
         }
     }
 
-    detectAntigravityBrainPath(): string | null {
-        for (const candidate of LocalFolderService._ANTIGRAVITY_BRAIN_PATHS) {
+    detectAntigravityBrainPaths(): string[] {
+        return LocalFolderService._ANTIGRAVITY_BRAIN_PATHS.filter(candidate => {
             try {
                 const stat = fs.statSync(candidate);
-                if (stat.isDirectory()) { return candidate; }
-            } catch { /* not found */ }
-        }
-        return null;
+                return stat.isDirectory();
+            } catch { return false; }
+        });
+    }
+
+    detectAntigravityBrainPath(): string | null {
+        return this.detectAntigravityBrainPaths()[0] ?? null;
     }
 
     async listAntigravitySessions(): Promise<Array<{
@@ -442,48 +445,54 @@ export class LocalFolderService {
         timestamp: string;  // ISO string from folder mtime
         artifacts: Array<{ id: string; name: string; relativePath: string }>;
     }>> {
-        const brainPath = this.detectAntigravityBrainPath();
-        if (!brainPath) { return []; }
+        const brainPaths = this.detectAntigravityBrainPaths();
+        if (brainPaths.length === 0) { return []; }
 
-        let sessionDirs: fs.Dirent[];
-        try {
-            sessionDirs = await fs.promises.readdir(brainPath, { withFileTypes: true });
-        } catch { return []; }
-
+        const seenIds = new Set<string>();
         const sessions = [];
-        for (const entry of sessionDirs) {
-            if (!entry.isDirectory()) { continue; }
-            // UUID pattern: 8-4-4-4-12 hex chars
-            if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(entry.name)) { continue; }
 
-            const sessionDir = path.join(brainPath, entry.name);
-            let mtime = new Date();
+        for (const brainPath of brainPaths) {
+            let sessionDirs: fs.Dirent[];
             try {
-                const stat = await fs.promises.stat(sessionDir);
-                mtime = stat.mtime;
-            } catch { /* use default */ }
+                sessionDirs = await fs.promises.readdir(brainPath, { withFileTypes: true });
+            } catch { continue; }
 
-            // Enumerate .md artifacts within the session (skip .metadata.json sidecars)
-            let artifacts: Array<{ id: string; name: string; relativePath: string }> = [];
-            try {
-                const files = await fs.promises.readdir(sessionDir);
-                artifacts = files
-                    .filter(f => f.endsWith('.md') && !f.includes('.metadata'))
-                    .map(f => ({
-                        id: path.join(sessionDir, f),    // absolute path used as id for fetchDocContent
-                        name: f.replace(/\.md$/, ''),     // e.g. "task", "walkthrough"
-                        relativePath: path.join(entry.name, f)
-                    }));
-            } catch { /* skip */ }
+            for (const entry of sessionDirs) {
+                if (!entry.isDirectory()) { continue; }
+                if (seenIds.has(entry.name)) { continue; }
+                // UUID pattern: 8-4-4-4-12 hex chars
+                if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/.test(entry.name)) { continue; }
 
-            if (artifacts.length === 0) { continue; } // Skip sessions with no displayable artifacts
+                const sessionDir = path.join(brainPath, entry.name);
+                let mtime = new Date();
+                try {
+                    const stat = await fs.promises.stat(sessionDir);
+                    mtime = stat.mtime;
+                } catch { /* use default */ }
 
-            sessions.push({
-                id: entry.name,
-                name: entry.name.slice(0, 8),
-                timestamp: mtime.toISOString(),
-                artifacts
-            });
+                // Enumerate .md artifacts within the session (skip .metadata.json sidecars)
+                let artifacts: Array<{ id: string; name: string; relativePath: string }> = [];
+                try {
+                    const files = await fs.promises.readdir(sessionDir);
+                    artifacts = files
+                        .filter(f => f.endsWith('.md') && !f.includes('.metadata'))
+                        .map(f => ({
+                            id: path.join(sessionDir, f),    // absolute path used as id for fetchDocContent
+                            name: f.replace(/\.md$/, ''),     // e.g. "task", "walkthrough"
+                            relativePath: path.join(entry.name, f)
+                        }));
+                } catch { /* skip */ }
+
+                if (artifacts.length === 0) { continue; } // Skip sessions with no displayable artifacts
+
+                seenIds.add(entry.name);
+                sessions.push({
+                    id: entry.name,
+                    name: entry.name.slice(0, 8),
+                    timestamp: mtime.toISOString(),
+                    artifacts
+                });
+            }
         }
 
         // Newest first
@@ -492,13 +501,16 @@ export class LocalFolderService {
     }
 
     async fetchAntigravityArtifact(absolutePath: string): Promise<{ success: boolean; content?: string; error?: string }> {
-        const brainPath = this.detectAntigravityBrainPath();
-        if (!brainPath) { return { success: false, error: 'Antigravity brain not detected' }; }
+        const brainPaths = this.detectAntigravityBrainPaths();
+        if (brainPaths.length === 0) { return { success: false, error: 'Antigravity brain not detected' }; }
 
         // Security: validate path stays within brain directory (use separator to prevent prefix bypass)
         const resolved = path.resolve(absolutePath);
-        const brainResolved = path.resolve(brainPath);
-        if (resolved !== brainResolved && !resolved.startsWith(brainResolved + path.sep)) {
+        const isValid = brainPaths.some(brainPath => {
+            const brainResolved = path.resolve(brainPath);
+            return resolved === brainResolved || resolved.startsWith(brainResolved + path.sep);
+        });
+        if (!isValid) {
             return { success: false, error: 'Invalid path' };
         }
 
