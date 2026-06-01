@@ -1042,9 +1042,15 @@ export class KanbanProvider implements vscode.Disposable {
 
         try {
             const resolvedWorkspaceRoot = path.resolve(workspaceRoot);
-            if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot) !== resolvedWorkspaceRoot) {
-                console.log(`[KanbanProvider] refreshWithData: resolvedWorkspaceRoot ${resolvedWorkspaceRoot} differs from current ${this._currentWorkspaceRoot} — not refreshing board`);
-                return;
+            // Guard: only refresh if resolvedWorkspaceRoot matches the currently selected workspace root.
+            // Must resolve _currentWorkspaceRoot through resolveEffectiveWorkspaceRoot so that
+            // child workspaces (which map to a shared parent DB) are not incorrectly blocked.
+            if (this._currentWorkspaceRoot) {
+                const resolvedCurrentRoot = this.resolveEffectiveWorkspaceRoot(this._currentWorkspaceRoot);
+                if (path.resolve(resolvedCurrentRoot) !== resolvedWorkspaceRoot) {
+                    console.log(`[KanbanProvider] refreshWithData: resolvedWorkspaceRoot ${resolvedWorkspaceRoot} differs from current (effective) ${resolvedCurrentRoot} — not refreshing board`);
+                    return;
+                }
             }
             const db = this._getKanbanDb(resolvedWorkspaceRoot);
 
