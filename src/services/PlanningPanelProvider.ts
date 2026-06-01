@@ -2661,35 +2661,6 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _registerImport(
-        cacheService: PlanningPanelCacheService | undefined,
-        sourceId: string,
-        docId: string,
-        docName: string,
-        content: string,
-        workspaceRoot: string,
-        filePath?: string
-    ): Promise<void> {
-        if (!cacheService) return;
-        try {
-            const rawSlug = docName
-                .toLowerCase()
-                .replace(/[^a-z0-9]+/g, '_')
-                .replace(/^_+|_+$/g, '')
-                .slice(0, 60) || sourceId;
-            const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
-            const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-            const workspaceId = await this._getWorkspaceId(workspaceRoot);
-            await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
-                remoteContentHash: contentHash,
-                workspaceId: workspaceId,
-                filePath
-            });
-        } catch (regErr) {
-            console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
-        }
-    }
-
     private async _handleFetchPageContent(workspaceRoot: string, sourceId: string, docId: string, pageId: string, requestId: number): Promise<void> {
         try {
             const adapter = this._researchImportService.getAdapter(sourceId);

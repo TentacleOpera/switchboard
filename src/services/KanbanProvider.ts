@@ -2396,6 +2396,21 @@ export class KanbanProvider implements vscode.Disposable {
         }
     }
 
+    private async _resolveGlobalDesignDoc(workspaceRoot: string): Promise<{ designDocLink?: string; designDocContent?: string }> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
+        const designDocLink = designDocEnabled ? (config.get<string>('planner.designDocLink', '') || '').trim() : undefined;
+        if (!designDocLink) return {};
+        let designDocContent: string | undefined;
+        if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
+            try {
+                const notionService = this._getNotionService(workspaceRoot);
+                designDocContent = (await notionService.loadCachedContent()) || undefined;
+            } catch { /* non-fatal */ }
+        }
+        return { designDocLink, designDocContent };
+    }
+
     public async generateUnifiedPrompt(
         role: string,
         plans: BatchPromptPlan[],
@@ -2411,6 +2426,11 @@ export class KanbanProvider implements vscode.Disposable {
                 ...agentConfig?.addons,
                 ...(roleConfigAddons || {}),
             };
+            if (mergedAddons.designDoc) {
+                const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+                mergedAddons.designDocLink = designDocLink;
+                mergedAddons.designDocContent = designDocContent;
+            }
             return buildCustomAgentPrompt(
                 plans,
                 agentConfig?.promptInstructions,
@@ -2448,16 +2468,8 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.plannerWorkflowPath = promptsConfig.plannerWorkflowPath;
             resolvedOptions.workflowFilePathEnabled = promptsConfig.workflowFilePathEnabledByRole?.planner !== false;
 
-            const designDocEnabled = promptsConfig.designDocEnabled;
-            const designDocLink = designDocEnabled ? (promptsConfig.designDocLink || '').trim() : undefined;
-            let designDocContent: string | undefined;
-            if (designDocEnabled && designDocLink && (designDocLink.includes('notion.so') || designDocLink.includes('notion.site'))) {
-                try {
-                    const notionService = this._getNotionService(workspaceRoot);
-                    designDocContent = (await notionService.loadCachedContent()) || undefined;
-                } catch { /* non-fatal */ }
-            }
-            resolvedOptions.designDocLink = designDocLink || undefined;
+            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+            resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;
         } else if (role === 'lead' || role === 'coder' || role === 'intern') {
             resolvedOptions.instruction = (role === 'coder' || role === 'intern') ? 'low-complexity' : undefined;
@@ -2470,17 +2482,9 @@ export class KanbanProvider implements vscode.Disposable {
         } else if (role === 'reviewer') {
             resolvedOptions.advancedReviewerEnabled = promptsConfig.advancedReviewerEnabled;
         } else if (role === 'tester') {
-            const designDocEnabled = config.get<boolean>('planner.designDocEnabled', false);
-            const designDocLink = (config.get<string>('planner.designDocLink', '') || '').trim();
-            if (!designDocEnabled || !designDocLink) {
+            const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
+            if (!designDocLink) {
                 throw new Error('Acceptance Tester requires a Design Doc / PRD to be enabled and attached in Setup.');
-            }
-            let designDocContent: string | undefined;
-            if (designDocLink.includes('notion.so') || designDocLink.includes('notion.site')) {
-                try {
-                    const notionService = this._getNotionService(workspaceRoot);
-                    designDocContent = (await notionService.loadCachedContent()) || undefined;
-                } catch { /* non-fatal */ }
             }
             resolvedOptions.designDocLink = designDocLink;
             resolvedOptions.designDocContent = designDocContent;

@@ -5117,7 +5117,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         let stateChanged = false;
 
         const customAgents = await this.getCustomAgents(workspaceRoot);
-        const customAgentRoles = customAgents.filter(a => a.includeInKanban).map(a => a.role);
+        const customAgentRoles = customAgents.map(a => a.role);
         for (const rawRole of this._autobanPoolRoles(customAgentRoles)) {
             const role = this._normalizeAutobanPoolRole(rawRole);
             const aliveRoleTerminals = this._getAliveAutobanTerminalNamesFromRegistry(role, aliveTerminals, true);
@@ -5494,7 +5494,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const normalizedRole = this._normalizeAutobanPoolRole(role);
         const customAgents = await this.getCustomAgents(workspaceRoot);
-        const customAgentRoles = customAgents.filter(a => a.includeInKanban).map(a => a.role);
+        const customAgentRoles = customAgents.map(a => a.role);
         if (!this._autobanPoolRoles(customAgentRoles).includes(normalizedRole)) {
             vscode.window.showErrorMessage(`Unsupported autoban pool role '${role}'.`);
             return;
@@ -6482,10 +6482,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         );
 
         await this.updateState(async (state: any) => {
-            state.customAgents = parseCustomAgents(state.customAgents).map((agent) => ({
-                ...agent,
-                includeInKanban: false
-            }));
+            state.customAgents = parseCustomAgents(state.customAgents);
             state.customKanbanColumns = [];
 
             if (state.visibleAgents && typeof state.visibleAgents === 'object') {

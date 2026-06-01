@@ -23,6 +23,7 @@ export interface CustomAgentAddons {
     customSubagentName?: string;
 
     // Design doc
+    designDoc?: boolean;
     designDocLink?: string;
     designDocContent?: string;
 
@@ -177,7 +178,9 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         const sanitized = String(s.customSubagentName).replace(/[^a-zA-Z0-9_]/g, '').trim();
         if (sanitized) a.customSubagentName = sanitized;
     }
+    if (s.designDoc === true) a.designDoc = true;
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
+    if (!a.designDoc && s.designDocLink) a.designDoc = true;
     if (s.designDocContent) {
         const content = String(s.designDocContent).trim();
         a.designDocContent = content.length > 50000 ? content.slice(0, 50000) + '\n[TRUNCATED]' : content;
@@ -323,19 +326,6 @@ export function buildKanbanColumns(
         };
     });
 
-    const customColumns = customAgents
-        .filter(agent => agent.includeInKanban)
-        .map(agent => ({
-            id: agent.role,
-            label: agent.name,
-            role: agent.role,
-            order: agent.kanbanOrder,
-            kind: 'custom-agent' as const,
-            source: 'custom-agent' as const,
-            autobanEnabled: false,
-            dragDropMode: agent.dragDropMode,
-        }));
-
     const userColumns = customKanbanColumns.map(column => ({
         id: column.id,
         label: column.label,
@@ -348,7 +338,7 @@ export function buildKanbanColumns(
         triggerPrompt: column.triggerPrompt
     }));
 
-    return [...defaultColumns, ...customColumns, ...userColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
+    return [...defaultColumns, ...userColumns].sort((a, b) => a.order - b.order || a.label.localeCompare(b.label));
 }
 
 export function getBuiltInAgentLabels(): Record<BuiltInAgentRole, string> {

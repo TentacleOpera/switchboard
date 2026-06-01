@@ -2345,18 +2345,8 @@
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
             <label class="modal-label" for="agents-tab-custom-agent-prompt">Prompt instructions</label>
             <textarea id="agents-tab-custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
-            <label class="modal-label" for="agents-tab-custom-agent-dragdrop">Drag &amp; Drop Mode</label>
-            <select id="agents-tab-custom-agent-dragdrop" class="modal-input">
-              <option value="cli">CLI Agent (trigger terminal action)</option>
-              <option value="prompt">Clipboard Prompt (copy to clipboard)</option>
-            </select>
-            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:6px;">
-              <input id="agents-tab-custom-agent-kanban" type="checkbox" style="width:auto; margin:0;">
-              <span>Show as Kanban column</span>
-            </label>
-
-            <details id="agents-tab-custom-agent-addons" style="margin-top:10px;">
-              <summary class="modal-label" style="cursor:pointer; user-select:none;">Prompt Add-ons</summary>
+            <div id="agents-tab-custom-agent-addons" style="margin-top:10px;">
+              <div class="modal-label" style="margin-bottom:4px;">Prompt Add-ons</div>
               <div style="padding:8px 0; display:flex; flex-direction:column; gap:4px;">
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-switchboard-safeguards" style="width:auto;margin:0;"> Switchboard Safeguards</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-git-prohibition" style="width:auto;margin:0;"> Git Prohibition</label>                <label class="checkbox-label"><input type="checkbox" id="ca-addon-workspace-detection" style="width:auto;margin:0;"> Workspace Type Detection</label>
@@ -2405,12 +2395,12 @@
                   </div>
                 </div>
 
-                <div style="margin-top:8px;">                  <label class="modal-label" style="margin-bottom:4px;">Design Doc Link</label>
-                  <input id="ca-addon-design-doc-link" class="modal-input" type="text" placeholder="https://notion.so/..." style="margin-bottom:8px;">
+                <div style="margin-top:8px;">
+                  <label class="checkbox-label"><input type="checkbox" id="ca-addon-design-doc" style="width:auto;margin:0;"> Design Doc Reference</label>
                 </div>
                 
               </div>
-            </details>
+            </div>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
               <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
@@ -3056,8 +3046,6 @@
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
           document.getElementById('agents-tab-custom-agent-prompt').value = agent?.promptInstructions || '';
-          document.getElementById('agents-tab-custom-agent-dragdrop').value = agent?.dragDropMode || 'cli';
-          document.getElementById('agents-tab-custom-agent-kanban').checked = agent?.includeInKanban === true;
 
           // Load addons
           const addons = agent?.addons || {};
@@ -3075,7 +3063,7 @@
           const ticketUpdateMode = addons.ticketUpdateMode || (addons.ticketUpdateEnabled === true ? 'comment-only' : 'disabled');
           document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
           document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
-          document.getElementById('ca-addon-design-doc-link').value = addons.designDocLink || '';
+          document.getElementById('ca-addon-design-doc').checked = addons.designDoc === true || !!addons.designDocLink;
 
           const subagentPolicy = addons.subagentPolicy || 'default';
           const customSubagentName = addons.customSubagentName || '';
@@ -3088,9 +3076,6 @@
             customNameInput.value = customSubagentName;
             customNameInput.style.display = subagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
           }
-
-          // Close details by default when opening form
-          document.getElementById('agents-tab-custom-agent-addons').removeAttribute('open');
 
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
           document.getElementById('agents-tab-custom-agent-form').classList.remove('hidden');
@@ -3119,9 +3104,9 @@
             name,
             startupCommand,
             promptInstructions: document.getElementById('agents-tab-custom-agent-prompt').value.trim(),
-            includeInKanban: !!document.getElementById('agents-tab-custom-agent-kanban').checked,
+            includeInKanban: false,
             kanbanOrder: 0,
-            dragDropMode: document.getElementById('agents-tab-custom-agent-dragdrop').value,
+            dragDropMode: 'cli',
             addons: {
                 switchboardSafeguards: document.getElementById('ca-addon-switchboard-safeguards').checked,
                 gitProhibitionEnabled: document.getElementById('ca-addon-git-prohibition').checked,
@@ -3137,7 +3122,7 @@
                 complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
                 ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
                 researchEnabled: document.getElementById('ca-addon-research').checked,
-                designDocLink: document.getElementById('ca-addon-design-doc-link').value.trim() || undefined,
+                designDoc: document.getElementById('ca-addon-design-doc').checked,
                 subagentPolicy: Array.from(document.getElementsByName('ca-subagent-policy')).find(r => r.checked)?.value || 'default',
                 customSubagentName: document.getElementById('ca-addon-custom-subagent-name')?.value.trim() || '',
             }
@@ -3153,7 +3138,7 @@
           }
 
           const previousAgent = agentsTabCustomAgents.find(agent => agent.id === (agentsTabEditingAgentId || nextAgent.id));
-          if (previousAgent?.includeInKanban) {
+          if (previousAgent) {
             nextAgent.kanbanOrder = previousAgent.kanbanOrder;
           }
 
@@ -7123,7 +7108,6 @@
                     { role: 'lead', label: 'Lead Coder' },
                     { role: 'reviewer', label: 'Reviewer' },
                     ...lastCustomAgents
-                        .filter(agent => agent.includeInKanban === true)
                         .map(agent => ({ role: agent.role, label: agent.name }))
                 ];
 
@@ -7663,7 +7647,8 @@
         function renderKanbanAssignedAgentOptions(selectedRole) {
             const roles = BUILT_IN_AGENT_LABELS;
             const options = roles.map(r => `<option value="${r.key}"${r.key === selectedRole ? ' selected' : ''}>${r.label}</option>`).join('');
-            kanbanColumnAssignedAgentInput.innerHTML = options;
+            const customOpts = lastCustomAgents.map(a => `<option value="${a.role}"${a.role === selectedRole ? ' selected' : ''}>${a.name}</option>`).join('');
+            kanbanColumnAssignedAgentInput.innerHTML = options + (customOpts ? `<optgroup label="Custom Agents">${customOpts}</optgroup>` : '');
         }
 
         function sanitizeKanbanColumnId(label) {

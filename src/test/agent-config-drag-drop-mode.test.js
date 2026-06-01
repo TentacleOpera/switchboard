@@ -1,8 +1,23 @@
 const assert = require('assert');
 const path = require('path');
-const { parseCustomAgents, parseCustomKanbanColumns, buildKanbanColumns, reweightSequence } = require(path.join(process.cwd(), 'out', 'services', 'agentConfig.js'));
+const { parseCustomAgents, parseCustomKanbanColumns, buildKanbanColumns, reweightSequence, parseCustomAgentAddons } = require(path.join(process.cwd(), 'out', 'services', 'agentConfig.js'));
 
 describe('agentConfig — dragDropMode', () => {
+    describe('parseCustomAgentAddons() designDoc backward compatibility', () => {
+        it('sets designDoc: true when designDocLink is populated', () => {
+            const addons = parseCustomAgentAddons({ designDocLink: 'https://notion.so/test' });
+            assert.ok(addons);
+            assert.strictEqual(addons.designDoc, true);
+            assert.strictEqual(addons.designDocLink, 'https://notion.so/test');
+        });
+
+        it('preserves designDoc: true if designDoc is already true', () => {
+            const addons = parseCustomAgentAddons({ designDoc: true, designDocLink: 'https://notion.so/test' });
+            assert.ok(addons);
+            assert.strictEqual(addons.designDoc, true);
+        });
+    });
+
     describe('parseCustomAgents()', () => {
         const baseAgent = {
             id: 'test_agent',
@@ -51,7 +66,7 @@ describe('agentConfig — dragDropMode', () => {
             }
         });
 
-        it('propagates dragDropMode from custom agent', () => {
+        it('does NOT produce custom-agent columns even when includeInKanban is true', () => {
             const agents = parseCustomAgents([{
                 id: 'prompt_agent',
                 name: 'Prompt Agent',
@@ -62,22 +77,7 @@ describe('agentConfig — dragDropMode', () => {
             }]);
             const columns = buildKanbanColumns(agents);
             const customCol = columns.find(c => c.kind === 'custom-agent');
-            assert.ok(customCol, 'Custom column should exist');
-            assert.strictEqual(customCol.dragDropMode, 'prompt');
-        });
-
-        it('propagates dragDropMode "cli" from custom agent when not specified', () => {
-            const agents = parseCustomAgents([{
-                id: 'cli_agent',
-                name: 'CLI Agent',
-                startupCommand: 'cli-tool run',
-                includeInKanban: true,
-                kanbanOrder: 400
-            }]);
-            const columns = buildKanbanColumns(agents);
-            const customCol = columns.find(c => c.kind === 'custom-agent');
-            assert.ok(customCol, 'Custom column should exist');
-            assert.strictEqual(customCol.dragDropMode, 'cli');
+            assert.strictEqual(customCol, undefined, 'Custom agent column should not exist');
         });
 
         it('propagates persisted user-authored kanban columns with prompt metadata', () => {
