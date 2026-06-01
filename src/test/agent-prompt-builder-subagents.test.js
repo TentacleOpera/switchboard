@@ -215,53 +215,6 @@ function testCustomWorkflowWithAddons() {
     console.log('  PASS: Custom workflow with add-ons appends add-on instructions');
 }
 
-function testSplitPlanDefaultDisabled() {
-    console.log('Testing split plan default disabled...');
-    const prompt = buildKanbanBatchPrompt('planner', plans1, {
-        plannerWorkflowPath: '.agent/workflows/improve-plan.md'
-    });
-    assert.ok(!prompt.includes('SPLIT PLAN'), 'Default planner prompt should NOT include "SPLIT PLAN"');
-    assert.ok(!prompt.includes('_routine.md'), 'Default planner prompt should NOT include "_routine.md"');
-    console.log('  PASS: Default planner prompt excludes split-plan directives');
-}
-
-function testSplitPlanEnabledDefaultWorkflow() {
-    console.log('Testing split plan enabled with default workflow...');
-    const prompt = buildKanbanBatchPrompt('planner', plans1, {
-        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
-        splitPlan: true
-    });
-    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Split-plan enabled prompt should include "SPLIT PLAN MODE"');
-    assert.ok(prompt.includes('_routine.md'), 'Split-plan enabled prompt should include "_routine.md"');
-    console.log('  PASS: Split-plan enabled with default workflow includes full split directives');
-}
-
-function testSplitPlanEnabledCustomWorkflow() {
-    console.log('Testing split plan enabled with custom workflow...');
-    const customWorkflowPath = '.claude/superpowers/skills/writing-plans.md';
-    const prompt = buildKanbanBatchPrompt('planner', plans1, {
-        plannerWorkflowPath: customWorkflowPath,
-        splitPlan: true
-    });
-    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Split-plan enabled with custom workflow should include "SPLIT PLAN MODE"');
-    assert.ok(prompt.includes('_routine.md'), 'Split-plan enabled with custom workflow should include "_routine.md"');
-    assert.ok(prompt.includes(`Read ${customWorkflowPath} and follow it step-by-step`), 'Custom workflow should still generate minimal "Read and follow" prompt');
-    console.log('  PASS: Split-plan enabled with custom workflow includes concise split directive');
-}
-
-function testSplitPlanWithAggressivePairProgramming() {
-    console.log('Testing split plan with aggressive pair programming...');
-    const prompt = buildKanbanBatchPrompt('planner', plans1, {
-        plannerWorkflowPath: '.agent/workflows/improve-plan.md',
-        splitPlan: true,
-        aggressivePairProgramming: true
-    });
-    assert.ok(prompt.includes('SPLIT PLAN MODE'), 'Prompt with both options should include "SPLIT PLAN MODE"');
-    assert.ok(prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Prompt with both options should include "PAIR PROGRAMMING OPTIMISATION"');
-    assert.ok(prompt.includes('_routine.md'), 'Prompt with both options should include "_routine.md"');
-    console.log('  PASS: Split-plan and aggressive pair programming can coexist without contradiction');
-}
-
 function testInternAnalystPrompts() {
     console.log('Testing intern and analyst prompt templates...');
     const internPrompt = buildKanbanBatchPrompt('intern', plans1);
@@ -402,10 +355,6 @@ try {
     testCustomWorkflowPathGeneratesMinimalPrompt();
     testDefaultWorkflowPathGeneratesMinimalPrompt();
     testCustomWorkflowWithAddons();
-    testSplitPlanDefaultDisabled();
-    testSplitPlanEnabledDefaultWorkflow();
-    testSplitPlanEnabledCustomWorkflow();
-    testSplitPlanWithAggressivePairProgramming();
     testInternAnalystPrompts();
     testCodeResearcherAndResearcherPrompts();
     testResolveBaseInstructions();

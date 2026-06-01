@@ -293,4 +293,70 @@ private _isSplitPlanEnabled(): boolean {
 
 ---
 
-**Recommendation**: Send to Coder
+## Review Pass (2026-06-01)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | Orphaned `splitPlan` UI elements in `kanban.html` — 6 dangling references (2 HTML checkboxes, 3 JS load/save lines, 1 event listener) present non-functional "Split Plan" controls to users after backend removal |
+| CRITICAL-2 | CRITICAL | Three test files contain failing assertions — `agent-prompt-builder-subagents.test.js` (3 test functions asserting `'SPLIT PLAN MODE'` in planner prompt), `kanban-default-prompt-previews.test.js` (1 assertion), `minimal-prompt.test.js` (2 assertions + sections array entry) |
+| MAJOR-1 | MAJOR | Stale `splitPlan` in `promptsConfig` mock in `kanban-default-prompt-previews.test.js` (lines 25, 104) and `promptsConfig.splitPlan` assignments (lines 129, 152) |
+| NIT-1 | NIT | `ICON_SPLITTER` aliases `ICON_JULES` — both buttons show same icon; deferred to dedicated SVG asset |
+| NIT-2 | NIT | `testSplitPlanDefaultDisabled` in `agent-prompt-builder-subagents.test.js` is tautological after feature removal |
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| CRITICAL-1 | Fix now | Remove all 6 orphaned UI references from `kanban.html` |
+| CRITICAL-2 | Fix now | Remove failing splitPlan test functions and assertions from 3 test files |
+| MAJOR-1 | Fix now | Clean `promptsConfig` mock alongside CRITICAL-2 |
+| NIT-1 | Defer | Acceptable, already flagged in plan "User Review Required" |
+| NIT-2 | Fix now | Remove alongside CRITICAL-2 cleanup |
+
+### Fixes Applied
+
+**`src/webview/kanban.html`** — 6 edits:
+1. Removed `<label>` with `id="ca-addon-split-plan"` from Accuracy tab (was line 2371)
+2. Removed `<label>` with `id="plannerAddonSplitPlan"` from Planner addons (was lines 2519-2523)
+3. Removed `document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;` (was line 2821)
+4. Removed `document.getElementById('ca-addon-split-plan').checked = addons.splitPlan === true;` (was line 3018)
+5. Removed `splitPlan: document.getElementById('ca-addon-split-plan').checked,` from Accuracy save object (was line 3083)
+6. Removed `'plannerAddonSplitPlan'` from planner addon event listener array (was line 3514)
+
+**`src/test/kanban-default-prompt-previews.test.js`** — 5 edits:
+1. Removed `splitPlan: true` from `promptsConfig` mock (was line 25)
+2. Removed `splitPlan: role === 'planner' ? promptsConfig.splitPlan : undefined,` from options (was line 104)
+3. Removed `KanbanProvider.promptsConfig.splitPlan = false;` from TEST 1 (was line 129)
+4. Removed `KanbanProvider.promptsConfig.splitPlan = true;` from TEST 2 (was line 152)
+5. Removed `assert.ok(!previews.planner.includes('SPLIT PLAN MODE'), ...)` from TEST 1 and `assert.ok(previews.planner.includes('SPLIT PLAN MODE'), ...)` from TEST 2 (was lines 141, 164)
+
+**`src/test/agent-prompt-builder-subagents.test.js`** — 2 edits:
+1. Removed 4 test functions: `testSplitPlanDefaultDisabled`, `testSplitPlanEnabledDefaultWorkflow`, `testSplitPlanEnabledCustomWorkflow`, `testSplitPlanWithAggressivePairProgramming` (was lines 218-263)
+2. Removed their invocations from the `try` block (was lines 405-408)
+
+**`src/test/minimal-prompt.test.js`** — 3 edits:
+1. Removed `splitPlan: true` from `testPromptLineBreaksAreNormalized` options (was line 172)
+2. Removed `promptOpts.splitPlan = true;` from `testNoTripleNewlinesInAnyRole` (was line 216)
+3. Removed `splitPlan: true` and `'SPLIT PLAN MODE'` from `testConsistentSpacingBetweenDirectives` (was lines 252, 264)
+
+**`src/test/prompts-tab-move-regression.test.js`** — 1 edit:
+1. Removed `'plannerAddonSplitPlan'` from `promptsTabElements` array (was line 48)
+
+### Validation Results
+
+- **grep sweep**: Zero `splitPlan`/`SplitPlan`/`split-plan` references remain in `src/` directory
+- **SPLIT_PLAN_DIRECTIVE preserved**: Confirmed in `agentPromptBuilder.ts` at line 228 (definition) and lines 950, 972 (splitter role builder usage)
+- **splitterSelected handler verified**: Present in `kanban.html` (5 references) and `KanbanProvider.ts` (1 reference at line 5390)
+- **Compilation**: Skipped per session instructions
+- **Tests**: Skipped per session instructions
+
+### Remaining Risks
+
+- **Low**: Tracked backup files `temp.js`, `previous_kanban.html`, `temp_script.js` in repo root still contain stale `splitPlan` references. These are not imported or executed — purely historical snapshots. No action required.
+- **Deferred**: `ICON_SPLITTER` reuses `ICON_28` (same as Jules). A dedicated SVG asset would improve UX distinguishability but is not blocking.
+
+---
+
+**Recommendation**: ~~Send to Coder~~ **Review Complete** — CRITICAL/MAJOR findings fixed, validation passed

@@ -2368,7 +2368,6 @@
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-advanced-reviewer" style="width:auto;margin:0;"> Advanced Regression Analysis</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-caveman-output" style="width:auto;margin:0;"> Caveman Output</label>
                 <label class="checkbox-label"><input type="checkbox" id="ca-addon-dependency-check" style="width:auto;margin:0;"> Dependency Check</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-split-plan" style="width:auto;margin:0;"> Split Plan (Routine/Complex files)</label>
                 <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
                   <input type="checkbox" id="ca-addon-complexity-scoring" style="width:auto;margin:0;">
                   <span>Apply Complexity Scoring (if plan lacks Complexity Audit)</span>
@@ -2514,12 +2513,6 @@
                   <input type="checkbox" id="plannerAddonGitProhibition">
                   <span>Git Prohibition</span>
                   <span class="tooltip">Include git prohibition directive</span>
-                </label>
-
-                <label class="checkbox-item" title="Produce separate Routine and Complex plan files">
-                  <input type="checkbox" id="plannerAddonSplitPlan">
-                  <span>Split Plan</span>
-                  <span class="tooltip">Produce separate Routine and Complex plan files</span>
                 </label>
 
                 <label class="checkbox-item" title="Instruct agent to ignore previous checkpoint summaries from prior sessions">
@@ -2818,7 +2811,6 @@
                 document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
-                document.getElementById('plannerAddonSplitPlan').checked = !!config.addons?.splitPlan;
                 document.getElementById('plannerAddonClearAntigravityContext').checked = !!config.addons?.clearAntigravityContext;
                 document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
@@ -3015,7 +3007,6 @@
           document.getElementById('ca-addon-advanced-reviewer').checked = addons.advancedReviewerEnabled === true;
           document.getElementById('ca-addon-caveman-output').checked = addons.cavemanOutput === true;
           document.getElementById('ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
-          document.getElementById('ca-addon-split-plan').checked = addons.splitPlan === true;
           document.getElementById('ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
           const ticketUpdateMode = addons.ticketUpdateMode || (addons.ticketUpdateEnabled === true ? 'comment-only' : 'disabled');
           document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
@@ -3080,7 +3071,6 @@
                 advancedReviewerEnabled: document.getElementById('ca-addon-advanced-reviewer').checked,
                 cavemanOutput: document.getElementById('ca-addon-caveman-output').checked,
                 dependencyCheckEnabled: document.getElementById('ca-addon-dependency-check').checked,
-                splitPlan: document.getElementById('ca-addon-split-plan').checked,
                 complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
                 ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
                 researchEnabled: document.getElementById('ca-addon-research').checked,
@@ -3511,7 +3501,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonSplitPlan', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonUseSubagents'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonUseSubagents'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {

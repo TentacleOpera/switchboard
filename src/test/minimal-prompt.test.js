@@ -169,7 +169,6 @@ function testPromptLineBreaksAreNormalized() {
         aggressivePairProgramming: true,
         dependencyCheckEnabled: true,
         gitProhibitionEnabled: true,
-        splitPlan: true,
         workspaceRoot: '/path/to/workspace'
     });
     assert.ok(!plannerPrompt.includes('\n\n\n'), 'Planner prompt should not contain 3+ consecutive newlines');
@@ -213,7 +212,6 @@ function testNoTripleNewlinesInAnyRole() {
                 promptOpts.plannerWorkflowPath = '.agent/workflows/improve-plan.md';
                 promptOpts.aggressivePairProgramming = true;
                 promptOpts.dependencyCheckEnabled = true;
-                promptOpts.splitPlan = true;
             }
             if (role === 'reviewer') {
                 promptOpts.advancedReviewerEnabled = true;
@@ -249,7 +247,6 @@ function testConsistentSpacingBetweenDirectives() {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
         aggressivePairProgramming: true,
         dependencyCheckEnabled: true,
-        splitPlan: true,
         gitProhibitionEnabled: true,
         switchboardSafeguardsEnabled: true,
         workspaceRoot: '/path/to/workspace',
@@ -261,7 +258,6 @@ function testConsistentSpacingBetweenDirectives() {
     const sections = [
         'PAIR PROGRAMMING OPTIMISATION',
         'DEPENDENCY CHECK ENABLED',
-        'SPLIT PLAN MODE',
         'WORKSPACE TYPE',
         'FOCUS DIRECTIVE',
         'GIT POLICY',

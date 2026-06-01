@@ -45,7 +45,6 @@ function run() {
         'plannerAddonDesignDoc',
         'plannerAddonAggressivePairProgramming',
         'plannerAddonGitProhibition',
-        'plannerAddonSplitPlan',
         'plannerAddonClearAntigravityContext',
         'roleAddonsDesc',
         'roleAddonsGroup',
