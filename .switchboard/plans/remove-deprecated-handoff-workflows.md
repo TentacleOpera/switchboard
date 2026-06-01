@@ -295,6 +295,58 @@ If issues arise:
 - Restore the runsheet logging calls to use handoff workflow names
 - Users can manually restore the files if needed
 
+## Reviewer Pass Results (2026-06-01)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding | Status |
+|----|----------|---------|--------|
+| CRITICAL-1 | CRITICAL | `.cursorrules` (the actual Cursor instruction file, not `templates/cursor/cursor-instructions.md.template` which doesn't exist) still documented all four handoff workflows at lines 40-43 | **Fixed** |
+| CRITICAL-2 | CRITICAL | `.codeium/windsurf-instructions.md` (the actual Windsurf instruction file, not `templates/windsurf/windsurf-instructions.md.template` which doesn't exist) still documented all four handoff workflows at lines 22-25 | **Fixed** |
+| MAJOR-1 | MAJOR | Generated README content in `extension.ts` line 2811 still said "handoff logs" in descriptive text: `"review outputs, handoff logs, and audit reports"`. Plan's diff only addressed the `/handoff` trigger reference, missed this descriptive phrase. | **Fixed** → changed to "session logs" |
+| MAJOR-2 | MAJOR | `package.json` version not bumped. Plan requires bump to trigger `shouldRefreshAgentWorkspaceFiles()`. Was `1.7.2`, should be `1.7.3`. | **Fixed** → bumped to 1.7.3 |
+| NIT-1 | NIT | `docs/DELEGATION_WORKFLOWS_README.md` still references the old delegation workflow system. The `.switchboard/handoff/` directory reference is valid, but the overall document describes the obsolete pattern. Out of plan scope — deferred. | Deferred |
+
+### Stage 2: Balanced Synthesis
+
+- CRITICAL-1 and CRITICAL-2: The plan referenced template file paths (`templates/cursor/cursor-instructions.md.template`, `templates/windsurf/windsurf-instructions.md.template`) that don't exist in the repo. The actual instruction files are `.cursorrules` and `.codeium/windsurf-instructions.md`. The implementation correctly handled the `extension.ts` help text but missed these two IDE-specific instruction files. Fixed by removing the four handoff rows from both files' Workflow Triggers tables.
+- MAJOR-1: The plan's diff for the README content only addressed the `/handoff` trigger line but missed the descriptive "handoff logs" phrase. Fixed by replacing with "session logs".
+- MAJOR-2: Version bump was specified in the plan but not applied. Fixed by bumping 1.7.2 → 1.7.3.
+- Acceptable deviation: The plan said to delete `workflowMap` as dead code. Instead, it was refactored into `_workflowNameForDispatchRole` with handoff entries removed, and the function is now actively called (line 2334). This is a better outcome than deletion.
+
+### Files Changed by Reviewer
+
+| File | Change |
+|------|--------|
+| `.cursorrules` | Removed 4 handoff workflow rows from Workflow Triggers table |
+| `.codeium/windsurf-instructions.md` | Removed 4 handoff workflow rows from Workflow Triggers table |
+| `src/extension.ts` (line 2811) | Changed "handoff logs" → "session logs" in generated README content |
+| `package.json` | Bumped version from 1.7.2 → 1.7.3 |
+
+### Verification Results
+
+**Grep check 1 — File path references** (`handoff.md`, `handoff-chat.md`, etc. in `src/`):
+- 8 matches in `extension.ts` — all in `cleanupLegacyAgentFiles()` legacyFiles array and blocklist array. These are CORRECT (must stay to clean files from user workspaces and prevent re-distribution).
+- 0 matches in `.cursorrules` or `.codeium/windsurf-instructions.md` after fix.
+
+**Grep check 2 — Workflow name references** (`'handoff'`, `'handoff-chat'`, etc. in `src/`):
+- `session-action-log.test.ts`: Uses `'handoff'` as test data for session action log tests. Acceptable — testing with historical data patterns.
+- `cleanWorkspace.ts`: `'handoff'` in `TRANSIENT_DIRS` — references the `.switchboard/handoff/` DIRECTORY (not workflow). Correct per plan.
+- `KanbanMigration.ts`: `workflow === 'handoff'` — migration logic for historical kanban data. Correct — must stay to handle old sessions.
+- `kanbanColumnDerivation.test.ts`: `{ workflow: 'handoff' }` test input. Acceptable — testing derivation with historical patterns.
+
+**Grep check 3 — `/handoff` trigger references** in instruction files:
+- 0 matches in `.cursorrules` after fix (only `handoff_clipboard` MCP tool remains, which plan says to keep).
+- 0 matches in `.codeium/windsurf-instructions.md` after fix (same).
+
+**All verification checks pass.** Remaining `handoff` references are legitimate: cleanup/blocklist entries, directory references, historical data migration, and test fixtures.
+
+### Remaining Risks
+
+1. **Template file path mismatch**: The plan references `templates/cursor/cursor-instructions.md.template` and `templates/windsurf/windsurf-instructions.md.template` — these files don't exist. The actual instruction files are `.cursorrules` and `.codeium/windsurf-instructions.md`. If future tooling expects the template paths, they'll need to be created or the plan's path references corrected.
+2. **Historical data**: Old sessions in the kanban database may still have `workflow: 'handoff'` recorded. `KanbanMigration.ts` handles this correctly, but any custom queries against the runsheet data will encounter these values.
+3. **`docs/DELEGATION_WORKFLOWS_README.md`**: Still describes the old delegation workflow pattern. The `.switchboard/handoff/` directory reference is valid, but the document as a whole describes an obsolete system. Consider updating or removing in a future cleanup pass.
+
 ---
 
 **Send to Coder** (Complexity 4)

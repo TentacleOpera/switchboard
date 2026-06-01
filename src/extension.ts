@@ -2808,7 +2808,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
     try {
         await vscode.workspace.fs.stat(readmeUri);
     } catch {
-        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, handoff logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.`;
+        const readmeContent = `# Switchboard\n\nThis folder contains workflow artifacts — review outputs, session logs, and audit reports.\n\nSee \`WORKFLOW_REFERENCE.md\` for full workflow documentation.\n\n### Quick Start\n- Terminal and messaging setup is handled automatically on extension activation.\n- Use the **Prompts tab** to inject delegation instructions for external agents.\n- Use \`/improve-plan\` for plan hardening plus adversarial review.`;
         await vscode.workspace.fs.writeFile(readmeUri, Buffer.from(readmeContent, 'utf8'));
     }
 

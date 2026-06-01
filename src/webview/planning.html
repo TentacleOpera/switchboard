@@ -210,10 +210,12 @@
         }
 
         .sidebar-toggle-row {
-            display: flex;
-            justify-content: flex-end;
-            margin-bottom: 8px;
+            position: absolute;
+            top: 12px;
+            right: 12px;
+            margin-bottom: 0;
             flex-shrink: 0;
+            z-index: 10;
         }
 
         .sidebar-toggle-btn {
@@ -235,7 +237,10 @@
         }
 
         .content-row.collapsed .sidebar-toggle-row {
+            position: static;
+            display: flex;
             justify-content: center;
+            margin-bottom: 8px;
         }
 
         /* Active Design Doc Header */
@@ -496,6 +501,7 @@
         #tree-pane,
         #tree-pane-online,
         #tree-pane-html {
+            position: relative;
             background: var(--panel-bg2);
             border-right: 1px solid var(--border-color);
             overflow-y: auto;
