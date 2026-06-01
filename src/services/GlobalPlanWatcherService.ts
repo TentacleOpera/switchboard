@@ -60,7 +60,10 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._outputChannel = outputChannel;
     }
 
-    public async refreshWatchers(): Promise<void> {
+    public async refreshWatchers(options?: { clearProjectFilters?: boolean }): Promise<void> {
+        if (options?.clearProjectFilters) {
+            this._currentProjects.clear();
+        }
         await this._refreshWatchers();
     }
 
@@ -80,8 +83,8 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
         this._disposables.push(configListener);
 
         // NOTE: switchboard.mappingsChanged is registered in extension.ts, which calls
-        // this._refreshWatchers() directly. Do NOT register a duplicate handler here,
-        // as the second registerCommand() call would override this one.
+        // this.refreshWatchers({ clearProjectFilters: true }) directly. Do NOT register
+        // a duplicate handler here, as the second registerCommand() call would override this one.
 
         // Watch for workspace folder additions/removals
         const folderListener = vscode.workspace.onDidChangeWorkspaceFolders(async () => {
@@ -182,8 +185,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
     }
 
     private async _refreshWatchers(): Promise<void> {
-        // Clear stale project filters when mappings change
-        this._currentProjects.clear();
         // Get all folders that should be watched
         const foldersToWatch = await this._getAllMappedFolders();
         

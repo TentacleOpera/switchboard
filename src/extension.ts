@@ -1004,7 +1004,7 @@ export async function activate(context: vscode.ExtensionContext) {
         kanbanProvider!._scheduleBoardRefresh();
         // Tell watchers to refresh
         if (globalPlanWatcher) {
-            await (globalPlanWatcher as any)._refreshWatchers();
+            await globalPlanWatcher.refreshWatchers({ clearProjectFilters: true });
         }
     });
     context.subscriptions.push(mappingsChangedDisposable);
