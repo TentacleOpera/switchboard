@@ -1,5 +1,4 @@
 <!-- switchboard:agents-protocol:start -->
-<!-- switchboard:agents-protocol:start -->
 # AGENTS.md - Switchboard Protocol
 
 ### 📚 Available Skills
@@ -39,7 +38,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 **MANDATORY**: Before writing any plan file, you MUST verify where to write it using this algorithm:
 
 **Step 0 — Check for Antigravity Brain Environment**
-If the directory `~/.gemini/antigravity/brain/` exists on the filesystem, you are likely running inside an Antigravity sandbox session. In this case, you MUST write the implementation plan *only* to the `implementation_plan.md` file inside the active conversation subdirectory under that brain folder (the subdirectory you are currently operating within). Do NOT manually write a second copy of the plan to `.switchboard/plans/` — the Switchboard extension's brain watcher will automatically mirror the brain file into the plans directory for you. Proceed no further through this algorithm.
+If the directory `~/.gemini/antigravity/brain/` or `~/.gemini/antigravity-cli/brain/` exists on the filesystem, you are likely running inside an Antigravity sandbox session. In this case, you MUST write the implementation plan *only* to the `implementation_plan.md` file inside the active conversation subdirectory under whichever brain folder is present (the subdirectory you are currently operating within). Do NOT manually write a second copy of the plan to `.switchboard/plans/` — the Switchboard extension's brain watcher will automatically mirror the brain file into the plans directory for you. Proceed no further through this algorithm.
 
 **Step 1 — Discover the Switchboard workspace**
 Check each open workspace root for the existence of `.switchboard/plans/`. Not every repo in a multi-root setup has this — only Switchboard-managed workspaces do. Run: `ls {workspaceRoot}/.switchboard/plans/` for each root.
@@ -54,5 +53,4 @@ Use the active editor's workspace root as the tiebreaker. Write to the `.switchb
 Ask the user where to write the plan. Never create `.switchboard/plans/` yourself.
 
 **NEVER** skip the filesystem check and assume a workspace is Switchboard-managed based on file context alone.
-<!-- switchboard:agents-protocol:end -->
 <!-- switchboard:agents-protocol:end -->
