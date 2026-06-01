@@ -153,6 +153,8 @@ export function resolveBaseInstructions(
             case 'append': base = `${base}\n\n${override.text}`; break;
         }
     }
+    // NOTE: Custom agents handle workflow prepend separately in buildCustomAgentPrompt.
+    // If you change the workflow instruction format here, update buildCustomAgentPrompt too.
     if (role !== 'planner' && options?.workflowFilePathEnabled && options?.workflowFilePath) {
         base = `Read ${options.workflowFilePath} and follow it step-by-step.\n\n${base}`;
     }
@@ -1097,7 +1099,9 @@ export function buildCustomAgentPrompt(
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
 
-    // Custom workflow: prepend read-workflow instruction
+    // Custom workflow: prepend read-workflow instruction.
+    // NOTE: Built-in roles handle workflow prepend in resolveBaseInstructions.
+    // If you change the workflow instruction format here, update resolveBaseInstructions too.
     if (addons?.workflowFilePathEnabled && addons?.workflowFilePath) {
         return `Read ${addons.workflowFilePath} and follow it step-by-step.\n\n` +
             buildCustomAgentPrompt(plans, promptInstructions,
