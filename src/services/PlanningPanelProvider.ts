@@ -1955,12 +1955,25 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
                 return;
             }
+            // Validate sourceFolder is a configured HTML folder
+            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
+            if (!localFolderService.getHtmlFolderPaths().includes(resolvedSourceFolder)) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is not a configured HTML folder path' });
+                return;
+            }
             const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
-            const resolvedPath = path.resolve(path.join(sourceFolder, cleanDocId));
+            const resolvedPath = path.resolve(path.join(resolvedSourceFolder, cleanDocId));
+            // Prevent path traversal
+            if (!resolvedPath.startsWith(path.resolve(resolvedSourceFolder) + path.sep) && resolvedPath !== path.resolve(resolvedSourceFolder)) {
+                this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'Invalid file path' });
+                return;
+            }
             if (!fs.existsSync(resolvedPath)) {
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'File not found' });
                 return;
             }
+            if (!this._panel) { return; }
             const webviewUri = this._panel.webview.asWebviewUri(vscode.Uri.file(resolvedPath)).toString();
             this._activePreviewPath = resolvedPath;
             this._activePreviewSourceId = 'html-folder';

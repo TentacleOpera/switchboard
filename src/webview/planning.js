@@ -30,10 +30,36 @@
         kanbanReviewSelectedText: ''
     };
 
+    function getActiveTabName() {
+        const activeBtn = document.querySelector('.research-tab-btn.active');
+        return activeBtn ? activeBtn.dataset.tab : 'local';
+    }
+
+    function applySidebarState(tabName, collapsed) {
+        const tabContent = document.getElementById(`${tabName}-content`);
+        if (!tabContent) return;
+        const contentRow = tabContent.querySelector('.content-row');
+        const toggleBtn = tabContent.querySelector('.sidebar-toggle-btn');
+        if (contentRow) {
+            contentRow.classList.toggle('collapsed', collapsed);
+        }
+        if (toggleBtn) {
+            toggleBtn.textContent = collapsed ? '»' : '«';
+        }
+    }
+
     function toggleSidebarCollapsed() {
-        state.docsListCollapsed = !state.docsListCollapsed;
-        state.htmlPreviewCollapsed = state.docsListCollapsed;
-        
+        const activeTab = getActiveTabName();
+        if (activeTab === 'html-preview') {
+            state.htmlPreviewCollapsed = !state.htmlPreviewCollapsed;
+            applySidebarState('html-preview', state.htmlPreviewCollapsed);
+        } else {
+            state.docsListCollapsed = !state.docsListCollapsed;
+            // Apply to local and research tabs (they share the same collapsed state)
+            applySidebarState('local', state.docsListCollapsed);
+            applySidebarState('research', state.docsListCollapsed);
+        }
+
         // Persist state
         const currentPersisted = vscode.getState() || {};
         vscode.setState({
@@ -41,27 +67,12 @@
             docsListCollapsed: state.docsListCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed
         });
-        
-        // Apply class to all content rows
-        const contentRows = document.querySelectorAll('.content-row');
-        const toggleBtns = document.querySelectorAll('.sidebar-toggle-btn');
-        
-        contentRows.forEach(row => {
-            row.classList.toggle('collapsed', state.docsListCollapsed);
-        });
-        
-        toggleBtns.forEach(btn => {
-            btn.textContent = state.docsListCollapsed ? '»' : '«';
-        });
     }
 
     // Initialize sidebar state
-    if (state.docsListCollapsed) {
-        const contentRows = document.querySelectorAll('.content-row');
-        const toggleBtns = document.querySelectorAll('.sidebar-toggle-btn');
-        contentRows.forEach(row => row.classList.add('collapsed'));
-        toggleBtns.forEach(btn => btn.textContent = '»');
-    }
+    applySidebarState('local', state.docsListCollapsed);
+    applySidebarState('research', state.docsListCollapsed);
+    applySidebarState('html-preview', state.htmlPreviewCollapsed);
 
     // Bind sidebar toggle listeners
     document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
@@ -106,6 +117,13 @@
 
             btn.classList.add('active');
             document.getElementById(`${tabName}-content`).classList.add('active');
+
+            // Apply correct sidebar state for the newly active tab
+            if (tabName === 'html-preview') {
+                applySidebarState('html-preview', state.htmlPreviewCollapsed);
+            } else if (tabName === 'local' || tabName === 'research') {
+                applySidebarState(tabName, state.docsListCollapsed);
+            }
 
             if (tabName === 'kanban') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
@@ -759,7 +777,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
-        toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
+        toggleBtn.textContent = state.htmlPreviewCollapsed ? '»' : '«';
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
         toggleRow.appendChild(toggleBtn);
         treePaneHtml.appendChild(toggleRow);
