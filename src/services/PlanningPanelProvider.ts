@@ -623,6 +623,19 @@ export class PlanningPanelProvider {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
+    /**
+     * Resolve the effective workspace root: if this workspace is part of a
+     * workspaceDatabaseMapping, return the parent workspace root; otherwise
+     * return the resolved path unchanged. Mirrors KanbanProvider.resolveEffectiveWorkspaceRoot().
+     */
+    private _resolveEffectiveWorkspaceRoot(workspaceRoot: string): string {
+        try {
+            const { resolveEffectiveWorkspaceRootFromMappings } = require('./WorkspaceIdentityService');
+            return resolveEffectiveWorkspaceRootFromMappings(path.resolve(workspaceRoot));
+        } catch { /* outside extension host */ }
+        return path.resolve(workspaceRoot);
+    }
+
     private _buildKanbanWorkspaceItems(): Array<{ label: string; workspaceRoot: string }> {
         let mappings: any[] = [];
         let enabled = false;
@@ -1284,7 +1297,19 @@ export class PlanningPanelProvider {
                             const { KanbanDatabase } = require('./KanbanDatabase');
                             const db = KanbanDatabase.forWorkspace(root);
                             const workspaceId = await this._getWorkspaceId(root);
-                            allWorkspaceProjects[path.resolve(root)] = await db.getProjects(workspaceId);
+                            const projects = await db.getProjects(workspaceId);
+
+                            // Key by both the actual root AND the effective (mapped parent) root
+                            // so that the webview project-dropdown lookup works regardless of
+                            // whether the user selected a mapped parent or an independent folder.
+                            const resolvedRoot = path.resolve(root);
+                            const effectiveRoot = this._resolveEffectiveWorkspaceRoot(root);
+                            allWorkspaceProjects[resolvedRoot] = projects;
+                            if (effectiveRoot !== resolvedRoot) {
+                                // Merge into the parent entry (or create it)
+                                const existing = allWorkspaceProjects[effectiveRoot] || [];
+                                allWorkspaceProjects[effectiveRoot] = [...new Set([...existing, ...projects])];
+                            }
 
                             // Fetch column definitions for this workspace and merge
                             const colDefs = await this._getKanbanColumnDefinitions(root);
@@ -2947,19 +2972,24 @@ export class PlanningPanelProvider {
         const db = KanbanDatabase.forWorkspace(workspaceRoot);
         const workspaceId = await this._getWorkspaceId(workspaceRoot);
         const records = await db.getBoard(workspaceId);
+
+        // Resolve to the effective (mapped parent) root so that plan.workspaceRoot
+        // matches the workspaceItems dropdown values sent to the webview.
+        const effectiveRoot = this._resolveEffectiveWorkspaceRoot(workspaceRoot);
+
+        // Derive the label from _buildKanbanWorkspaceItems() so it uses the
+        // configured mapping name (not the raw VSCode folder name).
+        const wsLabel = this._buildKanbanWorkspaceItems().find(
+            item => item.workspaceRoot === effectiveRoot
+        )?.label || path.basename(effectiveRoot);
+
         return records.map((r: any) => ({
             planId: r.planId,
             sessionId: r.sessionId || '',
             topic: r.topic || path.basename(r.planFile || '') || 'Untitled',
             column: r.kanbanColumn,
-            workspaceRoot: path.resolve(workspaceRoot),
-            workspaceLabel: (() => {
-                const resolvedRoot = path.resolve(workspaceRoot);
-                const folder = (vscode.workspace.workspaceFolders || []).find(
-                    f => path.resolve(f.uri.fsPath) === resolvedRoot
-                );
-                return folder ? folder.name : path.basename(workspaceRoot);
-            })(),
+            workspaceRoot: effectiveRoot,
+            workspaceLabel: wsLabel,
             project: r.project || '',
             repoScope: r.repoScope || '',
             mtime: r.updatedAt ? new Date(r.updatedAt).getTime() : 0,

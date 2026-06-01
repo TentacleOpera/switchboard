@@ -194,4 +194,51 @@ The "All Projects" option at line 2520 must **not** be removed. It is the load-b
 
 ---
 
+## Review Pass (2026-06-01)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **CRITICAL** | `plan.workspaceRoot` set to child folder path (e.g., `/Users/patrick/switchboard-subfolder`) but `workspaceItems` dropdown returns mapped parent path (e.g., `/Users/patrick/MyWorkspace`). The filter at `planning.js:2610` compares `plan.workspaceRoot !== filters.workspaceRoot` — every plan gets filtered out when a mapped workspace is selected. |
+| 2 | **CRITICAL** | `allWorkspaceProjects` keyed by actual child folder paths, but `workspaceItems` dropdown returns mapped parent paths. The lookup at `planning.js:2750` (`_kanbanAllWorkspaceProjects[selectedRoot]`) returns `undefined` → empty project dropdown for mapped workspaces. |
+| 3 | **MAJOR** | `workspaceLabel` IIFE in `_getKanbanPlans` still uses VSCode folder name lookup instead of the configured mapping name, creating label inconsistency between dropdown and plan cards. |
+| 4 | **NIT** | `mappings` typed as `any[]` instead of `WorkspaceDatabaseMapping[]` — loses type safety (deferred). |
+
+### Stage 2: Balanced Synthesis
+
+- **#1 Fix now:** Plans invisible when mapped workspace selected — core functionality broken.
+- **#2 Fix now:** Project dropdown empty when mapped workspace selected — core functionality broken.
+- **#3 Fix now:** Label inconsistency; trivial to fix alongside #1.
+- **#4 Defer:** No runtime impact.
+
+### Code Fixes Applied
+
+**File: `src/services/PlanningPanelProvider.ts`**
+
+1. **Added `_resolveEffectiveWorkspaceRoot()` method** (after `_getWorkspaceRoots()`, before `_buildKanbanWorkspaceItems()`):
+   - Mirrors `KanbanProvider.resolveEffectiveWorkspaceRoot()` — calls `resolveEffectiveWorkspaceRootFromMappings()` from `WorkspaceIdentityService`.
+   - Falls back to `path.resolve(workspaceRoot)` if outside extension host.
+
+2. **Fixed `_getKanbanPlans()`** — `workspaceRoot` and `workspaceLabel`:
+   - `workspaceRoot` now uses `this._resolveEffectiveWorkspaceRoot(workspaceRoot)` instead of `path.resolve(workspaceRoot)`, so plan objects carry the mapped parent path matching the dropdown values.
+   - `workspaceLabel` now derives from `_buildKanbanWorkspaceItems().find(...)` instead of VSCode folder lookup, so plan cards show the configured mapping name.
+
+3. **Fixed `fetchKanbanPlans` handler** — `allWorkspaceProjects` key coverage:
+   - After fetching projects per root, the code now keys `allWorkspaceProjects` by both the actual root AND the effective (mapped parent) root.
+   - When `effectiveRoot !== resolvedRoot`, projects are merged into the parent entry via set union, matching how `KanbanProvider._getAllWorkspaceProjects()` handles this.
+
+### Validation Results
+
+- **Typecheck (`tsc --noEmit`):** 5 pre-existing errors, none in changed code. No new errors introduced.
+- **Tests:** Skipped per instructions (user will run separately).
+
+### Remaining Risks
+
+1. **Multiple child roots mapping to same parent:** The existing `seenIds` dedup on `planId` prevents duplicate plans. The project merge uses `Set` union to avoid duplicates. No issue expected.
+2. **`_buildKanbanWorkspaceItems()` called twice per `_getKanbanPlans` invocation** (once for label lookup, once in `fetchKanbanPlans` for workspaceItems). This is a synchronous, lightweight method reading from an in-memory index — acceptable overhead. Could be memoized per fetch cycle if profiling shows concern.
+3. **NIT #4 (type annotation):** `mappings: any[]` → `WorkspaceDatabaseMapping[]` can be done in a follow-up cleanup pass.
+
+---
+
 **Recommendation:** Send to Intern (complexity 3)
