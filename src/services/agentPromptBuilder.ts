@@ -301,7 +301,13 @@ export const DEEP_RESEARCH_DIRECTIVE =
     `4) Defence-in-Depth controls checklist\n` +
     `5) Plain-English glossary of domain-specific terms\n` +
     `6) Full source list with direct links and retrieval dates\n` +
-    `7) Current State Analysis, External Research Findings, Proposed Implementation Plan, Impact Analysis, Source Credibility Assessment, Knowledge Gaps, Recommended Next Steps.\n` +
+    `7) Current State Analysis\n` +
+    `8) External Research Findings\n` +
+    `9) Proposed Implementation Plan\n` +
+    `10) Impact Analysis\n` +
+    `11) Source Credibility Assessment\n` +
+    `12) Knowledge Gaps\n` +
+    `13) Recommended Next Steps\n` +
     `SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.\n` +
     `DECISION THIS FEEDS: End with a recommended default for a platform of typical scale — do not just survey the field.\n` +
     `TARGET SOURCE COUNT: 50-100 sources (soft target — prioritize quality over quantity).`;

@@ -2410,6 +2410,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             academic: 'Academic (100-200+ sources)'
         };
 
+        if (!customPrompt) {
+            return '';
+        }
+
         const STRUCTURED_PROMPT_RE = /^(ROLE|CONTEXT|OBJECTIVE|TASK|INSTRUCTIONS):/m;
         const isStructured = STRUCTURED_PROMPT_RE.test(customPrompt);
 
