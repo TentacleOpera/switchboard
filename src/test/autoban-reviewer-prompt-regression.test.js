@@ -34,11 +34,6 @@ async function run() {
         'Expected reviewer prompt to include Grumpy adversarial critique instructions.'
     );
 
-    assert.ok(
-        builderSource.includes('unless specified otherwise in this prompt'),
-        'Expected reviewer verification instruction to include conditional override clause for skipTests/skipCompilation add-ons.'
-    );
-
     console.log('autoban reviewer prompt regression test passed');
 }
 

@@ -150,6 +150,51 @@ Update the base reviewer prompt to be conditional, allowing add-on directives to
 - Prompt preview shows no conflicting instructions when `skipTests`/`skipCompilation` are enabled
 - `skipTests` and `skipCompilation` add-ons still function as expected when enabled/disabled
 
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+1. **NIT** — Tester role lacks conditional clause on its "Run verification checks" line (line 539). Tester has no skip add-ons and no skipBlock in suffix, so no active contradiction. Future-proofing note only.
+2. **MAJOR** — Redundant test assertion: `builderSource.includes('unless specified otherwise in this prompt')` is a strict substring of the full-string assertion at line 27-30. Tautological test provides zero independent coverage — if the full-string assertion passes, the substring assertion is guaranteed to pass.
+3. **NIT** — Plan line numbers stale (plan says 416, actual is 469; plan says 471, actual is 539; plan says 28, actual is 27).
+4. **NIT** — Tester suffix block (line 553) omits `skipBlock` entirely, silently ignoring any user-enabled skip add-ons. Pre-existing architectural issue, outside plan scope.
+
+### Stage 2: Balanced Synthesis
+
+1. **Tester conditional clause** → Defer. Not in scope — no active contradiction. Address if skip add-ons are ever added to tester.
+2. **Redundant test assertion** → Fix now. Removed tautological assertion. The full-string assertion at line 27-30 already validates the conditional clause.
+3. **Stale line numbers** → Fix now. Updated in corrected line numbers table below.
+4. **Tester suffix omits skipBlock** → Defer. Pre-existing, out of scope.
+
+### Stage 3: Code Fixes Applied
+
+- **`src/test/autoban-reviewer-prompt-regression.test.js`**: Removed the redundant `builderSource.includes('unless specified otherwise in this prompt')` assertion (was lines 37-40). The full-string assertion at line 27-30 already validates this substring.
+
+### Stage 4: Verification Results
+
+- `node src/test/autoban-reviewer-prompt-regression.test.js` — **PASSED** (all assertions green)
+- Core implementation verified:
+  - `agentPromptBuilder.ts` line 469: Reviewer instruction includes conditional clause ✓
+  - `agentPromptBuilder.ts` line 539: Tester instruction unchanged (no skip add-ons, no skipBlock in suffix) ✓
+  - `agentPromptBuilder.ts` line 504: Reviewer suffix includes `skipBlock` ✓
+  - `agentPromptBuilder.ts` line 553: Tester suffix omits `skipBlock` (pre-existing, out of scope) ✓
+  - `sharedDefaults.js` line 24: Reviewer has `skipCompilation: true, skipTests: true` ✓
+  - `sharedDefaults.js` line 25: Tester has no skip add-ons ✓
+
+### Corrected Line Numbers
+
+- "line 416" (reviewer verification) → actual line 469 in `agentPromptBuilder.ts`
+- "line 436" (reviewer suffixBlock) → actual line 504 in `agentPromptBuilder.ts`
+- "line 471" (tester role) → actual line 539 in `agentPromptBuilder.ts`
+- "line 485" (tester suffixBlock) → actual line 553 in `agentPromptBuilder.ts`
+- "line 28" (regression test assertion) → actual line 27 in `autoban-reviewer-prompt-regression.test.js`
+- "line 35" (Grumpy critique assertion) → actual line 33 in `autoban-reviewer-prompt-regression.test.js`
+
+### Remaining Risks
+
+1. **Tester suffix omits skipBlock** — If skip add-ons are ever added to the tester role defaults, the suffix block at line 553 must be updated to include `skipBlock`, and the tester's verification instruction at line 539 should receive the same conditional clause.
+2. **Other roles with verification instructions** — The coder and lead roles also include `skipBlock` in their suffixes. If any of their base instructions contain "Run verification checks" or similar, the same contradiction pattern could appear. Currently they do not use this exact phrasing, but future prompt edits should be aware of the pattern.
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern**
