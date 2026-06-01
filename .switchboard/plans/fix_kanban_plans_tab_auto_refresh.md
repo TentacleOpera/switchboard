@@ -227,9 +227,72 @@ The optional auto-refresh toggle mentioned in the original plan is deferred. The
 
 ## Original Success Criteria (Preserved)
 
-- [ ] Kanban plans tab automatically updates when plan files change
-- [ ] Auto-refresh works for file creation, modification, and deletion
-- [ ] Debouncing prevents excessive refreshes during rapid changes
-- [ ] Works correctly in multi-root workspaces
-- [ ] Optional: User can toggle auto-refresh on/off
-- [ ] Visual feedback indicates when auto-refresh occurs
+- [x] Kanban plans tab automatically updates when plan files change
+- [x] Auto-refresh works for file creation, modification, and deletion
+- [x] Debouncing prevents excessive refreshes during rapid changes
+- [x] Works correctly in multi-root workspaces
+- [ ] Optional: User can toggle auto-refresh on/off *(deferred)*
+- [x] Visual feedback indicates when auto-refresh occurs
+
+---
+
+## Review Pass Results (2026-06-01)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Implementation uses `_handleMessage()` instead of plan's `postMessage()` | — | **Not a finding** — implementation is better (avoids pointless webview round-trip) |
+| 2 | "↻ refreshed" indicator shows on manual refresh too, not just auto-refresh | NIT | **Defer** — harmless transient toast; could add `source` field later |
+| 3 | `document.hasFocus()` guard logic differs from plan's buggy condition | — | **Not a finding** — implementation correctly fixed plan bug (`!document.hasFocus && typeof ...` would always be false) |
+| 4 | No `this._panel` check inside debounce `setTimeout` callback — wasted async work on disposed panel | MAJOR | **Fixed** |
+| 5 | Double-dispose of watchers in `dispose()` (explicit loop + `_disposables.forEach`) | NIT | **Keep** — consistent with existing `_setupLocalFolderWatchers` pattern, harmless due to try/catch |
+| 6 | No watcher for plans directory creation after initial setup | NIT | **Defer** — known limitation documented in plan edge cases |
+| 7 | Expando `_fadeTimer` property on DOM element | NIT | **Keep** — consistent with codebase patterns |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now**: Finding #4 (MAJOR) — debounce callback must re-check panel existence before calling `_handleMessage`
+- **Defer**: Findings #2, #6 — cosmetic/edge-case, not blocking
+- **Keep as-is**: Findings #1, #3, #5, #7 — implementation is correct or consistent with codebase
+
+### Code Fix Applied
+
+**File**: `src/services/PlanningPanelProvider.ts` (line 481)
+**Change**: Added `if (!this._panel) { return; }` guard inside the `setTimeout` callback, before `this._handleMessage()` call.
+
+```ts
+// Before (vulnerable):
+this._kanbanPlansWatchDebounce = setTimeout(() => {
+    this._kanbanPlansWatchDebounce = undefined;
+    this._handleMessage({ ... }).catch(...);
+}, 800);
+
+// After (fixed):
+this._kanbanPlansWatchDebounce = setTimeout(() => {
+    this._kanbanPlansWatchDebounce = undefined;
+    if (!this._panel) { return; }  // ← ADDED: guard against disposed panel
+    this._handleMessage({ ... }).catch(...);
+}, 800);
+```
+
+### Implementation Deviations from Plan (All Intentional/Beneficial)
+
+1. **`_handleMessage()` vs `postMessage()`**: The implementation calls `_handleMessage()` directly on the extension side instead of posting a message to the webview and waiting for it to bounce back. This is more efficient and correct — the webview doesn't need to be involved in triggering a backend data fetch.
+
+2. **Error handling**: Implementation adds `.catch(err => console.error(...))` on the `_handleMessage` promise — the plan had no error handling.
+
+3. **Panel existence check at trigger time**: Implementation adds `if (!this._panel) { return; }` at the top of `triggerRefresh()` (before debounce), in addition to the fix-added check inside the callback.
+
+4. **`hasFocus` condition**: Implementation uses positive condition (`if (hasFocus()) { show }`) instead of the plan's broken negative condition.
+
+### Validation
+
+- **Typecheck**: Skipped per session directive
+- **Tests**: Skipped per session directive
+- **Manual verification**: See Verification Plan section above (steps 1–8)
+
+### Remaining Risks
+
+1. **Plans directory created after panel open**: If `.switchboard/plans/` doesn't exist when the panel opens, the watcher won't be registered for that root. User must manually refresh once after creating the directory. Low-impact edge case.
+2. **Indicator on manual refresh**: The "↻ refreshed" toast appears on both auto-refresh and manual refresh. Could be refined by adding a `source` field to the message, but the current behavior is acceptable.

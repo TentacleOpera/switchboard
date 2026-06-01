@@ -478,6 +478,7 @@ export class PlanningPanelProvider {
                 }
                 this._kanbanPlansWatchDebounce = setTimeout(() => {
                     this._kanbanPlansWatchDebounce = undefined;
+                    if (!this._panel) { return; }
                     this._handleMessage({
                         type: 'fetchKanbanPlans',
                         requestId: Date.now()
