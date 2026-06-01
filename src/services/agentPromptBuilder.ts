@@ -949,18 +949,21 @@ STEP 2: Apply Split Plan Directive
 After ensuring the plan has a Complexity Audit, apply the following directive:
 \n\n${SPLIT_PLAN_DIRECTIVE}
 
-STEP 3: Dispatch Instructions (for the USER, not automated)
+STEP 3: Dispatch Instructions
 After creating both files:
+
+Automated actions (execute these yourself):
 1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
    a. Read workspace config:
       WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
       DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
       [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
-   b. Run SQL UPDATE using the workspace-root-relative path:
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID';"
-   c. Verify: sqlite3 "$DB_PATH" "SELECT changes();"
+   b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; SELECT changes();"
       - If output is 1: success (card moved to Planned column)
       - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
+
+Manual actions (instruct the USER to perform):
 2. Manually drag the original file (Complex) to the Lead Coder column
 3. Manually drag the _routine.md file to the Coder column
 
@@ -971,18 +974,21 @@ STEP 1: Apply Split Plan Directive
 Apply the following directive:
 \n\n${SPLIT_PLAN_DIRECTIVE}
 
-STEP 2: Dispatch Instructions (for the USER, not automated)
+STEP 2: Dispatch Instructions
 After creating both files:
+
+Automated actions (execute these yourself):
 1. For each new file (both the complex original and the _routine.md companion), immediately after creation:
    a. Read workspace config:
       WORKSPACE_ID=$(head -n 1 .switchboard/workspace-id)
       DB_PATH=$(head -n 2 .switchboard/workspace-id | tail -n 1)
       [ -z "$DB_PATH" ] && DB_PATH=".switchboard/kanban.db"
-   b. Run SQL UPDATE using the workspace-root-relative path:
-      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID';"
-   c. Verify: sqlite3 "$DB_PATH" "SELECT changes();"
+   b. Run SQL UPDATE + verification in a single command (workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md):
+      sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; SELECT changes();"
       - If output is 1: success (card moved to Planned column)
       - If output is 0: the file may not be registered yet; notify the user to manually drag the card to the Planned column
+
+Manual actions (instruct the USER to perform):
 2. Manually drag the original file (Complex) to the Lead Coder column
 3. Manually drag the _routine.md file to the Coder column
 

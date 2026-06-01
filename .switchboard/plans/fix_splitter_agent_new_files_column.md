@@ -156,4 +156,57 @@ Create both files in the same directory as the original plan.
 - **Backward compatibility**: If the SQL UPDATE fails or the agent omits it, the existing manual drag workflow still works
 
 ## Files Changed
-- `src/services/agentPromptBuilder.ts` — Update splitter agent prompt STEP 3 (lines 884-889) and STEP 2 (lines 896-901) to include SQL UPDATE for setting kanban_column to 'PLAN REVIEWED'
+- `src/services/agentPromptBuilder.ts` — Update splitter agent prompt STEP 3 (complexity-scoring variant) and STEP 2 (non-complexity-scoring variant) to include SQL UPDATE for setting kanban_column to 'PLAN REVIEWED'
+
+## Review Pass (2026-06-01)
+
+### Stage 1 — Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | **`SELECT changes()` in a separate `sqlite3` invocation always returns 0.** Each `sqlite3` CLI call opens a new database connection; `changes()` only reflects DML within the same connection. A fresh connection has no prior DML, so `changes()` = 0 always. Verified empirically: separate invocations → 0, combined → 1. The project's own `KanbanProvider.ts` (lines 2765, 2808) already does this correctly by combining UPDATE + SELECT changes() in a single command. The plan itself contained this bug and the implementation faithfully reproduced it. |
+| MAJOR-1 | MAJOR | **Step header "for the USER, not automated" is now misleading.** The original step only contained manual drag instructions — appropriate for a "for the USER" label. After adding automated SQL commands the agent should execute, the header creates ambiguity: an agent may interpret the SQL commands as instructions to print for the user rather than execute itself, defeating the purpose of the fix. |
+| NIT-1 | NIT | **`<relative_path>` placeholder is abstract.** The plan specifies "workspace-root-relative path format" in prose but the prompt just says `<relative_path>`. A concrete example (e.g., `.switchboard/plans/my_plan_routine.md`) would reduce the chance of the agent using an incorrect path format. |
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| CRITICAL-1 | Fix now | Combine UPDATE + SELECT changes() into single `sqlite3` command, matching established pattern in `KanbanProvider.ts` |
+| MAJOR-1 | Fix now | Split step into two labeled sub-sections: "Automated actions (execute these yourself)" and "Manual actions (instruct the USER to perform)" |
+| NIT-1 | Fix now (trivial) | Add concrete path example inline with the SQL command |
+
+### Fixes Applied
+
+**`src/services/agentPromptBuilder.ts`** — Both splitter variants (complexity-scoring STEP 3, non-complexity-scoring STEP 2):
+
+1. **CRITICAL-1 fix**: Changed from two separate `sqlite3` commands:
+   ```
+   sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID';"
+   sqlite3 "$DB_PATH" "SELECT changes();"
+   ```
+   To a single combined command:
+   ```
+   sqlite3 "$DB_PATH" "UPDATE plans SET kanban_column = 'PLAN REVIEWED' WHERE plan_file = '<relative_path>' AND workspace_id = '$WORKSPACE_ID'; SELECT changes();"
+   ```
+
+2. **MAJOR-1 fix**: Changed step header from `STEP N: Dispatch Instructions (for the USER, not automated)` to `STEP N: Dispatch Instructions` with two clearly labeled sub-sections:
+   - `Automated actions (execute these yourself):` — SQL UPDATE commands
+   - `Manual actions (instruct the USER to perform):` — drag instructions
+
+3. **NIT-1 fix**: Added concrete path example: `(workspace-root-relative path, e.g. .switchboard/plans/my_plan_routine.md)`
+
+### Validation Results
+
+- **grep sweep**: Zero instances of `for the USER, not automated` remain in `agentPromptBuilder.ts`
+- **grep sweep**: Both `SELECT changes()` occurrences are now combined with UPDATE in a single `sqlite3` command (lines 962, 987)
+- **grep sweep**: Zero instances of standalone `Verify: sqlite3` remain
+- **Pattern consistency**: Combined UPDATE+changes() pattern matches `KanbanProvider.ts` lines 2765 and 2808
+- **Compilation**: Skipped per session instructions
+- **Tests**: Skipped per session instructions
+
+### Remaining Risks
+
+- **Low**: The `UPDATE before INSERT` race condition (agent runs UPDATE before watcher registers the file) still applies. The `changes() = 0` output now correctly detects this case and instructs the agent to notify the user. Previously, this detection was broken because `changes()` always returned 0 regardless.
+- **Low**: SQL injection via file path — the agent substitutes `<relative_path>` itself, so this is not a user-input vector. File paths under `.switchboard/plans/` are typically safe characters.
+- **Deferred**: `ICON_SPLITTER` reuses `ICON_28` (same as Jules). A dedicated SVG asset would improve UX distinguishability but is not blocking and is tracked separately.
