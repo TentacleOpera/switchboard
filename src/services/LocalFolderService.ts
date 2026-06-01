@@ -58,6 +58,12 @@ export class LocalFolderService {
         return folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
     }
 
+    /** Read the legacy singular setting; returns the raw string or empty string. */
+    private _getLegacyFolderPath(): string {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        return config.get<string>('research.localFolderPath', '');
+    }
+
     // ── Folder Path Resolution (matches kanban.dbPath pattern) ──
 
     resolveFolderPath(folderPath: string): string {
@@ -94,9 +100,17 @@ export class LocalFolderService {
 
     async addFolderPath(folderPath: string): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-        const currentPaths = config.get<string[]>('research.localFolderPaths', []);
+        let currentPaths = config.get<string[]>('research.localFolderPaths', []);
+
+        // Migrate legacy singular setting into the array before adding
+        if (currentPaths.length === 0) {
+            const legacyPath = this._getLegacyFolderPath();
+            if (legacyPath) {
+                currentPaths = [legacyPath];
+            }
+        }
+
         const resolvedInput = this.resolveFolderPath(folderPath);
-        
         const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
         if (!isDuplicate) {
             const newPaths = [...currentPaths, folderPath];
@@ -106,11 +120,28 @@ export class LocalFolderService {
 
     async removeFolderPath(folderPath: string): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
-        const currentPaths = config.get<string[]>('research.localFolderPaths', []);
+        let currentPaths = config.get<string[]>('research.localFolderPaths', []);
+
+        // Migrate legacy singular setting into the array before removing
+        if (currentPaths.length === 0) {
+            const legacyPath = this._getLegacyFolderPath();
+            if (legacyPath) {
+                currentPaths = [legacyPath];
+            }
+        }
+
         const resolvedToRemove = this.resolveFolderPath(folderPath);
-        
         const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
         await config.update('research.localFolderPaths', newPaths, this._getConfigurationTarget());
+
+        // If the array is now empty, clear the legacy setting too so the
+        // fallback in getFolderPaths() doesn't re-add the removed folder.
+        if (newPaths.length === 0) {
+            const legacyPath = this._getLegacyFolderPath();
+            if (legacyPath) {
+                await config.update('research.localFolderPath', undefined, this._getConfigurationTarget());
+            }
+        }
     }
 
     // ── File Listing ────────────────────────────────────────────
