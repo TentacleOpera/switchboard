@@ -4509,7 +4509,8 @@
             hideTooltip();
             const viewState = captureBoardViewState();
             currentCards = cards;
-            // Prune selectedCards to only keep cards that are present in the current board data
+            // Prune stale selectedCards entries so ASSIGN count and merge buttons stay accurate
+            // when cards disappear from the board (deletion, workspace/project filter change)
             const cardIds = new Set(cards.map(c => c.sessionId || c.planId).filter(Boolean));
             for (const key of selectedCards.keys()) {
                 if (!cardIds.has(key)) {
