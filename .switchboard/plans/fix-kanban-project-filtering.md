@@ -233,8 +233,44 @@ No other changes to this handler.
 
 ## Files Changed
 - `src/services/KanbanDatabase.ts` — Add optional `projectFilter` parameter to `getPlansWithDependencies()` and `getPlansByColumn()` with sentinel translation
-- `src/services/KanbanProvider.ts` — Pass `this._projectFilter` at 4 call sites: `_sendDependencyMapData()`, `getDependencyMapData` handler (copyPrompt branch, line ~4335), `rebuildDependencyMap` handler (line ~4368), and `getUATData` handler (lines ~6148–6149)
+- `src/services/KanbanProvider.ts` — Pass `this._projectFilter` at 5 call sites: `_sendDependencyMapData()`, `getDependencyMapData` handler (copyPrompt branch, line ~4335), `rebuildDependencyMap` handler (line ~4368), `getUATData` handler (lines ~6148–6149), and `_generateAntigravityPrompt` (line ~2707)
 
 ---
 
-**Recommendation: Send to Coder**
+## Review Pass — 2026-06-01
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **MAJOR** | `_generateAntigravityPrompt` call site at line 2707 does not pass `this._projectFilter`. When a project filter is active, the antigravity prompt generator fetches plans from ALL projects, sending an agent to work on the wrong project's plans. Same class of bug the plan was created to fix. | `KanbanProvider.ts:2707` |
+| 2 | NIT | New DB methods (`getPlansByColumn`, `getPlansWithDependencies`) lack the early-return optimization that `getBoardFilteredByProject` uses (delegating to the simpler `getBoard()` when no filter is active). Functionally equivalent but a style inconsistency. | `KanbanDatabase.ts:2219-2272` |
+| 3 | PASS | Sentinel handling (`__unassigned__` → `''`) is correct in both new DB methods, matching the reference pattern in `getBoardFilteredByProject`. | `KanbanDatabase.ts:2230, 2257` |
+| 4 | PASS | All four plan-specified call sites correctly pass `this._projectFilter`. | `KanbanProvider.ts:2133, 4399, 4432, 6155-6156` |
+| 5 | PASS | Prompt-assembly logic in `copyPrompt` branch preserved verbatim; only DB call arguments changed. | `KanbanProvider.ts:4400-4414` |
+| 6 | PASS | Backward compatibility maintained — optional parameters, existing unfiltered callers still work. | `KanbanDatabase.ts`, `KanbanProvider.ts` |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| 1. `_generateAntigravityPrompt` unfiltered | **Fix now** | Pass `this._projectFilter` at line 2707 — same class of bug, trivial fix, low risk |
+| 2. No early-return optimization | Defer | Functionally correct; style-only concern |
+
+### Stage 3: Code Fixes Applied
+
+- **`KanbanProvider.ts` line 2707**: Changed `db.getPlansByColumn(workspaceId, column)` → `db.getPlansByColumn(workspaceId, column, this._projectFilter)`
+
+### Stage 4: Verification Results
+
+- **Typecheck**: `npx tsc --noEmit` — 5 pre-existing errors in unrelated files (`extension.ts`, `ClickUpSyncService.ts`, `KanbanProvider.ts:4726`, `PlanningPanelProvider.ts`, `TaskViewerProvider.ts`). Zero errors in plan-touched code. All changes compile cleanly.
+- **Tests**: Skipped per session directive.
+
+### Remaining Risks
+
+1. **`repoScope` filtering gap** (acknowledged in User Review Required): Dependencies, UAT, and antigravity prompt paths still do not filter by `repoScope`. Only `project` filtering is applied. If a repo filter is active alongside a project filter, plans from other repos within the same project will still appear.
+2. **`_generateAntigravityPrompt` now filtered by project but not by `repoScope`**: Same repoScope gap as above, now applies to this call site too.
+
+---
+
+**Status: Review Complete — Implementation verified, one MAJOR finding fixed**

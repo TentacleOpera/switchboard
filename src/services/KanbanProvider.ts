@@ -2704,7 +2704,7 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             // Query for plans in the specified column
-            const columnPlans = await db.getPlansByColumn(workspaceId, column);
+            const columnPlans = await db.getPlansByColumn(workspaceId, column, this._projectFilter);
 
             if (!columnPlans || columnPlans.length === 0) {
                 this._panel?.webview.postMessage({
