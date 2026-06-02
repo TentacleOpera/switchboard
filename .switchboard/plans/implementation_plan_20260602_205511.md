@@ -148,3 +148,42 @@ grep -n "get-state.js.*read-only\|get-state.js.*freely" .agent/skills/kanban_ope
 ---
 
 **Recommendation:** Send to Intern (complexity ≤ 3)
+
+## Review & Verification Results
+
+### Stage 1: Grumpy Review
+* **AGENTS.md line 66**: Replaced as requested. The old SQL UPDATE line is completely gone.
+* **AGENTS.md line 83**: "or move cards" string successfully removed.
+* **AGENTS.md line 84**: `kanban_operations` skill correctly registered as a manual fallback.
+* **kanban_operations/SKILL.md**: The "MANUAL FALLBACK ONLY" warning block is perfectly inserted before the main heading.
+* **Severity**: [NIT] Nothing to complain about here. The text replacement was performed correctly without accidentally mangling the tables or headers. It's a rare day when the code monkey follows instructions this precisely.
+
+### Stage 2: Balanced Synthesis
+* **Actionable Fixes**: None required. The implementation is 100% compliant with the plan.
+
+### Files Changed
+* `AGENTS.md`
+* `.agent/skills/kanban_operations/SKILL.md`
+
+### Validation Results
+```bash
+# grep -n "UPDATE plans SET kanban_column" AGENTS.md
+> (zero matches)
+
+# grep -n "or move cards" AGENTS.md
+> (zero matches)
+
+# grep -n "read-only\|READ-ONLY\|QUERYING.*only" AGENTS.md
+66: Kanban column transitions are handled automatically... QUERYING kanban state only...
+83: | `query_switchboard_kanban` | Query kanban state via direct SQL access to kanban.db (read-only) |
+
+# grep -n "kanban_operations" AGENTS.md
+66: ...use the `kanban_operations` skill.
+84: | `kanban_operations` | Move kanban cards via move-card.js — MANUAL FALLBACK ONLY...
+
+# grep -n "MANUAL FALLBACK ONLY" .agent/skills/kanban_operations/SKILL.md
+6: > ⚠️ **MANUAL FALLBACK ONLY** — The `move-card.js` script is an override/recovery mechanism...
+```
+
+### Remaining Risks
+None. SQL override instructions have been effectively neutralized.
