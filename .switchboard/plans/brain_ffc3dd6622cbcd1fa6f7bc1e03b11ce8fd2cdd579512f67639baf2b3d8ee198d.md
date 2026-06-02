@@ -156,3 +156,58 @@ The root causes of the issue are:
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Results (2026-06-02)
+
+### Reviewer: Grumpy Principal Engineer (inline adversarial pass)
+
+### Stage 1 Findings
+
+| # | Severity | Description | Location |
+|---|----------|-------------|----------|
+| 1 | NIT | `_getAllowedRoots` / `isWorkspaceInMapping` philosophical contradiction — unmapped workspaces are now switchable but `initializeKanbanDbOnStartup` (TaskViewerProvider:1842) still skips them via `isWorkspaceInMapping`. DB is created on-demand but not pre-populated from files. Known design trade-off per plan's Adversarial Synthesis. | TaskViewerProvider.ts:1842 |
+| 2 | NIT | Misleading log message in `KanbanProvider._resolveWorkspaceRoot` line 566 — says "not switching" but function still returns the resolved path. Pre-existing, not introduced by this change. | KanbanProvider.ts:566 |
+| 3 | NIT | `_setupStateWatcher` recreates VS Code glob watcher `**/.switchboard/state.json` unnecessarily on workspace switch. Only the native `fs.watch` fallback needs recreation. Harmless but wasteful. | TaskViewerProvider.ts:8491-8532 |
+| 4 | NIT | `_setupPlanWatcher` fallback at line 8620 (`if (foldersToWatch.length === 0)`) is partially dead code when mappings are enabled, since the safety net at line 8614 always adds at least one entry. Still useful as defense-in-depth for no-mappings case. | TaskViewerProvider.ts:8620-8623 |
+| 5 | NIT | TaskViewerProvider._resolveWorkspaceRoot line 836 checks `path.resolve(kanbanRoot)` but returns `kanbanRoot` (unresolved). Works due to `kanbanRoot` always being resolved by invariant, but asymmetrical. | TaskViewerProvider.ts:836 |
+
+**No CRITICAL or MAJOR findings.**
+
+### Stage 2 Synthesis
+
+- **Keep:** All eight implementation changes are correct and match the plan requirements.
+- **Fix Now:** Nothing — no CRITICAL/MAJOR findings.
+- **Defer:** All five NITs are either pre-existing, harmless, or acknowledged design trade-offs.
+
+### Implementation Verification
+
+All eight plan requirements verified against actual code:
+
+1. **KanbanProvider._getAllowedRoots** (line 503): Deletion block removed. Method now starts with `new Set<string>(roots)`, adds mapping entries, returns without deletion. ✓
+2. **KanbanProvider._resolveWorkspaceRoot** (line 558): Fallback `if (this._getWorkspaceRoots().includes(resolved)) { return resolved; }` added at line 571. Does NOT update `_currentWorkspaceRoot`. ✓
+3. **KanbanProvider.setCurrentWorkspaceRoot** (line 651): Validation updated to `!allowed.has(resolved) && !roots.includes(resolved)` (De Morgan's equivalent of plan's `allowed.has(resolved) || roots.includes(resolved)`). ✓
+4. **TaskViewerProvider._getAllowedRoots** (line 844): Deletion block removed. Matches KanbanProvider pattern. Both providers in lockstep. ✓
+5. **TaskViewerProvider._resolveWorkspaceRoot** (line 822): Fallback added at line 828 for explicit root, and at line 836 for kanban-delegated root. ✓
+6. **TaskViewerProvider.refreshUI** (line 2000): Guard updated to resolve `currentRoot` through `resolveEffectiveWorkspaceRoot` before comparing with `effectiveRoot`. Matches `KanbanProvider.refreshWithData` pattern. ✓
+7. **TaskViewerProvider.reinitializePlanWatcher** (line 3043): `_setupStateWatcher()` added between `_resolveWorkspaceRoot` and `_setupPlanWatcher`. ✓
+8. **TaskViewerProvider._setupPlanWatcher** (line 8572): Safety net added at lines 8614-8618 — `effectiveRoot` always included in `foldersToWatch`. ✓
+
+### Typecheck Results
+
+- Ran `npx tsc --noEmit` — 2 pre-existing errors only (import path extension issues in `ClickUpSyncService.ts:2310` and `KanbanProvider.ts:4771`). Neither is in a modified area. **No new type errors introduced.**
+
+### Files Changed (by implementation)
+
+- `src/services/KanbanProvider.ts`: `_getAllowedRoots` (deletion block removed), `_resolveWorkspaceRoot` (fallback added), `setCurrentWorkspaceRoot` (validation relaxed)
+- `src/services/TaskViewerProvider.ts`: `_getAllowedRoots` (deletion block removed), `_resolveWorkspaceRoot` (fallback added), `refreshUI` (guard fix), `reinitializePlanWatcher` (state watcher added), `_setupPlanWatcher` (safety net added)
+
+### Remaining Risks
+
+1. **Unmapped workspace bootstrap gap** — switching to an unmapped workspace creates a DB on-demand but doesn't pre-populate from files. Low risk since unmapped workspaces typically don't have `.switchboard/` directories. If users report empty kanban boards, `initializeKanbanDbOnStartup` should be updated to also bootstrap unmapped workspaces.
+2. **Implicit ordering dependency** — `reinitializePlanWatcher` relies on `setCurrentWorkspaceRoot` having been called first (so `_resolveWorkspaceRoot()` without args returns the new root). This is the existing call pattern but is fragile if refactored.
+
+### Verdict
+
+**PASS** — Implementation is complete and correct. All plan requirements satisfied. No code fixes needed.
