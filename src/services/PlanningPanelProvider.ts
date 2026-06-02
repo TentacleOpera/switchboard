@@ -240,7 +240,7 @@ export class PlanningPanelProvider {
                     vscode.Uri.joinPath(this._extensionUri, 'dist'),
                     vscode.Uri.joinPath(this._extensionUri, 'webview'),
                     vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
-                    ...this._getWorkspaceRoots().map(root => vscode.Uri.file(root))
+                    ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri)
                 ]
             }
         );
@@ -1860,7 +1860,7 @@ export class PlanningPanelProvider {
                     vscode.Uri.joinPath(extensionUri, 'dist'),
                     vscode.Uri.joinPath(extensionUri, 'webview'),
                     vscode.Uri.joinPath(extensionUri, 'node_modules'),
-                    ...this._getWorkspaceRoots().map(root => vscode.Uri.file(root))
+                    ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri)
                 ];
 
                 const extraRoots: vscode.Uri[] = [];
