@@ -825,6 +825,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             const resolved = path.resolve(workspaceRoot);
             const allowed = this._getAllowedRoots();
             if (allowed.has(resolved)) { return resolved; }
+            if (this._getWorkspaceRoots().includes(resolved)) { return resolved; }
         }
 
         // Delegate to kanban (single source of truth), with validation guard
@@ -832,6 +833,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (kanbanRoot) {
             const allowed = this._getAllowedRoots();
             if (allowed.has(kanbanRoot)) { return kanbanRoot; }
+            if (this._getWorkspaceRoots().includes(path.resolve(kanbanRoot))) { return kanbanRoot; }
         }
 
         // Fallback: first allowed root
@@ -867,11 +869,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
                     }
 
-                }
-                for (const root of roots) {
-                    if (this._kanbanProvider && !this._kanbanProvider.isWorkspaceInMapping(root)) {
-                        allowedRoots.delete(path.resolve(root));
-                    }
                 }
             }
         } catch { /* fall through */ }
@@ -2008,11 +2005,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 : null;
             if (effectiveRoot) {
                 const currentRoot = this._kanbanProvider?.getCurrentWorkspaceRoot();
+                const resolvedCurrentRoot = currentRoot
+                    ? (this._kanbanProvider?.resolveEffectiveWorkspaceRoot(currentRoot) || currentRoot)
+                    : null;
                 // Guard: only activate if effectiveRoot matches current selection, or if
                 // nothing is selected yet (initialization). Mirrors KanbanProvider.refreshIfShowing.
-                if (currentRoot && path.resolve(currentRoot) !== path.resolve(effectiveRoot)) {
+                if (resolvedCurrentRoot && path.resolve(resolvedCurrentRoot) !== path.resolve(effectiveRoot)) {
                     console.log(
-                        `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from current ${currentRoot} — not switching workspace context`
+                        `[TaskViewerProvider] refreshUI: effectiveRoot ${effectiveRoot} differs from resolved current ${resolvedCurrentRoot} — not switching workspace context`
                     );
                     return;
                 }
@@ -2815,7 +2815,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public async getStartupCommands(workspaceRoot?: string): Promise<Record<string, string>> {
         const statePath = this._resolveStateFilePath(workspaceRoot);
-        if (!statePath) return {};
+        if (!statePath) {
+            console.warn(`[TaskViewerProvider] getStartupCommands: statePath is null for workspaceRoot='${workspaceRoot}'`);
+            return {};
+        }
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
@@ -2824,7 +2827,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 startupCommands[agent.role] = agent.startupCommand;
             }
             return startupCommands;
-        } catch {
+        } catch (e) {
+            console.warn(`[TaskViewerProvider] getStartupCommands: failed to read/parse state file '${statePath}': ${e}`);
             return {};
         }
     }
@@ -3038,6 +3042,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      */
     public reinitializePlanWatcher(workspaceRoot: string): void {
         this._resolveWorkspaceRoot(workspaceRoot);
+        this._setupStateWatcher();
         this._setupPlanWatcher();
         this.reinitializeBrainWatcher();
     }
@@ -8604,6 +8609,12 @@ What would you like to find?`;
             }
         } catch {
             // Outside extension host
+        }
+
+        // Safety net: always include the effective root of the current workspace
+        const effectiveRoot = this._kanbanProvider?.resolveEffectiveWorkspaceRoot(workspaceRoot) || workspaceRoot;
+        if (!foldersToWatch.includes(path.resolve(effectiveRoot))) {
+            foldersToWatch.push(path.resolve(effectiveRoot));
         }
 
         // Fallback: if no mappings, watch the current workspace root
@@ -14401,7 +14412,7 @@ What would you like to find?`;
                 planFileRelative = plan.planFile;
                 sessionTopic = plan.topic || plan.planFile || 'Untitled';
                 workingDir = resolveWorkingDir(resolvedWorkspaceRoot, plan.repoScope || '');
-                previousColumn = plan.columnName;
+                previousColumn = plan.kanbanColumn;
             }
         }
 

@@ -2307,6 +2307,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     });
                 }
 
+                outputChannel?.appendLine(`[Extension] createAgentGrid: sending startup commands for ${agents.length} agent(s), effectiveWorkspaceRoot=${effectiveWorkspaceRoot}`);
                 for (const agent of agents) {
                     let cmd = await taskViewerProvider.getAgentStartupCommand(agent.role, effectiveWorkspaceRoot);
                     if (cmd && cmd.trim()) {
@@ -2319,7 +2320,11 @@ export async function activate(context: vscode.ExtensionContext) {
                             const binary = cmd.trim().split(/\s+/)[0];
                             const displayName = path.basename(binary).replace(/\.(exe|cmd|bat)$/i, '').toUpperCase() + ' CLI';
                             taskViewerProvider.setTerminalAgentInfo(suffixedName(agent.name), agent.role, displayName);
+                        } else {
+                            outputChannel?.appendLine(`[Extension] WARNING: terminal not found in registeredTerminals for '${agent.name}' (key=${suffixedName(agent.name)})`);
                         }
+                    } else {
+                        outputChannel?.appendLine(`[Extension] WARNING: empty startup command for '${agent.name}' (${agent.role}), cmd='${cmd || ''}'`);
                     }
                 }
             } catch (e) {
@@ -2703,6 +2708,32 @@ async function maybeOfferControlPlaneOnboarding(workspaceRoot: string): Promise<
     if (selection === 'Not Now') {
         await switchboardConfig.update('controlPlane.onboardingDismissed', true, vscode.ConfigurationTarget.Workspace);
     }
+}
+
+/**
+ * Recursively list files under a URI using vscode.workspace.fs.
+ * Returns relative paths (posix-style) suitable for Uri.joinPath.
+ */
+async function crawlDirectory(uri: vscode.Uri, depth: number = 0): Promise<string[]> {
+    if (depth > 5) return [];
+    let entries: [string, vscode.FileType][];
+    try {
+        entries = await vscode.workspace.fs.readDirectory(uri);
+    } catch {
+        return [];
+    }
+    const results: string[] = [];
+    for (const [name, type] of entries) {
+        if (type === vscode.FileType.File) {
+            results.push(name);
+        } else if (type === vscode.FileType.Directory) {
+            const childPaths = await crawlDirectory(vscode.Uri.joinPath(uri, name), depth + 1);
+            for (const rel of childPaths) {
+                results.push(name + path.sep + rel);
+            }
+        }
+    }
+    return results;
 }
 
 /**

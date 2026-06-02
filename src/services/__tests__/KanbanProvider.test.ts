@@ -5,6 +5,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { KanbanProvider, KanbanCard } from '../KanbanProvider';
 import { KanbanColumnDefinition } from '../agentConfig';
+import { KanbanDatabase } from '../KanbanDatabase';
 
 suite('KanbanProvider', () => {
     let sandbox: sinon.SinonSandbox;
@@ -474,8 +475,43 @@ Manual verification steps:
                 workspaceRoot: '/path/to/workspaceB'
             });
 
-            // Verify filter is cleared
-            assert.strictEqual(provider.getProjectFilter(), null);
+            // Verify filter is cleared to unassigned sentinel
+            assert.strictEqual(provider.getProjectFilter(), KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+        });
+
+        test('setProjectFilter handler falls back to UNASSIGNED_PROJECT_FILTER when project is null', async () => {
+            const provider = new KanbanProvider(vscode.Uri.file('/test'), mockContext);
+            (provider as any)._currentWorkspaceRoot = '/test/workspace';
+            sandbox.stub(provider as any, '_refreshBoard').resolves();
+
+            await (provider as any)._handleMessage({
+                type: 'setProjectFilter',
+                project: null
+            });
+
+            assert.strictEqual(provider.getProjectFilter(), KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
+        });
+
+        test('deleteProject handler resets filter to UNASSIGNED_PROJECT_FILTER when active project is deleted', async () => {
+            const provider = new KanbanProvider(vscode.Uri.file('/test'), mockContext);
+            (provider as any)._currentWorkspaceRoot = '/test/workspace';
+            sandbox.stub(provider as any, '_readWorkspaceId').resolves('ws-id');
+            const mockDb = {
+                deleteProject: sandbox.stub().resolves(),
+            };
+            sandbox.stub(provider as any, '_getKanbanDb').returns(mockDb);
+            sandbox.stub(provider as any, '_refreshBoard').resolves();
+
+            provider.setProjectFilter('DeletedProject');
+            assert.strictEqual(provider.getProjectFilter(), 'DeletedProject');
+
+            await (provider as any)._handleMessage({
+                type: 'deleteProject',
+                workspaceRoot: '/test/workspace',
+                projectName: 'DeletedProject'
+            });
+
+            assert.strictEqual(provider.getProjectFilter(), KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
         });
     });
 

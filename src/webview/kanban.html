@@ -6144,8 +6144,6 @@
 
             if (!targetWorkspaceRoot) return;
 
-            // Build confirmation label
-            const wsLabel = selectedOption.textContent || targetWorkspaceRoot;
             // Determine if this is a same-workspace or cross-workspace operation
             // by checking the source workspaces of the actually selected cards,
             // not currentWorkspaceRoot (which may have been updated by a dropdown switch).
@@ -6160,8 +6158,6 @@
 
             if (!isSameWorkspace) {
                 // Cross-workspace: reassign to target workspace first, optionally passing targetProject
-                // Include sourceWorkspaceRoot from the selected cards (not currentWorkspaceRoot,
-                // which may have changed when the user switched the dropdown to pick the target).
                 const sourceWorkspaceRoot = sourceWorkspaces.size === 1
                     ? Array.from(sourceWorkspaces)[0]
                     : '';
@@ -6172,12 +6168,29 @@
                     targetWorkspaceRoot: targetWorkspaceRoot,
                     targetProject: targetProject === '__unassigned__' ? '' : targetProject
                 });
+
+                // Post-assignment: switch workspace context to the target workspace so the user sees their moved cards
+                currentWorkspaceRoot = targetWorkspaceRoot;
+                activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
+                lastBoardSignature = '';  // Ensure the refresh triggered by selectWorkspace is not short-circuited
+                postKanbanMessage({
+                    type: 'selectWorkspace',
+                    workspaceRoot: targetWorkspaceRoot,
+                    project: targetProject
+                });
             } else {
                 // Same workspace: project assignment only
                 postKanbanMessage({
                     type: 'assignSelectedToProject',
                     projectName: targetProject === '__unassigned__' ? '' : targetProject,
                     planIds: sessionIds
+                });
+
+                // Post-assignment: switch project filter to the target project so the user sees their moved cards
+                activeProjectFilter = targetProject === '__unassigned__' ? '__unassigned__' : targetProject;
+                postKanbanMessage({
+                    type: 'setProjectFilter',
+                    project: targetProject
                 });
             }
 
@@ -6199,6 +6212,18 @@
             const selectedProject = selectedOption.dataset.project || '';
             const controlPlaneAction = selectedOption.dataset.controlPlaneAction || undefined;
 
+            // If cards are selected, do NOT switch workspace or project filter immediately.
+            // We want to wait for the user to click the ASSIGN button.
+            if (selectedCards.size > 0) {
+                const btnDeleteProject = document.getElementById('btn-delete-project');
+                if (btnDeleteProject) {
+                    const disabled = !selectedProject || selectedProject === '__unassigned__';
+                    btnDeleteProject.disabled = disabled;
+                    btnDeleteProject.setAttribute('data-tooltip', !disabled ? 'Delete selected project' : 'Select a project to delete');
+                }
+                return;
+            }
+
             const isDifferentWorkspace = selectedWorkspaceRoot !== currentWorkspaceRoot;
 
             if (isDifferentWorkspace) {
@@ -6208,13 +6233,13 @@
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,
                     controlPlaneAction: controlPlaneAction,
-                    project: selectedProject || null // Sentinel '__unassigned__' is truthy, so || null preserves it
+                    project: selectedProject
                 });
             } else if (selectedProject !== (activeProjectFilter ?? '')) {
                 // Same workspace, different project filter
                 postKanbanMessage({
                     type: 'setProjectFilter',
-                    project: selectedProject || null // Sentinel '__unassigned__' is truthy, so || null preserves it
+                    project: selectedProject
                 });
             }
 
@@ -7648,7 +7673,7 @@
         function renderKanbanAssignedAgentOptions(selectedRole) {
             const roles = BUILT_IN_AGENT_LABELS;
             const options = roles.map(r => `<option value="${r.key}"${r.key === selectedRole ? ' selected' : ''}>${r.label}</option>`).join('');
-            const customOpts = lastCustomAgents.map(a => `<option value="${a.role}"${a.role === selectedRole ? ' selected' : ''}>${a.name}</option>`).join('');
+            const customOpts = lastCustomAgents.map(a => `<option value="${escapeAttr(a.role)}"${a.role === selectedRole ? ' selected' : ''}>${escapeHtml(a.name)}</option>`).join('');
             kanbanColumnAssignedAgentInput.innerHTML = options + (customOpts ? `<optgroup label="Custom Agents">${customOpts}</optgroup>` : '');
         }
 

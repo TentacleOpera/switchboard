@@ -139,7 +139,7 @@ export class KanbanProvider implements vscode.Disposable {
     private _worktreeModeEnabledMap = new Map<string, boolean>();
     private _mergeColumnCheckCache = new Map<string, boolean | null>();
     private _repoScopeFilter: string | null = null;
-    private _projectFilter: string | null = null;
+    private _projectFilter: string | null = KanbanDatabase.UNASSIGNED_PROJECT_FILTER;
     private _allWorkspaceProjectsCache: Record<string, string[]> | null = null;
     // eslint-disable-next-line @typescript-eslint/no-explicit-any -- PlannerPromptWriter type lives in extension.ts; using any avoids a circular import
     private _plannerPromptWriter: any | null = null;
@@ -523,11 +523,6 @@ export class KanbanProvider implements vscode.Disposable {
                         allowedRoots.add(path.resolve(expanded));
                     }
                 }
-                for (const root of roots) {
-                    if (!this.isWorkspaceInMapping(root)) {
-                        allowedRoots.delete(path.resolve(root));
-                    }
-                }
             }
         } catch { /* fall through */ }
         return allowedRoots;
@@ -571,6 +566,9 @@ export class KanbanProvider implements vscode.Disposable {
                         `[KanbanProvider] _resolveWorkspaceRoot: resolved ${resolved} differs from current ${this._currentWorkspaceRoot} — not switching`
                     );
                 }
+                return resolved;
+            }
+            if (this._getWorkspaceRoots().includes(resolved)) {
                 return resolved;
             }
         }
@@ -653,7 +651,8 @@ export class KanbanProvider implements vscode.Disposable {
     public setCurrentWorkspaceRoot(workspaceRoot: string): boolean {
         const resolved = path.resolve(workspaceRoot);
         const allowed = this._getAllowedRoots();
-        if (!allowed.has(resolved)) {
+        const roots = this._getWorkspaceRoots();
+        if (!allowed.has(resolved) && !roots.includes(resolved)) {
             console.error(`[KanbanProvider] Rejected invalid workspace: ${workspaceRoot}`);
             return false;
         }
@@ -1162,7 +1161,7 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
-                projectFilter: this._projectFilter || null,
+                projectFilter: this._projectFilter ?? null,
                 projects: projList,
                 allWorkspaceProjects
             });
@@ -1920,7 +1919,7 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
-                projectFilter: this._projectFilter || null,
+                projectFilter: this._projectFilter ?? null,
                 projects,
                 allWorkspaceProjects
             });
@@ -2074,7 +2073,7 @@ export class KanbanProvider implements vscode.Disposable {
                 workspaceRoot: resolvedWorkspaceRoot,
                 workspaces: workspaceItems,
                 activeFilter: this._repoScopeFilter || null,
-                projectFilter: this._projectFilter || null,
+                projectFilter: this._projectFilter ?? null,
                 projects,
                 allWorkspaceProjects
             });
@@ -4301,7 +4300,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     this.setCurrentWorkspaceRoot(msg.workspaceRoot);
                     // Only reset project filter if not explicitly provided
                     if (msg.project === null || msg.project === undefined) {
-                        this.setProjectFilter(null); // Reset project filter on workspace switch
+                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER); // Reset project filter on workspace switch
                     } else {
                         this.setProjectFilter(msg.project); // Preserve selected project
                     }
@@ -4365,7 +4364,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = msg.workspaceRoot || this._currentWorkspaceRoot;
                 if (workspaceRoot && typeof msg.projectName === 'string') {
                     if (this._projectFilter === msg.projectName) {
-                        this.setProjectFilter(null);
+                        this.setProjectFilter(KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     }
                     const workspaceId = await this._readWorkspaceId(workspaceRoot);
                     if (workspaceId) {
@@ -4380,7 +4379,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'setProjectFilter': {
                 const workspaceRoot = this._currentWorkspaceRoot;
                 if (workspaceRoot && (msg.project === null || typeof msg.project === 'string')) {
-                    this.setProjectFilter(msg.project ?? null);
+                    this.setProjectFilter(msg.project ?? KanbanDatabase.UNASSIGNED_PROJECT_FILTER);
                     await this._refreshBoard(workspaceRoot);
                 }
                 break;
