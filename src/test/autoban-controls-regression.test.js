@@ -34,7 +34,7 @@ function run() {
     );
     expectRegex(
         webviewSource,
-        /let\s+autobanState\s*=\s*\{\s*enabled:\s*false,\s*batchSize:\s*3,\s*complexityFilter:\s*'all',\s*routingMode:\s*'dynamic'/s,
+        /let\s+autobanState\s*=\s*\{\s*enabled:\s*false,\s*batchSize:\s*1,\s*complexityFilter:\s*'all',\s*routingMode:\s*'dynamic'/s,
         'Expected the implementation webview to initialize autoban state with the new control defaults.'
     );
     expectRegex(

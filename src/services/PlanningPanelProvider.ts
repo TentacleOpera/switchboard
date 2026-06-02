@@ -239,7 +239,8 @@ export class PlanningPanelProvider {
                 localResourceRoots: [
                     vscode.Uri.joinPath(this._extensionUri, 'dist'),
                     vscode.Uri.joinPath(this._extensionUri, 'webview'),
-                    vscode.Uri.joinPath(this._extensionUri, 'node_modules')
+                    vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
+                    ...this._getWorkspaceRoots().map(root => vscode.Uri.file(root))
                 ]
             }
         );
@@ -1858,7 +1859,8 @@ export class PlanningPanelProvider {
                 const baseRoots = [
                     vscode.Uri.joinPath(extensionUri, 'dist'),
                     vscode.Uri.joinPath(extensionUri, 'webview'),
-                    vscode.Uri.joinPath(extensionUri, 'node_modules')
+                    vscode.Uri.joinPath(extensionUri, 'node_modules'),
+                    ...this._getWorkspaceRoots().map(root => vscode.Uri.file(root))
                 ];
 
                 const extraRoots: vscode.Uri[] = [];

@@ -58,6 +58,7 @@
             // Apply to local and research tabs (they share the same collapsed state)
             applySidebarState('local', state.docsListCollapsed);
             applySidebarState('research', state.docsListCollapsed);
+            applySidebarState('online', state.docsListCollapsed);
         }
 
         // Persist state
@@ -72,6 +73,7 @@
     // Initialize sidebar state
     applySidebarState('local', state.docsListCollapsed);
     applySidebarState('research', state.docsListCollapsed);
+    applySidebarState('online', state.docsListCollapsed);
     applySidebarState('html-preview', state.htmlPreviewCollapsed);
 
     // Bind sidebar toggle listeners
@@ -121,7 +123,7 @@
             // Apply correct sidebar state for the newly active tab
             if (tabName === 'html-preview') {
                 applySidebarState('html-preview', state.htmlPreviewCollapsed);
-            } else if (tabName === 'local' || tabName === 'research') {
+            } else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
                 applySidebarState(tabName, state.docsListCollapsed);
             }
 

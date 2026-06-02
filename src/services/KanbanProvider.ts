@@ -256,9 +256,9 @@ export class KanbanProvider implements vscode.Disposable {
         this._columnDragDropModes = this._getSetting<Record<string, 'cli' | 'prompt' | 'disabled'>>('kanban.columnDragDropModes', {});
         this._routingMapConfig = this._getSetting<{ lead: number[]; coder: number[]; intern: number[] } | null>('kanban.routingMapConfig', null);
         this._allowUnknownComplexityAutoMove = this._getSetting<boolean>('kanban.allowUnknownComplexityAutoMove', true);
-        this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', false);
+        this._clearTerminalBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
         this._clearTerminalBeforePromptDelay = Math.min(Math.max(
-            vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 1500),
+            vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000),
             0
         ), 10000);
 
@@ -310,6 +310,13 @@ export class KanbanProvider implements vscode.Disposable {
             return this._context.globalState.get<T>(key, defaultValue);
         }
         return this._context.workspaceState.get<T>(key, defaultValue);
+    }
+
+    private _getRoleConfig(role: string): any {
+        if (this._taskViewerProvider) {
+            return this._taskViewerProvider.getRoleConfig(`roleConfig_${role}`);
+        }
+        return this._getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
     }
 
     private async _updateSetting<T>(key: string, value: T): Promise<void> {
@@ -1010,8 +1017,8 @@ export class KanbanProvider implements vscode.Disposable {
      * Called by GlobalPlanWatcherService to avoid unnecessary refreshes.
      */
     public refreshIfShowing(workspaceRoot: string): void {
-        const resolved = path.resolve(workspaceRoot);
-        if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot) === resolved) {
+        const resolved = path.resolve(workspaceRoot).toLowerCase();
+        if (this._currentWorkspaceRoot && path.resolve(this._currentWorkspaceRoot).toLowerCase() === resolved) {
             this._scheduleBoardRefresh(this._currentWorkspaceRoot);
         } else {
             // Plan discovered in a non-active workspace.
@@ -2238,7 +2245,7 @@ export class KanbanProvider implements vscode.Disposable {
         // Merge with roleConfigs from workspaceState
         const roles = ['planner', 'lead', 'coder', 'reviewer', 'tester', 'intern', 'analyst', 'ticket_updater', 'researcher', 'splitter'];
         for (const role of roles) {
-            const config: any = this._getSetting(`switchboard.prompts.roleConfig_${role}`, undefined);
+            const config: any = this._getRoleConfig(role);
             if (config && config.prompt?.trim()) {
                 overrides[role] = {
                     text: config.prompt.trim(),
@@ -2420,7 +2427,7 @@ export class KanbanProvider implements vscode.Disposable {
             const customAgents = await this._getCustomAgents(workspaceRoot);
             const agentId = role.replace('custom_agent_', '');
             const agentConfig = customAgents.find(a => a.id === agentId || a.role === role);
-            const roleConfigAddons = this._getSetting<any>(`switchboard.prompts.roleConfig_${role}`, undefined)?.addons;
+            const roleConfigAddons = this._getRoleConfig(role)?.addons;
             const mergedAddons = {
                 ...agentConfig?.addons,
                 ...(roleConfigAddons || {}),
@@ -2508,20 +2515,20 @@ export class KanbanProvider implements vscode.Disposable {
     private async _getPromptsConfig(workspaceRoot: string): Promise<any> {
         const config = vscode.workspace.getConfiguration('switchboard');
         
-        // Load role-based configs from workspaceState
-        const plannerConfig: any = this._getSetting('switchboard.prompts.roleConfig_planner', undefined);
-        const coderConfig: any = this._getSetting('switchboard.prompts.roleConfig_coder', undefined);
-        const leadConfig: any = this._getSetting('switchboard.prompts.roleConfig_lead', undefined);
-        const reviewerConfig: any = this._getSetting('switchboard.prompts.roleConfig_reviewer', undefined);
-        const testerConfig: any = this._getSetting('switchboard.prompts.roleConfig_tester', undefined);
-        const internConfig: any = this._getSetting('switchboard.prompts.roleConfig_intern', undefined);
-        const analystConfig: any = this._getSetting('switchboard.prompts.roleConfig_analyst', undefined);
-        const researcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_researcher', undefined);
-        const splitterConfig: any = this._getSetting('switchboard.prompts.roleConfig_splitter', undefined);
-        const ticketUpdaterConfig: any = this._getSetting('switchboard.prompts.roleConfig_ticket_updater', undefined);
-        const codeResearcherConfig: any = this._getSetting('switchboard.prompts.roleConfig_code_researcher', undefined)
-            ?? this._getSetting('switchboard.prompts.roleConfig_research_planner', undefined);
-        const gathererConfig: any = this._getSetting('switchboard.prompts.roleConfig_gatherer', undefined);
+        // Load role-based configs from workspaceState / state.json
+        const plannerConfig: any = this._getRoleConfig('planner');
+        const coderConfig: any = this._getRoleConfig('coder');
+        const leadConfig: any = this._getRoleConfig('lead');
+        const reviewerConfig: any = this._getRoleConfig('reviewer');
+        const testerConfig: any = this._getRoleConfig('tester');
+        const internConfig: any = this._getRoleConfig('intern');
+        const analystConfig: any = this._getRoleConfig('analyst');
+        const researcherConfig: any = this._getRoleConfig('researcher');
+        const splitterConfig: any = this._getRoleConfig('splitter');
+        const ticketUpdaterConfig: any = this._getRoleConfig('ticket_updater');
+        const codeResearcherConfig: any = this._getRoleConfig('code_researcher')
+            ?? this._getRoleConfig('research_planner');
+        const gathererConfig: any = this._getRoleConfig('gatherer');
 
         return {
             workflowFilePathEnabledByRole: {
@@ -2571,11 +2578,11 @@ export class KanbanProvider implements vscode.Disposable {
             plannerWorkflowPath: plannerConfig?.workflowFilePath || config.get<string>('planner.workflowPath', '.agent/workflows/improve-plan.md'),
             skipCompilationByRole: {
                 planner: plannerConfig?.addons?.skipCompilation ?? false,
-                lead: leadConfig?.addons?.skipCompilation ?? false,
-                coder: coderConfig?.addons?.skipCompilation ?? false,
-                reviewer: reviewerConfig?.addons?.skipCompilation ?? false,
+                lead: leadConfig?.addons?.skipCompilation ?? true,
+                coder: coderConfig?.addons?.skipCompilation ?? true,
+                reviewer: reviewerConfig?.addons?.skipCompilation ?? true,
                 tester: testerConfig?.addons?.skipCompilation ?? false,
-                intern: internConfig?.addons?.skipCompilation ?? false,
+                intern: internConfig?.addons?.skipCompilation ?? true,
                 analyst: analystConfig?.addons?.skipCompilation ?? false,
                 researcher: researcherConfig?.addons?.skipCompilation ?? false,
                 splitter: splitterConfig?.addons?.skipCompilation ?? false,
@@ -2584,11 +2591,11 @@ export class KanbanProvider implements vscode.Disposable {
             },
             skipTestsByRole: {
                 planner: plannerConfig?.addons?.skipTests ?? false,
-                lead: leadConfig?.addons?.skipTests ?? false,
-                coder: coderConfig?.addons?.skipTests ?? false,
-                reviewer: reviewerConfig?.addons?.skipTests ?? false,
+                lead: leadConfig?.addons?.skipTests ?? true,
+                coder: coderConfig?.addons?.skipTests ?? true,
+                reviewer: reviewerConfig?.addons?.skipTests ?? true,
                 tester: testerConfig?.addons?.skipTests ?? false,
-                intern: internConfig?.addons?.skipTests ?? false,
+                intern: internConfig?.addons?.skipTests ?? true,
                 analyst: analystConfig?.addons?.skipTests ?? false,
                 researcher: researcherConfig?.addons?.skipTests ?? false,
                 splitter: splitterConfig?.addons?.skipTests ?? false,
@@ -2629,17 +2636,18 @@ export class KanbanProvider implements vscode.Disposable {
                 code_researcher: codeResearcherConfig?.addons?.switchboardSafeguards ?? true,
             },
             useSubagentsByRole: {
-                planner: plannerConfig?.addons?.subagentPolicy === 'default' ? false : (plannerConfig?.addons?.useSubagents ?? false),
-                lead: leadConfig?.addons?.subagentPolicy === 'default' ? false : (leadConfig?.addons?.useSubagents ?? false),
-                coder: coderConfig?.addons?.subagentPolicy === 'default' ? false : (coderConfig?.addons?.useSubagents ?? false),
-                reviewer: reviewerConfig?.addons?.subagentPolicy === 'default' ? false : (reviewerConfig?.addons?.useSubagents ?? false),
-                tester: testerConfig?.addons?.subagentPolicy === 'default' ? false : (testerConfig?.addons?.useSubagents ?? false),
-                intern: internConfig?.addons?.subagentPolicy === 'default' ? false : (internConfig?.addons?.useSubagents ?? false),
-                analyst: analystConfig?.addons?.subagentPolicy === 'default' ? false : (analystConfig?.addons?.useSubagents ?? false),
-                researcher: researcherConfig?.addons?.subagentPolicy === 'default' ? false : (researcherConfig?.addons?.useSubagents ?? false),
-                splitter: splitterConfig?.addons?.subagentPolicy === 'default' ? false : (splitterConfig?.addons?.useSubagents ?? false),
-                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'default' ? false : (ticketUpdaterConfig?.addons?.useSubagents ?? false),
-                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'default' ? false : (codeResearcherConfig?.addons?.useSubagents ?? false),
+                planner: plannerConfig?.addons?.subagentPolicy === 'useSubagents' || (plannerConfig?.addons?.subagentPolicy === undefined && plannerConfig?.addons?.useSubagents === true),
+                lead: leadConfig?.addons?.subagentPolicy === 'useSubagents' || (leadConfig?.addons?.subagentPolicy === undefined && leadConfig?.addons?.useSubagents === true),
+                coder: coderConfig?.addons?.subagentPolicy === 'useSubagents' || (coderConfig?.addons?.subagentPolicy === undefined && coderConfig?.addons?.useSubagents === true),
+                reviewer: reviewerConfig?.addons?.subagentPolicy === 'useSubagents' || (reviewerConfig?.addons?.subagentPolicy === undefined && reviewerConfig?.addons?.useSubagents === true),
+                tester: testerConfig?.addons?.subagentPolicy === 'useSubagents' || (testerConfig?.addons?.subagentPolicy === undefined && testerConfig?.addons?.useSubagents === true),
+                intern: internConfig?.addons?.subagentPolicy === 'useSubagents' || (internConfig?.addons?.subagentPolicy === undefined && internConfig?.addons?.useSubagents === true),
+                analyst: analystConfig?.addons?.subagentPolicy === 'useSubagents' || (analystConfig?.addons?.subagentPolicy === undefined && analystConfig?.addons?.useSubagents === true),
+                researcher: researcherConfig?.addons?.subagentPolicy === 'useSubagents' || (researcherConfig?.addons?.subagentPolicy === undefined && researcherConfig?.addons?.useSubagents === true),
+                splitter: splitterConfig?.addons?.subagentPolicy === 'useSubagents' || (splitterConfig?.addons?.subagentPolicy === undefined && splitterConfig?.addons?.useSubagents === true),
+                ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'useSubagents' || (ticketUpdaterConfig?.addons?.subagentPolicy === undefined && ticketUpdaterConfig?.addons?.useSubagents === true),
+                code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'useSubagents' || (codeResearcherConfig?.addons?.subagentPolicy === undefined && codeResearcherConfig?.addons?.useSubagents === true),
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'useSubagents' || (gathererConfig?.addons?.subagentPolicy === undefined && gathererConfig?.addons?.useSubagents === true),
             },
             noSubagentsByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'noSubagents',
@@ -2653,6 +2661,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.subagentPolicy === 'noSubagents',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'noSubagents',
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'noSubagents',
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'noSubagents',
             },
             customSubagentNameByRole: {
                 planner: plannerConfig?.addons?.subagentPolicy === 'customSubagent' ? (plannerConfig?.addons?.customSubagentName || '') : '',
@@ -2666,6 +2675,7 @@ export class KanbanProvider implements vscode.Disposable {
                 splitter: splitterConfig?.addons?.subagentPolicy === 'customSubagent' ? (splitterConfig?.addons?.customSubagentName || '') : '',
                 ticket_updater: ticketUpdaterConfig?.addons?.subagentPolicy === 'customSubagent' ? (ticketUpdaterConfig?.addons?.customSubagentName || '') : '',
                 code_researcher: codeResearcherConfig?.addons?.subagentPolicy === 'customSubagent' ? (codeResearcherConfig?.addons?.customSubagentName || '') : '',
+                gatherer: gathererConfig?.addons?.subagentPolicy === 'customSubagent' ? (gathererConfig?.addons?.customSubagentName || '') : '',
             },
             clearAntigravityContextByRole: {
                 planner: plannerConfig?.addons?.clearAntigravityContext ?? false,
@@ -2683,11 +2693,11 @@ export class KanbanProvider implements vscode.Disposable {
             },
             cavemanOutputByRole: {
                 planner: plannerConfig?.addons?.cavemanOutput ?? false,
-                lead: leadConfig?.addons?.cavemanOutput ?? false,
-                coder: coderConfig?.addons?.cavemanOutput ?? false,
+                lead: leadConfig?.addons?.cavemanOutput ?? true,
+                coder: coderConfig?.addons?.cavemanOutput ?? true,
                 reviewer: reviewerConfig?.addons?.cavemanOutput ?? false,
                 tester: testerConfig?.addons?.cavemanOutput ?? false,
-                intern: internConfig?.addons?.cavemanOutput ?? false,
+                intern: internConfig?.addons?.cavemanOutput ?? true,
                 analyst: analystConfig?.addons?.cavemanOutput ?? false,
                 researcher: researcherConfig?.addons?.cavemanOutput ?? false,
                 splitter: splitterConfig?.addons?.cavemanOutput ?? false,
@@ -4713,7 +4723,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
 
             case 'updateClearTerminalBeforePromptDelay':
-                const clampedDelay = Math.min(Math.max(msg.delay ?? 1500, 0), 10000);
+                const clampedDelay = Math.min(Math.max(msg.delay ?? 2000, 0), 10000);
                 this._clearTerminalBeforePromptDelay = clampedDelay;
                 try {
                     await vscode.workspace.getConfiguration('switchboard').update(
@@ -5202,26 +5212,21 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
 
-                const chatWorkflowPath = '.agent/workflows/switchboard-chat.md';
-                let planSection = '';
+                let chatPlans: BatchPromptPlan[] = [];
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
                     const selectedCards = this._lastCards.filter(card =>
                         card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
                     );
-                    if (selectedCards.length > 0) {
-                        const planLines: string[] = [];
-                        for (const card of selectedCards) {
-                            const absPath = this._resolvePlanFilePath(workspaceRoot, card.planFile);
-                            let line = `- [${card.topic}] Plan File: ${absPath}`;
-                            planLines.push(line);
-                        }
-                        planSection = `\n\n## Plans to Discuss\n${planLines.join('\n')}\n\nPlease read each plan file above before starting the discussion.`;
-                    }
+                    chatPlans = selectedCards.map(card => ({
+                        topic: card.topic,
+                        absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
+                        sessionId: card.sessionId,
+                    }));
                 }
 
-                const prompt = `/switchboard-chat\n\nPlease enter the chat workflow defined at: ${chatWorkflowPath}\n\nWe will be discussing plans and requirements.${planSection}`;
+                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot });
                 await vscode.env.clipboard.writeText(prompt);
-                const count = Array.isArray(msg.sessionIds) ? msg.sessionIds.length : 0;
+                const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
                 vscode.window.showInformationMessage(`Chat prompt copied to clipboard${planWord}.`);
                 break;
@@ -5229,14 +5234,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
             case 'copyChatWorkflow': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
-                const workflowPath = path.join(workspaceRoot, '.agent', 'workflows', 'switchboard-chat.md');
-                try {
-                    const content = await fs.promises.readFile(workflowPath, 'utf8');
-                    await vscode.env.clipboard.writeText(content);
-                    this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied Switchboard Chat workflow to clipboard.', isError: false });
-                } catch {
-                    vscode.window.showWarningMessage('Switchboard Chat workflow file not found. Run Switchboard Setup to scaffold it.');
-                }
+
+                const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot });
+                await vscode.env.clipboard.writeText(prompt);
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied Switchboard Chat workflow prompt to clipboard.', isError: false });
                 break;
             }
             case 'promptSelected': {
@@ -5646,7 +5647,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             }
             case 'importFromClipboard':
-                await vscode.commands.executeCommand('switchboard.importPlanFromClipboard');
+                await vscode.commands.executeCommand('switchboard.importPlanFromClipboard', msg.markdownText);
                 break;
             case 'pairProgramCard': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);

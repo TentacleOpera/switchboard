@@ -59,7 +59,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
 
     // Extract complexity
     let complexity: string = 'Unknown';
-    const overrideMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override:\*\*\s*(\d{1,2}|Low|High|Unknown)/im);
+    const overrideMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Manual Complexity Override(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High|Unknown)/im);
     if (overrideMatch) {
         const val = overrideMatch[1];
         if (val.toLowerCase() !== 'unknown') {
@@ -72,7 +72,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         }
     }
     if (complexity === 'Unknown') {
-        const metadataMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity:\*\*\s*(\d{1,2}|Low|High)/im);
+        const metadataMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Complexity(?:\*\*:\s*|:\*\*)\s*(\d{1,2}|Low|High)/im);
         if (metadataMatch) {
             const val = metadataMatch[1];
             const num = parseInt(val, 10);
@@ -86,7 +86,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
 
     // Extract tags
     let tags: string = '';
-    const tagsMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Tags:\*\*\s*(.+)/im);
+    const tagsMatch = content.match(/^[\s\-\*\>]*(?:\d+\.\s*)?\*\*Tags(?:\*\*:\s*|:\*\*)\s*(.+)/im);
     if (tagsMatch) {
         tags = sanitizeTags(tagsMatch[1]);
     }
@@ -110,7 +110,7 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
     }
 
     let project: string | undefined;
-    const projectMatch = content.match(/^\*\*Project:\*\*\s*(.+)$/im);
+    const projectMatch = content.match(/^\*\*Project(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
     if (projectMatch) {
         project = projectMatch[1].trim() || undefined;
     }

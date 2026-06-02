@@ -542,6 +542,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     public async saveRoleConfig(key: string, value: unknown): Promise<void> {
+        const roleName = key.replace('roleConfig_', '');
         await this.updateSetting(`switchboard.prompts.${key}`, value);
 
         // Invalidate and rebuild the cached prompt overrides when a role config changes.
@@ -561,6 +562,101 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public getRoleConfig(key: string): unknown {
         return this.getSetting(`switchboard.prompts.${key}`, undefined);
+    }
+
+    public async exportPromptSettings(): Promise<boolean> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace selected.');
+            return false;
+        }
+
+        try {
+            const keys = new Set<string>();
+            for (const key of this._context.globalState.keys()) {
+                if (key.startsWith('switchboard.prompts.roleConfig_')) {
+                    keys.add(key);
+                }
+            }
+            for (const key of this._context.workspaceState.keys()) {
+                if (key.startsWith('switchboard.prompts.roleConfig_')) {
+                    keys.add(key);
+                }
+            }
+
+            const roleConfigs: Record<string, unknown> = {};
+            for (const key of keys) {
+                const value = this.getSetting(key, undefined);
+                if (value !== undefined) {
+                    const roleName = key.replace('switchboard.prompts.roleConfig_', '');
+                    roleConfigs[roleName] = value;
+                }
+            }
+
+            const data = {
+                version: 1,
+                exportedAt: new Date().toISOString(),
+                roleConfigs
+            };
+
+            const settingsDir = path.join(workspaceRoot, '.switchboard');
+            await fs.promises.mkdir(settingsDir, { recursive: true });
+            const targetPath = path.join(settingsDir, 'settings.json');
+            const tmpPath = path.join(settingsDir, '.settings.json.tmp');
+
+            await fs.promises.writeFile(tmpPath, JSON.stringify(data, null, 2), 'utf8');
+            await fs.promises.rename(tmpPath, targetPath);
+
+            vscode.window.showInformationMessage('Prompt settings exported to .switchboard/settings.json');
+            return true;
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to export prompt settings: ${error.message || error}`);
+            return false;
+        }
+    }
+
+    public async importPromptSettings(): Promise<boolean> {
+        const workspaceRoot = this._getWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('No workspace selected.');
+            return false;
+        }
+
+        const settingsPath = path.join(workspaceRoot, '.switchboard', 'settings.json');
+        if (!fs.existsSync(settingsPath)) {
+            vscode.window.showWarningMessage('No settings file found at .switchboard/settings.json');
+            return false;
+        }
+
+        try {
+            const content = await fs.promises.readFile(settingsPath, 'utf8');
+            const data = JSON.parse(content);
+
+            if (!data || typeof data !== 'object') {
+                throw new Error('Invalid JSON format');
+            }
+
+            if (data.version !== 1) {
+                throw new Error(`Unsupported schema version: ${data.version}`);
+            }
+
+            const roleConfigs = data.roleConfigs;
+            if (roleConfigs && typeof roleConfigs === 'object') {
+                for (const roleName of Object.keys(roleConfigs)) {
+                    const value = roleConfigs[roleName];
+                    await this.saveRoleConfig(`roleConfig_${roleName}`, value);
+                }
+            }
+
+            await vscode.commands.executeCommand('switchboard.refreshUI');
+            this._kanbanProvider?.postMessage({ type: 'reloadRoleConfigs' });
+
+            vscode.window.showInformationMessage('Prompt settings imported from .switchboard/settings.json');
+            return true;
+        } catch (error: any) {
+            vscode.window.showErrorMessage(`Failed to import prompt settings: ${error.message || error}`);
+            return false;
+        }
     }
 
     private async _migrateWorkspaceStateToGlobal(): Promise<void> {
@@ -1052,6 +1148,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _getAntigravityRoots(): string[] {
         return [
             path.join(os.homedir(), '.gemini', 'antigravity-cli'),
+            path.join(os.homedir(), '.gemini', 'antigravity-ide'),
             path.join(os.homedir(), '.gemini', 'antigravity')
         ];
     }
@@ -4001,7 +4098,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 skipBrainPromotion: true,
                 createdAt,
                 suppressIntegrationSync: true,
-                skipTemplateHeadings: true,
                 projectName
             }
         );
@@ -4157,7 +4253,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     skipBrainPromotion: true,
                     suppressIntegrationSync: true,
                     createdAt,
-                    skipTemplateHeadings: true,
                     projectName: projectFilter || undefined
                 }
             );
@@ -4179,7 +4274,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         skipBrainPromotion: true,
                         suppressIntegrationSync: true,
                         createdAt: subtaskCreatedAt,
-                        skipTemplateHeadings: true,
                         projectName: projectFilter || undefined
                     }
                 );
@@ -4933,7 +5027,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             this._singleColumnAutobanState.complexityFilter = this._autobanState.complexityFilter;
             this._singleColumnAutobanState.terminalPools = this._autobanState.terminalPools;
             const sc = this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
-            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules[sc]?.intervalMinutes ?? 15;
+            this._singleColumnAutobanState.intervalMinutes = this._autobanState.rules[sc]?.intervalMinutes ?? 10;
             this._singleColumnAutobanState.sourceColumnRole = columnToPromptRole(sc) || undefined;
             await this._context.workspaceState.update('singleColumn.autoban.state', this._singleColumnAutobanState);
         }
@@ -5780,8 +5874,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         if (newMode === 'single-column') {
             const enabled = msg.enabled === undefined ? this._singleColumnAutobanState.enabled : !!msg.enabled;
-            const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 15;
-            const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 3;
+            const intervalMinutes = msg.intervalMinutes || this._singleColumnAutobanState.intervalMinutes || 10;
+            const batchSize = msg.batchSize || this._singleColumnAutobanState.batchSize || 1;
             const complexityFilter = msg.complexityFilter || this._singleColumnAutobanState.complexityFilter || 'all';
             const terminalPools = msg.terminalPools || this._singleColumnAutobanState.terminalPools || {};
             const sourceColumn = msg.sourceColumn || this._singleColumnAutobanState.sourceColumn || 'PLAN REVIEWED';
@@ -8936,6 +9030,26 @@ What would you like to find?`;
                         } catch (e) {
                             console.error('[TaskViewerProvider] Mirror → brain sync failed:', e);
                         }
+
+                        // Sync metadata to Kanban database
+                        try {
+                            const relativeMirror = path.relative(workspaceRoot, mirrorPath).replace(/\\/g, '/');
+                            const db = await this._getKanbanDb(workspaceRoot);
+                            const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+                            if (db && wsId) {
+                                const mirrorContent = await fs.promises.readFile(mirrorPath, 'utf8');
+                                const meta = await parsePlanMetadata(mirrorContent, relativeMirror);
+                                await db.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
+                                await db.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
+                                await db.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
+                                await db.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
+                                this._kanbanProvider?.refreshIfShowing(workspaceRoot);
+                                console.log('[TaskViewerProvider] Updated mirror plan metadata via stagingWatcher');
+                            }
+                        } catch (e) {
+                            console.warn('[TaskViewerProvider] Mirror metadata sync failed:', e);
+                        }
+
                         return;
                     }
 
@@ -8973,6 +9087,24 @@ What would you like to find?`;
                             `[TaskViewerProvider] Mirror → source write failed for ${path.basename(sourcePath)}: ${e?.code || e?.message || e}. ` +
                             `Mirror remains the source of truth.`
                         );
+                    }
+
+                    // Sync metadata to Kanban database for ingested plans
+                    try {
+                        const dbConn = await this._getKanbanDb(workspaceRoot);
+                        const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
+                        if (dbConn && wsId) {
+                            const mirrorContent = await fs.promises.readFile(mirrorPath, 'utf8');
+                            const meta = await parsePlanMetadata(mirrorContent, relativeMirror);
+                            await dbConn.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
+                            await dbConn.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
+                            await dbConn.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
+                            await dbConn.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
+                            this._kanbanProvider?.refreshIfShowing(workspaceRoot);
+                            console.log('[TaskViewerProvider] Updated mirror plan metadata via stagingWatcher');
+                        }
+                    } catch (e) {
+                        console.warn('[TaskViewerProvider] Mirror metadata sync failed:', e);
                     }
                 }, 500));  // 500ms debounce
             });
@@ -14281,8 +14413,8 @@ What would you like to find?`;
         // (copilot, claude, etc.), causing the subsequent prompt to concatenate
         // with the /clear input. Clipboard paste uses a different input path
         // that avoids this.
-        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', false);
-        const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 1500);
+        const clearBeforePrompt = vscode.workspace.getConfiguration('switchboard').get<boolean>('terminal.clearBeforePrompt', true);
+        const rawClearDelay = vscode.workspace.getConfiguration('switchboard').get<number>('terminal.clearBeforePromptDelay', 2000);
         const clearDelay = Math.min(Math.max(rawClearDelay, 0), 10000);
 
         const paced = meta.sender !== meta.recipient;
@@ -14918,7 +15050,7 @@ What would you like to find?`;
         }
     }
 
-    public async importPlanFromClipboard(): Promise<void> {
+    public async importPlanFromClipboard(markdownText?: string): Promise<void> {
         // LAZY CHANGE: Ensure DB exists before import
         try {
             const workspaceRoot = this._getWorkspaceRoot();
@@ -14932,7 +15064,7 @@ What would you like to find?`;
             console.error('[Import] DB creation failed:', e);
         }
 
-        const text = await vscode.env.clipboard.readText();
+        const text = markdownText ?? await vscode.env.clipboard.readText();
 
         if (!text || !text.trim()) {
             vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');
@@ -15097,7 +15229,6 @@ What would you like to find?`;
             skipBrainPromotion?: boolean;
             suppressIntegrationSync?: boolean;
             createdAt?: string;
-            skipTemplateHeadings?: boolean;
             projectName?: string;
         } = {}
     ): Promise<{ planFileAbsolute: string; }> {
@@ -15118,11 +15249,7 @@ What would you like to find?`;
         const stablePlanPath = this._normalizePendingPlanPath(planFileAbsolute);
         this._pendingPlanCreations.add(stablePlanPath);
         try {
-            const isFullPlan = idea.includes('## Proposed Changes') || idea.includes('## Goal');
-            const headerText = isAirlock ? '## Notebook Plan\n\n' : '';
-            const content = (isFullPlan || options.skipTemplateHeadings)
-                ? idea
-                : `# ${title}\n\n${headerText}${idea}\n\n## Goal\n- Clarify expected outcome and scope.\n\n## Proposed Changes\n- TODO\n\n## Verification Plan\n- TODO\n\n## Open Questions\n- TODO\n`;
+            const content = isAirlock ? `## Notebook Plan\n\n${idea}` : idea;
             await fs.promises.writeFile(planFileAbsolute, content, 'utf8');
 
             const createdAt = options.createdAt || now.toISOString();
@@ -15277,7 +15404,7 @@ What would you like to find?`;
         const personaFile = TaskViewerProvider.ROLE_TO_PERSONA_FILE[role];
         if (!personaFile) return undefined;
 
-        const workspaceRoot = this._resolveWorkspaceRoot();
+        const workspaceRoot = this._resolveStateWorkspaceRoot();
         if (!workspaceRoot) return undefined;
         const personaPath = path.join(workspaceRoot, '.agent', 'personas', personaFile);
 
@@ -16434,7 +16561,7 @@ What would you like to find?`;
     // ── Web AI Airlock ──────────────────────────────────────────────────
 
     private async _handleAirlockExport(): Promise<void> {
-        const workspaceRoot = this._resolveWorkspaceRoot();
+        const workspaceRoot = this._resolveStateWorkspaceRoot();
         if (!workspaceRoot) {
             this._view?.webview.postMessage({ type: 'airlock_exportError', message: 'No workspace open' });
             return;

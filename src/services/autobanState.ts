@@ -9,7 +9,7 @@ export type AutobanRoutingMode = 'dynamic' | 'all_coder' | 'all_lead';
 export const AUTOBAN_SHARED_REVIEWER_COLUMNS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'] as const;
 
 export const AUTOBAN_BATCH_SIZE_OPTIONS = [1, 2, 3, 4, 5] as const;
-export const DEFAULT_AUTOBAN_BATCH_SIZE = 3;
+export const DEFAULT_AUTOBAN_BATCH_SIZE = 1;
 export const DEFAULT_AUTOBAN_GLOBAL_SESSION_CAP = 200;
 export const MAX_AUTOBAN_TERMINALS_PER_ROLE = 5;
 
@@ -25,8 +25,8 @@ export type SingleColumnAutobanConfig = {
 
 export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
     enabled: false,
-    intervalMinutes: 15,
-    batchSize: 3,
+    intervalMinutes: 10,
+    batchSize: 1,
     complexityFilter: 'all',
     terminalPools: {},
     sourceColumn: 'PLAN REVIEWED',
@@ -36,7 +36,7 @@ export const DEFAULT_SINGLE_COLUMN_CONFIG: SingleColumnAutobanConfig = {
 export function normalizeSingleColumnConfig(state?: Partial<SingleColumnAutobanConfig> | null): SingleColumnAutobanConfig {
     return {
         enabled: state?.enabled === true,
-        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 15)),
+        intervalMinutes: Math.max(1, Math.min(60, Number.isFinite(state?.intervalMinutes as number) ? Math.floor(state!.intervalMinutes!) : 10)),
         batchSize: normalizeAutobanBatchSize(state?.batchSize),
         complexityFilter: (['all', 'low_and_below', 'medium_and_below', 'medium_and_above', 'high_and_above'] as const).includes(state?.complexityFilter as any)
             ? state!.complexityFilter!

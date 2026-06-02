@@ -75,7 +75,7 @@ async function readPersistedFields(statePath: string): Promise<Record<string, un
         if (state.autoban && typeof state.autoban === 'object') {
             persisted.autoban = state.autoban;
         }
-
+        
         // Preserve plan ingestion target
         if (typeof state.planIngestionFolder === 'string') {
             persisted.planIngestionFolder = state.planIngestionFolder;

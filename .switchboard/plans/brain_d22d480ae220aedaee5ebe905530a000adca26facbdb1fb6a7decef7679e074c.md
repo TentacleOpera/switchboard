@@ -1,10 +1,10 @@
 # Watch and Sync Multiple Antigravity Brain Paths
 
-Support concurrent use of the Antigravity chat sandbox (`~/.gemini/antigravity/`) and the Antigravity CLI sandbox (`~/.gemini/antigravity-cli/`) by extending the extension's brain watcher, session lister, and artifact fetcher to monitor both paths.
+Support concurrent use of the Antigravity chat sandbox (`~/.gemini/antigravity/`), the Antigravity CLI sandbox (`~/.gemini/antigravity-cli/`), and the Antigravity IDE sandbox (`~/.gemini/antigravity-ide/`) by extending the extension's brain watcher, session lister, and artifact fetcher to monitor all three paths.
 
 ## Goal
 
-Extend the Switchboard extension's Antigravity brain integration to discover, watch, and sync plan files from both `~/.gemini/antigravity/` and `~/.gemini/antigravity-cli/` concurrently, replacing single-root assumptions with array-based multi-path tracking throughout the watcher, session listing, and artifact fetching pipelines.
+Extend the Switchboard extension's Antigravity brain integration to discover, watch, and sync plan files from `~/.gemini/antigravity/`, `~/.gemini/antigravity-cli/`, and `~/.gemini/antigravity-ide/` concurrently, replacing single-root assumptions with array-based multi-path tracking throughout the watcher, session listing, and artifact fetching pipelines.
 
 ## Metadata
 
@@ -14,7 +14,7 @@ Extend the Switchboard extension's Antigravity brain integration to discover, wa
 ## User Review Required
 
 > [!NOTE]
-> The brain watcher and planning panel were originally designed to prioritize `antigravity-cli` on startup but only watch `antigravity` for plan mirroring. By changing these components to use array-based tracking, we will watch and list artifacts from both directories concurrently.
+> The brain watcher and planning panel were originally designed to prioritize `antigravity-cli` on startup but only watch `antigravity` for plan mirroring. By changing these components to use array-based tracking, we will watch and list artifacts from all three directories (`antigravity`, `antigravity-cli`, `antigravity-ide`) concurrently.
 
 > [!IMPORTANT]
 > The change requires modifying `src/test/brain-source-layout-regression.test.js` because the test uses static regex analysis to assert that the watcher is set up for a single `antigravityRoot`. We will update the test to expect multi-path loop watching.
@@ -33,11 +33,11 @@ Extend the Switchboard extension's Antigravity brain integration to discover, wa
 - `_resolveBrainSourcePathForMirrorHash()` security containment check (line 11534) must validate against **any** active root, not a single `brainDir` — a wrong check silently drops mirror→brain write-back
 - `_setupBrainWatcher()` staging watcher passes `antigravityRoot` to `_resolveBrainSourcePathForMirrorHash()`; with multiple roots, the wrong root may be passed, causing the containment check to reject valid paths
 - `_getAntigravitySourceKind()` classification (`brain` vs `artifact`) must work across both roots without misclassifying paths
-- Potential watcher overlap: `~/.gemini/antigravity/brain/` is a subdirectory of `~/.gemini/antigravity/`, so recursive watchers on both roots may fire duplicate events for the same file
+- Potential watcher overlap: `~/.gemini/antigravity/brain/` is a subdirectory of `~/.gemini/antigravity/`, so recursive watchers on both roots may fire duplicate events for the same file. This does not apply across sibling roots (`antigravity-cli`, `antigravity-ide`) which are independent directories.
 
 ## Edge-Case & Dependency Audit
 
-- **Race Conditions:** Two brain watchers (one per root) could fire for the same file when `antigravity/brain/` is a subdirectory of `antigravity/`. The shared `_brainDebounceTimers` map (keyed by stable path) already deduplicates these — no additional guard needed, but the overlap must be documented.
+- **Race Conditions:** Brain watchers (one per root) could fire for the same file when `antigravity/brain/` is a subdirectory of `antigravity/`. The shared `_brainDebounceTimers` map (keyed by stable path) already deduplicates these — no additional guard needed, but the overlap must be documented. The `antigravity-cli` and `antigravity-ide` roots are siblings and cannot cause duplicate events.
 - **Security:** `_resolveBrainSourcePathForMirrorHash()` line 11534 uses `_isPathWithin(brainDir, resolvedBrainPath)` to prevent mirror write-back outside the brain directory. With multiple roots, this must check `_getAntigravityRoots().some(root => this._isPathWithin(root, resolvedBrainPath))` to avoid silently rejecting valid paths from the other root.
 - **Side Effects:** `seedBrainPlanBlacklistFromCurrentBrainSnapshot()` currently walks a single root. Walking both roots may add more entries to the blacklist — this is correct behavior (blacklist should cover all roots) but increases the set size.
 - **Dependencies & Conflicts:** `LocalFolderService.detectAntigravityBrainPath()` is called from `PlanningPanelProvider._setupAntigravityWatcher()`. The new `detectAntigravityBrainPaths()` must coexist with the old method during migration. Keep `detectAntigravityBrainPath()` as a convenience wrapper returning the first detected path.
@@ -59,7 +59,7 @@ Key risks: the `_resolveBrainSourcePathForMirrorHash` security check will silent
 **1. Replace `_getAntigravityRoot()` with `_getAntigravityRoots()` (line 1055–1057)**
 
 - Rename `_getAntigravityRoot(): string` → `_getAntigravityRoots(): string[]`.
-- Return `[path.join(os.homedir(), '.gemini', 'antigravity-cli'), path.join(os.homedir(), '.gemini', 'antigravity')]`.
+- Return `[path.join(os.homedir(), '.gemini', 'antigravity-cli'), path.join(os.homedir(), '.gemini', 'antigravity-ide'), path.join(os.homedir(), '.gemini', 'antigravity')]`.
 - Add a convenience wrapper `_getAntigravityRoot(): string` that returns `_getAntigravityRoots()[0]` for backward compatibility with any call sites not yet migrated (or inline the `[0]` at each call site).
 
 **2. Update `_getAntigravityPlanRoots()` (line 1059–1066)**
@@ -270,10 +270,10 @@ Key risks: the `_resolveBrainSourcePathForMirrorHash` security check will silent
 ### Manual Verification
 - Start the extension in Debug mode.
 - Enable "Antigravity Brain" in the settings / UI.
-- Verify that sessions from both `~/.gemini/antigravity/brain/` and `~/.gemini/antigravity-cli/brain/` appear in the ARTIFACTS tab.
-- Edit an `implementation_plan.md` in both locations and verify they both successfully mirror to the workspace `.switchboard/plans/` directory.
-- Verify that mirror→brain write-back (editing a mirrored plan in VS Code) syncs back to the correct brain source in both roots.
-- Verify that the plan ingestion folder validation still rejects paths inside either antigravity root.
+- Verify that sessions from `~/.gemini/antigravity/brain/`, `~/.gemini/antigravity-cli/brain/`, and `~/.gemini/antigravity-ide/brain/` all appear in the ARTIFACTS tab.
+- Edit an `implementation_plan.md` in each location and verify they all successfully mirror to the workspace `.switchboard/plans/` directory.
+- Verify that mirror→brain write-back (editing a mirrored plan in VS Code) syncs back to the correct brain source in all three roots.
+- Verify that the plan ingestion folder validation still rejects paths inside any antigravity root.
 
 ## Recommendation
 
@@ -322,4 +322,4 @@ Complexity 6 → **Send to Coder**
 
 1. **Dead convenience wrappers** (`_getAntigravityRoot()`, `detectAntigravityBrainPath()`) — zero callers, safe to remove in a cleanup pass but not urgent
 2. **Pre-existing test failures** in `workspace-scope-regression.test.js` (4 tests) — unrelated to this plan, should be tracked separately
-3. **Watcher overlap** concern from the plan is a false alarm: `~/.gemini/antigravity/` and `~/.gemini/antigravity-cli/` are sibling directories, not nested, so no duplicate events from the two watcher sets
+3. **Watcher overlap** concern from the plan is a false alarm: `~/.gemini/antigravity/`, `~/.gemini/antigravity-cli/`, and `~/.gemini/antigravity-ide/` are all sibling directories, not nested, so no duplicate events from the three watcher sets

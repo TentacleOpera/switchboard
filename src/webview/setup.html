@@ -521,6 +521,18 @@
                 </label>
 
                 <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
+                    <div style="font-size: 11px; color: var(--text-primary); font-weight: 600; margin-bottom: 8px;">PROMPT SETTINGS EXPORT / IMPORT</div>
+                    <div style="font-size: 10px; color: var(--text-secondary); line-height: 1.4; margin-bottom: 12px;">
+                        Export writes current prompt configurations to <code>.switchboard/settings.json</code>. Import reads from that file and updates your VS Code settings.
+                    </div>
+                    <div style="display: flex; gap: 8px; margin-bottom: 8px;">
+                        <button id="btn-export-prompts" class="secondary-btn" style="flex: 1;">Export Settings to File</button>
+                        <button id="btn-import-prompts" class="secondary-btn" style="flex: 1;">Import Settings from File</button>
+                    </div>
+                    <div id="prompt-settings-status" style="font-size: 10px; line-height: 1.4; display: none;"></div>
+                </div>
+
+                <div style="margin-top: 24px; padding-top: 16px; border-top: 1px solid var(--border-dim);">
                     <div style="font-size: 10px; color: var(--accent-orange); margin-bottom: 8px; line-height: 1.4; font-family: var(--font-mono);">
                         ⚠ Press this button if your .switchboard directory, agents.md or agent folder gets deleted. Do not touch otherwise.
                     </div>
@@ -2740,6 +2752,24 @@
         document.getElementById('btn-initialize')?.addEventListener('click', () => vscode.postMessage({ type: 'runSetup' }));
         document.getElementById('btn-open-docs')?.addEventListener('click', () => vscode.postMessage({ type: 'openDocs' }));
         document.getElementById('btn-open-kanban')?.addEventListener('click', () => vscode.postMessage({ type: 'openKanban' }));
+        document.getElementById('btn-export-prompts')?.addEventListener('click', () => {
+            const statusEl = document.getElementById('prompt-settings-status');
+            if (statusEl) {
+                statusEl.style.display = 'block';
+                statusEl.style.color = 'var(--text-secondary)';
+                statusEl.textContent = 'Exporting prompt settings...';
+            }
+            vscode.postMessage({ type: 'exportPromptSettings' });
+        });
+        document.getElementById('btn-import-prompts')?.addEventListener('click', () => {
+            const statusEl = document.getElementById('prompt-settings-status');
+            if (statusEl) {
+                statusEl.style.display = 'block';
+                statusEl.style.color = 'var(--text-secondary)';
+                statusEl.textContent = 'Importing prompt settings...';
+            }
+            vscode.postMessage({ type: 'importPromptSettings' });
+        });
         controlPlaneModeMigrateButton?.addEventListener('click', () => setControlPlaneSetupMode('migrate-existing'));
         controlPlaneModeFreshButton?.addEventListener('click', () => setControlPlaneSetupMode('fresh-setup'));
         document.getElementById('btn-detect-control-plane')?.addEventListener('click', () => {
@@ -3491,6 +3521,36 @@
                     lastPromptPreviews = message.previews || {};
                     loadPreviewForCurrentRole();
                     break;
+                case 'exportPromptSettingsResult': {
+                    const statusEl = document.getElementById('prompt-settings-status');
+                    if (statusEl) {
+                        statusEl.style.display = 'block';
+                        if (message.success) {
+                            statusEl.style.color = 'var(--accent-teal, #4fd1c5)';
+                            statusEl.textContent = 'Settings exported successfully.';
+                        } else {
+                            statusEl.style.color = 'var(--accent-red, #ff5c5c)';
+                            statusEl.textContent = 'Failed to export settings.';
+                        }
+                        setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+                    }
+                    break;
+                }
+                case 'importPromptSettingsResult': {
+                    const statusEl = document.getElementById('prompt-settings-status');
+                    if (statusEl) {
+                        statusEl.style.display = 'block';
+                        if (message.success) {
+                            statusEl.style.color = 'var(--accent-teal, #4fd1c5)';
+                            statusEl.textContent = 'Settings imported successfully.';
+                        } else {
+                            statusEl.style.color = 'var(--accent-red, #ff5c5c)';
+                            statusEl.textContent = 'Failed to import settings.';
+                        }
+                        setTimeout(() => { statusEl.style.display = 'none'; }, 4000);
+                    }
+                    break;
+                }
                 case 'saveDefaultPromptOverridesResult':
                     break;
                 case 'saveStartupCommandsResult':

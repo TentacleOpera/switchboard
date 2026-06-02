@@ -644,8 +644,8 @@ export async function activate(context: vscode.ExtensionContext) {
     });
     context.subscriptions.push(initiatePlanDisposable);
 
-    const importFromClipboardDisposable = vscode.commands.registerCommand('switchboard.importPlanFromClipboard', async () => {
-        await taskViewerProvider?.importPlanFromClipboard();
+    const importFromClipboardDisposable = vscode.commands.registerCommand('switchboard.importPlanFromClipboard', async (markdownText?: string) => {
+        await taskViewerProvider?.importPlanFromClipboard(markdownText);
     });
     context.subscriptions.push(importFromClipboardDisposable);
 
@@ -2800,6 +2800,7 @@ async function performSetup(workspaceUri: vscode.Uri, extensionUri: vscode.Uri, 
         '.agent/workflows/handoff-lead.md',
         '.agent/workflows/handoff-relay.md',
         '.agent/workflows/challenge.md',
+        '.agent/personas/switchboard_operator.md',
     ];
     for (const blockPath of blocklist) {
         const blockUri = vscode.Uri.joinPath(workspaceUri, blockPath);

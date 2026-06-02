@@ -19,6 +19,7 @@ export class LocalFolderService {
     private static readonly _MAX_DEPTH = 10;
     private static readonly _ANTIGRAVITY_BRAIN_PATHS = [
         path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain'),
+        path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain'),
         path.join(os.homedir(), '.gemini', 'antigravity', 'brain'),
     ];
 

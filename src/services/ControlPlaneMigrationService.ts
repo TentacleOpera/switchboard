@@ -806,7 +806,10 @@ export class ControlPlaneMigrationService {
         const summary = await this._analyzeSharedAgentContent(repos);
         const sharedEntries = await this._collectSharedAgentEntries(repos, ['personas', 'workflows', 'skills']);
 
+        // Skip persona files that have been consolidated into workflows
+        const consolidatedPersonas = new Set(['personas/switchboard_operator.md']);
         for (const [relativePath, entries] of sharedEntries.entries()) {
+            if (consolidatedPersonas.has(relativePath)) continue;
             const uniqueHashes = new Set(entries.map((entry) => entry.hash));
             if (uniqueHashes.size > 1) {
                 continue;

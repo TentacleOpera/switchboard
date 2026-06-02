@@ -132,6 +132,16 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'integrationSetupStates', ...states });
                     break;
                 }
+                case 'exportPromptSettings': {
+                    const success = await this._taskViewerProvider.exportPromptSettings();
+                    this._panel.webview.postMessage({ type: 'exportPromptSettingsResult', success });
+                    break;
+                }
+                case 'importPromptSettings': {
+                    const success = await this._taskViewerProvider.importPromptSettings();
+                    this._panel.webview.postMessage({ type: 'importPromptSettingsResult', success });
+                    break;
+                }
                 case 'setGlobalSettingsEnabled': {
                     await this._taskViewerProvider.setGlobalSettingsEnabled(message.enabled);
                     break;

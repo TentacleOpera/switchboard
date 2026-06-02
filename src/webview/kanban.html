@@ -2121,12 +2121,6 @@
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
             </button>
-            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
-                <img src="{{ICON_28}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
-            </button>
-            <button class="strip-icon-btn" id="btn-copy-chat-workflow" data-tooltip="Copy switchboard-chat workflow to clipboard">
-                <img src="{{ICON_CHAT}}" alt="Copy Chat Workflow" style="width: 14px; height: 14px;">
-            </button>
             <button id="btn-delete-project" class="strip-btn" data-tooltip="Select a project to delete" disabled>🗑</button>
 
             <!-- Spacer to push right-side controls to the right -->
@@ -2165,6 +2159,12 @@
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 14px; height: 14px;">
                 </button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
+                <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+                    <img src="{{ICON_28}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
+                </button>
+                <button class="strip-icon-btn" id="btn-copy-chat-workflow" data-tooltip="Copy switchboard-chat workflow to clipboard">
+                    <img src="{{ICON_CHAT}}" alt="Copy Chat Workflow" style="width: 14px; height: 14px;">
+                </button>
             </div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
@@ -2265,7 +2265,7 @@
                         </label>
                         <div id="clear-delay-container" style="display:none; margin-top:4px; align-items:center; gap:6px; font-size:10px; color:var(--text-secondary);">
                             <label style="font-size:11px;">Delay:</label>
-                            <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="1500"
+                            <input type="number" id="clear-terminal-delay-input" min="0" max="10000" step="100" value="2000"
                                    style="width:70px; font-size:11px; padding:2px 4px; border:1px solid #555; border-radius:3px; background:var(--vscode-input-background); color:var(--vscode-input-foreground);">
                             <span style="font-size:10px; opacity:0.7;">ms (0&ndash;10000)</span>
                         </div>
@@ -2373,19 +2373,20 @@
                 </label>
                 <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
                   <input type="checkbox" id="ca-addon-research" style="width:auto;margin:0;">
-                  <span>Enable Deep Research (50-100 sources, codebase + web)</span>
-                </label>
-
                 <div style="margin-top:8px;">
                   <label class="modal-label" style="margin-bottom:4px;">Subagent Policy</label>
                   <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;">
                     <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
                       <input type="radio" name="ca-subagent-policy" value="default" style="width:auto; margin:0;" checked>
-                      <span>Default (sequential)</span>
+                      <span>Not Specified</span>
                     </label>
                     <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
                       <input type="radio" name="ca-subagent-policy" value="noSubagents" style="width:auto; margin:0;">
                       <span>No Subagents</span>
+                    </label>
+                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
+                      <input type="radio" name="ca-subagent-policy" value="useSubagents" style="width:auto; margin:0;">
+                      <span>Yes (Use Subagents)</span>
                     </label>
                     <label class="checkbox-label" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
                       <input type="radio" name="ca-subagent-policy" value="customSubagent" style="width:auto; margin:0;">
@@ -2531,12 +2532,6 @@
                   <input type="checkbox" id="plannerAddonSkipTests">
                   <span>Do not run automated tests</span>
                   <span class="tooltip">Skip automated test execution to save tokens</span>
-                </label>
-
-                <label class="checkbox-item" title="When processing multiple plans, instruct platform to use parallel subagents (if supported)">
-                  <input type="checkbox" id="plannerAddonUseSubagents">
-                  <span>Use Subagents for Multiple Plans</span>
-                  <span class="tooltip">When processing multiple plans, instruct platform to use parallel subagents (if supported)</span>
                 </label>
               </div>
             </div>
@@ -2812,7 +2807,6 @@
                 document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
-                document.getElementById('plannerAddonUseSubagents').checked = config.addons?.useSubagents !== false;
             } else if (currentRole === 'researcher' || currentRole === 'code_researcher') {
                 const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
                 const complexity = config.researchComplexity || 'deep';
@@ -3328,8 +3322,8 @@
         let cliTriggersEnabled = true;
         let dynamicComplexityRoutingEnabled = true;
         let allowUnknownComplexityAutoMove = true;
-        let clearTerminalBeforePrompt = false;
-        let clearTerminalBeforePromptDelay = 1500;
+        let clearTerminalBeforePrompt = true;
+        let clearTerminalBeforePromptDelay = 2000;
 
         let collapseCodersEnabled = true;
         // Restore collapse toggle from webview state if available
@@ -3564,7 +3558,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests', 'plannerAddonUseSubagents'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -3764,6 +3758,10 @@
             const scToggle = document.getElementById('sc-clear-terminal-before-prompt-toggle');
             if (scToggle) {
                 scToggle.checked = !!clearTerminalBeforePrompt;
+            }
+            const mcToggle = document.getElementById('mc-clear-terminal-before-prompt-toggle');
+            if (mcToggle) {
+                mcToggle.checked = !!clearTerminalBeforePrompt;
             }
         }
 
@@ -4186,7 +4184,29 @@
                 postKanbanMessage({ type: 'createPlan' });
             });
 
-            document.getElementById('btn-import-clipboard')?.addEventListener('click', () => {
+            document.getElementById('btn-import-clipboard')?.addEventListener('click', async () => {
+                try {
+                    if (navigator.clipboard && navigator.clipboard.read) {
+                        const items = await navigator.clipboard.read();
+                        let htmlText = '';
+                        for (const item of items) {
+                            if (item.types.includes('text/html')) {
+                                const blob = await item.getType('text/html');
+                                htmlText = await blob.text();
+                                break;
+                            }
+                        }
+                        if (htmlText) {
+                            const markdown = convertHtmlToMarkdown(htmlText);
+                            if (markdown) {
+                                postKanbanMessage({ type: 'importFromClipboard', markdownText: markdown });
+                                return;
+                            }
+                        }
+                    }
+                } catch (err) {
+                    console.warn('[Webview Clipboard] Failed to read HTML from navigator.clipboard, falling back to backend plain text path:', err);
+                }
                 postKanbanMessage({ type: 'importFromClipboard' });
             });
 
@@ -4944,6 +4964,108 @@
             return div.innerHTML;
         }
 
+        function convertHtmlToMarkdown(html) {
+            const parser = new DOMParser();
+            const doc = parser.parseFromString(html, 'text/html');
+
+            function cleanText(text) {
+                return text.replace(/\u00a0/g, ' ');
+            }
+
+            function walk(node, listDepth = 0, isPre = false, listType = null) {
+                if (node.nodeType === Node.TEXT_NODE) {
+                    return cleanText(node.nodeValue);
+                }
+
+                if (node.nodeType !== Node.ELEMENT_NODE) {
+                    return '';
+                }
+
+                const tagName = node.tagName.toUpperCase();
+                let childrenMarkdown = '';
+
+                let nextListDepth = listDepth;
+                let nextListType = listType;
+                if (tagName === 'UL' || tagName === 'OL') {
+                    nextListDepth = listDepth + 1;
+                    nextListType = tagName;
+                }
+
+                for (let i = 0; i < node.childNodes.length; i++) {
+                    childrenMarkdown += walk(node.childNodes[i], nextListDepth, isPre || tagName === 'PRE', nextListType);
+                }
+
+                switch (tagName) {
+                    case 'H1':
+                        return `\n\n# ${childrenMarkdown.trim()}\n\n`;
+                    case 'H2':
+                        return `\n\n## ${childrenMarkdown.trim()}\n\n`;
+                    case 'H3':
+                        return `\n\n### ${childrenMarkdown.trim()}\n\n`;
+                    case 'H4':
+                        return `\n\n#### ${childrenMarkdown.trim()}\n\n`;
+                    case 'H5':
+                        return `\n\n##### ${childrenMarkdown.trim()}\n\n`;
+                    case 'H6':
+                        return `\n\n###### ${childrenMarkdown.trim()}\n\n`;
+                    case 'P':
+                    case 'DIV':
+                        return `\n\n${childrenMarkdown.trim()}\n\n`;
+                    case 'BR':
+                        return '\n';
+                    case 'STRONG':
+                    case 'B':
+                        return `**${childrenMarkdown.trim()}**`;
+                    case 'EM':
+                    case 'I':
+                        return `*${childrenMarkdown.trim()}*`;
+                    case 'CODE':
+                        if (isPre) {
+                            return childrenMarkdown;
+                        } else {
+                            return ` \`${childrenMarkdown.trim()}\` `;
+                        }
+                    case 'PRE': {
+                        let lang = '';
+                        const classAttr = node.getAttribute('class') || '';
+                        const langMatch = classAttr.match(/language-(\w+)/) || classAttr.match(/lang-(\w+)/);
+                        if (langMatch) {
+                            lang = langMatch[1];
+                        } else {
+                            const codeChild = node.querySelector('code');
+                            if (codeChild) {
+                                const codeClass = codeChild.getAttribute('class') || '';
+                                const codeLangMatch = codeClass.match(/language-(\w+)/) || codeClass.match(/lang-(\w+)/);
+                                if (codeLangMatch) {
+                                    lang = codeLangMatch[1];
+                                }
+                            }
+                        }
+                        return `\n\n\`\`\`${lang}\n${childrenMarkdown.trim()}\n\`\`\`\n\n`;
+                    }
+                    case 'A': {
+                        const href = node.getAttribute('href') || '';
+                        const text = childrenMarkdown.trim() || href;
+                        return `[${text}](${href})`;
+                    }
+                    case 'LI': {
+                        const indent = '  '.repeat(Math.max(0, listDepth - 1));
+                        const prefix = listType === 'OL' ? '1. ' : '- ';
+                        return `\n${indent}${prefix}${childrenMarkdown.trim()}`;
+                    }
+                    case 'UL':
+                    case 'OL':
+                        return `\n${childrenMarkdown}\n`;
+                    default:
+                        return childrenMarkdown;
+                }
+            }
+
+            let result = walk(doc.body);
+            result = result.replace(/\n{3,}/g, '\n\n');
+            return result.trim();
+        }
+
         function formatTimeAgo(iso) {
             if (!iso) return '';
             const diff = Date.now() - new Date(iso).getTime();
@@ -5478,6 +5600,10 @@
                         void statusEl.offsetWidth; // Trigger reflow to restart animation
                         statusEl.classList.add('flashing');
                     }
+                    break;
+                }
+                case 'reloadRoleConfigs': {
+                    loadRoleConfigs();
                     break;
                 }
                 case 'switchToTab': {
@@ -6692,7 +6818,7 @@
                 singleColumnContainer.style.cssText = 'display: flex; flex-direction: column; gap: 12px;';
                 container.appendChild(singleColumnContainer);
 
-                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 15, batchSize: 3, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED', sourceColumnRole: 'lead' };
+                const singleColumnConfig = state.singleColumnConfig || { enabled: false, intervalMinutes: 10, batchSize: 1, complexityFilter: 'all', terminalPools: {}, sourceColumn: 'PLAN REVIEWED', sourceColumnRole: 'lead' };
 
                 // Client-side column→role mapping (mirrors backend columnToPromptRole)
                 const scColumnRoleMap = {
@@ -6790,7 +6916,7 @@
                 ruleRowSc.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
 
                 const ruleLblSc = document.createElement('span');
-                ruleLblSc.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                ruleLblSc.style.cssText = 'color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
                 ruleLblSc.textContent = scSourceCol + ' → ' + scTargetLabel;
 
                 const everyLblSc = document.createElement('span');
@@ -6805,7 +6931,7 @@
                 minInputSc.style.cssText = autobanNumberInputStyle;
                 guardInteraction(minInputSc);
                 minInputSc.addEventListener('change', () => {
-                    const val = Math.max(1, Math.min(60, parseInt(minInputSc.value, 10) || 15));
+                    const val = Math.max(1, Math.min(60, parseInt(minInputSc.value, 10) || 10));
                     singleColumnConfig.intervalMinutes = val;
                     minInputSc.value = String(val);
                     postKanbanMessage({
@@ -6830,6 +6956,11 @@
                 ruleRowSc.appendChild(minInputSc);
                 ruleRowSc.appendChild(minLblSc);
                 columnRulesSectionSc.appendChild(ruleRowSc);
+
+                const poolBannerSc = document.createElement('div');
+                poolBannerSc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
+                poolBannerSc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
+                columnRulesSectionSc.appendChild(poolBannerSc);
 
                 // --- Automation Rules Section (ordered second) ---
                 const automationRulesSectionSc = document.createElement('div');
@@ -6859,7 +6990,7 @@
                     batchSelectSc.appendChild(opt);
                 });
                 batchSelectSc.addEventListener('change', () => {
-                    singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 3;
+                    singleColumnConfig.batchSize = parseInt(batchSelectSc.value, 10) || 1;
                     postKanbanMessage({
                         type: 'setAutomationMode',
                         mode: 'single-column',
@@ -6961,7 +7092,7 @@
 
                 // Clear Before Prompt Toggle (inside automation rules section)
                 const scClearRow = document.createElement('div');
-                scClearRow.style.cssText = 'display:flex; align-items:center; justify-content:space-between; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                scClearRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
                 const scClearLabel = document.createElement('span');
                 scClearLabel.textContent = 'CLEAR TERMINAL BEFORE PROMPT:';
                 scClearLabel.title = '⚠️ Strongly recommended — prevents token waste and agent overload.';
@@ -7144,6 +7275,88 @@
                     { column: 'LEAD CODED', label: 'LEAD CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 },
                     { column: 'CODER CODED', label: 'CODER CODED -> CODE REVIEWED', defaultMin: 15, floorPerPlan: 4 }
                 ];
+
+                // --- Column Rules Section (ordered first) ---
+                const columnRulesSection = document.createElement('div');
+                columnRulesSection.className = 'db-subsection';
+                multiColumnContainer.appendChild(columnRulesSection);
+
+                const rulesHeader = document.createElement('div');
+                rulesHeader.className = 'subsection-header';
+                const rulesSpan = document.createElement('span');
+                rulesSpan.textContent = 'COLUMN RULES';
+                rulesHeader.appendChild(rulesSpan);
+                columnRulesSection.appendChild(rulesHeader);
+
+                const timingExplanation = document.createElement('div');
+                timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
+                timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
+                columnRulesSection.appendChild(timingExplanation);
+
+                columnTransitions.forEach(({ column, label, defaultMin }) => {
+                    const idSuffix = getAutobanRuleIdSuffix(column);
+                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin };
+                    const ruleRow = document.createElement('div');
+                    ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
+
+                    const checkbox = document.createElement('input');
+                    checkbox.type = 'checkbox';
+                    checkbox.checked = rule.enabled;
+                    checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
+                    checkbox.addEventListener('change', () => {
+                        if (!state.rules) state.rules = {};
+                        if (!state.rules[column]) {
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                        }
+                        state.rules[column].enabled = checkbox.checked;
+                        emitAutobanState();
+                    });
+
+                    const ruleLbl = document.createElement('span');
+                    ruleLbl.style.cssText = 'color:var(--text-primary); white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
+                    ruleLbl.textContent = label;
+
+                    const everyLbl = document.createElement('span');
+                    everyLbl.style.cssText = 'color:var(--text-secondary);';
+                    everyLbl.textContent = 'every';
+
+                    const minInput = document.createElement('input');
+                    minInput.type = 'number';
+                    minInput.min = '1';
+                    minInput.max = '60';
+                    minInput.id = 'interval-input-' + idSuffix;
+                    minInput.value = String(rule.intervalMinutes);
+                    minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
+                    guardInteraction(minInput);
+                    minInput.addEventListener('change', () => {
+                        if (!state.rules) state.rules = {};
+                        if (!state.rules[column]) {
+                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
+                        }
+                        const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
+                        state.rules[column].intervalMinutes = val;
+                        minInput.value = String(val);
+                        emitAutobanState();
+                    });
+
+                    const minLbl = document.createElement('span');
+                    minLbl.style.cssText = 'color:var(--text-secondary);';
+                    minLbl.textContent = 'min';
+
+                    ruleRow.appendChild(checkbox);
+                    ruleRow.appendChild(ruleLbl);
+                    ruleRow.appendChild(everyLbl);
+                    ruleRow.appendChild(minInput);
+                    ruleRow.appendChild(minLbl);
+                    columnRulesSection.appendChild(ruleRow);
+                });
+
+                const poolBannerMc = document.createElement('div');
+                poolBannerMc.style.cssText = 'padding:6px 10px; font-family:var(--font-mono); font-size:9px; color:var(--accent-teal); border-left:3px solid var(--accent-teal-dim); border-radius:4px; background:color-mix(in srgb, var(--accent-teal) 8%, transparent); margin:0 8px 4px 8px; line-height:1.4;';
+                poolBannerMc.innerHTML = '💡 <strong>Terminal Pools:</strong> Using terminal pools allows you to lower this value, since instructions will be rotated among terminals.';
+                columnRulesSection.appendChild(poolBannerMc);
+
+                // --- Automation Rules Section (ordered second) ---
                 const automationRulesSection = document.createElement('div');
                 automationRulesSection.className = 'db-subsection';
                 multiColumnContainer.appendChild(automationRulesSection);
@@ -7173,7 +7386,7 @@
                     batchSelect.appendChild(opt);
                 });
                 batchSelect.addEventListener('change', () => {
-                    state.batchSize = parseInt(batchSelect.value, 10) || 3;
+                    state.batchSize = parseInt(batchSelect.value, 10) || 1;
                     emitAutobanState();
                 });
 
@@ -7242,81 +7455,27 @@
                 routingRow.appendChild(routingSelect);
                 automationRulesSection.appendChild(routingRow);
 
-
-
-                const columnRulesSection = document.createElement('div');
-                columnRulesSection.className = 'db-subsection';
-                multiColumnContainer.appendChild(columnRulesSection);
-
-                const rulesHeader = document.createElement('div');
-                rulesHeader.className = 'subsection-header';
-                const rulesSpan = document.createElement('span');
-                rulesSpan.textContent = 'COLUMN RULES';
-                rulesHeader.appendChild(rulesSpan);
-                columnRulesSection.appendChild(rulesHeader);
-
-                const timingExplanation = document.createElement('div');
-                timingExplanation.style.cssText = 'padding:8px 12px; font-size:11px; color:var(--text-secondary); margin-bottom:8px; line-height:1.4;';
-                timingExplanation.textContent = 'Specify the time delay between advancing each plan to the next stage. Lower intervals require more backup terminals to avoid overwhelming each agent.';
-                columnRulesSection.appendChild(timingExplanation);
-
-                columnTransitions.forEach(({ column, label, defaultMin }) => {
-                    const idSuffix = getAutobanRuleIdSuffix(column);
-                    const rule = state.rules?.[column] || { enabled: true, intervalMinutes: defaultMin };
-                    const ruleRow = document.createElement('div');
-                    ruleRow.style.cssText = 'display:flex; align-items:center; gap:6px; padding:4px 8px; font-family:var(--font-mono); font-size:10px;';
-
-                    const checkbox = document.createElement('input');
-                    checkbox.type = 'checkbox';
-                    checkbox.checked = rule.enabled;
-                    checkbox.style.cssText = 'accent-color:var(--accent-teal); cursor:pointer;';
-                    checkbox.addEventListener('change', () => {
-                        if (!state.rules) state.rules = {};
-                        if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
-                        }
-                        state.rules[column].enabled = checkbox.checked;
-                        emitAutobanState();
+                // Clear Before Prompt Toggle (inside automation rules section)
+                const mcClearRow = document.createElement('div');
+                mcClearRow.style.cssText = 'display:flex; align-items:center; gap:8px; padding:0 8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
+                const mcClearLabel = document.createElement('span');
+                mcClearLabel.textContent = 'CLEAR TERMINAL BEFORE PROMPT:';
+                mcClearLabel.title = '⚠️ Strongly recommended — prevents token waste and agent overload.';
+                const mcClearToggle = document.createElement('input');
+                mcClearToggle.id = 'mc-clear-terminal-before-prompt-toggle';
+                mcClearToggle.type = 'checkbox';
+                mcClearToggle.checked = !!clearTerminalBeforePrompt;
+                mcClearToggle.addEventListener('change', () => {
+                    clearTerminalBeforePrompt = mcClearToggle.checked;
+                    updateClearTerminalBeforePromptUi();
+                    postKanbanMessage({
+                        type: 'toggleClearTerminalBeforePrompt',
+                        enabled: mcClearToggle.checked
                     });
-
-                    const ruleLbl = document.createElement('span');
-                    ruleLbl.style.cssText = 'color:var(--text-primary); flex:1; white-space:nowrap; overflow:hidden; text-overflow:ellipsis;';
-                    ruleLbl.textContent = label;
-
-                    const everyLbl = document.createElement('span');
-                    everyLbl.style.cssText = 'color:var(--text-secondary);';
-                    everyLbl.textContent = 'every';
-
-                    const minInput = document.createElement('input');
-                    minInput.type = 'number';
-                    minInput.min = '1';
-                    minInput.max = '60';
-                    minInput.id = 'interval-input-' + idSuffix;
-                    minInput.value = String(rule.intervalMinutes);
-                    minInput.style.cssText = 'width:40px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-                    guardInteraction(minInput);
-                    minInput.addEventListener('change', () => {
-                        if (!state.rules) state.rules = {};
-                        if (!state.rules[column]) {
-                            state.rules[column] = { enabled: true, intervalMinutes: defaultMin };
-                        }
-                        const val = Math.max(1, parseInt(minInput.value, 10) || defaultMin);
-                        state.rules[column].intervalMinutes = val;
-                        minInput.value = String(val);
-                        emitAutobanState();
-                    });
-
-                    const minLbl = document.createElement('span');
-                    minLbl.style.cssText = 'color:var(--text-secondary);';
-                    minLbl.textContent = 'min';
-
-                    ruleRow.appendChild(checkbox);
-                    ruleRow.appendChild(ruleLbl);
-                    ruleRow.appendChild(everyLbl);
-                    ruleRow.appendChild(minInput);
-                    ruleRow.appendChild(minLbl);
-                    columnRulesSection.appendChild(ruleRow);
                 });
+                mcClearRow.appendChild(mcClearLabel);
+                mcClearRow.appendChild(mcClearToggle);
+                automationRulesSection.appendChild(mcClearRow);
 
                 const terminalPoolsSection = document.createElement('div');
                 terminalPoolsSection.className = 'db-subsection';
