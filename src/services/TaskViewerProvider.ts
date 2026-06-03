@@ -623,7 +623,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const settingsPath = path.join(workspaceRoot, '.switchboard', 'settings.json');
-        if (!fs.existsSync(settingsPath)) {
+        try {
+            await fs.promises.access(settingsPath);
+        } catch {
             vscode.window.showWarningMessage('No settings file found at .switchboard/settings.json');
             return false;
         }
@@ -641,7 +643,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             }
 
             const roleConfigs = data.roleConfigs;
-            if (roleConfigs && typeof roleConfigs === 'object') {
+            if (roleConfigs && typeof roleConfigs === 'object' && !Array.isArray(roleConfigs)) {
                 for (const roleName of Object.keys(roleConfigs)) {
                     const value = roleConfigs[roleName];
                     await this.saveRoleConfig(`roleConfig_${roleName}`, value);
@@ -659,25 +661,29 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    /** Non-role keys that must be migrated alongside role configs. */
+    private static readonly _MIGRATABLE_NON_ROLE_KEYS = [
+        'kanban.cliTriggersEnabled',
+        'kanban.dynamicComplexityRoutingEnabled',
+        'kanban.columnDragDropModes',
+        'kanban.routingMapConfig',
+        'kanban.allowUnknownComplexityAutoMove',
+        'kanban.orderOverrides',
+    ];
+
+    /** Discover all role config keys from a state object (global or workspace). */
+    private _discoverRoleConfigKeys(state: vscode.Memento): string[] {
+        return state.keys().filter(key => key.startsWith('switchboard.prompts.roleConfig_'));
+    }
+
+    /** Build the full list of keys to migrate: static non-role keys + dynamically discovered role config keys. */
+    private _collectMigratableKeys(sourceState: vscode.Memento): string[] {
+        const roleKeys = this._discoverRoleConfigKeys(sourceState);
+        return [...TaskViewerProvider._MIGRATABLE_NON_ROLE_KEYS, ...roleKeys];
+    }
+
     private async _migrateWorkspaceStateToGlobal(): Promise<void> {
-        const keysToMigrate = [
-            'kanban.cliTriggersEnabled',
-            'kanban.dynamicComplexityRoutingEnabled',
-            'kanban.columnDragDropModes',
-            'kanban.routingMapConfig',
-            'kanban.allowUnknownComplexityAutoMove',
-            'kanban.orderOverrides',
-            'switchboard.prompts.roleConfig_planner',
-            'switchboard.prompts.roleConfig_coder',
-            'switchboard.prompts.roleConfig_lead',
-            'switchboard.prompts.roleConfig_reviewer',
-            'switchboard.prompts.roleConfig_tester',
-            'switchboard.prompts.roleConfig_intern',
-            'switchboard.prompts.roleConfig_analyst',
-            'switchboard.prompts.roleConfig_researcher',
-            'switchboard.prompts.roleConfig_splitter',
-            'switchboard.prompts.roleConfig_ticket_updater'
-        ];
+        const keysToMigrate = this._collectMigratableKeys(this._context.workspaceState);
 
         for (const key of keysToMigrate) {
             const value = this._context.workspaceState.get(key);
@@ -688,24 +694,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     private async _migrateGlobalStateToWorkspace(): Promise<void> {
-        const keysToMigrate = [
-            'kanban.cliTriggersEnabled',
-            'kanban.dynamicComplexityRoutingEnabled',
-            'kanban.columnDragDropModes',
-            'kanban.routingMapConfig',
-            'kanban.allowUnknownComplexityAutoMove',
-            'kanban.orderOverrides',
-            'switchboard.prompts.roleConfig_planner',
-            'switchboard.prompts.roleConfig_coder',
-            'switchboard.prompts.roleConfig_lead',
-            'switchboard.prompts.roleConfig_reviewer',
-            'switchboard.prompts.roleConfig_tester',
-            'switchboard.prompts.roleConfig_intern',
-            'switchboard.prompts.roleConfig_analyst',
-            'switchboard.prompts.roleConfig_researcher',
-            'switchboard.prompts.roleConfig_splitter',
-            'switchboard.prompts.roleConfig_ticket_updater'
-        ];
+        const keysToMigrate = this._collectMigratableKeys(this._context.globalState);
 
         for (const key of keysToMigrate) {
             const value = this._context.globalState.get(key);

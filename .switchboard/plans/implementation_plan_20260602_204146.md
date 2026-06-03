@@ -175,3 +175,63 @@ public getRoleConfig(key: string): unknown {
 
 ### Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Results (2026-06-03)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | MAJOR (pre-existing) | `_migrateWorkspaceStateToGlobal` and `_migrateGlobalStateToWorkspace` (lines 664–716) use hardcoded role config key lists. Custom agent role configs (e.g. `roleConfig_custom_agent_xyz`) are silently dropped when toggling global/workspace settings mode. Same class of bug the plan identified for export, but in a different code path. |
+| 2 | NIT (keep) | Plan specified `fs.renameSync` but implementation uses `fs.promises.rename` (async). Implementation is better — sync I/O blocks the extension host. |
+| 3 | NIT (fixed) | `importPromptSettings` used `fs.existsSync` (sync) while the rest of the method uses async APIs. Inconsistent and blocks extension host. |
+| 4 | NIT (defer) | `catch (error: any)` pattern in export/import methods. Consistent with codebase conventions, not worth the churn. |
+| 5 | MAJOR (fixed) | `importPromptSettings` validated `roleConfigs` with `typeof === 'object'` but did not guard against arrays. `typeof [] === 'object'` is true, so a malformed `settings.json` with `"roleConfigs": [...]` would produce garbage imports (keys `"0"`, `"1"`, etc. passed to `saveRoleConfig`). |
+| 6 | NIT (keep) | Status display auto-hides after 4 seconds. Reasonable UX, plan doesn't specify timeout duration. |
+
+### Stage 2: Balanced Synthesis — Actions Taken
+
+| Finding | Action | Result |
+|---------|--------|--------|
+| #1 (hardcoded migration lists) | **Fixed** | Replaced hardcoded role config key lists in `_migrateWorkspaceStateToGlobal`/`_migrateGlobalStateToWorkspace` with dynamic key discovery via `_discoverRoleConfigKeys()`. Non-role keys extracted to `_MIGRATABLE_NON_ROLE_KEYS` static readonly. |
+| #2 (`fs.promises.rename`) | **Keep** — implementation is better | No change. |
+| #3 (`fs.existsSync`) | **Fixed** | Replaced with `fs.promises.access(settingsPath)` in `importPromptSettings`. |
+| #4 (`error: any`) | **Defer** | Consistent with codebase. |
+| #5 (array `roleConfigs` guard) | **Fixed** | Added `!Array.isArray(roleConfigs)` to the validation check in `importPromptSettings`. |
+| #6 (4s timeout) | **Keep** | No change. |
+
+### Files Changed by Review
+
+- `src/services/TaskViewerProvider.ts`:
+  - Line 626: Replaced `fs.existsSync(settingsPath)` with `await fs.promises.access(settingsPath)` wrapped in try/catch.
+  - Line 646: Added `&& !Array.isArray(roleConfigs)` guard to `roleConfigs` validation.
+  - Lines 664–705: Replaced hardcoded role config key lists in `_migrateWorkspaceStateToGlobal`/`_migrateGlobalStateToWorkspace` with dynamic key discovery. Extracted non-role keys to `_MIGRATABLE_NON_ROLE_KEYS` static readonly array. Added `_discoverRoleConfigKeys(state)` and `_collectMigratableKeys(sourceState)` helper methods.
+
+### Implementation Verification (All Plan Requirements)
+
+| Requirement | Status | Notes |
+|-------------|--------|-------|
+| `saveRoleConfig` reverted to IDE-storage-only | PASS | No `updateState` call; only `updateSetting` + cache invalidation. |
+| `getRoleConfig` reverted to IDE-storage-only | PASS | Single line: `return this.getSetting(...)`. No `state.json` read. |
+| `exportPromptSettings` dynamic key discovery | PASS | Iterates both `globalState.keys()` and `workspaceState.keys()`, filters by prefix. |
+| `exportPromptSettings` versioned schema | PASS | `{ version: 1, exportedAt: <ISO>, roleConfigs: {...} }`. |
+| `exportPromptSettings` atomic write | PASS | Writes to `.settings.json.tmp` then `fs.promises.rename`. |
+| `exportPromptSettings` success/error messages | PASS | `showInformationMessage` on success, `showErrorMessage` on error. |
+| `importPromptSettings` file-not-found warning | PASS | `fs.promises.access` + `showWarningMessage`. |
+| `importPromptSettings` parse/version validation | PASS | Checks `typeof data === 'object'`, `data.version !== 1`, `!Array.isArray(roleConfigs)`. |
+| `importPromptSettings` writes via `saveRoleConfig` | PASS | Iterates `roleConfigs` entries, calls `saveRoleConfig('roleConfig_${roleName}', value)`. |
+| `importPromptSettings` UI refresh | PASS | `switchboard.refreshUI` + `this._kanbanProvider?.postMessage({ type: 'reloadRoleConfigs' })`. |
+| `SetupPanelProvider` message handlers | PASS | Cases `'exportPromptSettings'` and `'importPromptSettings'` at lines 135–144. Posts result back to webview. |
+| `cleanWorkspace.ts` `roleConfigs` removal | PASS | No `roleConfigs` preservation block in `readPersistedFields`. |
+| `setup.html` Export/Import section | PASS | Section header, two buttons, hint text, status display element. |
+| `setup.html` click handlers | PASS | Lines 2755–2772: sends `exportPromptSettings`/`importPromptSettings` messages, shows "Exporting..."/"Importing..." status. |
+| `setup.html` result listeners | PASS | Lines 3524–3553: handles `exportPromptSettingsResult`/`importPromptSettingsResult`, shows success/failure, auto-hides after 4s. |
+| `kanban.html` `reloadRoleConfigs` handler | PASS | Line 5670: `case 'reloadRoleConfigs': loadRoleConfigs(); break;`. Pre-existing, works correctly. |
+
+### Remaining Risks
+
+1. ~~**Pre-existing: Hardcoded migration key lists**~~ — **FIXED.** Migration methods now use `_discoverRoleConfigKeys()` for dynamic key discovery, matching the pattern used in `exportPromptSettings`.
+
+2. **Pre-existing: `error: any` catch blocks** — The export/import methods use `catch (error: any)` which is inconsistent with strict TypeScript best practices (`catch (error: unknown)` + type guard). Consistent with existing codebase patterns, so deferred.
