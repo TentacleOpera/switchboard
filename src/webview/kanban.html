@@ -331,7 +331,7 @@
         }
 
         .backlog-toggle-btn {
-            background: transparent;
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
             border: 1px solid var(--border-color);
             color: var(--text-secondary);
             font-family: var(--font-mono);
@@ -339,13 +339,14 @@
             letter-spacing: 0.5px;
             padding: 2px 6px;
             cursor: pointer;
-            border-radius: 2px;
+            border-radius: 3px;
             transition: all 0.15s;
             text-transform: uppercase;
+            line-height: 1;
         }
         .backlog-toggle-btn:hover {
-            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
         }
         .backlog-toggle-btn.is-active {
@@ -515,6 +516,33 @@
         }
 
         .column-icon-btn:hover img {
+            filter: brightness(1.2);
+        }
+
+        .column-header-btn {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            width: 24px;
+            height: 24px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .column-header-btn:hover {
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .column-header-btn img {
+            width: 14px;
+            height: 14px;
+            filter: brightness(0.9);
+            transition: all 0.15s;
+            pointer-events: none;
+        }
+        .column-header-btn:hover img {
             filter: brightness(1.2);
         }
 
@@ -2151,7 +2179,7 @@
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
             <div class="kanban-sub-bar">
                 <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 14px; height: 14px;">
+                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 17px; height: 17px;">
                 </button>
                 <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                     <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
@@ -2164,7 +2192,7 @@
                     </svg>
                 </button>
                 <button class="strip-icon-btn" id="btn-reset-autoban-timer" data-tooltip="Reset and restart automation timers" style="display:none;">
-                    <img src="{{ICON_22}}" alt="Reset Timers" style="width: 14px; height: 14px;">
+                    <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
                 </button>
                 <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                     <img src="{{ICON_28}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
@@ -4122,12 +4150,11 @@
 
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
-                            ${backlogToggleBtn}
-                            <button class="column-icon-btn" data-action="chatCopyPrompt" data-column="${escapeAttr(def.id)}" data-tooltip="Copy chat prompt to clipboard. If no plans are selected, this starts a general chat consultation mode in which code editing is prohibited.">
+                            <button class="column-header-btn" data-action="chatCopyPrompt" data-column="${escapeAttr(def.id)}" data-tooltip="Copy chat prompt to clipboard. If no plans are selected, this starts a general chat consultation mode in which code editing is prohibited.">
                                 <img src="${ICON_CHAT}" alt="Chat">
                             </button>
-                            <button class="btn-add-plan" id="btn-add-plan" data-tooltip="Add Plan">+</button>
-                            <button class="btn-add-plan" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import" style="width: 16px; height: 16px;"></button>
+                            <button class="column-header-btn" id="btn-add-plan" data-tooltip="Add Plan">+</button>
+                            <button class="column-header-btn" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
                        </div>`
                     : `<div style="display: flex; align-items: center; gap: 4px;">
@@ -4229,7 +4256,10 @@
                 return `<div class="kanban-column" data-column="${escapeAttr(def.id)}">
                     <div class="column-header">
                         <div style="display:flex; flex-direction:column;">
-                            <span class="column-name">${escapeHtml(columnDisplayLabel)}</span>
+                            <div style="display:flex; align-items:center; gap:8px;">
+                                <span class="column-name">${escapeHtml(columnDisplayLabel)}</span>
+                                ${backlogToggleBtn}
+                            </div>
                             ${subline}
                         </div>
                         ${rightSide}
@@ -4296,7 +4326,7 @@
 
 
             // Column icon button handlers
-            document.querySelectorAll('.column-icon-btn').forEach(btn => {
+            document.querySelectorAll('.column-icon-btn, .column-header-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     flashIconBtn(btn);
                     const action = btn.dataset.action;
