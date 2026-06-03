@@ -32,6 +32,11 @@ let setupStatusBarItem: vscode.StatusBarItem;
 
 // Status bar item for file opening prevention toggle
 let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
+let terminalOpenStatusBarItem: vscode.StatusBarItem;
+let terminalClearStatusBarItem: vscode.StatusBarItem;
+let terminalResetStatusBarItem: vscode.StatusBarItem;
+let kanbanStatusBarItem: vscode.StatusBarItem;
+let artifactsStatusBarItem: vscode.StatusBarItem;
 
 // Global references
 let outputChannel: vscode.OutputChannel | null = null;
@@ -1676,8 +1681,76 @@ export async function activate(context: vscode.ExtensionContext) {
         ? 'Agent file opening is blocked. Click to allow agent file opening.'
         : 'Agent file opening is allowed. Click to block agent file opening.';
     fileOpeningPreventionStatusBarItem.command = 'switchboard.togglePreventAgentFileOpening';
-    fileOpeningPreventionStatusBarItem.show();
     context.subscriptions.push(fileOpeningPreventionStatusBarItem);
+
+    // Initialize 5 new status bar items
+    terminalOpenStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
+    terminalOpenStatusBarItem.text = '$(terminal)';
+    terminalOpenStatusBarItem.tooltip = 'Open Agent Terminals';
+    terminalOpenStatusBarItem.command = 'switchboard.createAgentGrid';
+    context.subscriptions.push(terminalOpenStatusBarItem);
+
+    terminalClearStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
+    terminalClearStatusBarItem.text = '$(trash)';
+    terminalClearStatusBarItem.tooltip = 'Clear Agent Terminals';
+    terminalClearStatusBarItem.command = 'switchboard.clearAllTerminals';
+    context.subscriptions.push(terminalClearStatusBarItem);
+
+    terminalResetStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 96);
+    terminalResetStatusBarItem.text = '$(sync)';
+    terminalResetStatusBarItem.tooltip = 'Reset Agent Terminals';
+    terminalResetStatusBarItem.command = 'switchboard.deregisterAllTerminals';
+    context.subscriptions.push(terminalResetStatusBarItem);
+
+    kanbanStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 95);
+    kanbanStatusBarItem.text = '$(project)';
+    kanbanStatusBarItem.tooltip = 'Open Kanban Board';
+    kanbanStatusBarItem.command = 'switchboard.openKanban';
+    context.subscriptions.push(kanbanStatusBarItem);
+
+    artifactsStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 94);
+    artifactsStatusBarItem.text = '$(note)';
+    artifactsStatusBarItem.tooltip = 'Open Planning Panel';
+    artifactsStatusBarItem.command = 'switchboard.openPlanningPanel';
+    context.subscriptions.push(artifactsStatusBarItem);
+
+    function updateStatusBarVisibility() {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        const showAgentOpenToggle = config.get<boolean>('statusBar.showAgentOpenToggle', false);
+        const showTerminalControls = config.get<boolean>('statusBar.showTerminalControls', false);
+        const showKanbanButton = config.get<boolean>('statusBar.showKanbanButton', false);
+        const showArtifactsButton = config.get<boolean>('statusBar.showArtifactsButton', false);
+
+        if (showAgentOpenToggle) {
+            fileOpeningPreventionStatusBarItem.show();
+        } else {
+            fileOpeningPreventionStatusBarItem.hide();
+        }
+
+        if (showTerminalControls) {
+            terminalOpenStatusBarItem.show();
+            terminalClearStatusBarItem.show();
+            terminalResetStatusBarItem.show();
+        } else {
+            terminalOpenStatusBarItem.hide();
+            terminalClearStatusBarItem.hide();
+            terminalResetStatusBarItem.hide();
+        }
+
+        if (showKanbanButton) {
+            kanbanStatusBarItem.show();
+        } else {
+            kanbanStatusBarItem.hide();
+        }
+
+        if (showArtifactsButton) {
+            artifactsStatusBarItem.show();
+        } else {
+            artifactsStatusBarItem.hide();
+        }
+    }
+
+    updateStatusBarVisibility();
 
     // Listen for configuration changes
     context.subscriptions.push(vscode.workspace.onDidChangeConfiguration(e => {
@@ -1690,6 +1763,15 @@ export async function activate(context: vscode.ExtensionContext) {
                     ? 'Agent file opening is blocked. Click to allow agent file opening.'
                     : 'Agent file opening is allowed. Click to block agent file opening.';
             }
+            updateStatusBarVisibility();
+        }
+        if (
+            e.affectsConfiguration('switchboard.statusBar.showAgentOpenToggle') ||
+            e.affectsConfiguration('switchboard.statusBar.showTerminalControls') ||
+            e.affectsConfiguration('switchboard.statusBar.showKanbanButton') ||
+            e.affectsConfiguration('switchboard.statusBar.showArtifactsButton')
+        ) {
+            updateStatusBarVisibility();
         }
     }));
 
@@ -1748,6 +1830,18 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.deregisterAllTerminals();
     });
     context.subscriptions.push(deregisterAllTerminalsDisposable);
+
+    const clearAllTerminalsDisposable = vscode.commands.registerCommand('switchboard.clearAllTerminals', async () => {
+        let clearedCount = 0;
+        for (const [name, terminal] of registeredTerminals.entries()) {
+            if (terminal.exitStatus === undefined) {
+                await sendRobustText(terminal, '/clear', false);
+                clearedCount++;
+            }
+        }
+        outputChannel?.appendLine(`[Extension] Cleared ${clearedCount} active terminals.`);
+    });
+    context.subscriptions.push(clearAllTerminalsDisposable);
 
     // Register Clean Working Memory command
     const cleanWorkspaceDisposable = vscode.commands.registerCommand('switchboard.cleanWorkspace', async () => {

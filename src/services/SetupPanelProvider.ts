@@ -541,6 +541,46 @@ export class SetupPanelProvider implements vscode.Disposable {
                     await this._taskViewerProvider.handleSetExcludeReviewedBacklogSetting(message.enabled);
                     await vscode.commands.executeCommand('switchboard.refreshUI');
                     break;
+                case 'getStatusShowAgentOpenSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowAgentOpenSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowAgentOpenSetting()
+                    });
+                    break;
+                case 'setStatusShowAgentOpenSetting':
+                    await this._taskViewerProvider.handleSetStatusShowAgentOpenSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getStatusShowTerminalsSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowTerminalsSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowTerminalsSetting()
+                    });
+                    break;
+                case 'setStatusShowTerminalsSetting':
+                    await this._taskViewerProvider.handleSetStatusShowTerminalsSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getStatusShowKanbanSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowKanbanSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowKanbanSetting()
+                    });
+                    break;
+                case 'setStatusShowKanbanSetting':
+                    await this._taskViewerProvider.handleSetStatusShowKanbanSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
+                case 'getStatusShowArtifactsSetting':
+                    this._panel.webview.postMessage({
+                        type: 'statusShowArtifactsSetting',
+                        enabled: this._taskViewerProvider.handleGetStatusShowArtifactsSetting()
+                    });
+                    break;
+                case 'setStatusShowArtifactsSetting':
+                    await this._taskViewerProvider.handleSetStatusShowArtifactsSetting(message.enabled);
+                    await vscode.commands.executeCommand('switchboard.refreshUI');
+                    break;
                 case 'getDesignDocSetting': {
                     const designDocSetting = this._taskViewerProvider.handleGetDesignDocSetting();
                     this._panel.webview.postMessage({

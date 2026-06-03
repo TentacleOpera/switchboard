@@ -3111,6 +3111,42 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('excludeReviewedBacklogFromDropdown', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetStatusShowAgentOpenSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showAgentOpenToggle', false);
+    }
+
+    public async handleSetStatusShowAgentOpenSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showAgentOpenToggle', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetStatusShowTerminalsSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showTerminalControls', false);
+    }
+
+    public async handleSetStatusShowTerminalsSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showTerminalControls', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetStatusShowKanbanSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showKanbanButton', false);
+    }
+
+    public async handleSetStatusShowKanbanSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showKanbanButton', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
+    public handleGetStatusShowArtifactsSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('statusBar.showArtifactsButton', false);
+    }
+
+    public async handleSetStatusShowArtifactsSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetJulesAutoSyncSetting(): boolean {
         return this._isJulesAutoSyncEnabled();
     }
@@ -3466,6 +3502,22 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'excludeReviewedBacklogSetting',
             enabled: this.handleGetExcludeReviewedBacklogSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowAgentOpenSetting',
+            enabled: this.handleGetStatusShowAgentOpenSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowTerminalsSetting',
+            enabled: this.handleGetStatusShowTerminalsSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowKanbanSetting',
+            enabled: this.handleGetStatusShowKanbanSetting()
+        });
+        this._setupPanelProvider.postMessage({
+            type: 'statusShowArtifactsSetting',
+            enabled: this.handleGetStatusShowArtifactsSetting()
         });
 
         const designDocSetting = this.handleGetDesignDocSetting();
@@ -10946,6 +10998,14 @@ What would you like to find?`;
 
         const relativePath = path.relative(this._getStablePath(matchingRoot), normalizedFilePath);
         const parts = relativePath.split(path.sep).filter(Boolean);
+
+        // Exclude paths containing "completed" directories to prevent
+        // archived plans from being re-ingested as new Kanban cards
+        if (parts.some(part => part.toLowerCase() === 'completed')) {
+            console.log(`[TaskViewerProvider] Brain mirror candidate rejected (completed directory): ${path.basename(filePath)}`);
+            return false;
+        }
+
         // Allow up to 3 levels: brain/<session>/subdir/plan.md
         if (parts.length < 1 || parts.length > 3) return false;
 
@@ -10976,6 +11036,7 @@ What would you like to find?`;
             for (const entry of entriesInDir) {
                 const fullPath = path.join(currentDir, entry.name);
                 if (entry.isDirectory()) {
+                    if (entry.name.toLowerCase() === 'completed') continue;
                     pendingDirs.push(fullPath);
                     continue;
                 }
@@ -11004,6 +11065,7 @@ What would you like to find?`;
             for (const entry of entriesInDir) {
                 const fullPath = path.join(currentDir, entry.name);
                 if (entry.isDirectory()) {
+                    if (entry.name.toLowerCase() === 'completed') continue;
                     pendingDirs.push(fullPath);
                     continue;
                 }

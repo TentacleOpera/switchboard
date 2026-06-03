@@ -151,6 +151,10 @@
         "command": "switchboard.togglePreventAgentFileOpening",
         "title": "Switchboard: Toggle Agent File Opening Prevention",
         "category": "Switchboard"
+      },
+      {
+        "command": "switchboard.clearAllTerminals",
+        "title": "Switchboard: Clear Agent Terminals"
       }
     ],
     "configuration": {
@@ -473,6 +477,30 @@
           "type": "boolean",
           "default": true,
           "description": "Automatically select the first workspace folder on activation if no kanban workspace is selected."
+        },
+        "switchboard.statusBar.showAgentOpenToggle": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the existing agent-open toggle on the status bar.",
+          "scope": "window"
+        },
+        "switchboard.statusBar.showTerminalControls": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the Open/Clear/Reset terminal buttons on the status bar.",
+          "scope": "window"
+        },
+        "switchboard.statusBar.showKanbanButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the Open Kanban button on the status bar.",
+          "scope": "window"
+        },
+        "switchboard.statusBar.showArtifactsButton": {
+          "type": "boolean",
+          "default": false,
+          "description": "Controls visibility of the Open Planning Panel button on the status bar.",
+          "scope": "window"
         }
       }
     },

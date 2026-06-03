@@ -464,6 +464,7 @@
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
             <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
             <button class="tab-btn" data-tab="docs" role="tab" aria-selected="false">Docs</button>
+            <button class="tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
 
         <div class="tab-content open" id="startup-fields" data-tab-content="setup">
@@ -976,6 +977,47 @@
                 Documentation
             </div>
             <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
+        </div>
+
+        <div class="tab-content" id="status-bar-fields" data-tab-content="status-bar">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                STATUS BAR CONTROLS
+            </div>
+            <div class="hint-text" style="margin-bottom: 12px; font-size: 10px; color: var(--text-secondary); line-height: 1.4;">
+                Control what gets shown on the bottom status bar for quick access.
+            </div>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-agent-open-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Agent Open Toggle</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the shield toggle on the status bar to block/allow agent file opening.</span>
+                </div>
+            </label>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-terminals-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Terminal Controls on Status Bar</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Shows Open, Clear, and Reset terminal buttons.</span>
+                </div>
+            </label>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-kanban-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Kanban Open Button</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the project button on the status bar to open the Kanban board.</span>
+                </div>
+            </label>
+
+            <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
+                <input id="status-show-artifacts-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
+                <div style="display:flex; flex-direction:column; gap:4px;">
+                    <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Show Planning Panel Open Button</span>
+                    <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the note button on the status bar to open the Planning Panel.</span>
+                </div>
+            </label>
         </div>
     </div>
 
@@ -3247,7 +3289,21 @@
             vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: e.target.checked });
         });
  
+        document.getElementById('status-show-agent-open-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowAgentOpenSetting', enabled: e.target.checked });
+        });
 
+        document.getElementById('status-show-terminals-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowTerminalsSetting', enabled: e.target.checked });
+        });
+
+        document.getElementById('status-show-kanban-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowKanbanSetting', enabled: e.target.checked });
+        });
+
+        document.getElementById('status-show-artifacts-toggle')?.addEventListener('change', (e) => {
+            vscode.postMessage({ type: 'setStatusShowArtifactsSetting', enabled: e.target.checked });
+        });
  
         document.getElementById('auto-commit-code-review-toggle')?.addEventListener('change', (e) => {
             vscode.postMessage({ type: 'saveStartupCommands', autoCommitOnCodeReview: e.target.checked });
@@ -3608,6 +3664,34 @@
                 case 'excludeReviewedBacklogSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('exclude-reviewed-backlog-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'statusShowAgentOpenSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-agent-open-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'statusShowTerminalsSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-terminals-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'statusShowKanbanSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-kanban-toggle');
+                        if (toggle) toggle.checked = message.enabled === true;
+                    });
+                    break;
+                }
+                case 'statusShowArtifactsSetting': {
+                    runSetupHydration(() => {
+                        const toggle = document.getElementById('status-show-artifacts-toggle');
                         if (toggle) toggle.checked = message.enabled === true;
                     });
                     break;
