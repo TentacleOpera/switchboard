@@ -393,6 +393,39 @@ Manual verification steps:
             const steps = (provider as any)._parseVerificationSteps(content);
             assert.deepStrictEqual(steps, ['Toggle on/off still works', 'Setting value persists']);
         });
+
+        test('parses direct steps under "## Verification Plan" without manual subheading (Pattern 3 default-true)', () => {
+            const content = `
+## Verification Plan
+
+1. Open the app
+2. Check the sidebar
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Open the app', 'Check the sidebar']);
+        });
+
+        test('parses steps under "## Verificaton Plan" with typo (Pattern 3 typo-tolerant)', () => {
+            const content = `
+## Verificaton Plan
+
+1. Verify typo header works
+2. Confirm steps extracted
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Verify typo header works', 'Confirm steps extracted']);
+        });
+
+        test('parses steps under "## Verificaiton Steps" with typo (Pattern 3 typo-tolerant)', () => {
+            const content = `
+## Verificaiton Steps
+
+- [ ] Checkbox step one
+- [x] Checkbox step two
+            `;
+            const steps = (provider as any)._parseVerificationSteps(content);
+            assert.deepStrictEqual(steps, ['Checkbox step one', 'Checkbox step two']);
+        });
     });
 
     suite('refreshWithData', () => {

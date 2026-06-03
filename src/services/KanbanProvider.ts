@@ -5228,7 +5228,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
-                vscode.window.showInformationMessage(`Chat prompt copied to clipboard${planWord}.`);
+                vscode.window.showInformationMessage(`Planning chat prompt copied to clipboard${planWord}.`);
                 break;
             }
             case 'copyChatWorkflow': {
@@ -5237,7 +5237,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot });
                 await vscode.env.clipboard.writeText(prompt);
-                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied Switchboard Chat workflow prompt to clipboard.', isError: false });
+                this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
                 break;
             }
             case 'promptSelected': {
@@ -6555,10 +6555,10 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
         // and extract steps ONLY from manual-specific subheadings like "Manual verification steps:"
         // NOT from "Automated Tests" or other non-manual sections
         if (steps.length === 0) {
-            const verificationPlanMatch = content.match(/##\s*Verification\s+Plan\s*\n([\s\S]*?)(?=\n##|$)/i);
+            const verificationPlanMatch = content.match(/##\s*Verific[a-z]*\s+(?:Plan|Steps)\s*\n([\s\S]*?)(?=\n##|$)/i);
             if (verificationPlanMatch) {
                 const lines = verificationPlanMatch[1].split('\n');
-                let inManualStepsSection = false;
+                let inManualStepsSection = true;
 
                 for (const line of lines) {
                     // Look for manual-specific subheadings that indicate manual steps follow
