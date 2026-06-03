@@ -245,3 +245,41 @@ Also apply the same sequential-directive removal as the built-in path:
 ---
 
 **Recommendation**: Complexity 5 → Send to Coder
+
+---
+
+## Review Results (2026-06-03)
+
+### Stage 1: Adversarial Findings
+
+| ID | Severity | Description |
+|----|----------|-------------|
+| CRITICAL-1 | CRITICAL | Planner subagentPolicy radio rendered into hidden `promptCustomization` container. The `promptCustomization` div is set to `display: none` when `currentRole === 'planner'` (kanban.html line 2793). The old `plannerAddonUseSubagents` checkbox was removed from the hardcoded `plannerConfig` section, but the replacement radio was placed in the hidden dynamic container. **The Planner role had ZERO visible subagent policy UI** — the core deliverable of this plan was broken for the Planner. |
+| MAJOR-1 | MAJOR | Duplicate `module.exports` block in `sharedDefaults.js` (lines 252-254 and 256-258 were identical). Second silently overwrites the first. Code hygiene issue. |
+| MAJOR-2 | MAJOR | TypeScript type `CustomAgentAddons.subagentPolicy` in `agentConfig.ts` was defined as `'default' \| 'noSubagents' \| 'customSubagent'` — missing `'useSubagents'`. This caused TS2367 compile error at `agentPromptBuilder.ts:1170` where the code compares against `'useSubagents'`. The `parseCustomAgentAddons` validator also rejected `'useSubagents'` values. |
+| NIT-1 | NIT | `renderRoleAddons('planner')` creates invisible duplicate DOM elements (all planner addons re-rendered into hidden container). Wasteful but not user-facing. Deferred. |
+
+### Stage 2: Balanced Synthesis & Fixes Applied
+
+| Finding | Verdict | Action Taken |
+|---------|---------|--------------|
+| CRITICAL-1 | **Fixed** | Added a 4-option subagentPolicy radio group directly into the `plannerConfig` hardcoded HTML section (after `plannerAddonSkipTests` checkbox), with `name="plannerSubagentPolicy"`. Added load logic in `handleRoleChange()` to set radio state and toggle custom name input visibility. Added change listeners in `initPromptsTabListeners()` for radio changes and custom name input. |
+| MAJOR-1 | **Fixed** | Removed duplicate `module.exports` block from `sharedDefaults.js`. |
+| MAJOR-2 | **Fixed** | Updated `CustomAgentAddons.subagentPolicy` type to `'default' \| 'noSubagents' \| 'useSubagents' \| 'customSubagent'` in `agentConfig.ts`. Updated `parseCustomAgentAddons` validator to accept `'useSubagents'`. |
+| NIT-1 | **Deferred** | Not user-facing; low priority. |
+
+### Files Changed by Review
+
+1. **`src/webview/kanban.html`** — Added planner subagentPolicy radio group HTML, load logic, and save listeners
+2. **`src/webview/sharedDefaults.js`** — Removed duplicate `module.exports`
+3. **`src/services/agentConfig.ts`** — Added `'useSubagents'` to `subagentPolicy` type union and parser validation
+
+### Verification
+
+- **Typecheck**: `npx tsc --noEmit` passes for all plan-related files. Pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (relative import paths) are unrelated to this plan.
+- **Manual verification**: Still required per the original Verification Plan — specifically confirming the Planner radio group is visible and functional in the Kanban Prompts tab.
+
+### Remaining Risks
+
+- The `renderRoleAddons('planner')` call still runs and creates invisible duplicate DOM elements in the hidden `promptCustomization` container. This is wasteful but harmless. A future cleanup could skip `renderRoleAddons` for the planner role or refactor the planner to use the dynamic renderer exclusively.
+- Legacy `useSubagents` boolean configs are handled by the migration path (`subagentPolicy === undefined && useSubagents === true`), but this fallback is not visually reflected in the UI — if a legacy config has `useSubagents: true`, the Planner radio will show "Not Specified" (value: `'default'`) even though the backend correctly resolves it to use subagents. A future enhancement could auto-migrate the legacy boolean to `subagentPolicy: 'useSubagents'` on load.

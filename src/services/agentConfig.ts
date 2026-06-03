@@ -19,7 +19,7 @@ export interface CustomAgentAddons {
     suppressWalkthrough?: boolean;
     cavemanOutput?: boolean;
     useSubagents?: boolean;
-    subagentPolicy?: 'default' | 'noSubagents' | 'customSubagent';
+    subagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
     customSubagentName?: string;
 
     // Design doc
@@ -171,8 +171,8 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.suppressWalkthrough === true) a.suppressWalkthrough = true;
     if (s.cavemanOutput === true) a.cavemanOutput = true;
     if (s.useSubagents === false) a.useSubagents = false;
-    if (s.subagentPolicy && ['default', 'noSubagents', 'customSubagent'].includes(s.subagentPolicy as string)) {
-        a.subagentPolicy = s.subagentPolicy as 'default' | 'noSubagents' | 'customSubagent';
+    if (s.subagentPolicy && ['default', 'noSubagents', 'useSubagents', 'customSubagent'].includes(s.subagentPolicy as string)) {
+        a.subagentPolicy = s.subagentPolicy as 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
     }
     if (s.customSubagentName && typeof s.customSubagentName === 'string') {
         const sanitized = String(s.customSubagentName).replace(/[^a-zA-Z0-9_]/g, '').trim();

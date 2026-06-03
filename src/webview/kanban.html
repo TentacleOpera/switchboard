@@ -2533,6 +2533,27 @@
                   <span>Do not run automated tests</span>
                   <span class="tooltip">Skip automated test execution to save tokens</span>
                 </label>
+
+                <div class="addon-radio-group" style="margin-top:8px;">
+                  <span class="addon-label" style="font-weight:600;margin-bottom:4px;display:block;">Subagent Policy</span>
+                  <label class="checkbox-item" title="Let the execution platform decide subagent behavior">
+                    <input type="radio" name="plannerSubagentPolicy" value="default" checked>
+                    <span>Not Specified</span>
+                  </label>
+                  <label class="checkbox-item" title="Explicitly instruct the agent not to spawn or invoke any subagents">
+                    <input type="radio" name="plannerSubagentPolicy" value="noSubagents">
+                    <span>No Subagents</span>
+                  </label>
+                  <label class="checkbox-item" title="Instruct the agent to use parallel subagents when handling multiple plans">
+                    <input type="radio" name="plannerSubagentPolicy" value="useSubagents">
+                    <span>Yes (Use Subagents)</span>
+                  </label>
+                  <label class="checkbox-item" title="Instruct the agent to use a specific custom subagent" style="display:flex;align-items:center;gap:6px;flex-wrap:wrap;">
+                    <input type="radio" name="plannerSubagentPolicy" value="customSubagent">
+                    <span>Custom Subagent</span>
+                    <input id="plannerAddonCustomSubagentName" type="text" placeholder="Custom subagent name..." style="margin-left:8px;padding:2px 6px;border-radius:4px;border:1px solid var(--vscode-input-border, #ccc);background:var(--vscode-input-background, #fff);color:var(--vscode-input-foreground, #000);display:none;font-size:11px;width:150px;">
+                  </label>
+                </div>
               </div>
             </div>
           </div>
@@ -2807,6 +2828,15 @@
                 document.getElementById('plannerAddonCavemanOutput').checked = !!config.addons?.cavemanOutput;
                 document.getElementById('plannerAddonSkipCompilation').checked = !!config.addons?.skipCompilation;
                 document.getElementById('plannerAddonSkipTests').checked = !!config.addons?.skipTests;
+                // Load subagent policy radio for planner
+                const plannerSubagentPolicy = config.addons?.subagentPolicy || 'default';
+                const plannerSubagentRadios = document.getElementsByName('plannerSubagentPolicy');
+                plannerSubagentRadios.forEach(radio => { radio.checked = radio.value === plannerSubagentPolicy; });
+                const plannerCustomNameInput = document.getElementById('plannerAddonCustomSubagentName');
+                if (plannerCustomNameInput) {
+                    plannerCustomNameInput.style.display = plannerSubagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
+                    plannerCustomNameInput.value = config.addons?.customSubagentName || '';
+                }
             } else if (currentRole === 'researcher' || currentRole === 'code_researcher') {
                 const config = roleConfigs[currentRole] || { prompt: '', addons: {} };
                 const complexity = config.researchComplexity || 'deep';
@@ -3572,6 +3602,37 @@
                     });
                 }
             });
+
+            // Planner subagent policy radio listeners
+            const plannerSubagentRadios = document.getElementsByName('plannerSubagentPolicy');
+            const plannerCustomNameInput = document.getElementById('plannerAddonCustomSubagentName');
+            plannerSubagentRadios.forEach(radio => {
+                radio.addEventListener('change', (e) => {
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.subagentPolicy = e.target.value;
+                    if (plannerCustomNameInput) {
+                        plannerCustomNameInput.style.display = e.target.value === 'customSubagent' ? 'inline-block' : 'none';
+                        if (e.target.value !== 'customSubagent') {
+                            roleConfigs.planner.addons.customSubagentName = '';
+                            plannerCustomNameInput.value = '';
+                        }
+                    }
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            });
+            if (plannerCustomNameInput) {
+                plannerCustomNameInput.addEventListener('input', (e) => {
+                    const sanitized = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
+                    e.target.value = sanitized;
+                    if (!roleConfigs.planner) roleConfigs.planner = { workflowFilePath: '', addons: {} };
+                    if (!roleConfigs.planner.addons) roleConfigs.planner.addons = {};
+                    roleConfigs.planner.addons.customSubagentName = sanitized;
+                    saveRoleConfig('planner');
+                    refreshPreview();
+                });
+            }
 
         }
         initPromptsTabListeners();
