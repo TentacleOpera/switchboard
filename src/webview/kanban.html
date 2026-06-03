@@ -4258,10 +4258,14 @@
                             }
                         }
                         if (htmlText) {
-                            const markdown = convertHtmlToMarkdown(htmlText);
-                            if (markdown) {
-                                postKanbanMessage({ type: 'importFromClipboard', markdownText: markdown });
-                                return;
+                            if (htmlText.length > 200_000) {
+                                console.warn('[Webview Clipboard] HTML content too large (' + Math.round(htmlText.length / 1024) + ' KB), falling back to backend plain text path.');
+                            } else {
+                                const markdown = convertHtmlToMarkdown(htmlText);
+                                if (markdown) {
+                                    postKanbanMessage({ type: 'importFromClipboard', markdownText: markdown });
+                                    return;
+                                }
                             }
                         }
                     }
@@ -5084,7 +5088,7 @@
                         if (isPre) {
                             return childrenMarkdown;
                         } else {
-                            return ` \`${childrenMarkdown.trim()}\` `;
+                            return `\`${childrenMarkdown.trim()}\``;
                         }
                     case 'PRE': {
                         let lang = '';

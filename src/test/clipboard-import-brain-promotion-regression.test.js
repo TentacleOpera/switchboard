@@ -13,7 +13,7 @@ function run() {
 
     assert.match(
         source,
-        /public async importPlanFromClipboard\(\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, text, false, \{ skipBrainPromotion: true \}\);/,
+        /public async importPlanFromClipboard\(markdownText\?: string\): Promise<void> \{[\s\S]*await this\._createInitiatedPlan\(title, text, false, \{ skipBrainPromotion: true \}\);/,
         'Expected single-plan clipboard import to pass skipBrainPromotion=true.'
     );
 

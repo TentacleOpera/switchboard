@@ -167,3 +167,61 @@ Key risks: (1) Custom HTML-to-Markdown converter will miss edge cases in messy c
 6. Test the fallback path: copy plain text (no HTML) to clipboard, click Import, verify it still works via the backend plain-text path.
 7. Test error handling: deny clipboard permission (if possible in test environment), verify graceful fallback or user-facing error message.
 8. Test that creating a plan via the "Add Plan" button (`createDraftPlanTicket`) still produces a plan with the full template stubs — confirming that `_buildDraftPlanContent` still provides them.
+
+## Review Results (Post-Implementation)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | File | Lines |
+|---|---------|----------|------|-------|
+| 1 | Stale test regex expects `importPlanFromClipboard()` with no params, but signature is now `(markdownText?: string)` — test will fail at runtime | **CRITICAL** | `src/test/clipboard-import-brain-promotion-regression.test.js` | 16 |
+| 2 | No HTML size check in webview before conversion — plan requires >200KB guard, only backend has it | **MAJOR** | `src/webview/kanban.html` | 4260-4266 |
+| 3 | Inline code adds extra spaces (`` ` `code` ` ``) — minor output quality issue | **NIT** | `src/webview/kanban.html` | 5087 |
+| 4 | No try/catch inside `convertHtmlToMarkdown` — outer handler catches but silently degrades | **NIT** | `src/webview/kanban.html` | 5028-5128 |
+| 5 | Ordered lists always start at `1.` regardless of `start` attribute | **NIT** | `src/webview/kanban.html` | 5114 |
+| 6 | No table support — `<table>` content collapses to concatenated text | **NIT** | `src/webview/kanban.html` | 5120-5121 |
+| 7 | PlanningPanelProvider always falls back to plain text (no webview clipboard read) | **NIT** | `src/services/PlanningPanelProvider.ts` | 2762 |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Action | Rationale |
+|---------|--------|-----------|
+| #1 Stale test regex (CRITICAL) | **Fix now** | Test will fail at runtime. One-line regex fix. |
+| #2 No HTML size check (MAJOR) | **Fix now** | Plan explicitly requires it; unbounded HTML conversion is a resource risk. |
+| #3 Inline code spaces (NIT) | **Fix now** (trivial) | One-character fix, improves output quality. |
+| #4 No try/catch in converter (NIT) | Defer | Outer catch handles adequately for v1. |
+| #5 Ordered list `start` attr (NIT) | Defer | Known limitation, CommonMark-compliant. |
+| #6 No table support (NIT) | Defer | Known limitation, explicitly documented. |
+| #7 Planning Panel plain-text (NIT) | Defer | Out of scope per plan. |
+
+### Stage 3: Code Fixes Applied
+
+1. **`src/test/clipboard-import-brain-promotion-regression.test.js` line 16**: Updated regex from `\(\)` to `\(markdownText\?: string\)` to match new signature. Test passes.
+
+2. **`src/webview/kanban.html` lines 4260-4270**: Added HTML size guard before conversion — if `htmlText.length > 200_000`, logs warning and falls back to backend plain-text path instead of attempting conversion.
+
+3. **`src/webview/kanban.html` line 5091**: Removed extra spaces around inline code — changed from `` ` \`${childrenMarkdown.trim()}\` ` `` to `` `\`${childrenMarkdown.trim()}\`` ``.
+
+### Validation Results
+
+- **Regression test**: `clipboard-import-brain-promotion-regression.test.js` — **PASSED** (after regex fix)
+- **Compilation**: Skipped per session directives
+- **Full test suite**: To be run separately by user
+
+### Remaining Risks
+
+- **Custom converter edge cases**: The `convertHtmlToMarkdown` function handles common HTML elements well but may produce suboptimal output for deeply nested structures, `<table>` elements, or HTML with extensive inline styles. Turndown would handle these more robustly if adopted in a future iteration.
+- **`navigator.clipboard.read()` compatibility**: The ClipboardItem API may not be available in all VS Code/Electron versions. The fallback path handles this gracefully.
+- **Planning Panel import path**: Always uses backend plain-text read; does not benefit from rich HTML conversion. Future enhancement could add webview clipboard read to the Planning Panel.
+
+### Implementation Confirmation
+
+All proposed changes from the plan have been implemented and verified:
+
+- ✅ `kanban.html`: Webview clipboard read with HTML-to-Markdown conversion, fallback to backend, size guard
+- ✅ `KanbanProvider.ts`: `msg.markdownText` forwarded to command
+- ✅ `extension.ts`: Command accepts optional `markdownText?: string` parameter
+- ✅ `TaskViewerProvider.ts`: `importPlanFromClipboard(markdownText?: string)` with nullish coalescing fallback
+- ✅ `TaskViewerProvider.ts`: `isFullPlan` template stub logic completely removed from `_createInitiatedPlan`
+- ✅ `TaskViewerProvider.ts`: `skipTemplateHeadings` option removed from options type and all callers
+- ✅ All callers (Linear, ClickUp parent, ClickUp subtask, clipboard, draft, multi-plan) no longer pass `skipTemplateHeadings`
