@@ -6549,11 +6549,11 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             }
         }
 
-        // Pattern 3: "## Verification Plan" section with manual-specific subheadings
+        // Pattern 3: "## Verification Plan/Steps" section (typo-tolerant: matches "Verificaton", "Verificaiton", etc.)
         // Only runs if Patterns 1 and 2 didn't find any steps (dedup guard)
-        // This handles plans that use "## Verification Plan" as the main section
-        // and extract steps ONLY from manual-specific subheadings like "Manual verification steps:"
-        // NOT from "Automated Tests" or other non-manual sections
+        // Steps directly under the header are captured by default (inManualStepsSection starts true).
+        // Any ### subheading resets the flag to false, excluding automated sections.
+        // The manual-specific trigger (e.g., "Manual verification steps:") re-enables capture after a subheading.
         if (steps.length === 0) {
             const verificationPlanMatch = content.match(/##\s*Verific[a-z]*\s+(?:Plan|Steps)\s*\n([\s\S]*?)(?=\n##|$)/i);
             if (verificationPlanMatch) {

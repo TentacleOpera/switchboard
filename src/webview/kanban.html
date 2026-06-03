@@ -130,6 +130,7 @@
             border: none;
             cursor: pointer;
             border-radius: 2px;
+            flex-shrink: 0;
         }
         .kanban-sub-bar .strip-icon-btn img {
             width: 14px;
@@ -165,6 +166,10 @@
             overflow: hidden;
             text-overflow: ellipsis;
             color: var(--text-secondary);
+        }
+        #status-message.sub-bar-status {
+            min-width: 0;
+            overflow: hidden;
         }
         #status-message.sub-bar-status.flashing {
             animation: statusFlash 3s ease-in-out forwards;
@@ -1362,6 +1367,9 @@
             gap: 6px;
             flex-wrap: wrap;
         }
+        .autoban-timers-inline.is-empty {
+            display: none;
+        }
 
         .autoban-timer-badge {
             font-family: var(--font-mono);
@@ -2118,9 +2126,6 @@
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
-            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
-            </button>
             <button id="btn-delete-project" class="strip-btn" data-tooltip="Select a project to delete" disabled>🗑</button>
 
             <!-- Spacer to push right-side controls to the right -->
@@ -2148,7 +2153,10 @@
                 <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
                     <img src="{{ICON_22}}" alt="Start Automation" style="width: 14px; height: 14px;">
                 </button>
-                <div class="autoban-timers-inline" id="autoban-timers-inline"></div>
+                <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
+                    <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
+                </button>
+                <div class="autoban-timers-inline is-empty" id="autoban-timers-inline"></div>
                 <button class="strip-icon-btn" id="btn-pause-autoban-timer" data-tooltip="Pause automation timers" style="display:none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="14" height="14" style="color: var(--accent-teal);">
                         <rect x="3" y="2" width="3.5" height="12" rx="1"/>
@@ -2158,13 +2166,10 @@
                 <button class="strip-icon-btn" id="btn-reset-autoban-timer" data-tooltip="Reset and restart automation timers" style="display:none;">
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 14px; height: 14px;">
                 </button>
-                <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
                 <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                     <img src="{{ICON_28}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
                 </button>
-                <button class="strip-icon-btn" id="btn-copy-chat-workflow" data-tooltip="Copy planning chat prompt to clipboard, prohibits code editing">
-                    <img src="{{ICON_CHAT}}" alt="Copy Chat Workflow" style="width: 14px; height: 14px;">
-                </button>
+                <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
             </div>
             <div class="kanban-board" id="kanban-board"></div>
         </div>
@@ -4118,6 +4123,9 @@
                 const rightSide = isCreated
                     ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
                             ${backlogToggleBtn}
+                            <button class="column-icon-btn" data-action="chatCopyPrompt" data-column="${escapeAttr(def.id)}" data-tooltip="Copy chat prompt to clipboard. If no plans are selected, this starts a general chat consultation mode in which code editing is prohibited.">
+                                <img src="${ICON_CHAT}" alt="Chat">
+                            </button>
                             <button class="btn-add-plan" id="btn-add-plan" data-tooltip="Add Plan">+</button>
                             <button class="btn-add-plan" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import" style="width: 16px; height: 16px;"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>
@@ -4196,11 +4204,6 @@
                                <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
                            </button>`
                         : '';
-                    const chatBtn = isCreated
-                        ? `<button class="column-icon-btn" data-action="chatCopyPrompt" data-column="${escapeAttr(def.id)}" data-tooltip="Copy chat prompt for selected plans to clipboard">
-                               <img src="${ICON_CHAT}" alt="Chat">
-                           </button>`
-                        : '';
                     buttonArea = `<div class="column-button-area">
                         <button class="column-icon-btn" data-action="moveSelected" data-column="${escapeAttr(def.id)}" data-tooltip="Move selected plans to next stage (triggers CLI if enabled)">
                             <img src="${ICON_MOVE_SELECTED}" alt="Move Selected">
@@ -4219,7 +4222,6 @@
                         ${splitterBtn}
                         ${codeMapBtn}
                         ${testingFailBtn}
-                        ${chatBtn}
                     </div>`;
                 }
 
@@ -6179,9 +6181,11 @@
 
             if (!autobanConfig || !autobanConfig.enabled) {
                 if (container.innerHTML !== '') { container.innerHTML = ''; }
+                container.classList.add('is-empty');
                 updateAutobanButtonState();
                 return;
             }
+            container.classList.remove('is-empty');
 
             if (autobanConfig.paused) {
                 const badgeData = autobanColumns.map(col => {
@@ -6707,10 +6711,6 @@
         if (collapseCodersEnabled) {
             document.getElementById('btn-collapse-coders')?.classList.add('is-active');
         }
-
-        document.getElementById('btn-copy-chat-workflow')?.addEventListener('click', () => {
-            postKanbanMessage({ type: 'copyChatWorkflow', workspaceRoot: getActiveWorkspaceRoot() });
-        });
 
         // Close buttons (both × header and Cancel footer)
         document.querySelectorAll('[data-action="closeRoutingMap"]').forEach(btn => {
