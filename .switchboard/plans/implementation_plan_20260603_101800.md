@@ -141,3 +141,46 @@ Key risks: front-matter removal breaks `docName` resolution in `_handleFetchDocs
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Pass (2026-06-03)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Double import registration: `writeContentToDocsDir` and `writeFromPlanningCache` registered imports with incorrect `remoteDocId` (used `docTitle`/`docName` instead of source-specific docId). Callers in `PlanningPanelProvider.ts` also registered with correct data, causing `INSERT OR REPLACE` to overwrite. First write was semantically wrong. | CRITICAL | **Fixed** |
+| 2 | Filename-as-slug fallback in `_handleFetchDocsFile` only stripped old 8-char hex hash suffixes (`_[a-f0-9]{8}$`), not new collision suffixes (`_1`, `_2`). Files with collision suffixes would display wrong docName. | MAJOR | **Fixed** |
+| 3 | `writeFromCache` passed raw content to `_writeDocToDocsDir` without stripping YAML front-matter. Dead code (no callers) but public API method. | MAJOR | **Fixed** |
+| 4 | Stale JSDoc comments still referenced `.switchboard/docs/` as destination. | NIT | **Fixed** |
+| 5 | `registerImport` and `setDocumentImported` fallback paths in `PlanningPanelCacheService.ts` still construct `.switchboard/docs/` paths. Overridden by `options.filePath` in all current flows. | NIT | **Deferred** |
+| 6 | `registerImport` still generates hash-based filenames (`slug_hash.md`). Dead code when `options.filePath` is provided. | NIT | **Deferred** |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now (1–4):** All have clear, isolated fixes with no cascading risk.
+- **Defer (5–6):** Both are in `PlanningPanelCacheService.ts` fallback paths that are currently unreachable. Fix when that service is refactored.
+
+### Code Fixes Applied
+
+**PlannerPromptWriter.ts:**
+- Removed import registration blocks from `writeContentToDocsDir` (was lines 166–183) and `writeFromPlanningCache` (was lines 210–228). Added comments explaining registration is the caller's responsibility.
+- Added front-matter stripping to `writeFromCache` (line 301–302).
+- Updated 3 JSDoc comments from ".switchboard/docs/" to "first configured local docs folder".
+
+**PlanningPanelProvider.ts:**
+- `_handleImportResearchDoc`: Added proper `registerImport` call after `writeContentToDocsDir` succeeds (lines 2810–2829), using correct `sourceId='research-clipboard'` and `finalDocTitle`.
+- `_handleImportFullDoc` local-folder path: Replaced `setDocumentImported` with proper `registerImport` call using `safeDocId` and `docName` (lines 2571–2591).
+- `_handleMessage` plannerPromptState path: Replaced `setDocumentImported` with proper `registerImport` call using source-specific `docId` (lines 2225–2249). Kept adapter `setDocumentImported` for UI state tracking.
+- `_handleFetchDocsFile`: Extended filename-as-slug fallback regex to also strip `_\d+$` collision suffixes (line 2401).
+
+### Verification Results
+
+- **Typecheck:** `npx tsc --noEmit` — no errors in modified files. Pre-existing errors in `agentPromptBuilder.ts`, `ClickUpSyncService.ts`, `KanbanProvider.ts` are unrelated.
+- **Tests:** Skipped per session directive. User to run separately.
+
+### Remaining Risks
+
+1. **`writeFromPlanningCache` path content hash:** When `finalContent` is empty (the `writeFromPlanningCache` branch in `_handleMessage`), the content hash is computed from an empty string. This is acceptable — the hash is only used for sync detection, and this path doesn't use sync.
+2. **`PlanningPanelCacheService` stale fallbacks:** `registerImport` and `setDocumentImported` still construct `.switchboard/docs/` fallback paths. These are unreachable in current flows but would be incorrect if reached. Should be cleaned up during next refactor of that service.

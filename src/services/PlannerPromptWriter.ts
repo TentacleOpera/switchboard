@@ -46,8 +46,8 @@ export class PlannerPromptWriter {
     }
 
     /**
-     * Shared logic: write content to .switchboard/docs/ with hash-based filename.
-     * Idempotent by design: same content → same hash → same filename → overwrite with identical content.
+     * Shared logic: write content to the first configured local docs folder.
+     * Idempotent by design: same content → same filename → overwrite with identical content.
      * @param options.skipDesignDocLink - (DEPRECATED) If true, do NOT set designDocLink. Previously used by removed "Copy Link" feature.
      */
     private async _writeDocToDocsDir(
@@ -139,8 +139,8 @@ export class PlannerPromptWriter {
     }
 
     /**
-     * Write content directly to .switchboard/docs/ (used for pages that aren't cached).
-     * Idempotent by design: same content → same hash → same filename → overwrite with identical content.
+     * Write content directly to the first configured local docs folder (used for pages that aren't cached).
+     * Idempotent by design: same content → same filename → overwrite with identical content.
      */
     async writeContentToDocsDir(
         workspaceRoot: string,
@@ -162,26 +162,8 @@ export class PlannerPromptWriter {
 
                 const result = await this._writeDocToDocsDir(workspaceRoot, contentWithoutFrontMatter, docTitle, sourceId, options);
 
-                // Register import in the import registry
-                if (result.success && result.savedPath) {
-                    try {
-                        const cacheService = this._options.getCacheService(workspaceRoot);
-                        const rawSlug = (docTitle || sourceId)
-                            .toLowerCase()
-                            .replace(/[^a-z0-9]+/g, '_')
-                            .replace(/^_+|_+$/g, '')
-                            .slice(0, 60) || sourceId;
-                        const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
-                        await cacheService.registerImport(sourceId, docTitle, docTitle, rawSlug, { 
-                            remoteContentHash: contentHash,
-                            workspaceId,
-                            filePath: result.savedPath
-                        });
-                    } catch (regErr) {
-                        console.warn('[PlannerPromptWriter] Failed to register import:', regErr);
-                    }
-                }
+                // Note: Import registration is the caller's responsibility.
+                // This method only has docTitle, not the source-specific docId needed for correct registration.
 
                 return result;
             } catch (err) {
@@ -196,7 +178,7 @@ export class PlannerPromptWriter {
     }
 
     /**
-     * Write document from the planning cache (new cache system) to .switchboard/docs/.
+     * Write document from the planning cache (new cache system) to the first configured local docs folder.
      * Reads from PlanningPanelCacheService instead of old per-source cache files.
      */
     async writeFromPlanningCache(
@@ -225,25 +207,8 @@ export class PlannerPromptWriter {
 
                 const result = await this._writeDocToDocsDir(workspaceRoot, contentWithoutFrontMatter, docName, sourceId, options);
 
-                // Register import in the import registry
-                if (result.success && result.savedPath) {
-                    try {
-                        const rawSlug = (docName || sourceId)
-                            .toLowerCase()
-                            .replace(/[^a-z0-9]+/g, '_')
-                            .replace(/^_+|_+$/g, '')
-                            .slice(0, 60) || sourceId;
-                        const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
-                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
-                        await cacheService.registerImport(sourceId, docId, docName, rawSlug, { 
-                            remoteContentHash: contentHash,
-                            workspaceId,
-                            filePath: result.savedPath
-                        });
-                    } catch (regErr) {
-                        console.warn('[PlannerPromptWriter] Failed to register import:', regErr);
-                    }
-                }
+                // Note: Import registration is the caller's responsibility.
+                // This method only has docName, not the source-specific docId needed for correct registration.
 
                 return result;
             } catch (err) {
@@ -333,7 +298,10 @@ export class PlannerPromptWriter {
                     return { error: 'Cache file not found. Please fetch content first.' };
                 }
 
-                return await this._writeDocToDocsDir(workspaceRoot, content, docTitle, sourceId, options);
+                // Strip YAML front-matter before writing
+                const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+
+                return await this._writeDocToDocsDir(workspaceRoot, contentWithoutFrontMatter, docTitle, sourceId, options);
             } catch (err) {
                 return { error: String(err) };
             } finally {

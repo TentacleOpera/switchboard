@@ -2222,12 +2222,29 @@ export class PlanningPanelProvider {
             } else {
                 result = await this._plannerPromptWriter.writeFromPlanningCache(workspaceRoot, sourceId, docId, docName, { skipDesignDocLink: true });
             }
-            if (result.success && this._cacheService) {
+            if (result.success && this._cacheService && result.savedPath) {
+                try {
+                    const rawSlug = (docName || sourceId)
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .slice(0, 60) || sourceId;
+                    const contentForHash = finalContent || '';
+                    const contentWithoutFrontMatter = contentForHash.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                    const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    await this._cacheService.registerImport(sourceId, docId, docName, rawSlug, {
+                        remoteContentHash: contentHash,
+                        workspaceId,
+                        filePath: result.savedPath
+                    });
+                } catch (regErr) {
+                    console.warn('[PlanningPanelProvider] Failed to register import:', regErr);
+                }
+                // Also mark as imported on the adapter (for UI state tracking)
                 const adapter = this._researchImportService.getAdapter(sourceId);
                 if (adapter && (adapter as any).setDocumentImported) {
                     await (adapter as any).setDocumentImported(docId);
-                } else {
-                    await this._cacheService.setDocumentImported(sourceId, docId);
                 }
             }
             this._panel?.webview.postMessage({ type: 'plannerPromptState', ...result });
@@ -2380,7 +2397,8 @@ export class PlanningPanelProvider {
             // 3. Filename-as-slug fallback
             if (!docName) {
                 const baseName = path.basename(filePath, '.md');
-                const cleanBaseName = baseName.replace(/_[a-f0-9]{8}$/, '');
+                // Strip old hash suffix (_abcd1234) and new collision suffix (_1, _2, etc.)
+                const cleanBaseName = baseName.replace(/_[a-f0-9]{8}$/, '').replace(/_\d+$/, '');
                 docName = cleanBaseName.replace(/_/g, ' ');
             }
             if (!docName) {
@@ -2550,8 +2568,24 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({ type: 'importFullDocResult', error: writeResult.error });
                     return;
                 }
-                if (this._cacheService && writeResult.success) {
-                    await this._cacheService.setDocumentImported(sourceId, docId);
+                if (this._cacheService && writeResult.success && writeResult.savedPath) {
+                    try {
+                        const rawSlug = (docName || sourceId)
+                            .toLowerCase()
+                            .replace(/[^a-z0-9]+/g, '_')
+                            .replace(/^_+|_+$/g, '')
+                            .slice(0, 60) || sourceId;
+                        const contentWithoutFrontMatter = (result.content || '').replace(/^---\n[\s\S]*?\n---\n*/, '');
+                        const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
+                        const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                        await this._cacheService.registerImport(sourceId, safeDocId, docName, rawSlug, {
+                            remoteContentHash: contentHash,
+                            workspaceId,
+                            filePath: writeResult.savedPath
+                        });
+                    } catch (regErr) {
+                        console.warn('[PlanningPanelProvider] Failed to register local-folder import:', regErr);
+                    }
                 }
                 await this._sendLocalDocsReady();
                 await this._handleFetchImportedDocs(workspaceRoot);
@@ -2773,7 +2807,28 @@ export class PlanningPanelProvider {
                 return;
             }
 
-            this._panel?.webview.postMessage({ 
+            // Register import in the import registry
+            if (writeResult.success && writeResult.savedPath && this._cacheService) {
+                try {
+                    const rawSlug = (finalDocTitle || 'research-clipboard')
+                        .toLowerCase()
+                        .replace(/[^a-z0-9]+/g, '_')
+                        .replace(/^_+|_+$/g, '')
+                        .slice(0, 60) || 'research-clipboard';
+                    const contentWithoutFrontMatter = content.replace(/^---\n[\s\S]*?\n---\n*/, '');
+                    const contentHash = crypto.createHash('sha256').update(contentWithoutFrontMatter).digest('hex');
+                    const workspaceId = await this._getWorkspaceId(workspaceRoot);
+                    await this._cacheService.registerImport('research-clipboard', finalDocTitle, finalDocTitle, rawSlug, {
+                        remoteContentHash: contentHash,
+                        workspaceId,
+                        filePath: writeResult.savedPath
+                    });
+                } catch (regErr) {
+                    console.warn('[PlanningPanelProvider] Failed to register research import:', regErr);
+                }
+            }
+
+            this._panel?.webview.postMessage({
                 type: 'importResearchDocResult', 
                 success: true, 
                 docTitle: finalDocTitle 
