@@ -11002,7 +11002,7 @@ What would you like to find?`;
         // Exclude paths containing "completed" directories to prevent
         // archived plans from being re-ingested as new Kanban cards
         if (parts.some(part => part.toLowerCase() === 'completed')) {
-            console.log(`[TaskViewerProvider] Brain mirror candidate rejected (completed directory): ${path.basename(filePath)}`);
+            console.log(`[TaskViewerProvider] Brain mirror candidate rejected (completed directory): ${filePath}`);
             return false;
         }
 
