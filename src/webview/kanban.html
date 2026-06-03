@@ -304,6 +304,11 @@
             border-color: var(--accent-teal-dim);
         }
 
+        .strip-icon-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
         .strip-icon-btn img {
             width: 14px;
             height: 14px;
@@ -523,21 +528,24 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             border: 1px solid transparent;
             border-radius: 3px;
             background: transparent;
             cursor: pointer;
             transition: all 0.15s;
         }
+        .column-header-btn:focus {
+            outline: none;
+        }
         .column-header-btn:hover {
             border-color: var(--accent-teal-dim);
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
         .column-header-btn img {
-            width: 16px;
-            height: 16px;
+            width: 20px;
+            height: 20px;
             filter: brightness(0.9);
             transition: all 0.15s;
             pointer-events: none;
@@ -549,7 +557,7 @@
         #btn-add-plan {
             color: var(--accent-teal);
             font-family: var(--font-mono);
-            font-size: 14px;
+            font-size: 18px;
             font-weight: bold;
         }
 
@@ -994,8 +1002,8 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             border: 1px solid transparent;
             border-radius: 3px;
             background: transparent;
@@ -1003,23 +1011,18 @@
             transition: all 0.15s;
             margin-left: 4px;
         }
+        .mode-toggle:focus {
+            outline: none;
+        }
 
         .mode-toggle:hover {
             border-color: var(--accent-teal-dim);
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
-        .mode-toggle.mode-cli {
-            border-color: color-mix(in srgb, var(--accent-orange) 40%, transparent);
-        }
-
-        .mode-toggle.mode-prompt {
-            border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);
-        }
-
         .mode-toggle img {
-            width: 16px;
-            height: 16px;
+            width: 20px;
+            height: 20px;
             filter: brightness(0.9);
             transition: all 0.15s;
             pointer-events: none;
@@ -1034,14 +1037,17 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            width: 24px;
-            height: 24px;
+            width: 28px;
+            height: 28px;
             border: 1px solid transparent;
             border-radius: 3px;
             background: transparent;
             cursor: pointer;
             transition: all 0.15s;
             margin-right: 4px;
+        }
+        .complexity-routing-btn:focus {
+            outline: none;
         }
 
         .complexity-routing-btn:hover {
@@ -1055,8 +1061,8 @@
         }
 
         .complexity-routing-btn img {
-            width: 16px;
-            height: 16px;
+            width: 20px;
+            height: 20px;
             filter: brightness(0.9);
             transition: all 0.15s;
             pointer-events: none;
@@ -2161,7 +2167,9 @@
             <select id="workspace-project-select" class="workspace-project-select" data-tooltip="Select workspace and project" style="min-width:280px;"></select>
             <button class="strip-btn is-teal" id="btn-assign-workspace-project" data-tooltip="Assign selected plan(s) to this workspace/project" disabled>ASSIGN</button>
             <button class="btn-add-plan" id="btn-add-project" data-tooltip="Add new project">+</button>
-            <button id="btn-delete-project" class="strip-btn" data-tooltip="Select a project to delete" disabled>🗑</button>
+            <button id="btn-delete-project" class="strip-icon-btn" data-tooltip="Select a project to delete" disabled>
+                <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
+            </button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
@@ -4640,14 +4648,24 @@
             const cardIds = new Set(cards.map(c => c.sessionId || c.planId).filter(Boolean));
             for (const key of selectedCards.keys()) {
                 const val = selectedCards.get(key);
-                const cardWorkspaceRoot = typeof val === 'object' ? val.workspaceRoot : val;
+                const cardWorkspaceRoot = val && typeof val === 'object' ? val.workspaceRoot : val;
                 // If the card belongs to a different workspace, do NOT prune it — it's
                 // invisible on the board right now but still tracked for cross-workspace ASSIGN.
                 if (cardWorkspaceRoot && cardWorkspaceRoot !== currentWorkspaceRoot) {
                     continue;
                 }
-                // Card belongs to the current workspace. Only prune if it's not in cardIds
-                // (meaning it was deleted or completed from the DB).
+                // If the card belongs to the current workspace but a different project than
+                // the active filter, do NOT prune it — it's filtered out of the board view
+                // but still tracked for cross-project ASSIGN.
+                if (val && typeof val === 'object' && activeProjectFilter) {
+                    const cardProject = val.project || '';
+                    const filterProject = activeProjectFilter === '__unassigned__' ? '' : activeProjectFilter;
+                    if (cardProject !== filterProject) {
+                        continue;
+                    }
+                }
+                // Card belongs to the current workspace and project. Only prune if it's not
+                // in cardIds (meaning it was deleted or completed from the DB).
                 if (!cardIds.has(key)) {
                     selectedCards.delete(key);
                 }
@@ -6395,22 +6413,34 @@
             // not currentWorkspaceRoot (which may have been updated by a dropdown switch).
             const sourceWorkspaces = new Set(
                 Array.from(selectedCards.values()).map(val =>
-                    typeof val === 'object' ? val.workspaceRoot : val
+                    val && typeof val === 'object' ? val.workspaceRoot : val
                 )
             );
             const isSameWorkspace = sourceWorkspaces.size === 1 && sourceWorkspaces.has(targetWorkspaceRoot);
 
             if (isSameWorkspace && (!targetProject || targetProject === '__unassigned__')) {
-                // No-op: same workspace, no project or unassigned
-                vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
-                return;
+                // Check if any selected cards actually have a project assignment.
+                // If they do, this is a valid "clear project" operation, not a no-op.
+                const hasAnyProjectAssignment = Array.from(selectedCards.values()).some(val => {
+                    const cardProject = val && typeof val === 'object' ? val.project : '';
+                    return !!cardProject;
+                });
+                if (!hasAnyProjectAssignment) {
+                    // True no-op: same workspace, no project target, and no cards have project assignments
+                    vscode?.postMessage?.({ type: 'showInfo', message: 'Plans are already in this workspace with no project assignment.' });
+                    return;
+                }
             }
 
             if (!isSameWorkspace) {
                 // Cross-workspace: reassign to target workspace first, optionally passing targetProject
-                const sourceWorkspaceRoot = sourceWorkspaces.size === 1
-                    ? Array.from(sourceWorkspaces)[0]
-                    : '';
+                if (sourceWorkspaces.size > 1) {
+                    // Multi-workspace selection is not supported for cross-workspace reassignment.
+                    // Each source workspace requires its own reassignment transaction.
+                    vscode?.postMessage?.({ type: 'showWarning', message: 'Cannot assign plans from multiple workspaces at once. Select plans from a single workspace and try again.' });
+                    return;
+                }
+                const sourceWorkspaceRoot = Array.from(sourceWorkspaces)[0];
                 postKanbanMessage({
                     type: 'reassignPlansWorkspace',
                     sessionIds: sessionIds,
