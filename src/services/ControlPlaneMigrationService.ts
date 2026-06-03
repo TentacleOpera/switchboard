@@ -971,6 +971,12 @@ export class ControlPlaneMigrationService {
         return this.generateCodeWorkspace(parentDir, repoDirs);
     }
 
+    // Files that should never be copied from the bundled .agent/ directory,
+    // even if they exist in the source. Matches the blocklist used in extension.ts activation.
+    private static readonly AGENT_COPY_BLOCKLIST = new Set([
+        'personas/switchboard_operator.md',
+    ]);
+
     private static async _copyDirectoryRecursive(
         sourceDir: string,
         targetDir: string,
@@ -985,6 +991,10 @@ export class ControlPlaneMigrationService {
             const entryRelativePath = basePath ? path.join(basePath, entry.name) : entry.name;
             if (entry.isDirectory()) {
                 await this._copyDirectoryRecursive(sourcePath, targetPath, options, entryRelativePath);
+                continue;
+            }
+            // Skip blocklisted files (consolidated into workflows, etc.)
+            if (this.AGENT_COPY_BLOCKLIST.has(entryRelativePath)) {
                 continue;
             }
             const isWorkflowFile = entryRelativePath.startsWith('workflows' + path.sep) && entry.name.endsWith('.md');

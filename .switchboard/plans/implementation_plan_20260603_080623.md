@@ -258,3 +258,54 @@ case 'copyChatWorkflow': {
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Review Results (2026-06-03)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **CRITICAL** | `_bootstrapControlPlaneLayout` in `ControlPlaneMigrationService.ts` copies from the bundled `.agent/` directory via `_copyDirectoryRecursive` with no blocklist. The persona file will be re-scaffolded on every migration/setup call, exactly the same bug the plan claims to close. The plan's own Edge-Case section acknowledged this but deferred it — the deferral was incorrect. |
+| 2 | **MAJOR** | `resolveBaseInstructions` (line 158) prepends `Read <workflowFilePath>` for all non-planner roles. The chat role is not excluded, so if `workflowFilePathEnabled` is set, the chat prompt gets a redundant "Read switchboard-chat.md" instruction prepended to the already-inlined content — the exact redundancy this plan was supposed to eliminate. The plan's Edge Cases (line 178) explicitly states these options "should be ignored for the chat role." |
+| 3 | NIT→OK | `DEFAULT_CHAT_BASE_INSTRUCTIONS` content fidelity vs. workflow file — markdown bold/heading markers stripped for prompt format, but all 9 rules, constraints, steps, and governance are present with identical text. Acceptable. |
+| 4 | NIT | `columnToPromptRole` does not include `chat` — correct per plan's "or leave it as a standalone role" option. |
+| 5 | NIT | Empty plan list wording: "None. General consultation." vs plan's suggested "No specific plans selected. Begin general consultation." — implementation's version is more concise and acceptable. |
+
+### Stage 2: Balanced Synthesis
+
+- **Finding 1 (CRITICAL) → Fix now**: Added `AGENT_COPY_BLOCKLIST` static readonly field to `ControlPlaneMigrationService` and a skip check in `_copyDirectoryRecursive`. This closes the re-scaffolding loop for both the migration path and the activation path.
+- **Finding 2 (MAJOR) → Fix now**: Added `role !== 'chat'` to the exclusion condition in `resolveBaseInstructions` alongside the existing `role !== 'planner'` check. One-line fix with prevents redundant workflow-file-read prepend.
+- Findings 3-5: Keep as-is.
+
+### Code Fixes Applied
+
+#### Fix 1: `src/services/ControlPlaneMigrationService.ts`
+- Added `AGENT_COPY_BLOCKLIST` static readonly `Set<string>` containing `'personas/switchboard_operator.md'`
+- Added blocklist check in `_copyDirectoryRecursive` before the overwrite/exist checks: `if (this.AGENT_COPY_BLOCKLIST.has(entryRelativePath)) continue;`
+- This ensures the persona file is never copied from the bundled `.agent/` directory during `_bootstrapControlPlaneLayout`, closing the re-scaffolding loop that the plan's own Complexity Audit identified.
+
+#### Fix 2: `src/services/agentPromptBuilder.ts`
+- Changed `resolveBaseInstructions` condition from `role !== 'planner'` to `role !== 'planner' && role !== 'chat'`
+- Added explanatory comment: "Chat role is excluded because its instructions are already inlined via DEFAULT_CHAT_BASE_INSTRUCTIONS."
+- This prevents a redundant "Read .agent/workflows/switchboard-chat.md" instruction from being prepended to the already-inlined chat prompt.
+
+### Verification
+
+- **TypeScript type check**: `npx tsc --noEmit` — 3 pre-existing errors, none in modified code. Fixes compile cleanly.
+- **Compilation**: Skipped per review instructions.
+- **Tests**: Skipped per review instructions.
+
+### Files Changed by Review
+
+| File | Change |
+|------|--------|
+| `src/services/ControlPlaneMigrationService.ts` | Added `AGENT_COPY_BLOCKLIST` constant and skip check in `_copyDirectoryRecursive` |
+| `src/services/agentPromptBuilder.ts` | Added `role !== 'chat'` exclusion in `resolveBaseInstructions` |
+
+### Remaining Risks
+
+1. **Dual-source-of-truth drift**: `DEFAULT_CHAT_BASE_INSTRUCTIONS` in `agentPromptBuilder.ts` must be kept in sync with `.agent/workflows/switchboard-chat.md`. The code comment on the constant notes this dependency. If the workflow file is updated, the constant must be updated too. No automated sync mechanism exists.
+2. **Future blocklist additions**: If additional persona files are consolidated into workflows in the future, they must be added to both `extension.ts` blocklist AND `ControlPlaneMigrationService.AGENT_COPY_BLOCKLIST`. Consider extracting a shared constant in a future refactor.
+3. **Bundled extension source**: The persona file may still exist in the bundled extension's `.agent/` directory. The blocklist prevents it from being copied to workspaces, but the source file remains. A future cleanup could remove it from the bundled source entirely.

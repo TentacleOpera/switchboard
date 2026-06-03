@@ -155,7 +155,8 @@ export function resolveBaseInstructions(
     }
     // NOTE: Custom agents handle workflow prepend separately in buildCustomAgentPrompt.
     // If you change the workflow instruction format here, update buildCustomAgentPrompt too.
-    if (role !== 'planner' && options?.workflowFilePathEnabled && options?.workflowFilePath) {
+    // Chat role is excluded because its instructions are already inlined via DEFAULT_CHAT_BASE_INSTRUCTIONS.
+    if (role !== 'planner' && role !== 'chat' && options?.workflowFilePathEnabled && options?.workflowFilePath) {
         base = `Read ${options.workflowFilePath} and follow it step-by-step.\n\n${base}`;
     }
     return base;
