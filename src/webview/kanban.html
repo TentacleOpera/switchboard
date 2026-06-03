@@ -4469,6 +4469,8 @@
                             ids.forEach(id => selectedCards.delete(id));
                             break;
                         }
+                        // Orphaned: button moved to sub-bar as #btn-chat-copy-prompt (board-global listener).
+                        // This case is retained for reference but will never be triggered from column headers.
                         case 'chatCopyPrompt': {
                             const ids = getSelectedInColumn(column);
                             postKanbanMessage({ type: 'chatCopyPrompt', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
@@ -4637,6 +4639,15 @@
             // when cards disappear from the board (deletion, workspace/project filter change)
             const cardIds = new Set(cards.map(c => c.sessionId || c.planId).filter(Boolean));
             for (const key of selectedCards.keys()) {
+                const val = selectedCards.get(key);
+                const cardWorkspaceRoot = typeof val === 'object' ? val.workspaceRoot : val;
+                // If the card belongs to a different workspace, do NOT prune it — it's
+                // invisible on the board right now but still tracked for cross-workspace ASSIGN.
+                if (cardWorkspaceRoot && cardWorkspaceRoot !== currentWorkspaceRoot) {
+                    continue;
+                }
+                // Card belongs to the current workspace. Only prune if it's not in cardIds
+                // (meaning it was deleted or completed from the DB).
                 if (!cardIds.has(key)) {
                     selectedCards.delete(key);
                 }
@@ -4729,7 +4740,10 @@
                         selectedCards.delete(pid);
                         el.classList.remove('selected');
                     } else {
-                        selectedCards.set(pid, el.dataset.workspaceRoot || currentWorkspaceRoot);
+                        selectedCards.set(pid, {
+                            workspaceRoot: el.dataset.workspaceRoot || currentWorkspaceRoot,
+                            project: el.dataset.project || ''
+                        });
                         el.classList.add('selected');
                         // Sync sidebar dropdown on unmodified single clicks
                         if (!e.shiftKey && !e.metaKey && !e.ctrlKey) {
@@ -5041,7 +5055,7 @@
                 : '';
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
-                <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}">
+                <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
                     ${worktreeIconHtml}
                     <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}${branchInfo}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
@@ -6379,7 +6393,11 @@
             // Determine if this is a same-workspace or cross-workspace operation
             // by checking the source workspaces of the actually selected cards,
             // not currentWorkspaceRoot (which may have been updated by a dropdown switch).
-            const sourceWorkspaces = new Set(selectedCards.values());
+            const sourceWorkspaces = new Set(
+                Array.from(selectedCards.values()).map(val =>
+                    typeof val === 'object' ? val.workspaceRoot : val
+                )
+            );
             const isSameWorkspace = sourceWorkspaces.size === 1 && sourceWorkspaces.has(targetWorkspaceRoot);
 
             if (isSameWorkspace && (!targetProject || targetProject === '__unassigned__')) {
@@ -6443,18 +6461,6 @@
             const selectedWorkspaceRoot = selectedOption.dataset.workspaceRoot || '';
             const selectedProject = selectedOption.dataset.project || '';
             const controlPlaneAction = selectedOption.dataset.controlPlaneAction || undefined;
-
-            // If cards are selected, do NOT switch workspace or project filter immediately.
-            // We want to wait for the user to click the ASSIGN button.
-            if (selectedCards.size > 0) {
-                const btnDeleteProject = document.getElementById('btn-delete-project');
-                if (btnDeleteProject) {
-                    const disabled = !selectedProject || selectedProject === '__unassigned__';
-                    btnDeleteProject.disabled = disabled;
-                    btnDeleteProject.setAttribute('data-tooltip', !disabled ? 'Delete selected project' : 'Select a project to delete');
-                }
-                return;
-            }
 
             const isDifferentWorkspace = selectedWorkspaceRoot !== currentWorkspaceRoot;
 

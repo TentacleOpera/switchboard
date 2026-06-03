@@ -88,6 +88,7 @@ export interface KanbanCard {
     createdAt: string;
     complexity: string;
     workspaceRoot: string;
+    project?: string;
     dependencies: string[];
     hasBlockingDependencies: boolean;
 }
@@ -1108,6 +1109,7 @@ export class KanbanProvider implements vscode.Disposable {
                     createdAt: row.createdAt || '',
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
+                    project: row.project || '',
                     dependencies: deps,
                     hasBlockingDependencies: deps.length > 0
                 };
@@ -1123,6 +1125,7 @@ export class KanbanProvider implements vscode.Disposable {
                 createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
+                project: rec.project || '',
                 dependencies: [],
                 hasBlockingDependencies: false
             })));
@@ -1875,6 +1878,7 @@ export class KanbanProvider implements vscode.Disposable {
                         createdAt: row.createdAt || '',
                         complexity: row.complexity || 'Unknown',
                         workspaceRoot: resolvedWorkspaceRoot,
+                        project: row.project || '',
                         dependencies: deps,
                         hasBlockingDependencies: deps.length > 0,
                         worktreeId: row.worktreeId
@@ -1895,6 +1899,7 @@ export class KanbanProvider implements vscode.Disposable {
                     createdAt: rec.createdAt || '',
                     complexity: rec.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
+                    project: rec.project || '',
                     dependencies: [],
                     hasBlockingDependencies: false
                 })));
@@ -2037,6 +2042,7 @@ export class KanbanProvider implements vscode.Disposable {
                     createdAt: row.createdAt || '',
                     complexity: row.complexity || 'Unknown',
                     workspaceRoot: resolvedWorkspaceRoot,
+                    project: row.project || '',
                     dependencies: deps,
                     hasBlockingDependencies: deps.length > 0
                 };
@@ -2052,6 +2058,7 @@ export class KanbanProvider implements vscode.Disposable {
                 createdAt: rec.createdAt || '',
                 complexity: rec.complexity || 'Unknown',
                 workspaceRoot: resolvedWorkspaceRoot,
+                project: rec.project || '',
                 dependencies: [],
                 hasBlockingDependencies: false
             })));
