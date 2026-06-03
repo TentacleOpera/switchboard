@@ -9079,16 +9079,18 @@ What would you like to find?`;
                     }
 
                     // Sync metadata to Kanban database for ingested plans
+                    // Placed after the catch block (not inside the try) so metadata still syncs
+                    // when the source write fails — the mirror remains the source of truth.
+                    // (db already obtained above for tombstone check; reuse to avoid redundant _getKanbanDb call)
                     try {
-                        const dbConn = await this._getKanbanDb(workspaceRoot);
                         const wsId = await this._getWorkspaceIdForRoot(workspaceRoot);
-                        if (dbConn && wsId) {
+                        if (db && wsId) {
                             const mirrorContent = await fs.promises.readFile(mirrorPath, 'utf8');
                             const meta = await parsePlanMetadata(mirrorContent, relativeMirror);
-                            await dbConn.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
-                            await dbConn.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
-                            await dbConn.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
-                            await dbConn.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
+                            await db.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
+                            await db.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
+                            await db.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
+                            await db.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
                             this._kanbanProvider?.refreshIfShowing(workspaceRoot);
                             console.log('[TaskViewerProvider] Updated mirror plan metadata via stagingWatcher');
                         }
