@@ -1673,7 +1673,7 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(setupStatusBarItem);
     }
 
-    // Initialize file opening prevention status bar item (unconditional — runtime toggle)
+    // Initialize file opening prevention status bar item (visibility controlled by statusBar.showAgentOpenToggle)
     fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
     const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
     fileOpeningPreventionStatusBarItem.text = currentPreventAgentFileOpening ? '$(shield) Agent Open: Blocked' : '$(shield) Agent Open: Allowed';
@@ -1832,14 +1832,14 @@ export async function activate(context: vscode.ExtensionContext) {
     context.subscriptions.push(deregisterAllTerminalsDisposable);
 
     const clearAllTerminalsDisposable = vscode.commands.registerCommand('switchboard.clearAllTerminals', async () => {
-        let clearedCount = 0;
-        for (const [name, terminal] of registeredTerminals.entries()) {
+        const clearPromises: Promise<void>[] = [];
+        for (const [, terminal] of registeredTerminals.entries()) {
             if (terminal.exitStatus === undefined) {
-                await sendRobustText(terminal, '/clear', false);
-                clearedCount++;
+                clearPromises.push(sendRobustText(terminal, '/clear', false));
             }
         }
-        outputChannel?.appendLine(`[Extension] Cleared ${clearedCount} active terminals.`);
+        await Promise.all(clearPromises);
+        outputChannel?.appendLine(`[Extension] Cleared ${clearPromises.length} active terminals.`);
     });
     context.subscriptions.push(clearAllTerminalsDisposable);
 
