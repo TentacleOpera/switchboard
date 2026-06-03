@@ -312,7 +312,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         'clickup': 'ClickUp',
         'linear': 'Linear',
         'notion': 'Notion',
-        'local-folder': 'Cowork/local'
+        'local-folder': 'Cowork/local',
+        'research-clipboard': 'Research'
     };
 
     // Saved browse filter containers from config (restored after containers load)
@@ -2431,7 +2432,7 @@ CONTEXT: ${contextText}. The reader is a software engineer — explain domain-sp
 
 CENTRAL QUESTION: ${customPrompt}
 SUB-QUESTIONS (cover all, lead with the first three):
-  1. ${customPrompt} — core framing
+  1. Core framing of the central question and key definitions
   2. What are the current best practices and authoritative standards?
   3. What are the key trade-offs and failure modes?
   4. What is the current state of the art and recent developments?

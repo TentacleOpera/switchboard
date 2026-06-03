@@ -57,33 +57,41 @@ export class PlannerPromptWriter {
         sourceId: string,
         options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
+        const localFolderService = this._options.getLocalFolderService(workspaceRoot);
+        const folderPaths = localFolderService.getFolderPaths();
+        if (folderPaths.length === 0) {
+            throw new Error("No local docs folder configured. Add a folder in the LOCAL DOCS tab before importing.");
+        }
+        const docsDir = folderPaths[0];
+
         // Generate collision-resistant filename
         const rawSlug = (docTitle || sourceId)
             .toLowerCase()
             .replace(/[^a-z0-9]+/g, '_')
             .replace(/^_+|_+$/g, '')
             .slice(0, 60) || sourceId;
-        const contentHash = crypto.createHash('sha256').update(content).digest('hex').slice(0, 8);
-        const docsDir = path.join(workspaceRoot, '.switchboard', 'docs');
+
         await fs.promises.mkdir(docsDir, { recursive: true });
-        const newDocPath = path.join(docsDir, `${rawSlug}_${contentHash}.md`);
 
-        // Add front-matter with original metadata for display purposes
-        // Store order from pageOrder option (defaults to 0)
-        const order = options.pageOrder ?? 0;
-        const frontMatter = `---
-docName: ${docTitle}
-sourceId: ${sourceId}
-slugPrefix: ${rawSlug}_${contentHash}
-order: ${order}
-parentDocName: ${options.parentDocName || docTitle}
----
+        let finalSlug = rawSlug;
+        let suffix = 0;
+        let newDocPath = path.join(docsDir, `${finalSlug}.md`);
+        while (true) {
+            try {
+                const existingContent = await fs.promises.readFile(newDocPath, 'utf8');
+                if (existingContent === content) {
+                    break;
+                }
+                suffix++;
+                finalSlug = `${rawSlug}_${suffix}`;
+                newDocPath = path.join(docsDir, `${finalSlug}.md`);
+            } catch (err) {
+                break;
+            }
+        }
 
-`;
-        const contentWithFrontMatter = frontMatter + content;
-
-        // Write the doc (idempotent: same content hash = same file)
-        await fs.promises.writeFile(newDocPath, contentWithFrontMatter, 'utf8');
+        // Write the doc without front-matter
+        await fs.promises.writeFile(newDocPath, content, 'utf8');
 
         if (!options.skipDesignDocLink) {
             // Point designDocLink at the structured docs/ path AND enable the feature

@@ -1184,7 +1184,7 @@ export class PlanningPanelProvider {
                 const slugPrefix = msg.slugPrefix;
                 const docName = msg.docName || slugPrefix;
                 const confirm = await vscode.window.showWarningMessage(
-                    `Delete "${docName}" from .switchboard/docs?`,
+                    `Delete "${docName}" from local docs?`,
                     { modal: true },
                     'Delete'
                 );
@@ -2351,11 +2351,40 @@ export class PlanningPanelProvider {
 
             const content = fs.readFileSync(filePath, 'utf-8');
 
-            // Parse docName from filename or front-matter
-            let docName = slugPrefix;
-            const frontMatterMatch = content.match(/^---\n[\s\S]*?docName:\s*(.+?)\n[\s\S]*?\n---/);
-            if (frontMatterMatch) {
-                docName = frontMatterMatch[1].trim();
+            // Parse docName from DB, top-level H1, or filename
+            let docName = '';
+
+            // 1. DB lookup first
+            for (const root of allRoots) {
+                try {
+                    const wsId = await this._getWorkspaceId(root);
+                    const cacheService = this._adapterFactories.getCacheService(root);
+                    const entry = await cacheService.getImportBySlugPrefix(slugPrefix, wsId);
+                    if (entry && entry.docName) {
+                        docName = entry.docName;
+                        break;
+                    }
+                } catch (e) {
+                    // Ignore DB errors and proceed
+                }
+            }
+
+            // 2. Top-level H1
+            if (!docName) {
+                const h1Match = content.match(/^#\s+(.+)$/m);
+                if (h1Match) {
+                    docName = h1Match[1].trim();
+                }
+            }
+
+            // 3. Filename-as-slug fallback
+            if (!docName) {
+                const baseName = path.basename(filePath, '.md');
+                const cleanBaseName = baseName.replace(/_[a-f0-9]{8}$/, '');
+                docName = cleanBaseName.replace(/_/g, ' ');
+            }
+            if (!docName) {
+                docName = slugPrefix;
             }
 
             // Strip front-matter for display
@@ -2524,6 +2553,8 @@ export class PlanningPanelProvider {
                 if (this._cacheService && writeResult.success) {
                     await this._cacheService.setDocumentImported(sourceId, docId);
                 }
+                await this._sendLocalDocsReady();
+                await this._handleFetchImportedDocs(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'importFullDocResult', success: true, message: 'Document imported' });
                 return;
             }
@@ -2607,6 +2638,8 @@ export class PlanningPanelProvider {
                         }
                     }
                     
+                    await this._sendLocalDocsReady();
+                    await this._handleFetchImportedDocs(workspaceRoot);
                     this._panel?.webview.postMessage({
                         type: 'importFullDocResult',
                         success: errorCount === 0,
@@ -2651,6 +2684,8 @@ export class PlanningPanelProvider {
                 }
             }
 
+            await this._sendLocalDocsReady();
+            await this._handleFetchImportedDocs(workspaceRoot);
             this._panel?.webview.postMessage({
                 type: 'importFullDocResult',
                 success: true,
@@ -2745,6 +2780,7 @@ export class PlanningPanelProvider {
             });
 
             await this._handleFetchImportedDocs(workspaceRoot);
+            await this._sendLocalDocsReady();
 
         } catch (err) {
             this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: String(err) });
