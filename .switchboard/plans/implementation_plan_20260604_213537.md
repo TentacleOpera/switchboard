@@ -318,3 +318,33 @@ this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cybe
 ---
 
 **Send to Coder** (Complexity 3 — routine multi-file rename with clear line-number guidance)
+
+---
+
+## Reviewer Pass — 2026-06-04
+
+### Review Outcome: APPROVED with one minor fix applied
+
+All 6 planned touch-points verified in code. The implementation is functionally correct across the full message-protocol chain:
+
+#### Files Changed
+- `src/webview/setup.html` — `#cyber-panel-theme-toggle` fully removed; `#cyber-animation-toggle` + `#cyber-animation-status` + event listener + incoming message case all correct.
+- `src/services/SetupPanelProvider.ts` — `getCyberAnimationDisabledSetting` / `setCyberAnimationDisabledSetting` cases implemented correctly. `postSetupPanelState()` called after save.
+- `src/services/TaskViewerProvider.ts` — `handleGetCyberAnimationDisabledSetting()` / `handleSetCyberAnimationDisabledSetting()` correctly target `theme.disableCyberAnimation`. `postSetupPanelState()` broadcast sends `cyberAnimationDisabledSetting` with `enabled` field.
+- `src/services/PlanningPanelProvider.ts` — `onDidChangeConfiguration` listener updated to `theme.disableCyberAnimation` → `cyberAnimationSetting` with `disabled` field. `_handleFetchRoots()` updated identically.
+- `src/webview/planning.js` — Old `cyberThemeSetting` handler removed. New `cyberAnimationSetting` handler toggles `cyber-animation-disabled` class on body.
+- `src/webview/planning.html` — `<body class="cyber-theme-enabled">` hardcoded. CRT sweep beam `::before` CSS + `@keyframes scanline-sweep` added. `prefers-reduced-motion` guard added. `.cyber-theme-enabled:not(.cyber-animation-disabled)` selector correctly suppresses beam when class is present.
+- `package.json` — `switchboard.theme.cyberPanel` deprecated with `deprecationMessage`. `switchboard.theme.disableCyberAnimation` added with `default: false`.
+
+#### Fix Applied in This Pass
+- **NIT → Fixed**: `TaskViewerProvider.handleSetCyberAnimationDisabledSetting` parameter renamed from `enabled: boolean` to `disabled: boolean` to match the actual semantics of `theme.disableCyberAnimation`. Call site (`SetupPanelProvider.ts:591`) unaffected — passes boolean positionally.
+
+#### Validation Results
+- Static trace of all 18 touch-points: ✅ All consistent
+- Zero remnant `cyberThemeSetting`, `cyberPanel`, or `#cyber-panel-theme-toggle` references in `src/`: ✅ Confirmed via grep
+- `position: absolute` on `::before` contained within `position: absolute; inset: 0` `.cyber-scanlines`: ✅ Valid containing block
+- Channel isolation (setup panel vs. planning panel) correctly uses distinct message types: ✅ Intentional and documented
+
+#### Remaining Risks
+- `translateY(100vh)` in `@keyframes scanline-sweep` uses viewport height, not container height. If the planning panel is significantly shorter than the viewport, the beam may appear to decelerate near the bottom edge relative to the container. Cosmetic only — no functional impact.
+- The `postSetupPanelState()` call in `setCyberAnimationDisabledSetting` broadcasts to the Setup Panel only. If a user has the Planning Panel open while toggling the setting, the Planning Panel will also update via the `onDidChangeConfiguration` listener — so both are covered. ✅

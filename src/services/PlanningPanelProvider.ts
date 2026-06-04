@@ -675,6 +675,21 @@ export class PlanningPanelProvider {
         return htmlContent;
     }
 
+    private _injectLocalCsp(html: string): string {
+        const cspTag = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: vscode-webview: vscode-webview-resource: vscode-resource:; style-src 'unsafe-inline' https: vscode-webview: vscode-webview-resource: vscode-resource:; img-src data: blob: https: vscode-webview: vscode-webview-resource: vscode-resource:;">`;
+        const headMatch = html.match(/<head\b[^>]*>/i);
+        if (headMatch && headMatch.index !== undefined) {
+            const index = headMatch.index + headMatch[0].length;
+            return html.slice(0, index) + '\n  ' + cspTag + html.slice(index);
+        }
+        const htmlMatch = html.match(/<html\b[^>]*>/i);
+        if (htmlMatch && htmlMatch.index !== undefined) {
+            const index = htmlMatch.index + htmlMatch[0].length;
+            return html.slice(0, index) + '\n<head>' + cspTag + '</head>' + html.slice(index);
+        }
+        return cspTag + '\n' + html;
+    }
+
     private _getWorkspaceRoots(): string[] {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
@@ -2098,12 +2113,13 @@ export class PlanningPanelProvider {
 
             try {
                 const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
+                const htmlWithCsp = this._injectLocalCsp(htmlContent);
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
                     sourceId,
                     requestId,
                     webviewUri,
-                    htmlContent,
+                    htmlContent: htmlWithCsp,
                     docName: path.basename(resolvedPath),
                     isAutoRefreshed: this._isAutoRefreshing
                 });

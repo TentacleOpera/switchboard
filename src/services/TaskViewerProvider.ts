@@ -3152,9 +3152,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
 
-    public async handleSetCyberAnimationDisabledSetting(enabled: boolean): Promise<void> {
+    public async handleSetCyberAnimationDisabledSetting(disabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.disableCyberAnimation', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberAnimation', disabled, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetJulesAutoSyncSetting(): boolean {

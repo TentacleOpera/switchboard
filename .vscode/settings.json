@@ -26,5 +26,8 @@
 	"switchboard.preventAgentFileOpening": false,
 	"switchboard.research.htmlFolderPaths": [
 		"/Users/patrickvuleta/Documents/GitHub/patrickwork/designs"
-	]
+	],
+	"switchboard.statusBar.showTerminalControls": true,
+	"switchboard.statusBar.showKanbanButton": true,
+	"switchboard.statusBar.showArtifactsButton": true
 }
