@@ -1358,7 +1358,7 @@ export class PlanningPanelProvider {
                             }
 
                             // Fetch column definitions for this workspace and merge
-                            const colDefs = await this._getKanbanColumnDefinitions(root);
+                            const colDefs = await this._getKanbanColumnDefinitions(root, plans);
                             for (const col of colDefs) {
                                 if (!seenColumnIds.has(col.id)) {
                                     seenColumnIds.add(col.id);
@@ -3176,10 +3176,11 @@ export class PlanningPanelProvider {
         }));
     }
 
-    private async _getKanbanColumnDefinitions(workspaceRoot: string): Promise<KanbanColumnDefinition[]> {
+    private async _getKanbanColumnDefinitions(workspaceRoot: string, plans?: KanbanPlanSummary[]): Promise<KanbanColumnDefinition[]> {
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         let customAgents: CustomAgentConfig[] = [];
         let customKanbanColumns: CustomKanbanColumnConfig[] = [];
+        let visibleAgents: Record<string, boolean> = {};
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
@@ -3189,9 +3190,26 @@ export class PlanningPanelProvider {
             if (Array.isArray(state.customKanbanColumns)) {
                 customKanbanColumns = state.customKanbanColumns.filter((c: any) => c && c.id && c.label);
             }
+            if (state.visibleAgents && typeof state.visibleAgents === 'object') {
+                visibleAgents = state.visibleAgents;
+            }
         } catch {
             // No state file or parse error — use defaults
         }
-        return buildKanbanColumns(customAgents, customKanbanColumns);
+        const allColumns = buildKanbanColumns(customAgents, customKanbanColumns);
+        if (!plans || plans.length === 0) {
+            return allColumns.filter(col => {
+                if (!col.hideWhenNoAgent) return true;
+                if (col.role && visibleAgents[col.role] !== false) return true;
+                return false;
+            });
+        }
+        const occupiedColumns = new Set(plans.map(p => p.column));
+        return allColumns.filter(col => {
+            if (!col.hideWhenNoAgent) return true;
+            if (col.role && visibleAgents[col.role] !== false) return true;
+            if (occupiedColumns.has(col.id)) return true;
+            return false;
+        });
     }
 }

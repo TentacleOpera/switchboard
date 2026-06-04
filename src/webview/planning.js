@@ -1263,25 +1263,30 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handlePreviewReady(msg) {
-        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath } = msg;
+        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri } = msg;
 
         if (sourceId === 'html-folder') {
             const iframe = document.getElementById('html-preview-frame');
             if (iframe) {
-                if (msg.htmlContent) {
+                if (htmlContent) {
                     iframe.removeAttribute('src');
-                    const htmlWithBase = injectBaseTag(msg.htmlContent, msg.webviewUri);
+                    const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
                     iframe.srcdoc = htmlWithBase;
-                } else if (msg.webviewUri) {
+                } else if (webviewUri) {
                     // Fallback: use src if htmlContent not provided (backward compat)
                     iframe.removeAttribute('srcdoc');
-                    iframe.src = msg.webviewUri;
+                    iframe.src = webviewUri;
                 }
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
-                statusHtml.textContent = msg.docName || 'Loaded';
-                statusHtml.style.color = 'var(--accent-teal)';
+                if (isAutoRefreshed) {
+                    statusHtml.textContent = (docName || 'Loaded') + ' — auto-refreshed';
+                    statusHtml.style.color = 'var(--accent-teal)';
+                } else {
+                    statusHtml.textContent = docName || 'Loaded';
+                    statusHtml.style.color = 'var(--accent-teal)';
+                }
             }
             return;
         }
@@ -1453,7 +1458,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             const iframe = document.getElementById('html-preview-frame');
             if (iframe) {
-                iframe.src = 'about:blank';  // Clear any loaded content ('' would navigate to webview base URL)
+                iframe.removeAttribute('src');  // Clear any src-based navigation
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
             return;
