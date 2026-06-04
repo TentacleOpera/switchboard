@@ -32,7 +32,6 @@ let setupStatusBarItem: vscode.StatusBarItem;
 
 // Status bar item for file opening prevention toggle
 let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
-let switchboardAnchorStatusBarItem: vscode.StatusBarItem;
 let terminalOpenStatusBarItem: vscode.StatusBarItem;
 let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
@@ -1674,11 +1673,7 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(setupStatusBarItem);
     }
 
-    // Initialize Switchboard group anchor status bar item
-    switchboardAnchorStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
-    switchboardAnchorStatusBarItem.text = 'SB │';
-    switchboardAnchorStatusBarItem.tooltip = 'Switchboard status bar controls';
-    context.subscriptions.push(switchboardAnchorStatusBarItem);
+
 
     // Initialize file opening prevention status bar item (visibility controlled by statusBar.showAgentOpenToggle)
     fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
@@ -1756,12 +1751,6 @@ export async function activate(context: vscode.ExtensionContext) {
             artifactsStatusBarItem.hide();
         }
 
-        // Show group anchor if at least one item is visible
-        if (showAgentOpenToggle || showTerminalControls || showKanbanButton || showArtifactsButton) {
-            switchboardAnchorStatusBarItem.show();
-        } else {
-            switchboardAnchorStatusBarItem.hide();
-        }
     }
 
     updateStatusBarVisibility();

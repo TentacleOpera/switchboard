@@ -25,7 +25,7 @@ Use this workflow to strengthen an existing feature plan in a single fluid pass.
    **Required Sections (in order):**
    1. **## Goal** - 1-2 sentences summarizing the objective, followed by any core problem, background, or root-cause analysis (always preserve and do not drop existing analysis)
    2. **## Metadata**
-      - **Tags:** [frontend, backend, authentication, database, UI, UX, devops, infrastructure, bugfix, documentation, reliability, workflow, testing, security, performance, analytics]
+      - **Tags:** [frontend, backend, auth, authentication, database, api, ui, ux, bugfix, feature, refactor, test, docs, security, performance, reliability, mobile, devops, infrastructure, cli, library]
       - Do NOT invent tags outside the allowed list. If no tags apply, write **Tags:** none
       - **Complexity:** 1-10
       - **Repo:** Bare sub-repo folder name if applicable
