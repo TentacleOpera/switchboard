@@ -15,7 +15,7 @@ import { LocalFolderService } from './LocalFolderService';
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
 import { PlanningPanelCacheService } from './PlanningPanelCacheService';
-import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig } from './agentConfig';
+import { buildKanbanColumns, KanbanColumnDefinition, CustomKanbanColumnConfig, CustomAgentConfig, parseCustomAgents } from './agentConfig';
 import { ReviewCommentRequest, ReviewCommentResult } from './ReviewProvider';
 
 
@@ -285,6 +285,15 @@ export class PlanningPanelProvider {
         this._disposables.push(
             vscode.window.onDidChangeActiveColorTheme(() => {
                 this._panel?.webview.postMessage({ type: 'themeChanged' });
+            })
+        );
+
+        this._disposables.push(
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (e.affectsConfiguration('switchboard.theme.cyberPanel')) {
+                    const cyberEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
+                    this._panel?.webview.postMessage({ type: 'cyberThemeSetting', enabled: cyberEnabled });
+                }
             })
         );
 
@@ -1996,6 +2005,8 @@ export class PlanningPanelProvider {
     private async _handleFetchRoots(): Promise<void> {
         await this._sendLocalDocsReady();
         await this._sendOnlineDocsReady();
+        const cyberEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
+        this._panel?.webview.postMessage({ type: 'cyberThemeSetting', enabled: cyberEnabled });
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {
@@ -2066,6 +2077,25 @@ export class PlanningPanelProvider {
             this._activePreviewSourceFolder = sourceFolder;
             this._activePreviewWorkspaceRoot = workspaceRoot;
             this._setupActiveDocWatcher(resolvedPath);
+
+            const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
+            const fileExt = path.extname(resolvedPath).toLowerCase();
+            const isImage = IMAGE_EXTENSIONS.has(fileExt);
+
+            if (isImage) {
+                // Skip UTF-8 read for binary image files
+                this._panel?.webview.postMessage({
+                    type: 'previewReady',
+                    sourceId,
+                    requestId,
+                    webviewUri,
+                    docName: path.basename(resolvedPath),
+                    isImage: true,
+                    isAutoRefreshed: this._isAutoRefreshing
+                });
+                return;
+            }
+
             try {
                 const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
                 this._panel?.webview.postMessage({
@@ -3180,7 +3210,14 @@ export class PlanningPanelProvider {
         const statePath = path.join(workspaceRoot, '.switchboard', 'state.json');
         let customAgents: CustomAgentConfig[] = [];
         let customKanbanColumns: CustomKanbanColumnConfig[] = [];
-        let visibleAgents: Record<string, boolean> = {};
+        // Build built-in role defaults matching KanbanProvider._getVisibleAgents
+        const visibleAgentDefaults: Record<string, boolean> = {
+            lead: true, coder: true, intern: true, reviewer: true,
+            tester: false, planner: true, analyst: true, jules: false,
+            gatherer: false, ticket_updater: false, researcher: false,
+            splitter: false, code_researcher: false
+        };
+        let visibleAgents: Record<string, boolean> = { ...visibleAgentDefaults };
         try {
             const content = await fs.promises.readFile(statePath, 'utf8');
             const state = JSON.parse(content);
@@ -3190,9 +3227,13 @@ export class PlanningPanelProvider {
             if (Array.isArray(state.customKanbanColumns)) {
                 customKanbanColumns = state.customKanbanColumns.filter((c: any) => c && c.id && c.label);
             }
-            if (state.visibleAgents && typeof state.visibleAgents === 'object') {
-                visibleAgents = state.visibleAgents;
+            // Custom agents default to visible, matching KanbanProvider behavior
+            const parsedCustomAgents = parseCustomAgents(state.customAgents);
+            for (const agent of parsedCustomAgents) {
+                visibleAgentDefaults[agent.role] = true;
             }
+            // Merge: defaults + custom-agent defaults, then overlay persisted toggles
+            visibleAgents = { ...visibleAgentDefaults, ...(state.visibleAgents || {}) };
         } catch {
             // No state file or parse error — use defaults
         }

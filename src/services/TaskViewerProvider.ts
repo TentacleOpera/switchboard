@@ -6,6 +6,7 @@ import * as crypto from 'crypto';
 import * as lockfile from 'proper-lockfile';
 import * as cp from 'child_process';
 import { promisify } from 'util';
+import { JSDOM } from 'jsdom';
 import { SessionActionLog, ArchiveSpec, ArchiveResult } from './SessionActionLog';
 import { KanbanProvider } from './KanbanProvider';
 import type { SetupPanelProvider } from './SetupPanelProvider';
@@ -3147,6 +3148,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
+    public handleGetCyberPanelThemeSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
+    }
+
+    public async handleSetCyberPanelThemeSetting(enabled: boolean): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard');
+        await config.update('theme.cyberPanel', enabled, vscode.ConfigurationTarget.Workspace);
+    }
+
     public handleGetJulesAutoSyncSetting(): boolean {
         return this._isJulesAutoSyncEnabled();
     }
@@ -3518,6 +3528,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._setupPanelProvider.postMessage({
             type: 'statusShowArtifactsSetting',
             enabled: this.handleGetStatusShowArtifactsSetting()
+        });
+
+        this._setupPanelProvider.postMessage({
+            type: 'cyberPanelThemeSetting',
+            enabled: this.handleGetCyberPanelThemeSetting()
         });
 
         const designDocSetting = this.handleGetDesignDocSetting();
@@ -13816,6 +13831,11 @@ What would you like to find?`;
                 : this._resolveWorkspaceRoot();
             if (!resolvedWorkspaceRoot) return;
 
+            try {
+                await this._rescanAntigravityPlanSources(resolvedWorkspaceRoot);
+            } catch (e) {
+                console.error('[TaskViewerProvider] Antigravity rescan failed:', e);
+            }
             await this._refreshRunSheets(resolvedWorkspaceRoot);
         } catch (e) {
             console.error('[TaskViewerProvider] Failed to refresh from DB:', e);
@@ -15103,6 +15123,146 @@ What would you like to find?`;
         }
     }
 
+    private async _readClipboardHtml(): Promise<string | null> {
+        const execFileAsync = promisify(cp.execFile);
+        const TIMEOUT_MS = 5000;
+
+        try {
+            switch (process.platform) {
+                case 'darwin': {
+                    const { stdout } = await execFileAsync('osascript', [
+                        '-e', 'the clipboard as «class HTML»'
+                    ], { timeout: TIMEOUT_MS, encoding: 'utf8' });
+                    // Parse «data HTML3C703E...» format
+                    const hexMatch = stdout.match(/«data HTML([0-9A-Fa-f]+)»/);
+                    if (!hexMatch) { return null; }
+                    const hex = hexMatch[1];
+                    // Decode hex pairs to UTF-8 string
+                    const bytes = Buffer.from(hex, 'hex');
+                    return bytes.toString('utf8');
+                }
+                case 'win32': {
+                    const { stdout } = await execFileAsync('powershell', [
+                        '-NoProfile', '-Command', 'Get-Clipboard -TextFormatType Html'
+                    ], { timeout: TIMEOUT_MS, encoding: 'utf8' });
+                    if (!stdout || !stdout.trim()) { return null; }
+                    // Extract fragment between StartFragment/EndFragment if present
+                    const fragMatch = stdout.match(/<!--StartFragment-->([\s\S]*?)<!--EndFragment-->/);
+                    return fragMatch ? fragMatch[1] : stdout;
+                }
+                case 'linux': {
+                    // Try xclip first, then xsel
+                    try {
+                        const { stdout } = await execFileAsync('xclip', [
+                            '-selection', 'clipboard', '-t', 'text/html', '-o'
+                        ], { timeout: TIMEOUT_MS, encoding: 'utf8' });
+                        if (stdout && stdout.trim()) { return stdout; }
+                    } catch { /* xclip not available or failed */ }
+                    try {
+                        const { stdout } = await execFileAsync('xsel', [
+                            '--clipboard', '--output', '--html'
+                        ], { timeout: TIMEOUT_MS, encoding: 'utf8' });
+                        if (stdout && stdout.trim()) { return stdout; }
+                    } catch { /* xsel not available or failed */ }
+                    return null;
+                }
+                default:
+                    return null;
+            }
+        } catch {
+            return null;
+        }
+    }
+
+    private _convertHtmlToMarkdown(html: string): string {
+        const dom = new JSDOM(html);
+        const doc = dom.window.document;
+
+        function cleanText(text: string): string {
+            return text.replace(/\u00a0/g, ' ');
+        }
+
+        function walk(node: any, listDepth = 0, isPre = false, listType: string | null = null): string {
+            if (node.nodeType === 3) { // TEXT_NODE
+                return cleanText(node.textContent || '');
+            }
+            if (node.nodeType !== 1) { // ELEMENT_NODE
+                return '';
+            }
+
+            const tagName = (node as any).tagName.toUpperCase();
+            let childrenMarkdown = '';
+
+            let nextListDepth = listDepth;
+            let nextListType = listType;
+            if (tagName === 'UL' || tagName === 'OL') {
+                nextListDepth = listDepth + 1;
+                nextListType = tagName;
+            }
+
+            for (let i = 0; i < node.childNodes.length; i++) {
+                childrenMarkdown += walk(node.childNodes[i], nextListDepth, isPre || tagName === 'PRE', nextListType);
+            }
+
+            switch (tagName) {
+                case 'H1': return `\n\n# ${childrenMarkdown.trim()}\n\n`;
+                case 'H2': return `\n\n## ${childrenMarkdown.trim()}\n\n`;
+                case 'H3': return `\n\n### ${childrenMarkdown.trim()}\n\n`;
+                case 'H4': return `\n\n#### ${childrenMarkdown.trim()}\n\n`;
+                case 'H5': return `\n\n##### ${childrenMarkdown.trim()}\n\n`;
+                case 'H6': return `\n\n###### ${childrenMarkdown.trim()}\n\n`;
+                case 'P':
+                case 'DIV':
+                    return `\n\n${childrenMarkdown.trim()}\n\n`;
+                case 'BR': return '\n';
+                case 'STRONG':
+                case 'B':
+                    return `**${childrenMarkdown.trim()}**`;
+                case 'EM':
+                case 'I':
+                    return `*${childrenMarkdown.trim()}*`;
+                case 'CODE':
+                    if (isPre) { return childrenMarkdown; }
+                    return `\`${childrenMarkdown.trim()}\``;
+                case 'PRE': {
+                    let lang = '';
+                    const classAttr = (node as any).getAttribute('class') || '';
+                    const langMatch = classAttr.match(/language-(\w+)/) || classAttr.match(/lang-(\w+)/);
+                    if (langMatch) {
+                        lang = langMatch[1];
+                    } else {
+                        const codeChild = (node as any).querySelector('code');
+                        if (codeChild) {
+                            const codeClass = codeChild.getAttribute('class') || '';
+                            const codeLangMatch = codeClass.match(/language-(\w+)/) || codeClass.match(/lang-(\w+)/);
+                            if (codeLangMatch) { lang = codeLangMatch[1]; }
+                        }
+                    }
+                    return `\n\n\`\`\`${lang}\n${childrenMarkdown.trim()}\n\`\`\`\n\n`;
+                }
+                case 'A': {
+                    const href = (node as any).getAttribute('href') || '';
+                    const text = childrenMarkdown.trim() || href;
+                    return `[${text}](${href})`;
+                }
+                case 'LI': {
+                    const indent = '  '.repeat(Math.max(0, listDepth - 1));
+                    const prefix = listType === 'OL' ? '1. ' : '- ';
+                    return `\n${indent}${prefix}${childrenMarkdown.trim()}`;
+                }
+                case 'UL':
+                case 'OL':
+                    return `\n${childrenMarkdown}\n`;
+                default:
+                    return childrenMarkdown;
+            }
+        }
+
+        let result = walk(doc.body);
+        result = result.replace(/\n{3,}/g, '\n\n');
+        return result.trim();
+    }
+
     public async importPlanFromClipboard(markdownText?: string): Promise<void> {
         // LAZY CHANGE: Ensure DB exists before import
         try {
@@ -15117,7 +15277,18 @@ What would you like to find?`;
             console.error('[Import] DB creation failed:', e);
         }
 
-        const text = markdownText ?? await vscode.env.clipboard.readText();
+        let text: string;
+        if (markdownText) {
+            text = markdownText;
+        } else {
+            const html = await this._readClipboardHtml();
+            if (html) {
+                const converted = this._convertHtmlToMarkdown(html);
+                text = converted || await vscode.env.clipboard.readText();
+            } else {
+                text = await vscode.env.clipboard.readText();
+            }
+        }
 
         if (!text || !text.trim()) {
             vscode.window.showWarningMessage('Clipboard is empty. Copy a Markdown plan first.');

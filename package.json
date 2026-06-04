@@ -501,6 +501,11 @@
           "default": false,
           "description": "Controls visibility of the Open Planning Panel button on the status bar.",
           "scope": "window"
+        },
+        "switchboard.theme.cyberPanel": {
+          "type": "boolean",
+          "default": false,
+          "description": "Enable entirely optional 'Cyber Panel' theme with scanlines and glow in the artifacts preview."
         }
       }
     },

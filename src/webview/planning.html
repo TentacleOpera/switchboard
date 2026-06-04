@@ -80,25 +80,30 @@
             white-space: nowrap;
             padding: 0 16px;
             font-size: 11px;
-            font-family: var(--font-family);
+            font-family: var(--font-mono);
             letter-spacing: 0.5px;
             text-transform: uppercase;
             background: transparent;
             color: var(--text-secondary);
-            border: none;
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 3px 3px 0 0;
+            position: relative;
+            top: 1px;
             cursor: pointer;
-            border-bottom: 2px solid transparent;
             transition: all 0.15s;
         }
 
         .research-tab-btn:hover {
             color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
         }
 
         .research-tab-btn.active {
             color: var(--accent-teal);
-            border-bottom-color: var(--accent-teal);
-            background: var(--panel-bg);
+            background: var(--panel-bg2);
+            border-color: var(--border-color);
+            border-bottom-color: var(--panel-bg2);
         }
 
         /* Tab Content Areas */
@@ -760,7 +765,9 @@
             font-size: 2em; /* 2em relative to 13px base = 26px */
             margin-top: 0;
             padding-bottom: 0.3em;
-            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            padding-left: 8px;
         }
 
         #markdown-preview h2,
@@ -768,7 +775,9 @@
         #kanban-preview-pane h2 {
             font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
             padding-bottom: 0.3em;
-            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 2px solid var(--accent-teal-dim);
+            padding-left: 6px;
         }
 
         #markdown-preview h3,
@@ -847,9 +856,9 @@
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
             line-height: 1.357em;
-            color: #d29922;
-            background-color: rgba(210, 153, 34, 0.12);
-            border: 1px solid rgba(210, 153, 34, 0.25);
+            color: var(--accent-teal);
+            background-color: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid var(--accent-teal-dim);
             padding: 2px 6px;
             border-radius: 3px;
         }
@@ -1369,7 +1378,9 @@
             align-items: flex-start;
             gap: 10px;
             padding: 10px 12px;
-            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.06));
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
             /* Match kanban board card gradient */
             background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
             border-left: 3px solid var(--accent-teal-dim);
@@ -1399,6 +1410,57 @@
             background: rgba(255, 255, 255, 0.08);
             color: var(--text-secondary);
             border: 1px solid var(--border-color);
+        }
+        .kanban-column-badge[data-column="CREATED"] { background: rgba(61, 219, 217, 0.2); color: #3ddbd9; border-color: rgba(61, 219, 217, 0.3); }
+        .kanban-column-badge[data-column="PLAN_REVIEWED"] { background: rgba(187, 134, 252, 0.2); color: #bb86fc; border-color: rgba(187, 134, 252, 0.3); }
+        .kanban-column-badge[data-column="CODED"] { background: rgba(255, 183, 77, 0.2); color: #ffb74d; border-color: rgba(255, 183, 77, 0.3); }
+        .kanban-column-badge[data-column="CODE_REVIEWED"] { background: rgba(255, 138, 101, 0.2); color: #ff8a65; border-color: rgba(255, 138, 101, 0.3); }
+        .kanban-column-badge[data-column="COMPLETED"] { background: rgba(102, 187, 106, 0.2); color: #66bb6a; border-color: rgba(102, 187, 106, 0.3); }
+        /* Fallback for custom columns */
+        .kanban-column-badge:not([data-column="CREATED"]):not([data-column="PLAN_REVIEWED"]):not([data-column="CODED"]):not([data-column="CODE_REVIEWED"]):not([data-column="COMPLETED"]) {
+            background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); border: 1px solid var(--border-color);
+        }
+
+        .markdown-alert { padding: 8px 12px; border-left: 4px solid; border-radius: 4px; margin: 12px 0; }
+        .markdown-alert-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .alert-note { border-left-color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 8%, transparent); }
+        .alert-note .markdown-alert-title { color: var(--accent-teal); }
+        .alert-tip { border-left-color: #66bb6a; background: rgba(102, 187, 106, 0.08); }
+        .alert-tip .markdown-alert-title { color: #66bb6a; }
+        .alert-important { border-left-color: #bb86fc; background: rgba(187, 134, 252, 0.08); }
+        .alert-important .markdown-alert-title { color: #bb86fc; }
+        .alert-warning { border-left-color: #ffb74d; background: rgba(255, 183, 77, 0.08); }
+        .alert-warning .markdown-alert-title { color: #ffb74d; }
+        .alert-caution { border-left-color: #ff8a65; background: rgba(255, 138, 101, 0.08); }
+        .alert-caution .markdown-alert-title { color: #ff8a65; }
+
+        .cyber-scanlines {
+            display: none; /* Hidden by default; shown only when .cyber-theme-enabled is on body */
+            position: absolute;
+            inset: 0;
+            pointer-events: none; /* CRITICAL: must not block interaction with content below */
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.08) 2px,
+                rgba(0, 0, 0, 0.08) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines { display: block; }
+        .cyber-theme-enabled .preview-panel-wrapper h1,
+        .cyber-theme-enabled .preview-panel-wrapper h2 {
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        .preview-panel-wrapper {
+            position: relative;
+            flex: 2;
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
         }
         .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
         .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
@@ -1633,19 +1695,22 @@
                     </div>
                     <div class="empty-state">Loading local docs...</div>
                 </div>
-                <div id="preview-pane">
-                    <div class="preview-content-wrapper">
-                        <style>
-                            .page-navigation { margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px; }
-                            .page-item { padding: 6px 8px; cursor: pointer; border-radius: 3px; transition: background 0.1s; font-size: 13px; color: var(--accent-teal); }
-                            .page-item:hover { background: var(--accent-teal-dim); }
-                            .page-item.selected { background: var(--accent-teal-dim); }
-                        </style>
-                        <div id="markdown-preview">
-                            <div class="empty-state">Select a document from the sidebar to preview</div>
+                <div class="preview-panel-wrapper" style="flex: 2;">
+                    <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <style>
+                                .page-navigation { margin-bottom: 16px; padding: 12px; background: var(--panel-bg2); border: 1px solid var(--accent-teal-dim); border-radius: 4px; }
+                                .page-item { padding: 6px 8px; cursor: pointer; border-radius: 3px; transition: background 0.1s; font-size: 13px; color: var(--accent-teal); }
+                                .page-item:hover { background: var(--accent-teal-dim); }
+                                .page-item.selected { background: var(--accent-teal-dim); }
+                            </style>
+                            <div id="markdown-preview">
+                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                            </div>
+                            <textarea id="markdown-editor-local" class="markdown-editor" style="display:none;"></textarea>
                         </div>
-                        <textarea id="markdown-editor-local" class="markdown-editor" style="display:none;"></textarea>
                     </div>
+                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -1673,12 +1738,15 @@
                     </div>
                     <div class="empty-state">Loading online docs...</div>
                 </div>
-                <div id="preview-pane-online">
-                    <div class="preview-content-wrapper">
-                        <div id="markdown-preview-online">
-                            <div class="empty-state">Select a document from the sidebar to preview</div>
+                <div class="preview-panel-wrapper" style="flex: 2;">
+                    <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <div id="markdown-preview-online">
+                                <div class="empty-state">Select a document from the sidebar to preview</div>
+                            </div>
                         </div>
                     </div>
+                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -1862,11 +1930,14 @@
                 <div id="kanban-list-pane">
                     <!-- Plan rows rendered by JS -->
                 </div>
-                <div id="kanban-preview-pane" class="kanban-preview-pane">
-                    <div id="kanban-preview-content">
-                        <!-- Markdown preview rendered by JS -->
+                <div class="preview-panel-wrapper" style="flex: 2;">
+                    <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
+                        <div id="kanban-preview-content">
+                            <!-- Markdown preview rendered by JS -->
+                        </div>
+                        <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
                     </div>
-                    <textarea id="kanban-editor" class="markdown-editor" style="display:none;"></textarea>
+                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>
@@ -1884,6 +1955,9 @@
                 </div>
                 <div id="preview-pane-html" style="display: flex; flex-direction: column; background: var(--panel-bg); overflow: hidden; height: 100%;">
                     <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="flex: 1; border: none; background: white; width: 100%; height: 100%;"></iframe>
+                    <div id="image-preview-container" style="display: none; flex: 1; overflow: auto; background: var(--panel-bg); padding: 16px; text-align: center;">
+                        <img id="image-preview-img" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Image preview" />
+                    </div>
                 </div>
             </div>
         </div>

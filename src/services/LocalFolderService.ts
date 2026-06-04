@@ -376,7 +376,7 @@ export class LocalFolderService {
                 subfolderScans.push(
                     this._scanHtmlFolder(root, fullPath, results, relativePath, folderIndex, seenAbsolutePaths, depth + 1)
                 );
-            } else if (entry.isFile() && this._isHtmlFile(entry.name)) {
+            } else if (entry.isFile() && this._isHtmlOrImageFile(entry.name)) {
                 results.push({
                     id,
                     name: entry.name,
@@ -391,9 +391,9 @@ export class LocalFolderService {
         await Promise.all(subfolderScans);
     }
 
-    private _isHtmlFile(filename: string): boolean {
+    private _isHtmlOrImageFile(filename: string): boolean {
         const ext = path.extname(filename).toLowerCase();
-        return ['.html', '.htm'].includes(ext);
+        return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
     }
 
     // ── Delete ──────────────────────────────────────────────────

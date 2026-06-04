@@ -408,7 +408,45 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             resultLines.push(line);
         }
 
-        processed = resultLines.join('\n');
+        // Group consecutive blockquote lines
+        const groupedLines = [];
+        let inBlockquote = false;
+        let blockquoteLines = [];
+        for (const line of resultLines) {
+            const bqMatch = line.match(/^&gt;\s?(.*)$/);
+            if (bqMatch) {
+                if (!inBlockquote) { inBlockquote = true; blockquoteLines = []; }
+                blockquoteLines.push(bqMatch[1]);
+            } else {
+                if (inBlockquote) {
+                    groupedLines.push({ type: 'blockquote', lines: blockquoteLines });
+                    inBlockquote = false;
+                    blockquoteLines = [];
+                }
+                groupedLines.push(line);
+            }
+        }
+        if (inBlockquote) { groupedLines.push({ type: 'blockquote', lines: blockquoteLines }); }
+
+        const processedLines = [];
+        for (const item of groupedLines) {
+            if (typeof item === 'string') {
+                processedLines.push(item);
+            } else if (item && item.type === 'blockquote') {
+                const content = item.lines.join('\n');
+                const alertMatch = content.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*([\s\S]*)$/i);
+                if (alertMatch) {
+                    const type = alertMatch[1].toLowerCase();
+                    const title = alertMatch[1].charAt(0).toUpperCase() + alertMatch[1].slice(1).toLowerCase();
+                    const body = alertMatch[2].trim();
+                    processedLines.push(`HTML_ALERT_START_${type}_${title}HTML_ALERT_CONTENT${body}HTML_ALERT_END`);
+                } else {
+                    processedLines.push(`HTML_BLOCKQUOTE_START${content}HTML_BLOCKQUOTE_END`);
+                }
+            }
+        }
+
+        processed = processedLines.join('\n');
 
         // Now apply markdown transformations
         let html = processed
@@ -422,7 +460,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.+?)\*/g, '<em>$1</em>')
             .replace(/`([^`]+)`/g, '<code>$1</code>')
-            .replace(/^> (.+)$/gm, '<blockquote>$1</blockquote>')
             .replace(/^\* (.+)$/gm, '<li>$1</li>')
             .replace(/(<li>.*<\/li>\n?)+/g, '<ul>$&</ul>')
             .replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
@@ -448,6 +485,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         html = `<p>${html}</p>`;
         html = html.replace(/<p>\s*<\/p>/g, '');
+
+        // Replace placeholders
+        html = html.replace(/HTML_ALERT_START_([a-z]+)_([A-Za-z]+)HTML_ALERT_CONTENT([\s\S]*?)HTML_ALERT_END/g, (_, type, title, body) => {
+            return `</p><div class="markdown-alert alert-${type}"><div class="markdown-alert-title">${title}</div><div>${body}</div></div><p>`;
+        });
+        html = html.replace(/HTML_BLOCKQUOTE_START([\s\S]*?)HTML_BLOCKQUOTE_END/g, (_, body) => {
+            return `</p><blockquote>${body}</blockquote><p>`;
+        });
+        html = html.replace(/<p>\s*<\/p>/g, '');
+
         return html;
     }
 
@@ -471,7 +518,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         const icon = document.createElement('span');
         icon.className = 'icon';
-        icon.textContent = (node.kind === 'folder' || node.isDirectory) ? '📁' : (sourceId === 'html-folder' ? '🌐' : '📄');
+        let fileIcon = '📄';
+        if (sourceId === 'html-folder') {
+            const name = (node.name || '').toLowerCase();
+            const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.svg'];
+            fileIcon = imageExts.some(ext => name.endsWith(ext)) ? '🖼️' : '🌐';
+        }
+        icon.textContent = (node.kind === 'folder' || node.isDirectory) ? '📁' : fileIcon;
 
         const label = document.createElement('span');
         label.className = 'label';
@@ -1267,16 +1320,32 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         if (sourceId === 'html-folder') {
             const iframe = document.getElementById('html-preview-frame');
-            if (iframe) {
-                if (htmlContent) {
+            const imageContainer = document.getElementById('image-preview-container');
+            const imageImg = document.getElementById('image-preview-img');
+
+            if (msg.isImage && webviewUri) {
+                // Image preview: hide iframe, show image container
+                if (iframe) { iframe.style.display = 'none'; iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
+                if (imageContainer) { imageContainer.style.display = 'flex'; }
+                if (imageImg) { imageImg.src = webviewUri; }
+            } else if (webviewUri) {
+                // HTML preview: show iframe, hide image container, use iframe.src instead of srcdoc
+                if (iframe) {
+                    iframe.style.display = '';
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
+                }
+                if (imageContainer) { imageContainer.style.display = 'none'; }
+                if (imageImg) { imageImg.removeAttribute('src'); }
+            } else if (htmlContent) {
+                // Fallback: srcdoc if webviewUri not provided (backward compat)
+                if (iframe) {
+                    iframe.style.display = '';
                     iframe.removeAttribute('src');
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
                     iframe.srcdoc = htmlWithBase;
-                } else if (webviewUri) {
-                    // Fallback: use src if htmlContent not provided (backward compat)
-                    iframe.removeAttribute('srcdoc');
-                    iframe.src = webviewUri;
                 }
+                if (imageContainer) { imageContainer.style.display = 'none'; }
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
@@ -1937,6 +2006,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 alert('Planning Panel Error: ' + msg.message);
                 break;
+            case 'cyberThemeSetting': {
+                if (msg.enabled) {
+                    document.body.classList.add('cyber-theme-enabled');
+                } else {
+                    document.body.classList.remove('cyber-theme-enabled');
+                }
+                break;
+            }
             case 'kanbanPlansReady':
                 handleKanbanPlansReady(msg);
                 break;
@@ -2737,7 +2814,7 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
-                        <span class="kanban-column-badge">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                        <span class="kanban-column-badge" data-column="${escapeHtml(plan.column)}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}" title="Copy plan file path">Copy Link</button>` : ''}
                     </div>
                 </div>
