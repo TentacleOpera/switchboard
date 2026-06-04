@@ -390,6 +390,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
 
+        // Temporarily protect escaped backticks to prevent them from breaking the inline code block parser
+        processed = processed.replace(/\\`/g, '__ESCAPED_BACKTICK__');
+
         // Process line by line to deduplicate consecutive headers
         const lines = processed.split('\n');
         const resultLines = [];
@@ -497,6 +500,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return `</p><blockquote>${body}</blockquote><p>`;
         });
         html = html.replace(/<p>\s*<\/p>/g, '');
+
+        // Restore escaped backticks
+        // If it is inside <code> or <pre> tags, restore to \\` (preserving backslash)
+        // If it is outside, restore to ` (removing backslash)
+        let inCode = false;
+        html = html.replace(/(<code\b[^>]*>|<\/code>|<pre\b[^>]*>|<\/pre>|__ESCAPED_BACKTICK__)/g, (match) => {
+            if (match.startsWith('<code') || match.startsWith('<pre')) {
+                inCode = true;
+                return match;
+            } else if (match.startsWith('</code') || match.startsWith('</pre')) {
+                inCode = false;
+                return match;
+            } else if (match === '__ESCAPED_BACKTICK__') {
+                return inCode ? '\\`' : '`';
+            }
+            return match;
+        });
 
         return html;
     }

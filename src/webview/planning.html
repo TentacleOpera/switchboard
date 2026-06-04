@@ -747,13 +747,14 @@
             line-height: 1.5;
             word-wrap: break-word;
             color: var(--vscode-editor-foreground, #cccccc);
+            padding: 8px 16px;
         }
 
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
         #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
         #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
-            margin-top: 16px;
-            margin-bottom: 8px;
+            margin-top: 24px;
+            margin-bottom: 12px;
             font-weight: 600;
             line-height: 1.25;
             color: #ffffff;
@@ -807,7 +808,7 @@
         #markdown-preview p,
         #markdown-preview-online p,
         #kanban-preview-pane p {
-            margin-bottom: 10px;
+            margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
             color: var(--text-primary, #e0e0e0);
             font-size: inherit; /* Inherits from container's 13px */
@@ -816,7 +817,7 @@
         #markdown-preview li,
         #markdown-preview-online li,
         #kanban-preview-pane li {
-            margin-bottom: 0.25em; /* Tighter list item spacing */
+            margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
             color: var(--vscode-editor-foreground, #cccccc);
             font-size: inherit;
@@ -877,7 +878,7 @@
         #markdown-preview ul, #markdown-preview ol,
         #markdown-preview-online ul, #markdown-preview-online ol,
         #kanban-preview-pane ul, #kanban-preview-pane ol {
-            margin-bottom: 0.7em; /* Match VS Code's tighter list spacing */
+            margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
         }
 
@@ -1526,22 +1527,20 @@
         }
 
         /* ── Cyber Panel Theme: Immersive Background ── */
-        .cyber-theme-enabled body {
-            background-color: #040409;
+        /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
+           applied directly to document.body via classList.add — body cannot be a descendant of itself. */
+        body.cyber-theme-enabled {
+            background-color: #1a1a1a;
             background-image:
                 /* Subtle cyan grid lines */
                 linear-gradient(rgba(61, 219, 217, 0.04) 1px, transparent 1px),
-                linear-gradient(90deg, rgba(61, 219, 217, 0.04) 1px, transparent 1px),
-                /* Top-right magenta/purple radial glow */
-                radial-gradient(ellipse 60% 50% at 85% 10%, rgba(187, 134, 252, 0.12) 0%, transparent 70%),
-                /* Bottom-left cyan radial glow */
-                radial-gradient(ellipse 50% 40% at 10% 90%, rgba(61, 219, 217, 0.10) 0%, transparent 70%);
-            background-size: 40px 40px, 40px 40px, 100% 100%, 100% 100%;
+                linear-gradient(90deg, rgba(61, 219, 217, 0.04) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
         }
 
         /* Tab bar */
         .cyber-theme-enabled .research-tab-bar {
-            background: rgba(10, 10, 18, 0.65);
+            background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             border-bottom-color: rgba(61, 219, 217, 0.25);
@@ -1549,7 +1548,7 @@
 
         /* Controls strip */
         .cyber-theme-enabled .controls-strip {
-            background: rgba(10, 10, 18, 0.65);
+            background: rgba(10, 10, 10, 0.65);
             backdrop-filter: blur(10px);
             -webkit-backdrop-filter: blur(10px);
             border-bottom-color: rgba(61, 219, 217, 0.20);
@@ -1559,7 +1558,7 @@
         .cyber-theme-enabled #tree-pane,
         .cyber-theme-enabled #tree-pane-online,
         .cyber-theme-enabled #tree-pane-html {
-            background: rgba(6, 6, 14, 0.70);
+            background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             border-right-color: rgba(61, 219, 217, 0.20);
@@ -1567,27 +1566,40 @@
 
         /* Kanban list pane */
         .cyber-theme-enabled #kanban-list-pane {
-            background: rgba(6, 6, 14, 0.70);
+            background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
         }
 
-        /* Preview panel wrapper */
+        /* Preview panel wrapper — transparent passthrough in cyber mode.
+           The wrapper has overflow: hidden (base CSS) which kills backdrop-filter on children;
+           we make it a transparent container and apply glass directly on the scroll panes. */
         .cyber-theme-enabled .preview-panel-wrapper {
-            background: rgba(4, 4, 9, 0.60);
+            background: transparent;
+        }
+
+        /* Apply glassmorphism directly on the scroll containers where overflow-y:auto is set.
+           These sit directly above the body grid with no opaque ancestor in the way. */
+        .cyber-theme-enabled #preview-pane,
+        .cyber-theme-enabled #preview-pane-online {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
             backdrop-filter: blur(6px);
             -webkit-backdrop-filter: blur(6px);
         }
 
-        /* Let the body grid show through the preview reading area */
-        .cyber-theme-enabled #preview-pane,
-        .cyber-theme-enabled #preview-pane-online {
-            background: transparent;
-        }
-
-        /* Kanban preview — use id selector (DOM element is #kanban-preview-pane, not a class) */
+        /* Kanban preview — same direct-glass approach */
         .cyber-theme-enabled #kanban-preview-pane {
-            background: transparent;
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
         }
 
         /* Tab content wrappers — solid backgrounds that block the body grid */
@@ -1611,7 +1623,7 @@
 
         /* Planning cards */
         .cyber-theme-enabled .planning-card {
-            background: rgba(10, 10, 22, 0.60);
+            background: rgba(13, 13, 13, 0.60);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
             border-color: rgba(61, 219, 217, 0.20);
@@ -1620,7 +1632,7 @@
 
         /* Duplicate modal */
         .cyber-theme-enabled .duplicate-modal .modal-content {
-            background: rgba(8, 8, 18, 0.80);
+            background: rgba(10, 10, 10, 0.88);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
             border: 1px solid rgba(61, 219, 217, 0.25);
@@ -1629,7 +1641,7 @@
 
         /* Folder modal */
         .cyber-theme-enabled .folder-modal .modal-content {
-            background: rgba(8, 8, 18, 0.80);
+            background: rgba(10, 10, 10, 0.88);
             backdrop-filter: blur(12px);
             -webkit-backdrop-filter: blur(12px);
             border-color: rgba(61, 219, 217, 0.25);
@@ -1648,7 +1660,7 @@
         /* Secondary planning buttons */
         .cyber-theme-enabled .planning-button.secondary {
             border-color: rgba(61, 219, 217, 0.20);
-            background: rgba(10, 10, 22, 0.50);
+            background: rgba(10, 10, 10, 0.50);
         }
         .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
             border-color: rgba(61, 219, 217, 0.35);
@@ -1658,7 +1670,7 @@
         /* Select and input controls */
         .cyber-theme-enabled .planning-select,
         .cyber-theme-enabled .planning-input {
-            background: rgba(6, 6, 14, 0.70);
+            background: rgba(10, 10, 10, 0.70);
             border-color: rgba(61, 219, 217, 0.20);
         }
         .cyber-theme-enabled .planning-select:focus,
@@ -1676,6 +1688,10 @@
         }
 
         .cyber-theme-enabled .kanban-controls-strip {
+            background: transparent;
+        }
+
+        .cyber-theme-enabled .markdown-editor {
             background: transparent;
         }
 
