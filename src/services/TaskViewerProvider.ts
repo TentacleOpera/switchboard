@@ -3148,13 +3148,13 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         await config.update('statusBar.showArtifactsButton', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
-    public handleGetCyberPanelThemeSetting(): boolean {
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
+    public handleGetCyberAnimationDisabledSetting(): boolean {
+        return vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
     }
 
-    public async handleSetCyberPanelThemeSetting(enabled: boolean): Promise<void> {
+    public async handleSetCyberAnimationDisabledSetting(enabled: boolean): Promise<void> {
         const config = vscode.workspace.getConfiguration('switchboard');
-        await config.update('theme.cyberPanel', enabled, vscode.ConfigurationTarget.Workspace);
+        await config.update('theme.disableCyberAnimation', enabled, vscode.ConfigurationTarget.Workspace);
     }
 
     public handleGetJulesAutoSyncSetting(): boolean {
@@ -3531,8 +3531,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         });
 
         this._setupPanelProvider.postMessage({
-            type: 'cyberPanelThemeSetting',
-            enabled: this.handleGetCyberPanelThemeSetting()
+            type: 'cyberAnimationDisabledSetting',
+            enabled: this.handleGetCyberAnimationDisabledSetting()
         });
 
         const designDocSetting = this.handleGetDesignDocSetting();

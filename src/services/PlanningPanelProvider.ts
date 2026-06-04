@@ -291,9 +291,9 @@ export class PlanningPanelProvider {
 
         this._disposables.push(
             vscode.workspace.onDidChangeConfiguration(e => {
-                if (e.affectsConfiguration('switchboard.theme.cyberPanel')) {
-                    const cyberEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
-                    this._panel?.webview.postMessage({ type: 'cyberThemeSetting', enabled: cyberEnabled });
+                if (e.affectsConfiguration('switchboard.theme.disableCyberAnimation')) {
+                    const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+                    this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
                 }
             })
         );
@@ -2006,8 +2006,8 @@ export class PlanningPanelProvider {
     private async _handleFetchRoots(): Promise<void> {
         await this._sendLocalDocsReady();
         await this._sendOnlineDocsReady();
-        const cyberEnabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.cyberPanel', false);
-        this._panel?.webview.postMessage({ type: 'cyberThemeSetting', enabled: cyberEnabled });
+        const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
+        this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {

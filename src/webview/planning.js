@@ -2031,12 +2031,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
                 alert('Planning Panel Error: ' + msg.message);
                 break;
-            case 'cyberThemeSetting': {
-                if (msg.enabled) {
-                    document.body.classList.add('cyber-theme-enabled');
-                } else {
-                    document.body.classList.remove('cyber-theme-enabled');
-                }
+            case 'cyberAnimationSetting': {
+                document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
                 break;
             }
             case 'kanbanPlansReady':
