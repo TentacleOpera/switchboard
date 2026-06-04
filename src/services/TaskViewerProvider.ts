@@ -11118,7 +11118,11 @@ What would you like to find?`;
             const hasDbRow = db ? await db.hasPlan(sessionId) : false;
             const isRecent = stats.birthtimeMs >= cutoff || stats.mtimeMs >= cutoff;
 
-            if (!existingEntry && !hasDbRow && !isRecent) {
+            // Only skip plans already known to the system (registry or DB) that haven't
+            // changed since the last scan. Unclaimed plans (no registry entry, no DB row)
+            // must always be processed — they cannot have been previously handled and may
+            // have been missed by the watcher due to directory-creation latency.
+            if ((existingEntry || hasDbRow) && !isRecent) {
                 continue;
             }
 
@@ -11287,6 +11291,11 @@ What would you like to find?`;
             const firstLines = snippet.split(/\r?\n/).slice(0, MAX_HEADER_LINES).join('\n');
             const hasH1 = /^#\s+.+/m.test(firstLines);
             if (!hasH1) return false;
+
+            // Brain-sourced files are always agent-created artifacts written intentionally;
+            // accept any H1-headed .md without requiring Switchboard-specific section headers.
+            // The EXCLUDED_BRAIN_FILENAMES list already guards against known noise files.
+            if (this._isAntigravitySourcePath(filePath)) { return true; }
 
             // Relaxed validation for additional plan folder: any .md with H1 is accepted
             if (options?.isAdditionalFolder) {
