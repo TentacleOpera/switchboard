@@ -409,6 +409,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         // Group consecutive blockquote lines
+        // NOTE(escape-order coupling): This regex matches '&gt;' because HTML escaping
+        // runs first (lines 388-391). If the escape order ever changes, this regex
+        // must be updated accordingly or blockquote rendering will silently break.
         const groupedLines = [];
         let inBlockquote = false;
         let blockquoteLines = [];
