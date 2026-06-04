@@ -62,6 +62,7 @@ export class PlanningPanelProvider {
     private _kanbanPlansWatchDebounce: NodeJS.Timeout | undefined;
     private _lastPanelWriteTimestamp: number = 0;
     private _isAutoRefreshing: boolean = false;
+    private _nonce: string = '';
     private _activePreviewPath: string | null = null;
     private _activePreviewSourceId: string | null = null;
     private _activePreviewDocId: string | null = null;
@@ -638,6 +639,7 @@ export class PlanningPanelProvider {
 
     private _getHtml(webview: vscode.Webview): string {
         const nonce = crypto.randomBytes(16).toString('base64');
+        this._nonce = nonce;
         const cspSource = webview.cspSource;
 
         // Fallback chain for HTML file location
@@ -676,18 +678,28 @@ export class PlanningPanelProvider {
     }
 
     private _injectLocalCsp(html: string): string {
-        const cspTag = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: vscode-webview: vscode-webview-resource: vscode-resource:; style-src 'unsafe-inline' https: vscode-webview: vscode-webview-resource: vscode-resource:; img-src data: blob: https: vscode-webview: vscode-webview-resource: vscode-resource:;">`;
+        const cspTag = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: vscode-webview: vscode-webview-resource: vscode-resource:; style-src 'unsafe-inline' https: vscode-webview: vscode-webview-resource: vscode-resource:; img-src data: blob: https: vscode-webview: vscode-webview-resource: vscode-resource:; font-src data: https: vscode-webview: vscode-webview-resource: vscode-resource:; connect-src https: data:;">`;
+        let processedHtml = html;
         const headMatch = html.match(/<head\b[^>]*>/i);
         if (headMatch && headMatch.index !== undefined) {
             const index = headMatch.index + headMatch[0].length;
-            return html.slice(0, index) + '\n  ' + cspTag + html.slice(index);
+            processedHtml = html.slice(0, index) + '\n  ' + cspTag + html.slice(index);
+        } else {
+            const htmlMatch = html.match(/<html\b[^>]*>/i);
+            if (htmlMatch && htmlMatch.index !== undefined) {
+                const index = htmlMatch.index + htmlMatch[0].length;
+                processedHtml = html.slice(0, index) + '\n<head>' + cspTag + '</head>' + html.slice(index);
+            } else {
+                processedHtml = cspTag + '\n' + html;
+            }
         }
-        const htmlMatch = html.match(/<html\b[^>]*>/i);
-        if (htmlMatch && htmlMatch.index !== undefined) {
-            const index = htmlMatch.index + htmlMatch[0].length;
-            return html.slice(0, index) + '\n<head>' + cspTag + '</head>' + html.slice(index);
+
+        if (this._nonce) {
+            // Inject nonce into <script> tags that don't already have one,
+            // avoiding double-nonce on tags that already carry a nonce attribute.
+            processedHtml = processedHtml.replace(/<script(?![^>]*\bnonce=)(\s[^>]*)?>/gi, `<script nonce="${this._nonce}"$1>`);
         }
-        return cspTag + '\n' + html;
+        return processedHtml;
     }
 
     private _getWorkspaceRoots(): string[] {

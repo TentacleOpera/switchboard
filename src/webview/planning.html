@@ -235,6 +235,34 @@
             transition: all 0.15s;
         }
 
+        .sidebar-folders-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.15s;
+            margin-right: 4px;
+            display: flex;
+            align-items: center;
+        }
+
+        .cyber-theme-enabled .sidebar-folders-btn:hover {
+            color: var(--accent-neon);
+            border-color: var(--accent-neon);
+            box-shadow: 0 0 5px color-mix(in srgb, var(--accent-neon) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-neon) 10%, transparent);
+        }
+
+        .sidebar-folders-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
         .sidebar-toggle-btn:hover {
             color: var(--accent-teal);
             border-color: var(--accent-teal-dim);
@@ -1961,7 +1989,7 @@
                 <button id="btn-save-local" class="strip-btn" style="display:none;">Save</button>
                 <button id="btn-cancel-local" class="strip-btn" style="display:none;">Cancel</button>
                 <span id="status"></span>
-                <button id="btn-manage-folders" class="strip-btn" style="margin-left: auto;">Folders</button>
+
             </div>
             <div class="content-row">
                 <div id="tree-pane">
@@ -2229,7 +2257,7 @@
                     <div class="empty-state">Configure a folder to browse HTML files</div>
                 </div>
                 <div id="preview-pane-html" style="display: flex; flex-direction: column; background: var(--panel-bg); overflow: hidden; height: 100%;">
-                    <iframe id="html-preview-frame" sandbox="allow-scripts" style="flex: 1; border: none; background: white; width: 100%; height: 100%;"></iframe>
+                    <iframe id="html-preview-frame" sandbox="allow-scripts allow-same-origin" style="flex: 1; border: none; background: white; width: 100%; height: 100%;"></iframe>
                     <div id="image-preview-container" style="display: none; flex: 1; overflow: auto; background: var(--panel-bg); padding: 16px; text-align: center;">
                         <img id="image-preview-img" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Image preview" />
                     </div>
@@ -2262,6 +2290,9 @@
                             <span class="toggle-slider"></span>
                         </label>
                         <span class="toggle-label" style="font-size:11px; letter-spacing:0.5px; text-transform:uppercase; color:var(--text-secondary);">Show Antigravity Brain</span>
+                    </div>
+                    <div style="font-size: 10px; color: var(--text-secondary); margin-top: 4px; margin-left: 40px; opacity: 0.8;">
+                        Shows Antigravity App, IDE and CLI folders
                     </div>
                 </div>
                 

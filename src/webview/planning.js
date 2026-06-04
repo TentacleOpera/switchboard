@@ -985,11 +985,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Re-add sidebar toggle
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
+        
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.id = 'btn-manage-folders';
+        foldersBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 3L8.71 3L7.3 1.59C7.11 1.41 6.86 1.3 6.59 1.3L1.5 1.3C0.95 1.3 0.5 1.75 0.5 2.3L0.5 13.3C0.5 13.85 0.95 14.3 1.5 14.3L14.5 14.3C15.05 14.3 15.5 13.85 15.5 13.3L15.5 4C15.5 3.45 15.05 3 14.5 3ZM14.5 13.3L1.5 13.3L1.5 4L14.5 4L14.5 13.3Z"/></svg>';
+        foldersBtn.addEventListener('click', openFoldersModal);
+        
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
         toggleBtn.textContent = state.docsListCollapsed ? '»' : '«';
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+        
+        toggleRow.appendChild(foldersBtn);
         toggleRow.appendChild(toggleBtn);
         treePane.appendChild(toggleRow);
         
@@ -998,6 +1008,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             const docList = document.createElement('div');
             docList.className = 'source-doc-list';
             docList.dataset.sourceId = sourceId;
+            // Push content down to avoid overlapping with top-right absolute controls
+            docList.style.paddingTop = '10px';
             treePane.appendChild(docList);
 
             if (!nodes || nodes.length === 0) {
@@ -3336,8 +3348,8 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
         setupTextareaTabInterceptor(kanbanEditor);
     }
 
-    // Folder modal open
-    document.getElementById('btn-manage-folders').addEventListener('click', () => {
+    // Folder modal open logic
+    function openFoldersModal() {
         const modal = document.getElementById('folder-modal');
         modal.style.display = 'flex';
         // Sync antigravity toggle state from JS state
@@ -3347,7 +3359,7 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
         renderFolderListModal();
         // Request fresh folder list from backend to ensure sync (catches startup race)
         vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
-    });
+    }
 
     // Folder modal close (X button)
     document.getElementById('btn-close-folder-modal').addEventListener('click', () => {

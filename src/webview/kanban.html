@@ -140,6 +140,10 @@
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
         }
         .kanban-sub-bar .strip-icon-btn.is-active {
+            background: transparent;
+            box-shadow: none;
+        }
+        .kanban-sub-bar .strip-icon-btn.is-active:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
             box-shadow: var(--glow-teal);
         }
@@ -147,7 +151,7 @@
             filter: brightness(1.2);
         }
         .kanban-sub-bar .strip-icon-btn.is-off {
-            opacity: 0.6;
+            opacity: 0.5;
         }
         .kanban-sub-bar .strip-icon-btn.is-off img {
             filter: grayscale(0.5) brightness(0.7);
@@ -303,6 +307,7 @@
         .strip-icon-btn:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             border-color: transparent;
+            box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn:disabled {
@@ -325,6 +330,7 @@
         .controls-strip .strip-icon-btn:hover:not(:disabled) {
             border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn img {
@@ -336,8 +342,13 @@
 
         .strip-icon-btn.is-active {
             border-color: transparent;
-            box-shadow: var(--glow-teal);
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .strip-icon-btn.is-active:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
         }
 
         .strip-icon-btn.is-active img {
@@ -346,7 +357,7 @@
 
         .strip-icon-btn.is-off {
             border-color: transparent;
-            opacity: 0.6;
+            opacity: 0.5;
         }
 
         .strip-icon-btn.is-off img {
@@ -1071,12 +1082,24 @@
         .complexity-routing-btn:hover {
             border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            box-shadow: var(--glow-teal);
         }
 
         .complexity-routing-btn.is-active {
             border-color: transparent;
+            background: transparent;
+            box-shadow: none;
+            opacity: 1;
+        }
+        .complexity-routing-btn.is-active:hover {
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
             box-shadow: var(--glow-teal);
+        }
+        .complexity-routing-btn.is-off {
+            opacity: 0.5;
+        }
+        .complexity-routing-btn.is-off img {
+            filter: grayscale(0.5) brightness(0.7);
         }
 
         .complexity-routing-btn img {
@@ -2192,6 +2215,12 @@
             <button class="strip-icon-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">
                 <img src="{{ICON_41}}" alt="Chat Copy Prompt">
             </button>
+            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
+                <img src="{{ICON_CLI}}" alt="CLI Triggers">
+            </button>
+            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+                <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
+            </button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
@@ -2218,9 +2247,6 @@
                 <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
                     <img src="{{ICON_22}}" alt="Start Automation" style="width: 17px; height: 17px;">
                 </button>
-                <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                    <img src="{{ICON_CLI}}" alt="CLI Triggers" style="width: 14px; height: 14px;">
-                </button>
                 <div class="autoban-timers-inline is-empty" id="autoban-timers-inline"></div>
                 <button class="strip-icon-btn" id="btn-pause-autoban-timer" data-tooltip="Pause automation timers" style="display:none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="14" height="14" style="color: var(--accent-teal);">
@@ -2230,9 +2256,6 @@
                 </button>
                 <button class="strip-icon-btn" id="btn-reset-autoban-timer" data-tooltip="Reset and restart automation timers" style="display:none;">
                     <img src="{{ICON_22}}" alt="Reset Timers" style="width: 17px; height: 17px;">
-                </button>
-                <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
-                    <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders" style="width: 14px; height: 14px;">
                 </button>
                 <div id="status-message" role="status" aria-live="polite" class="sub-bar-status" style="display:none;"></div>
             </div>
@@ -3855,6 +3878,7 @@
             const toggle = document.getElementById('complexity-routing-toggle');
             if (toggle) {
                 toggle.classList.toggle('is-active', !!dynamicComplexityRoutingEnabled);
+                toggle.classList.toggle('is-off', !dynamicComplexityRoutingEnabled);
             }
         }
 
@@ -4175,7 +4199,7 @@
                     : '';
 
                 const complexityRoutingToggle = isPlanReviewed
-                    ? `<div id="complexity-routing-toggle" class="complexity-routing-btn ${dynamicComplexityRoutingEnabled ? 'is-active' : ''}" data-tooltip="Toggle complexity routing (low→coder, high→lead)">
+                    ? `<div id="complexity-routing-toggle" class="complexity-routing-btn ${dynamicComplexityRoutingEnabled ? 'is-active' : 'is-off'}" data-tooltip="Toggle complexity routing (low→coder, high→lead)">
                            <img src="${ICON_DYNAMIC_ROUTING}" alt="Dynamic Routing">
                        </div>`
                     : '';
@@ -6789,7 +6813,10 @@
         document.getElementById('btn-collapse-coders')?.addEventListener('click', () => {
             collapseCodersEnabled = !collapseCodersEnabled;
             const btn = document.getElementById('btn-collapse-coders');
-            if (btn) btn.classList.toggle('is-active', collapseCodersEnabled);
+            if (btn) {
+                btn.classList.toggle('is-active', collapseCodersEnabled);
+                btn.classList.toggle('is-off', !collapseCodersEnabled);
+            }
             try {
                 const state = vscode.getState() || {};
                 state.collapseCodersEnabled = collapseCodersEnabled;
@@ -6800,8 +6827,10 @@
             updateAllColumnAgents();
         });
         // Restore visual active state from saved toggle state
-        if (collapseCodersEnabled) {
-            document.getElementById('btn-collapse-coders')?.classList.add('is-active');
+        const btnCollapse = document.getElementById('btn-collapse-coders');
+        if (btnCollapse) {
+            btnCollapse.classList.toggle('is-active', collapseCodersEnabled);
+            btnCollapse.classList.toggle('is-off', !collapseCodersEnabled);
         }
 
         // Chat copy prompt button (sub-bar global action)
