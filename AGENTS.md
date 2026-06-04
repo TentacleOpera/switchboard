@@ -92,6 +92,13 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 
 **Skill Files Location**: `.agent/skills/` (distributed with plugin)
 
+### 📝 Plan Authoring & Problem Analysis Protocol
+
+When creating or improving any implementation plan (including via `/improve-plan`):
+- You MUST explicitly document the core problems, background context, and root cause analysis.
+- This details should be placed directly inside or immediately below the `## Goal` section to ensure the plan remains self-contained without violating workflow section requirements.
+- The `improve-plan` required section schema must never be used as a reason to drop the problem analysis.
+
 ### 📂 Workspace Detection for Plan Creation
 
 When creating plan files in multi-workspace setups, use this decision tree to determine which workspace's `.switchboard/plans/` directory to target:

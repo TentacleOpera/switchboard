@@ -65,6 +65,7 @@ export class PlanningPanelProvider {
     private _activePreviewSourceId: string | null = null;
     private _activePreviewDocId: string | null = null;
     private _activePreviewSourceFolder: string | null = null;
+    private _activePreviewWorkspaceRoot: string | undefined;
     private _watcherGeneration: number = 0;
 
     private _resolvedConfigCache: {
@@ -550,8 +551,9 @@ export class PlanningPanelProvider {
                 this._activeDocWatchDebounce = setTimeout(async () => {
                     if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
                     
-                    const allRoots = this._getWorkspaceRoots();
-                    const workspaceRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+                    const workspaceRoot = this._activePreviewWorkspaceRoot
+                        || this._getWorkspaceRoot()
+                        || (this._getWorkspaceRoots().length > 0 ? this._getWorkspaceRoots()[0] : undefined);
                     if (!workspaceRoot) return;
 
                     console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
@@ -560,6 +562,8 @@ export class PlanningPanelProvider {
                         if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
                             // Re-fetch local doc or HTML doc
                             await this._handleFetchPreview(workspaceRoot, this._activePreviewSourceId, this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
+                        } else if (this._activePreviewSourceId === 'kanban-plan') {
+                            await this._handleFetchKanbanPlanPreview(this._activePreviewDocId!, -1);
                         } else {
                             // Re-fetch imported doc via fetchDocsFile
                             await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
@@ -588,6 +592,37 @@ export class PlanningPanelProvider {
             this._disposables.push(this._activeDocWatcher);
         } catch (err) {
             console.error('[PlanningPanel] Failed to create active doc watcher:', err);
+        }
+    }
+
+    private async _handleFetchKanbanPlanPreview(filePath: string, requestId: number): Promise<void> {
+        const allRoots = this._getWorkspaceRoots();
+        const resolved = path.resolve(filePath);
+        const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
+        if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
+            this._panel?.webview.postMessage({
+                type: 'kanbanPlanPreviewReady', requestId,
+                content: '', error: 'File not found or not in workspace'
+            });
+            return;
+        }
+        try {
+            const content = await fs.promises.readFile(resolved, 'utf8');
+
+            // Set active preview state (mirrors _handleFetchPreview pattern)
+            this._activePreviewPath = resolved;
+            this._activePreviewSourceId = 'kanban-plan';
+            this._activePreviewDocId = filePath;
+            this._setupActiveDocWatcher(resolved);
+
+            this._panel?.webview.postMessage({
+                type: 'kanbanPlanPreviewReady', requestId, content,
+                isAutoRefreshed: this._isAutoRefreshing
+            });
+        } catch (err) {
+            this._panel?.webview.postMessage({
+                type: 'kanbanPlanPreviewReady', requestId, content: '', error: String(err)
+            });
         }
     }
 
@@ -1370,22 +1405,7 @@ export class PlanningPanelProvider {
             case 'fetchKanbanPlanPreview': {
                 const filePath: string = msg.filePath || '';
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
-                const allRoots = this._getWorkspaceRoots();
-                const resolved = path.resolve(filePath);
-                const isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
-                if (!filePath || !isAllowed || !fs.existsSync(resolved)) {
-                    this._panel?.webview.postMessage({
-                        type: 'kanbanPlanPreviewReady', requestId,
-                        content: '', error: 'File not found or not in workspace'
-                    });
-                    break;
-                }
-                try {
-                    const content = await fs.promises.readFile(resolved, 'utf8');
-                    this._panel?.webview.postMessage({ type: 'kanbanPlanPreviewReady', requestId, content });
-                } catch (err) {
-                    this._panel?.webview.postMessage({ type: 'kanbanPlanPreviewReady', requestId, content: '', error: String(err) });
-                }
+                await this._handleFetchKanbanPlanPreview(filePath, requestId);
                 break;
             }
             case 'setKanbanPlanContext': {
@@ -1432,6 +1452,7 @@ export class PlanningPanelProvider {
                         this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
                         break;
                     }
+                    this._lastPanelWriteTimestamp = Date.now();
                     await fs.promises.writeFile(resolved, content, 'utf8');
                     this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: true, tab });
                 } catch (err) {
@@ -1483,7 +1504,8 @@ export class PlanningPanelProvider {
                     throw new Error('sourceFolder is required');
                 }
                 // For local-folder: resolve the file path directly
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
                 const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
                 if (!localFolderService.getFolderPaths().includes(resolvedSourceFolder)) {
                     throw new Error('sourceFolder is not a configured folder path');
@@ -1553,7 +1575,8 @@ export class PlanningPanelProvider {
                 if (!sourceFolder) {
                     throw new Error('sourceFolder is required');
                 }
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
                 const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
                 if (!localFolderService.getFolderPaths().includes(resolvedSourceFolder)) {
                     throw new Error('sourceFolder is not a configured folder path');
@@ -1697,6 +1720,49 @@ export class PlanningPanelProvider {
         return new LocalFolderService(workspaceRoot);
     }
 
+    /**
+     * Find the LocalFolderService for the workspace root that has the given
+     * sourceFolder configured. Prioritizes the active workspace root when
+     * multiple roots configure the same folder path.
+     */
+    private _getLocalFolderServiceForFolder(
+        sourceFolder: string | undefined,
+        workspaceRoot: string,
+        sourceId: 'local-folder' | 'html-folder' = 'local-folder'
+    ): LocalFolderService | null {
+        if (!sourceFolder) { return null; }
+        const allRoots = this._getWorkspaceRoots();
+        const activeRoot = this._getWorkspaceRoot();
+
+        // Try active root first (matches existing priority logic)
+        if (activeRoot) {
+            const service = this._getLocalFolderService(activeRoot);
+            const paths = sourceId === 'html-folder'
+                ? service.getHtmlFolderPaths()
+                : service.getFolderPaths();
+            const resolved = service.resolveFolderPath(sourceFolder);
+            if (paths.includes(resolved)) {
+                return service;
+            }
+        }
+
+        // Fall back to scanning all roots
+        for (const root of allRoots) {
+            if (activeRoot && path.resolve(root) === path.resolve(activeRoot)) continue; // already tried
+            const service = this._getLocalFolderService(root);
+            const paths = sourceId === 'html-folder'
+                ? service.getHtmlFolderPaths()
+                : service.getFolderPaths();
+            const resolved = service.resolveFolderPath(sourceFolder);
+            if (paths.includes(resolved)) {
+                return service;
+            }
+        }
+
+        // Fallback: use the provided workspaceRoot's service (preserves current behavior)
+        return this._getLocalFolderService(workspaceRoot);
+    }
+
     private _mapLocalFilesToTreeNodes(files: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string }>): TreeNode[] {
         return files.map(f => ({
             id: f.id,
@@ -1719,6 +1785,13 @@ export class PlanningPanelProvider {
             const activeRoot = this._getWorkspaceRoot();
             let configuredFolderPaths: string[] = []; // Track configured folder paths for webview
 
+            // Compute configured folder paths for the active root directly
+            // (independent of the dedup scanning loop below)
+            if (activeRoot) {
+                const activeService = this._getLocalFolderService(activeRoot);
+                configuredFolderPaths = activeService.getFolderPaths();
+            }
+
             const seenFilePaths = new Set<string>(); // Deduplicate files across roots
 
             for (const root of allRoots) {
@@ -1735,10 +1808,6 @@ export class PlanningPanelProvider {
                         }
                         if (folderPath) {
                             scannedPaths.add(folderPath);
-                            // Prioritize the active root's folder paths for the webview
-                            if (!activeRoot || path.resolve(root) === path.resolve(activeRoot)) {
-                                configuredFolderPaths.push(folderPath);
-                            }
                         }
                     }
 
@@ -1814,6 +1883,13 @@ export class PlanningPanelProvider {
                 const activeRoot = this._getWorkspaceRoot();
                 let configuredFolderPaths: string[] = [];
 
+                // Compute configured HTML folder paths for the active root directly
+                // (independent of the dedup scanning loop below)
+                if (activeRoot) {
+                    const activeService = this._getLocalFolderService(activeRoot);
+                    configuredFolderPaths = activeService.getHtmlFolderPaths();
+                }
+
                 const seenFilePaths = new Set<string>();
 
                 for (const root of allRoots) {
@@ -1829,9 +1905,6 @@ export class PlanningPanelProvider {
                             }
                             if (folderPath) {
                                 scannedPaths.add(folderPath);
-                                if (!activeRoot || path.resolve(root) === path.resolve(activeRoot)) {
-                                    configuredFolderPaths.push(folderPath);
-                                }
                             }
                         }
 
@@ -1967,7 +2040,8 @@ export class PlanningPanelProvider {
                 return;
             }
             // Validate sourceFolder is a configured HTML folder
-            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'html-folder')
+                || this._getLocalFolderService(workspaceRoot);
             const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
             if (!localFolderService.getHtmlFolderPaths().includes(resolvedSourceFolder)) {
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is not a configured HTML folder path' });
@@ -1990,6 +2064,7 @@ export class PlanningPanelProvider {
             this._activePreviewSourceId = 'html-folder';
             this._activePreviewDocId = docId;
             this._activePreviewSourceFolder = sourceFolder;
+            this._activePreviewWorkspaceRoot = workspaceRoot;
             this._setupActiveDocWatcher(resolvedPath);
             this._panel?.webview.postMessage({
                 type: 'previewReady',
@@ -2008,7 +2083,8 @@ export class PlanningPanelProvider {
                 this._panel?.webview.postMessage({ type: 'previewError', sourceId, requestId, error: 'sourceFolder is required' });
                 return;
             }
-            const localFolderService = this._getLocalFolderService(workspaceRoot);
+            const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
+                || this._getLocalFolderService(workspaceRoot);
             try {
                 console.log('[PlanningPanel] Fetching local doc content:', { docId, requestId });
                 const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
@@ -2020,6 +2096,7 @@ export class PlanningPanelProvider {
                     this._activePreviewSourceId = 'local-folder';
                     this._activePreviewDocId = docId;
                     this._activePreviewSourceFolder = sourceFolder;
+                    this._activePreviewWorkspaceRoot = workspaceRoot;
                     this._setupActiveDocWatcher(resolvedPath);
 
                     this._panel?.webview.postMessage({ 
@@ -2200,7 +2277,8 @@ export class PlanningPanelProvider {
                 if (!sourceFolder) {
                     throw new Error('sourceFolder is required');
                 }
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
+                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
                 const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
                 const fetchResult = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
                 if (!fetchResult.success) {

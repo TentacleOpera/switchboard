@@ -26,6 +26,7 @@
         editMode: { local: false, kanban: false },
         editOriginalContent: { local: null, kanban: null },
         dirtyFlags: { local: false, kanban: false },
+        externalChangePending: { local: false, kanban: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: ''
     };
@@ -1248,10 +1249,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (sourceId === 'html-folder') {
             const iframe = document.getElementById('html-preview-frame');
             if (iframe && msg.webviewUri) {
-                if (iframe.src) {
-                    iframe.src = '';
-                }
-                iframe.src = msg.webviewUri;
+                iframe.removeAttribute('srcdoc');  // Clear error state srcdoc first
+                iframe.src = msg.webviewUri;       // Then set the real content
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
@@ -1263,6 +1262,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Auto-refresh notification
         if (isAutoRefreshed) {
+            if (state.editMode.local) {
+                // Defer reload — don't clobber the editor
+                state.externalChangePending.local = true;
+                const statusLocal = document.getElementById('status');
+                if (statusLocal) {
+                    statusLocal.textContent = 'File changed externally — save to overwrite or cancel to reload';
+                    statusLocal.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                }
+                return;
+            }
             const statusEl = sourceId === 'local-folder' ? document.getElementById('status') : document.getElementById('status-online');
             if (statusEl) {
                 const originalText = statusEl.textContent;
@@ -1408,6 +1417,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const { sourceId, requestId, error } = msg;
 
         if (requestId !== state.previewRequestId) return;
+
+        // Route html-folder errors to the HTML preview area
+        if (sourceId === 'html-folder') {
+            const statusHtml = document.getElementById('status-html');
+            if (statusHtml) {
+                statusHtml.textContent = 'Error: ' + error;
+                statusHtml.style.color = '';
+            }
+            const iframe = document.getElementById('html-preview-frame');
+            if (iframe) {
+                iframe.src = '';           // Clear any loaded content
+                iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
+            }
+            return;
+        }
 
         const isOnline = ONLINE_SOURCES.includes(sourceId);
         const targetPreview = isOnline ? markdownPreviewOnline : markdownPreview;
@@ -2828,6 +2852,19 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
         }
 
         _kanbanPlansCache = msg.plans || [];
+        // Refresh selected plan reference from updated cache
+        if (_kanbanSelectedPlan) {
+            const updated = _kanbanPlansCache.find(p => p.planId === _kanbanSelectedPlan.planId);
+            if (updated) {
+                _kanbanSelectedPlan = updated;
+            } else {
+                // Plan was deleted externally — clear selection
+                _kanbanSelectedPlan = null;
+                if (kanbanPreviewContent) {
+                    kanbanPreviewContent.innerHTML = '<div class="kanban-empty-state">Select a plan to preview</div>';
+                }
+            }
+        }
         _kanbanWorkspaceItems = msg.workspaceItems || [];
         _kanbanAllWorkspaceProjects = msg.allWorkspaceProjects || {};
         _kanbanAvailableColumns = msg.columns || [];  // NEW: store available columns
@@ -2856,12 +2893,49 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
     }
 
     function handleKanbanPlanPreviewReady(msg) {
-        if (msg.requestId !== _kanbanPreviewRequestId) return;
+        // Allow auto-refreshes (requestId -1 or undefined) and matching request IDs
+        if (msg.requestId !== undefined && msg.requestId !== -1 && msg.requestId !== _kanbanPreviewRequestId) return;
         if (!kanbanPreviewContent) return;
 
         if (msg.error) {
             kanbanPreviewContent.innerHTML = `<div class="kanban-empty-state" style="color: var(--vscode-errorForeground, #ff6b6b);">Error reading file: ${escapeHtml(msg.error)}</div>`;
             return;
+        }
+
+        // If user is in edit mode, defer the reload instead of clobbering
+        if (state.editMode.kanban && msg.isAutoRefreshed) {
+            state.externalChangePending.kanban = true;
+            // Show warning in kanban controls strip
+            const kanbanStrip = document.querySelector('.kanban-controls-strip');
+            if (kanbanStrip) {
+                let statusEl = kanbanStrip.querySelector('.kanban-external-change-warning');
+                if (!statusEl) {
+                    statusEl = document.createElement('span');
+                    statusEl.className = 'kanban-external-change-warning';
+                    statusEl.style.cssText = 'font-size:11px; color:var(--vscode-errorForeground, #ff6b6b); margin-left:8px;';
+                    kanbanStrip.appendChild(statusEl);
+                }
+                statusEl.textContent = 'File changed externally — save to overwrite or cancel to reload';
+            }
+            return;
+        }
+
+        // Show auto-refresh notification (mirrors local tab behavior at line 1265)
+        if (msg.isAutoRefreshed) {
+            const kanbanStrip = document.querySelector('.kanban-controls-strip');
+            if (kanbanStrip) {
+                let statusEl = kanbanStrip.querySelector('.kanban-auto-refresh-indicator');
+                if (!statusEl) {
+                    statusEl = document.createElement('span');
+                    statusEl.className = 'kanban-auto-refresh-indicator';
+                    statusEl.style.cssText = 'font-size:11px; color:var(--accent-teal); margin-left:8px; opacity:0; transition:opacity 0.3s;';
+                    kanbanStrip.appendChild(statusEl);
+                }
+                statusEl.textContent = 'Plan auto-refreshed';
+                statusEl.style.opacity = '1';
+                clearTimeout(statusEl._fadeTimer);
+                statusEl._fadeTimer = setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
+            }
         }
 
         // Store original content
@@ -3024,6 +3098,36 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
         
         state.editMode[tab] = false;
         state.dirtyFlags[tab] = false;
+
+        // Trigger deferred reload if an external change was pending
+        if (state.externalChangePending[tab]) {
+            state.externalChangePending[tab] = false;
+            if (tab === 'kanban' && _kanbanSelectedPlan && _kanbanSelectedPlan.planFile) {
+                _kanbanPreviewRequestId++;
+                vscode.postMessage({
+                    type: 'fetchKanbanPlanPreview',
+                    filePath: _kanbanSelectedPlan.planFile,
+                    requestId: _kanbanPreviewRequestId
+                });
+            } else if (tab === 'local') {
+                if (state.activeSource === 'local-folder' || state.activeSource === 'html-folder') {
+                    vscode.postMessage({
+                        type: 'fetchPreview',
+                        sourceId: state.activeSource,
+                        docId: state.activeDocId,
+                        requestId: ++state.previewRequestId,
+                        sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, state.activeDocFilePath.lastIndexOf('/')) : undefined
+                    });
+                } else {
+                    vscode.postMessage({
+                        type: 'fetchDocsFile',
+                        slugPrefix: state.activeDocId,
+                        requestId: ++state.previewRequestId
+                    });
+                }
+            }
+        }
+
         return true;
     }
 
