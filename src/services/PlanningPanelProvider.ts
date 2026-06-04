@@ -41,6 +41,7 @@ interface KanbanPlanSummary {
 }
 
 export class PlanningPanelProvider {
+    private static readonly IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
     private _panel: vscode.WebviewPanel | undefined;
     private _disposables: vscode.Disposable[] = [];
     private _latestRequestIds: Map<string, number> = new Map();
@@ -2078,9 +2079,8 @@ export class PlanningPanelProvider {
             this._activePreviewWorkspaceRoot = workspaceRoot;
             this._setupActiveDocWatcher(resolvedPath);
 
-            const IMAGE_EXTENSIONS = new Set(['.png', '.jpg', '.jpeg', '.gif', '.svg']);
             const fileExt = path.extname(resolvedPath).toLowerCase();
-            const isImage = IMAGE_EXTENSIONS.has(fileExt);
+            const isImage = PlanningPanelProvider.IMAGE_EXTENSIONS.has(fileExt);
 
             if (isImage) {
                 // Skip UTF-8 read for binary image files

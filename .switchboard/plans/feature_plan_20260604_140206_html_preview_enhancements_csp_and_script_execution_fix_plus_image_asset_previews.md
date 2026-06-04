@@ -229,6 +229,39 @@ Key risks: (1) Backend binary-file read will garble image content if image-detec
    - Modify the image file on disk (e.g., replace with a different image of the same name).
    - Verify the preview auto-refreshes to show the updated image.
 
+## Review Results (2026-06-04)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | File | Line(s) |
+|---|---------|----------|------|---------|
+| 1 | Missing cache-buster on image `src` — auto-refresh for images will show stale content because browser caches the identical URI | **MAJOR** | planning.js | 1333 (was: `imageImg.src = webviewUri` without `?t=`) |
+| 2 | `isImage` not destructured from `msg`, accessed as `msg.isImage` — inconsistent with destructuring pattern for all other fields | **NIT** | planning.js | 1322, 1329 |
+| 3 | `IMAGE_EXTENSIONS` Set allocated inside `_handleFetchPreview` on every call — should be class-level constant | **NIT** | PlanningPanelProvider.ts | 2081-2083 |
+
+All other implementation items (LocalFolderService rename, planning.html image container, icon logic, CSP compatibility, backend image guard, auto-refresh path coverage) verified as **PASS**.
+
+### Stage 2: Balanced Synthesis
+
+- **Fix #1 (MAJOR)**: Applied — added `?t=Date.now()` cache-buster to `imageImg.src` in the image preview branch, matching the HTML preview branch pattern. Without this, the "Validate Auto-Refresh for Images" manual test would fail.
+- **Fix #2 (NIT)**: Applied — added `isImage` to the destructuring statement on line 1322, changed `msg.isImage` to `isImage` on line 1329 for consistency.
+- **Fix #3 (NIT)**: Applied — moved `IMAGE_EXTENSIONS` to `private static readonly IMAGE_EXTENSIONS` class constant in `PlanningPanelProvider`, updated `_handleFetchPreview` to reference `PlanningPanelProvider.IMAGE_EXTENSIONS`.
+
+### Files Changed by Review
+
+1. **`src/webview/planning.js`** — Line 1322: added `isImage` to destructuring; Line 1329: changed `msg.isImage` to `isImage`; Line 1333: added `+ '?t=' + Date.now()` cache-buster to `imageImg.src`.
+2. **`src/services/PlanningPanelProvider.ts`** — Line 44: added `private static readonly IMAGE_EXTENSIONS = new Set([...])`; Line 2082-2083: replaced local `IMAGE_EXTENSIONS` with `PlanningPanelProvider.IMAGE_EXTENSIONS`.
+
+### Validation
+
+- Typecheck/lint: Skipped per session instructions (no compilation step).
+- Manual verification: All four manual test steps in the Verification Plan remain valid. Fix #1 specifically addresses step 4 ("Validate Auto-Refresh for Images").
+
+### Remaining Risks
+
+- The `?t=Date.now()` cache-buster appended to webviewUri for both HTML and image previews assumes the VS Code webview URI scheme tolerates query strings. This is standard HTTP behavior and has been confirmed working for HTML previews already; images should behave identically.
+- The `injectBaseTag(htmlContent, webviewUri)` call in the fallback `srcdoc` branch passes `undefined` for `webviewUri` (since that branch is only reached when `webviewUri` is falsy). The `injectBaseTag` function guards against this with `if (!html || !baseUri) return html`, so this is safe but worth noting.
+
 ## Recommendation
 
-Complexity 5 → **Send to Coder**
+Complexity 5 → **Send to Coder** (implementation complete, review fixes applied)

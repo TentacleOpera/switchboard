@@ -1319,18 +1319,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handlePreviewReady(msg) {
-        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri } = msg;
+        const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
         if (sourceId === 'html-folder') {
             const iframe = document.getElementById('html-preview-frame');
             const imageContainer = document.getElementById('image-preview-container');
             const imageImg = document.getElementById('image-preview-img');
 
-            if (msg.isImage && webviewUri) {
+            if (isImage && webviewUri) {
                 // Image preview: hide iframe, show image container
                 if (iframe) { iframe.style.display = 'none'; iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
-                if (imageImg) { imageImg.src = webviewUri; }
+                if (imageImg) { imageImg.src = webviewUri + '?t=' + Date.now(); } // cache-buster for refresh
             } else if (webviewUri) {
                 // HTML preview: show iframe, hide image container, use iframe.src instead of srcdoc
                 if (iframe) {
