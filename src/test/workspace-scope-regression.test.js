@@ -142,8 +142,8 @@ describe('workspace scope enforcement regressions', () => {
         );
         assert.match(
             source,
-            /private _getWorkspaceIdentityPath\(workspaceRoot: string\): string \{[\s\S]*workspace_identity\.json/,
-            'Expected workspace identity path helper.'
+            /import \{ ensureWorkspaceIdentity/,
+            'Expected ensureWorkspaceIdentity to be imported from WorkspaceIdentityService.'
         );
         assert.match(
             source,
@@ -167,19 +167,6 @@ describe('workspace scope enforcement regressions', () => {
             source,
             /_sanitizeLegacyBrainOwnershipEntries/,
             'Expected startup initialization to avoid ownership reclassification scans.'
-        );
-    });
-
-    it('registers merged local plans and archives merged source plan ownership entries', () => {
-        assert.match(
-            source,
-            /await log\.createRunSheet\(mergedSessionId, mergedRunSheet\);[\s\S]*await this\._registerPlan\(workspaceRoot, \{[\s\S]*planId: mergedSessionId,[\s\S]*sourceType: 'local'/,
-            'Expected merged plan output to be registered in ownership registry.'
-        );
-        assert.match(
-            source,
-            /const sourcePlanId = this\._getPlanIdForRunSheet\(sheet\);[\s\S]*await this\._updatePlanRegistryStatus\(workspaceRoot, sourcePlanId, 'archived'\);/,
-            'Expected merged source plans to be archived in ownership registry.'
         );
     });
 

@@ -253,6 +253,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _recentSourceWrites = new Map<string, NodeJS.Timeout>();   // managed-import source paths we just wrote
     private _pendingMirrorToSourceWritebacks = new Map<string, NodeJS.Timeout>(); // mirror paths with active staging-watcher debounce/writeback
     private _brainDebounceTimers = new Map<string, NodeJS.Timeout>();  // debounce brain watcher events
+    private _brainDebounceClaims = new Set<string>(); // track whether any event in the debounce window requested auto-claim
     private _lastAntigravityRescanAt = 0;
     private _configuredPlanSyncTimer?: NodeJS.Timeout;
     private _managedImportMirrorsForActiveFolder = new Set<string>();
@@ -8954,20 +8955,23 @@ What would you like to find?`;
                     const fullPath = uri.fsPath;
                     if (!this._isBrainMirrorCandidate(fullPath)) return;
 
-                    const effectiveAutoClaim = allowAutoClaim;
-
                     const stablePath = this._getStablePath(fullPath);
+                    if (allowAutoClaim) {
+                        this._brainDebounceClaims.add(stablePath);
+                    }
                     // Debounce: Windows fires multiple events per save (rename + change)
                     const existing = this._brainDebounceTimers.get(stablePath);
                     if (existing) clearTimeout(existing);
                     this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
                         try {
                             this._brainDebounceTimers.delete(stablePath);
+                            const finalAllowAutoClaim = this._brainDebounceClaims.has(stablePath);
+                            this._brainDebounceClaims.delete(stablePath);
                             // Skip if we wrote this brain file ourselves (mirror→brain direction)
                             if (this._recentBrainWrites.has(stablePath)) return;
                             if (fs.existsSync(fullPath)) {
                                 await this._ensureTombstonesLoaded(workspaceRoot);
-                                await this._mirrorBrainPlan(fullPath, effectiveAutoClaim, workspaceRoot);
+                                await this._mirrorBrainPlan(fullPath, finalAllowAutoClaim, workspaceRoot);
                             }
                         } catch (e) {
                             console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
@@ -8992,18 +8996,22 @@ What would you like to find?`;
                         if (!this._isBrainMirrorCandidate(fullPath)) return;
 
                         const rawAutoClaim = _eventType === 'rename';
-                        const effectiveAutoClaim = rawAutoClaim;
-
                         const stablePath = this._getStablePath(fullPath);
+                        if (rawAutoClaim) {
+                            this._brainDebounceClaims.add(stablePath);
+                        }
+
                         const existing = this._brainDebounceTimers.get(stablePath);
                         if (existing) clearTimeout(existing);
                         this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
                             try {
                                 this._brainDebounceTimers.delete(stablePath);
+                                const finalAutoClaim = this._brainDebounceClaims.has(stablePath);
+                                this._brainDebounceClaims.delete(stablePath);
                                 if (this._recentBrainWrites.has(stablePath)) return;
                                 if (fs.existsSync(fullPath)) {
                                     await this._ensureTombstonesLoaded(workspaceRoot);
-                                    await this._mirrorBrainPlan(fullPath, effectiveAutoClaim, workspaceRoot);
+                                    await this._mirrorBrainPlan(fullPath, finalAutoClaim, workspaceRoot);
                                 }
                             } catch (e) {
                                 console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
@@ -9176,6 +9184,7 @@ What would you like to find?`;
         // Clearing before dispose prevents stale callbacks from firing post-switch.
         this._brainDebounceTimers.forEach(t => clearTimeout(t));
         this._brainDebounceTimers.clear();
+        this._brainDebounceClaims.clear();
         // Dispose VS Code FileSystemWatcher
         this._brainWatchers.forEach(w => { try { w.dispose(); } catch {} });
         this._brainWatchers = [];
@@ -10726,11 +10735,37 @@ What would you like to find?`;
      * A plan is mirror-eligible only if it is registered in plan_registry.json with active status
      * and owned by this workspace. Shared brain directory activity alone never creates ownership.
      */
-    private _isPlanEligibleForWorkspace(stableBrainPath: string, _workspaceRoot: string): { eligible: boolean; reason: string } {
+    private _isPlanEligibleForWorkspace(stableBrainPath: string, workspaceRoot: string): { eligible: boolean; reason: string } {
         const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
         if (this._isPlanInRegistry(planId)) {
             return { eligible: true, reason: 'in_plan_registry' };
         }
+
+        // Scoping check for unregistered plans: check if the plan contains paths belonging to this workspace
+        try {
+            const baseBrainPath = this._getBaseBrainPath(stableBrainPath);
+            if (fs.existsSync(baseBrainPath)) {
+                const content = fs.readFileSync(baseBrainPath, 'utf8');
+                const normalizedRoot = this._getStablePath(workspaceRoot);
+
+                if (content.toLowerCase().includes(normalizedRoot.toLowerCase())) {
+                    return { eligible: true, reason: 'workspace_path_match' };
+                }
+
+                // Fallback: check session transcript
+                const sessionDir = path.dirname(baseBrainPath);
+                const transcriptPath = path.join(sessionDir, '.system_generated', 'logs', 'transcript.jsonl');
+                if (fs.existsSync(transcriptPath)) {
+                    const transcript = fs.readFileSync(transcriptPath, 'utf8');
+                    if (transcript.toLowerCase().includes(normalizedRoot.toLowerCase())) {
+                        return { eligible: true, reason: 'workspace_transcript_match' };
+                    }
+                }
+            }
+        } catch (e) {
+            console.warn('[TaskViewerProvider] Failed to verify plan workspace eligibility:', e);
+        }
+
         return { eligible: false, reason: 'not_in_plan_registry' };
     }
 
@@ -17040,6 +17075,7 @@ What would you like to find?`;
             this._julesStatusPollTimer = undefined;
         }
         this._brainDebounceTimers.forEach(t => clearTimeout(t));
+        this._brainDebounceClaims.clear();
         this._planFsDebounceTimers.forEach(t => clearTimeout(t));
         this._recentNativePlanCreations.forEach(t => clearTimeout(t));
         this._recentNativePlanCreations.clear();
