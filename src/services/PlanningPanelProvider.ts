@@ -2066,14 +2066,28 @@ export class PlanningPanelProvider {
             this._activePreviewSourceFolder = sourceFolder;
             this._activePreviewWorkspaceRoot = workspaceRoot;
             this._setupActiveDocWatcher(resolvedPath);
-            this._panel?.webview.postMessage({
-                type: 'previewReady',
-                sourceId,
-                requestId,
-                webviewUri,
-                docName: path.basename(resolvedPath),
-                isAutoRefreshed: this._isAutoRefreshing
-            });
+            try {
+                const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
+                this._panel?.webview.postMessage({
+                    type: 'previewReady',
+                    sourceId,
+                    requestId,
+                    webviewUri,
+                    htmlContent,
+                    docName: path.basename(resolvedPath),
+                    isAutoRefreshed: this._isAutoRefreshing
+                });
+            } catch (err: any) {
+                // If file read fails, fall back to webviewUri-only delivery
+                this._panel?.webview.postMessage({
+                    type: 'previewReady',
+                    sourceId,
+                    requestId,
+                    webviewUri,
+                    docName: path.basename(resolvedPath),
+                    isAutoRefreshed: this._isAutoRefreshing
+                });
+            }
             return;
         }
 

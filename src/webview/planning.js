@@ -346,6 +346,25 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return String(s).replace(/"/g, '&quot;').replace(/'/g, '&#39;');
     }
 
+    // Inject <base> tag for relative asset resolution in srcdoc iframes
+    function injectBaseTag(html, baseUri) {
+        if (!html || !baseUri) return html;
+        if (html.includes('<base ')) return html;  // Don't duplicate
+        
+        const baseTag = `<base href="${escapeAttr(baseUri)}">`;
+        const headMatch = html.match(/<head\b[^>]*>/i);
+        if (headMatch) {
+            const index = headMatch.index + headMatch[0].length;
+            return html.slice(0, index) + baseTag + html.slice(index);
+        }
+        const htmlMatch = html.match(/<html\b[^>]*>/i);
+        if (htmlMatch) {
+            const index = htmlMatch.index + htmlMatch[0].length;
+            return html.slice(0, index) + baseTag + html.slice(index);
+        }
+        return baseTag + html;  // Fallback: prepend for fragment HTML
+    }
+
     // Allowlist safe URL schemes and block dangerous ones
     function sanitizeUrl(rawUrl) {
         const trimmed = String(rawUrl).trim();
@@ -1248,9 +1267,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         if (sourceId === 'html-folder') {
             const iframe = document.getElementById('html-preview-frame');
-            if (iframe && msg.webviewUri) {
-                iframe.removeAttribute('srcdoc');  // Clear error state srcdoc first
-                iframe.src = msg.webviewUri;       // Then set the real content
+            if (iframe) {
+                if (msg.htmlContent) {
+                    iframe.removeAttribute('src');
+                    const htmlWithBase = injectBaseTag(msg.htmlContent, msg.webviewUri);
+                    iframe.srcdoc = htmlWithBase;
+                } else if (msg.webviewUri) {
+                    // Fallback: use src if htmlContent not provided (backward compat)
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = msg.webviewUri;
+                }
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {

@@ -1692,7 +1692,7 @@ export async function activate(context: vscode.ExtensionContext) {
 
     // Initialize terminal grid status bar items
     terminalOpenStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
-    terminalOpenStatusBarItem.text = '$(split-horizontal) Grid';
+    terminalOpenStatusBarItem.text = '$(hubot) Agents';
     terminalOpenStatusBarItem.tooltip = 'Open Agent Terminals';
     terminalOpenStatusBarItem.command = 'switchboard.createAgentGrid';
     context.subscriptions.push(terminalOpenStatusBarItem);

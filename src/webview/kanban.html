@@ -127,7 +127,7 @@
             align-items: center;
             justify-content: center;
             background: transparent;
-            border: none;
+            border: 1px solid transparent;
             cursor: pointer;
             border-radius: 2px;
             flex-shrink: 0;
@@ -153,7 +153,7 @@
             filter: grayscale(0.5) brightness(0.7);
         }
         .kanban-sub-bar .strip-icon-btn.is-paused {
-            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-orange) 10%, transparent);
         }
         .kanban-sub-bar .strip-icon-btn.is-paused svg {
@@ -291,7 +291,7 @@
             display: flex;
             align-items: center;
             justify-content: center;
-            border: 1px solid var(--border-color);
+            border: 1px solid transparent;
             background: var(--panel-bg2);
             border-radius: 2px;
             cursor: pointer;
@@ -301,7 +301,7 @@
 
         .strip-icon-btn:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
-            border-color: var(--accent-teal-dim);
+            border-color: transparent;
         }
 
         .strip-icon-btn:disabled {
@@ -317,7 +317,7 @@
         }
 
         .strip-icon-btn.is-active {
-            border-color: var(--accent-teal-dim);
+            border-color: transparent;
             box-shadow: var(--glow-teal);
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
@@ -327,7 +327,7 @@
         }
 
         .strip-icon-btn.is-off {
-            border-color: color-mix(in srgb, var(--accent-orange) 45%, transparent);
+            border-color: transparent;
             opacity: 0.6;
         }
 
@@ -540,7 +540,7 @@
             outline: none;
         }
         .column-header-btn:hover {
-            border-color: var(--accent-teal-dim);
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
         .column-header-btn img {
@@ -1016,7 +1016,7 @@
         }
 
         .mode-toggle:hover {
-            border-color: var(--accent-teal-dim);
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
@@ -1051,13 +1051,14 @@
         }
 
         .complexity-routing-btn:hover {
-            border-color: var(--accent-teal-dim);
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
         }
 
         .complexity-routing-btn.is-active {
-            border-color: var(--accent-teal);
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 15%, transparent);
+            box-shadow: var(--glow-teal);
         }
 
         .complexity-routing-btn img {
