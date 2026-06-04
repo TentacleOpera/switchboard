@@ -1525,6 +1525,160 @@
             box-shadow: var(--glow-teal);
         }
 
+        /* ── Cyber Panel Theme: Immersive Background ── */
+        .cyber-theme-enabled body {
+            background-color: #040409;
+            background-image:
+                /* Subtle cyan grid lines */
+                linear-gradient(rgba(61, 219, 217, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.04) 1px, transparent 1px),
+                /* Top-right magenta/purple radial glow */
+                radial-gradient(ellipse 60% 50% at 85% 10%, rgba(187, 134, 252, 0.12) 0%, transparent 70%),
+                /* Bottom-left cyan radial glow */
+                radial-gradient(ellipse 50% 40% at 10% 90%, rgba(61, 219, 217, 0.10) 0%, transparent 70%);
+            background-size: 40px 40px, 40px 40px, 100% 100%, 100% 100%;
+        }
+
+        /* Tab bar */
+        .cyber-theme-enabled .research-tab-bar {
+            background: rgba(10, 10, 18, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.25);
+        }
+
+        /* Controls strip */
+        .cyber-theme-enabled .controls-strip {
+            background: rgba(10, 10, 18, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Sidebar tree panes */
+        .cyber-theme-enabled #tree-pane,
+        .cyber-theme-enabled #tree-pane-online,
+        .cyber-theme-enabled #tree-pane-html {
+            background: rgba(6, 6, 14, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Kanban list pane */
+        .cyber-theme-enabled #kanban-list-pane {
+            background: rgba(6, 6, 14, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        /* Preview panel wrapper */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            background: rgba(4, 4, 9, 0.60);
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Let the body grid show through the preview reading area */
+        .cyber-theme-enabled #preview-pane,
+        .cyber-theme-enabled #preview-pane-online {
+            background: transparent;
+        }
+
+        /* Kanban preview — use id selector (DOM element is #kanban-preview-pane, not a class) */
+        .cyber-theme-enabled #kanban-preview-pane {
+            background: transparent;
+        }
+
+        /* Tab content wrappers — solid backgrounds that block the body grid */
+        .cyber-theme-enabled #research-content,
+        .cyber-theme-enabled #clipboard-content,
+        .cyber-theme-enabled #notebook-content {
+            background: transparent;
+        }
+
+        /* Kanban board content area */
+        .cyber-theme-enabled #kanban-content {
+            background: transparent;
+        }
+
+        /* Local and online content views */
+        .cyber-theme-enabled #local-content,
+        .cyber-theme-enabled #online-content,
+        .cyber-theme-enabled #html-preview-content {
+            background: transparent;
+        }
+
+        /* Planning cards */
+        .cyber-theme-enabled .planning-card {
+            background: rgba(10, 10, 22, 0.60);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: rgba(61, 219, 217, 0.20);
+            box-shadow: 0 0 12px rgba(61, 219, 217, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Duplicate modal */
+        .cyber-theme-enabled .duplicate-modal .modal-content {
+            background: rgba(8, 8, 18, 0.80);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Folder modal */
+        .cyber-theme-enabled .folder-modal .modal-content {
+            background: rgba(8, 8, 18, 0.80);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Primary planning buttons: brighter neon border in cyber mode */
+        .cyber-theme-enabled .planning-button {
+            border-color: rgba(61, 219, 217, 0.45);
+            box-shadow: 0 0 6px rgba(61, 219, 217, 0.10);
+        }
+        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
+            box-shadow: 0 0 14px rgba(61, 219, 217, 0.45);
+        }
+
+        /* Secondary planning buttons */
+        .cyber-theme-enabled .planning-button.secondary {
+            border-color: rgba(61, 219, 217, 0.20);
+            background: rgba(10, 10, 22, 0.50);
+        }
+        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+            border-color: rgba(61, 219, 217, 0.35);
+            background: rgba(61, 219, 217, 0.06);
+        }
+
+        /* Select and input controls */
+        .cyber-theme-enabled .planning-select,
+        .cyber-theme-enabled .planning-input {
+            background: rgba(6, 6, 14, 0.70);
+            border-color: rgba(61, 219, 217, 0.20);
+        }
+        .cyber-theme-enabled .planning-select:focus,
+        .cyber-theme-enabled .planning-input:focus {
+            border-color: rgba(61, 219, 217, 0.50);
+            box-shadow: 0 0 8px rgba(61, 219, 217, 0.15);
+        }
+
+        /* Cyan scrollbar thumbs in cyber mode */
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb {
+            background: rgba(61, 219, 217, 0.25);
+        }
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb:hover {
+            background: rgba(61, 219, 217, 0.45);
+        }
+
+        .cyber-theme-enabled .kanban-controls-strip {
+            background: transparent;
+        }
+
         .preview-panel-wrapper {
             position: relative;
             flex: 2;
