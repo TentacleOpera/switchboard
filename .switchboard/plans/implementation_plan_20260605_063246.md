@@ -166,4 +166,53 @@ None.
 
 ---
 
+## Review Pass — 2026-06-05
+
+### Stage 1: Grumpy Principal Engineer Adversarial Review
+
+| # | Finding | Severity | Verdict |
+|---|---------|----------|---------|
+| 1 | Regex `(\s[^>]*)` on `<script>` with no attributes — JS replace with non-participating group produces empty string, output is correct | ~~CRITICAL~~ → OK | Empirically verified: `<script>` → `<script nonce="ABC">` |
+| 2 | Base64 nonce chars (`+`, `/`, `=`) in HTML attribute context | NIT | Safe inside double quotes; consistent with existing `{{NONCE}}` pattern |
+| 3 | Dual CSP conflict: parent nonce-required + iframe `'unsafe-inline'` | ~~MAJOR~~ → OK | Both CSPs independently satisfied; nonce passes parent, `'unsafe-inline'` passes iframe |
+| 4 | Self-closing `<script/>` tags | NIT | Pre-existing in source HTML, not introduced by plan |
+| 5 | Multi-line `<script>` tags — `[^>]` matches newlines | ~~MAJOR~~ → OK | `[^>]` is negated char class, matches `\n`; empirically verified |
+| 6 | `<scripting>` / `<scripture>` false match | NIT | Theoretically possible, practically impossible |
+| 7 | `allow-same-origin` security trade-off | OK | Already documented in User Review Required section |
+| 8 | No HTML-escaping of nonce value in attribute interpolation | NIT | Base64 output is safe; consistent with existing codebase pattern at line 669 |
+| 9 | `_nonce` never cleared/reset between panel recreations | NIT | `_getHtml` runs synchronously before any preview fetch; no race possible |
+
+### Stage 2: Balanced Synthesis
+
+**What to Keep (No Changes Needed):**
+- `allow-same-origin` in iframe sandbox (line 2260 of `planning.html`) — correctly implemented
+- `_nonce` property (line 65) — correctly initialized and set
+- Nonce capture in `_getHtml` (line 642) — synchronous, no race
+- Nonce injection regex (line 700) — works correctly for all practical cases; negative lookahead prevents double-nonce
+- CSP injection refactor (lines 682–695) — clean `processedHtml` variable usage
+- Dual-CSP approach — scripts with nonce pass both policies
+
+**What to Fix Now:** Nothing — no CRITICAL or MAJOR findings survived scrutiny.
+
+**Deferred NITs:**
+- `data-nonce` false negative: regex skips `<script data-nonce="x">` because `\bnonce=` matches inside `data-nonce=`. Extremely unlikely in practice; iframe's own CSP allows `'unsafe-inline'` so no functional impact.
+- HTML-escaping nonce: defense-in-depth suggestion, but Base64 is safe and consistent with existing pattern.
+
+### Code Fixes Applied
+
+None required. Implementation matches plan exactly.
+
+### Verification Results
+
+- **TypeScript (`tsc --noEmit`):** No errors in `PlanningPanelProvider.ts`. Two pre-existing errors in unrelated files (`ClickUpSyncService.ts:2310`, `KanbanProvider.ts:4788`) — relative import path extension issues, not related to this plan.
+- **ESLint:** No config file present in project; not applicable.
+- **Regex empirical testing:** All 8 test cases pass correctly (no-attr script, type attr, existing nonce skip, src attr, data-nonce skip, multiple scripts, multiline, closing tag non-match).
+
+### Remaining Risks
+
+1. **CSP inheritance assumption:** If parent CSP is NOT inherited by srcdoc iframe, nonce injection is harmless (iframe's own CSP allows `'unsafe-inline'`). If inherited, nonce is required and correctly provided. Implementation is safe in both scenarios.
+2. **Future nonce generation changes:** If encoding changes from Base64, unescaped interpolation on line 700 could become injection risk. Low probability.
+
+---
+
 **Recommendation:** Complexity 3 → Send to Coder

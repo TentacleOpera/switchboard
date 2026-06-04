@@ -4386,7 +4386,6 @@
             // Column icon button handlers
             document.querySelectorAll('.column-icon-btn, .column-header-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
-                    flashIconBtn(btn);
                     const action = btn.dataset.action;
                     const column = btn.dataset.column;
                     // CODED_AUTO is synthetic — resolve to a real coder column for backend messages.
@@ -6835,8 +6834,6 @@
 
         // Chat copy prompt button (sub-bar global action)
         document.getElementById('btn-chat-copy-prompt')?.addEventListener('click', () => {
-            const btn = document.getElementById('btn-chat-copy-prompt');
-            if (btn) flashIconBtn(btn);
             const sessionIds = Array.from(selectedCards.keys());
             postKanbanMessage({ type: 'chatCopyPrompt', sessionIds, workspaceRoot: getActiveWorkspaceRoot() });
             selectedCards.clear();
@@ -8792,6 +8789,14 @@
                     e.target.value = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
                 });
             }
+
+            // Global button click animation listener
+            document.addEventListener('click', (e) => {
+                const btn = e.target.closest('button, .complexity-routing-btn');
+                if (btn && !btn.disabled && !btn.classList.contains('disabled')) {
+                    flashIconBtn(btn);
+                }
+            });
         });
 
     </script>
