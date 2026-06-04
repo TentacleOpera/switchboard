@@ -15151,7 +15151,8 @@ What would you like to find?`;
                     return fragMatch ? fragMatch[1] : stdout;
                 }
                 case 'linux': {
-                    // Try xclip first, then xsel
+                    // Try xclip (X11, supports -t for MIME target), then wl-paste (Wayland)
+                    // Note: xsel cannot request text/html — it only reads the default text target
                     try {
                         const { stdout } = await execFileAsync('xclip', [
                             '-selection', 'clipboard', '-t', 'text/html', '-o'
@@ -15159,11 +15160,11 @@ What would you like to find?`;
                         if (stdout && stdout.trim()) { return stdout; }
                     } catch { /* xclip not available or failed */ }
                     try {
-                        const { stdout } = await execFileAsync('xsel', [
-                            '--clipboard', '--output', '--html'
+                        const { stdout } = await execFileAsync('wl-paste', [
+                            '--type', 'text/html'
                         ], { timeout: TIMEOUT_MS, encoding: 'utf8' });
                         if (stdout && stdout.trim()) { return stdout; }
-                    } catch { /* xsel not available or failed */ }
+                    } catch { /* wl-paste not available or failed */ }
                     return null;
                 }
                 default:
@@ -15183,10 +15184,10 @@ What would you like to find?`;
         }
 
         function walk(node: any, listDepth = 0, isPre = false, listType: string | null = null): string {
-            if (node.nodeType === 3) { // TEXT_NODE
+            if (node.nodeType === dom.window.Node.TEXT_NODE) {
                 return cleanText(node.textContent || '');
             }
-            if (node.nodeType !== 1) { // ELEMENT_NODE
+            if (node.nodeType !== dom.window.Node.ELEMENT_NODE) {
                 return '';
             }
 
@@ -15259,6 +15260,7 @@ What would you like to find?`;
         }
 
         let result = walk(doc.body);
+        dom.window.close(); // Release JSDOM resources
         result = result.replace(/\n{3,}/g, '\n\n');
         return result.trim();
     }
@@ -15284,7 +15286,7 @@ What would you like to find?`;
             const html = await this._readClipboardHtml();
             if (html) {
                 const converted = this._convertHtmlToMarkdown(html);
-                text = converted || await vscode.env.clipboard.readText();
+                text = converted || (await vscode.env.clipboard.readText());
             } else {
                 text = await vscode.env.clipboard.readText();
             }
