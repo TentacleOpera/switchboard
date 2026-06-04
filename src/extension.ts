@@ -32,6 +32,7 @@ let setupStatusBarItem: vscode.StatusBarItem;
 
 // Status bar item for file opening prevention toggle
 let fileOpeningPreventionStatusBarItem: vscode.StatusBarItem;
+let switchboardAnchorStatusBarItem: vscode.StatusBarItem;
 let terminalOpenStatusBarItem: vscode.StatusBarItem;
 let terminalClearStatusBarItem: vscode.StatusBarItem;
 let terminalResetStatusBarItem: vscode.StatusBarItem;
@@ -1673,43 +1674,49 @@ export async function activate(context: vscode.ExtensionContext) {
         context.subscriptions.push(setupStatusBarItem);
     }
 
+    // Initialize Switchboard group anchor status bar item
+    switchboardAnchorStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+    switchboardAnchorStatusBarItem.text = 'SB │';
+    switchboardAnchorStatusBarItem.tooltip = 'Switchboard status bar controls';
+    context.subscriptions.push(switchboardAnchorStatusBarItem);
+
     // Initialize file opening prevention status bar item (visibility controlled by statusBar.showAgentOpenToggle)
     fileOpeningPreventionStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 99);
     const currentPreventAgentFileOpening = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
-    fileOpeningPreventionStatusBarItem.text = currentPreventAgentFileOpening ? '$(shield) Agent Open: Blocked' : '$(shield) Agent Open: Allowed';
+    fileOpeningPreventionStatusBarItem.text = currentPreventAgentFileOpening ? '$(shield) Guard: On' : '$(shield) Guard: Off';
     fileOpeningPreventionStatusBarItem.tooltip = currentPreventAgentFileOpening
         ? 'Agent file opening is blocked. Click to allow agent file opening.'
         : 'Agent file opening is allowed. Click to block agent file opening.';
     fileOpeningPreventionStatusBarItem.command = 'switchboard.togglePreventAgentFileOpening';
     context.subscriptions.push(fileOpeningPreventionStatusBarItem);
 
-    // Initialize 5 new status bar items
+    // Initialize terminal grid status bar items
     terminalOpenStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 98);
-    terminalOpenStatusBarItem.text = '$(terminal)';
+    terminalOpenStatusBarItem.text = '$(split-horizontal) Grid';
     terminalOpenStatusBarItem.tooltip = 'Open Agent Terminals';
     terminalOpenStatusBarItem.command = 'switchboard.createAgentGrid';
     context.subscriptions.push(terminalOpenStatusBarItem);
 
     terminalClearStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 97);
-    terminalClearStatusBarItem.text = '$(trash)';
+    terminalClearStatusBarItem.text = '$(paintcan) Clear';
     terminalClearStatusBarItem.tooltip = 'Clear Agent Terminals';
     terminalClearStatusBarItem.command = 'switchboard.clearAllTerminals';
     context.subscriptions.push(terminalClearStatusBarItem);
 
     terminalResetStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 96);
-    terminalResetStatusBarItem.text = '$(sync)';
+    terminalResetStatusBarItem.text = '$(stop-circle) Reset';
     terminalResetStatusBarItem.tooltip = 'Reset Agent Terminals';
     terminalResetStatusBarItem.command = 'switchboard.deregisterAllTerminals';
     context.subscriptions.push(terminalResetStatusBarItem);
 
     kanbanStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 95);
-    kanbanStatusBarItem.text = '$(project)';
+    kanbanStatusBarItem.text = '$(table) Kanban';
     kanbanStatusBarItem.tooltip = 'Open Kanban Board';
     kanbanStatusBarItem.command = 'switchboard.openKanban';
     context.subscriptions.push(kanbanStatusBarItem);
 
     artifactsStatusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 94);
-    artifactsStatusBarItem.text = '$(note)';
+    artifactsStatusBarItem.text = '$(notebook) Plans';
     artifactsStatusBarItem.tooltip = 'Open Planning Panel';
     artifactsStatusBarItem.command = 'switchboard.openPlanningPanel';
     context.subscriptions.push(artifactsStatusBarItem);
@@ -1748,6 +1755,13 @@ export async function activate(context: vscode.ExtensionContext) {
         } else {
             artifactsStatusBarItem.hide();
         }
+
+        // Show group anchor if at least one item is visible
+        if (showAgentOpenToggle || showTerminalControls || showKanbanButton || showArtifactsButton) {
+            switchboardAnchorStatusBarItem.show();
+        } else {
+            switchboardAnchorStatusBarItem.hide();
+        }
     }
 
     updateStatusBarVisibility();
@@ -1758,13 +1772,12 @@ export async function activate(context: vscode.ExtensionContext) {
             const value = vscode.workspace.getConfiguration('switchboard').get<boolean>('preventAgentFileOpening', false);
             void vscode.commands.executeCommand('setContext', 'switchboard.preventAgentFileOpeningEnabled', value);
             if (fileOpeningPreventionStatusBarItem) {
-                fileOpeningPreventionStatusBarItem.text = value ? '$(shield) Agent Open: Blocked' : '$(shield) Agent Open: Allowed';
+                fileOpeningPreventionStatusBarItem.text = value ? '$(shield) Guard: On' : '$(shield) Guard: Off';
                 fileOpeningPreventionStatusBarItem.tooltip = value
                     ? 'Agent file opening is blocked. Click to allow agent file opening.'
                     : 'Agent file opening is allowed. Click to block agent file opening.';
             }
             updateStatusBarVisibility();
-            taskViewerProvider.broadcastToWebviews({ type: 'preventAgentFileOpeningSetting', enabled: value });
         }
         if (
             e.affectsConfiguration('switchboard.statusBar.showAgentOpenToggle') ||

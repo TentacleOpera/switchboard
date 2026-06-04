@@ -309,3 +309,45 @@ Key risks: double-fire UI update cycle when File Guard is toggled from the sideb
 
 ---
 **Recommendation**: Send to Coder
+
+---
+
+## Review Results (Inline Reviewer Pass — 2026-06-04)
+
+### Grumpy Findings
+
+| ID | Severity | File | Issue |
+|---|---|---|---|
+| G-01 | **MAJOR** | `implementation.html` | `$(shield)` is VS Code status-bar markdown syntax — not rendered as a codicon in webviews. Displays as literal text `$(shield)`. |
+| G-02 | NIT | `implementation.html` | Stale `<!-- QUICK ACTIONS SECTION -->` comment left at line 1898 alongside the new `<!-- SWITCHBOARD CONTROLS SECTION -->` comment. |
+| G-03 | NIT | `TaskViewerProvider.ts` | `this._view?.webview.postMessage` used at line 3442 despite the method's existing `if (!this._view) { return; }` guard — inconsistent with all other calls in the method. |
+| G-04 | NIT | `implementation.html` | Both `enabled` and `disabled` branches of `updateAgentOpenGuardUI` set the icon to the same `$(shield)` text — zero visual differentiation regardless of state. |
+| G-05 | NIT | `implementation.html` | Brief init flash (green "Allowed" before state correction) — accepted by Two-Phase Init design pattern. |
+
+### Fixes Applied
+
+| Fix | File | Description |
+|---|---|---|
+| G-01 + G-04 | `implementation.html` | Replaced `$(shield)` with `🛡️` emoji in HTML markup (line 1918). Updated `updateAgentOpenGuardUI` to use `🔒` (blocked) and `🛡️` (allowed) to visually differentiate states. |
+| G-02 | `implementation.html` | Removed stale `<!-- QUICK ACTIONS SECTION -->` comment from line 1898. |
+| G-03 | `TaskViewerProvider.ts` | Normalized `this._view?.webview.postMessage` → `this._view.webview.postMessage` at line 3442, consistent with the method's early-return guard. |
+
+### Files Changed (Review Pass)
+
+- [`src/webview/implementation.html`](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/webview/implementation.html) — icon fix, stale comment cleanup
+- [`src/services/TaskViewerProvider.ts`](file:///Users/patrickvuleta/Documents/GitHub/switchboard/src/services/TaskViewerProvider.ts) — optional chaining normalization
+
+### Validation Results
+
+- **`$(shield)` eliminated**: grep for `shield)` returns 0 matches in `implementation.html` ✅
+- **Stale comment removed**: only `<!-- SWITCHBOARD CONTROLS SECTION -->` remains at line 1898 ✅
+- **Optional chaining fixed**: line 3442 confirmed as `this._view.webview.postMessage` ✅
+- **Icon state differentiation**: `🔒` = blocked, `🛡️` = allowed — visually distinct ✅
+- **All plan backend changes verified present**: TaskViewerProvider.ts cases (`setPreventAgentFileOpeningSetting`, `clearAllTerminals`) at lines 8111–8118 ✅; `_postSidebarConfigurationState` preventAgentFileOpeningSetting post at line 3442 ✅; extension.ts `broadcastToWebviews` at line 1767 ✅
+- **HTML structure verified**: `btn-quick-kanban`, `btn-quick-planning`, `btn-quick-setup` IDs preserved ✅; `btn-cc-reset` uses distinct ID, does not rebind `btn-deregister-all` ✅
+- Compilation/tests skipped per session directive.
+
+### Remaining Risks
+
+- **G-05 (Init flash)**: HTML initializes `btn-file-guard` with `is-allowed` class. If File Guard is enabled at extension load, a brief green flash appears before `_postSidebarConfigurationState` corrects it. Accepted by the Two-Phase Init design pattern described in the plan.
+- **Manual verification pending**: Steps 1–10 in the Verification Plan above require manual testing in the VS Code Extension Development Host.
