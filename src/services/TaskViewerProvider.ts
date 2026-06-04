@@ -3439,6 +3439,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             type: 'integrationProviderPreference',
             provider: preferredProvider
         });
+        this._view?.webview.postMessage({
+            type: 'preventAgentFileOpeningSetting',
+            enabled: this.handleGetPreventAgentFileOpeningSetting()
+        });
     }
 
     public async postSetupPanelState(workspaceRoot?: string): Promise<void> {
@@ -8103,6 +8107,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         break;
                     case 'deregisterAllTerminals':
                         await this._deregisterAllTerminals();
+                        break;
+                    case 'setPreventAgentFileOpeningSetting':
+                        if (typeof data.enabled === 'boolean') {
+                            await this.handleSetPreventAgentFileOpeningSetting(data.enabled);
+                        }
+                        break;
+                    case 'clearAllTerminals':
+                        await vscode.commands.executeCommand('switchboard.clearAllTerminals');
                         break;
                     case 'createAgentGrid':
                         try {

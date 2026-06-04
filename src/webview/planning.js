@@ -1427,7 +1427,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             const iframe = document.getElementById('html-preview-frame');
             if (iframe) {
-                iframe.src = '';           // Clear any loaded content
+                iframe.src = 'about:blank';  // Clear any loaded content ('' would navigate to webview base URL)
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
             return;
@@ -2936,6 +2936,13 @@ DEPTH: ${complexityLabels[complexity] || complexity}`;
                 clearTimeout(statusEl._fadeTimer);
                 statusEl._fadeTimer = setTimeout(() => { statusEl.style.opacity = '0'; }, 2000);
             }
+        }
+
+        // Clear any stale external-change warning (may have been set during a prior edit-mode deferral)
+        const kanbanStripForCleanup = document.querySelector('.kanban-controls-strip');
+        if (kanbanStripForCleanup) {
+            const staleWarning = kanbanStripForCleanup.querySelector('.kanban-external-change-warning');
+            if (staleWarning) staleWarning.remove();
         }
 
         // Store original content

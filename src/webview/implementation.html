@@ -96,6 +96,77 @@
             margin-bottom: 12px;
         }
 
+        /* Control Center Panel */
+        .control-panel-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 6px;
+            margin-bottom: 8px;
+        }
+
+        .control-panel-btn {
+            background: var(--btn-bg, rgba(255,255,255,0.05));
+            border: 1px solid var(--border-color);
+            border-radius: 6px;
+            color: var(--text-primary);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            padding: 7px 4px;
+            cursor: pointer;
+            text-align: center;
+            transition: background 0.15s ease, transform 0.1s ease, border-color 0.15s ease;
+        }
+
+        .control-panel-btn:hover {
+            background: var(--btn-hover-bg, rgba(255,255,255,0.1));
+            border-color: var(--accent-green);
+            transform: translateY(-1px);
+        }
+
+        .control-panel-btn:active {
+            transform: translateY(0);
+        }
+
+        /* File Guard toggle button */
+        .guard-panel-container {
+            margin-top: 4px;
+        }
+
+        .file-guard-btn {
+            width: 100%;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 6px;
+            padding: 8px;
+            border-radius: 6px;
+            border: 1px solid var(--border-color);
+            background: var(--btn-bg, rgba(255,255,255,0.05));
+            color: var(--text-primary);
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            cursor: pointer;
+            transition: background 0.15s ease, border-color 0.15s ease, color 0.15s ease;
+        }
+
+        .file-guard-btn.is-blocked {
+            background: rgba(220, 80, 80, 0.15);
+            border-color: #dc5050;
+            color: #ff8080;
+        }
+
+        .file-guard-btn.is-allowed {
+            background: rgba(80, 200, 120, 0.12);
+            border-color: #50c878;
+            color: #80e8a0;
+        }
+
+        .file-guard-btn:hover {
+            filter: brightness(1.15);
+        }
+
         .header-section {
             padding: 12px;
             background: var(--panel-bg);
@@ -1825,14 +1896,29 @@
     <!-- MAIN CONTAINER (normal sidebar) -->
     <div id="main-container" class="container">
         <!-- QUICK ACTIONS SECTION -->
+        <!-- SWITCHBOARD CONTROLS SECTION -->
         <div class="quick-actions-section">
             <div class="section-header">
-                <div class="section-label">QUICK ACTIONS</div>
+                <div class="section-label">SWITCHBOARD CONTROLS</div>
             </div>
-            <div style="display:flex; gap:6px;">
-                <button id="btn-quick-kanban" class="secondary-btn is-teal" style="flex:1">Kanban</button>
-                <button id="btn-quick-planning" class="secondary-btn is-teal" style="flex:1">artifacts</button>
-                <button id="btn-quick-setup" class="secondary-btn is-teal" style="flex:1">setup</button>
+            <!-- Row 1: Navigation -->
+            <div class="control-panel-grid">
+                <button id="btn-quick-kanban" class="control-panel-btn" title="Open Kanban board">Kanban</button>
+                <button id="btn-quick-planning" class="control-panel-btn" title="Open Artifacts panel">Artifacts</button>
+                <button id="btn-quick-setup" class="control-panel-btn" title="Open Setup panel">Setup</button>
+            </div>
+            <!-- Row 2: Terminal controls -->
+            <div class="control-panel-grid">
+                <button id="btn-cc-grid" class="control-panel-btn" title="Open agent terminal grid">Grid</button>
+                <button id="btn-cc-clear" class="control-panel-btn" title="Clear all agent terminals">Clear</button>
+                <button id="btn-cc-reset" class="control-panel-btn" title="Deregister all agent terminals">Reset</button>
+            </div>
+            <!-- File Guard toggle -->
+            <div class="guard-panel-container">
+                <button id="btn-file-guard" class="file-guard-btn is-allowed" title="Toggle File Guard: prevent agents from opening files">
+                    <span id="file-guard-icon">$(shield)</span>
+                    <span id="file-guard-label">File Guard: Allowed</span>
+                </button>
             </div>
         </div>
 
@@ -2145,6 +2231,25 @@
         if (btnQuickPlanning) btnQuickPlanning.addEventListener('click', () => vscode.postMessage({ type: 'openPlanningPanel' }));
         const btnQuickSetup = document.getElementById('btn-quick-setup');
         if (btnQuickSetup) btnQuickSetup.addEventListener('click', () => vscode.postMessage({ type: 'openSetupPanel' }));
+
+        // Control Center: terminal controls
+        const btnCcGrid = document.getElementById('btn-cc-grid');
+        if (btnCcGrid) btnCcGrid.addEventListener('click', () => vscode.postMessage({ type: 'createAgentGrid' }));
+
+        const btnCcClear = document.getElementById('btn-cc-clear');
+        if (btnCcClear) btnCcClear.addEventListener('click', () => vscode.postMessage({ type: 'clearAllTerminals' }));
+
+        const btnCcReset = document.getElementById('btn-cc-reset');
+        if (btnCcReset) btnCcReset.addEventListener('click', () => vscode.postMessage({ type: 'deregisterAllTerminals' }));
+
+        // File Guard toggle
+        const btnFileGuard = document.getElementById('btn-file-guard');
+        if (btnFileGuard) {
+            btnFileGuard.addEventListener('click', () => {
+                const isBlocked = btnFileGuard.classList.contains('is-blocked');
+                vscode.postMessage({ type: 'setPreventAgentFileOpeningSetting', enabled: !isBlocked });
+            });
+        }
         // Keep existing btn-open-central-setup listener for backwards compat (Terminals tab button)
         const btnOpenCentralSetup = document.getElementById('btn-open-central-setup');
         if (btnOpenCentralSetup) {
@@ -2569,6 +2674,9 @@
                     break;
                 case 'onboardingProgress':
                     handleOnboardingProgress(message);
+                    break;
+                case 'preventAgentFileOpeningSetting':
+                    updateAgentOpenGuardUI(message.enabled === true);
                     break;
                 case 'terminalStatuses':
                     lastTerminals = message.terminals || {};
@@ -3389,6 +3497,29 @@
             const tabBtn = document.getElementById('integration-tab-btn');
             if (tabBtn) {
                 tabBtn.textContent = provider === 'clickup' ? 'ClickUp' : 'Linear';
+            }
+        }
+
+        function updateAgentOpenGuardUI(enabled) {
+            const btn = document.getElementById('btn-file-guard');
+            const icon = document.getElementById('file-guard-icon');
+            const label = document.getElementById('file-guard-label');
+            if (!btn) return;
+
+            // Idempotency guard: skip DOM mutations if state is already correct
+            const isCurrentlyBlocked = btn.classList.contains('is-blocked');
+            if (isCurrentlyBlocked === !!enabled) return;
+
+            if (enabled) {
+                btn.classList.remove('is-allowed');
+                btn.classList.add('is-blocked');
+                if (icon) icon.textContent = '$(shield)';
+                if (label) label.textContent = 'File Guard: Blocked';
+            } else {
+                btn.classList.remove('is-blocked');
+                btn.classList.add('is-allowed');
+                if (icon) icon.textContent = '$(shield)';
+                if (label) label.textContent = 'File Guard: Allowed';
             }
         }
 

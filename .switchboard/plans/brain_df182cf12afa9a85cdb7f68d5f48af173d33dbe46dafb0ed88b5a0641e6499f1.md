@@ -327,3 +327,57 @@ if (_kanbanSelectedPlan) {
 
 ## Recommendation
 Complexity 5 → **Send to Coder**
+
+---
+
+## Reviewer Pass — 2026-06-04
+
+### Status: ✅ Implementation Verified — 1 MAJOR Fix Applied
+
+### Files Changed (Implementation)
+- `src/webview/planning.js` — all five frontend steps implemented
+- `src/services/PlanningPanelProvider.ts` — all four backend steps implemented
+
+### Stage 1 — Grumpy Findings
+
+| Severity | Finding |
+|----------|---------|
+| **MAJOR** | `handleKanbanPlanPreviewReady`: the `.kanban-external-change-warning` DOM span injected when an auto-refresh is deferred during edit mode was **never cleaned up** on subsequent successful renders. After the user saves or selects a new plan (without triggering another auto-refresh), the "File changed externally" warning persists permanently in the kanban controls strip. |
+| NIT | `handlePreviewReady` edit-mode guard at line 1265 fires for all sources, but is unreachable for non-local sources in practice (only one active doc watcher exists). Functionally safe. |
+| NIT | `_handleFetchKanbanPlanPreview` re-calls `_setupActiveDocWatcher` (disposes + recreates watcher) on every auto-refresh, causing `_watcherGeneration` to increment. Correct behavior but slightly wasteful. |
+| NIT | The local-tab warning text set by `state.externalChangePending.local` path self-heals when the deferred reload arrives; no explicit clear needed. |
+
+### Stage 2 — Balanced Synthesis
+
+**Keep**: All backend extraction, watcher registration, `isAutoRefreshed` flag, `_lastPanelWriteTimestamp` placement, `externalChangePending` state field, deferred reload in `exitEditMode`, `handleKanbanPlansReady` plan-refresh guard — all correct.
+
+**Fix now**: Stale `.kanban-external-change-warning` DOM element — applied below.
+
+**Defer**: Watcher recreation efficiency; local-tab edit-mode guard ordering (cosmetic).
+
+### Stage 3 — Code Fixes Applied
+
+**Fix: Stale `kanban-external-change-warning` span** (`src/webview/planning.js`)
+
+Added cleanup of any lingering `.kanban-external-change-warning` span at the top of the content-render block in `handleKanbanPlanPreviewReady`. Fires whenever a preview renders successfully (past the edit-mode-deferral and error early-returns), ensuring the warning is always cleared when fresh content arrives.
+
+```diff
++        // Clear any stale external-change warning (may have been set during a prior edit-mode deferral)
++        const kanbanStripForCleanup = document.querySelector('.kanban-controls-strip');
++        if (kanbanStripForCleanup) {
++            const staleWarning = kanbanStripForCleanup.querySelector('.kanban-external-change-warning');
++            if (staleWarning) staleWarning.remove();
++        }
++
+         // Store original content
+         state.editOriginalContent.kanban = msg.content || '';
+```
+
+### Verification Results
+- Automated tests: skipped per session directives.
+- Static review: all five frontend plan steps confirmed in `planning.js`. All four backend plan steps confirmed in `PlanningPanelProvider.ts`. `externalChangePending` field present in `state` object (line 29). `_activePreviewWorkspaceRoot` field declared (line 68). `_isAutoRefreshing` flag set/cleared via `finally` block (lines 560–573).
+- Security: `isAllowed` check preserved in `_handleFetchKanbanPlanPreview`. `_setupActiveDocWatcher` watcher generation guard intact.
+
+### Remaining Risks
+- Manual verification steps 3–4 (edit-mode deferral → cancel → reload) require runtime testing to confirm the deferred `fetchKanbanPlanPreview` arrives with the correct `requestId` and is accepted by the guard.
+- The `handlePreviewReady` local edit-mode warning (line 1268–1272) does not get cleared by `exitEditMode` itself — it self-heals only when the deferred reload arrives. Brief flash of stale warning text possible.

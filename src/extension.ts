@@ -1764,6 +1764,7 @@ export async function activate(context: vscode.ExtensionContext) {
                     : 'Agent file opening is allowed. Click to block agent file opening.';
             }
             updateStatusBarVisibility();
+            taskViewerProvider.broadcastToWebviews({ type: 'preventAgentFileOpeningSetting', enabled: value });
         }
         if (
             e.affectsConfiguration('switchboard.statusBar.showAgentOpenToggle') ||
