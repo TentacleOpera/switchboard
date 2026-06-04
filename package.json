@@ -505,7 +505,13 @@
         "switchboard.theme.cyberPanel": {
           "type": "boolean",
           "default": false,
-          "description": "Enable entirely optional 'Cyber Panel' theme with scanlines and glow in the artifacts preview."
+          "description": "Deprecated. The Cyber Panel theme is now always active.",
+          "deprecationMessage": "switchboard.theme.cyberPanel is deprecated. The Cyber Panel theme is now always on. Use switchboard.theme.disableCyberAnimation to disable the animated sweep beam."
+        },
+        "switchboard.theme.disableCyberAnimation": {
+          "type": "boolean",
+          "default": false,
+          "description": "Disable the animated rolling CRT sweep beam in the Cyber Panel theme."
         }
       }
     },

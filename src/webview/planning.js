@@ -1351,17 +1351,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (iframe) { iframe.style.display = 'none'; iframe.removeAttribute('src'); iframe.removeAttribute('srcdoc'); }
                 if (imageContainer) { imageContainer.style.display = 'flex'; }
                 if (imageImg) { imageImg.src = webviewUri + '?t=' + Date.now(); } // cache-buster for refresh
-            } else if (webviewUri) {
-                // HTML preview: show iframe, hide image container, use iframe.src instead of srcdoc
-                if (iframe) {
-                    iframe.style.display = '';
-                    iframe.removeAttribute('srcdoc');
-                    iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
-                }
-                if (imageContainer) { imageContainer.style.display = 'none'; }
-                if (imageImg) { imageImg.removeAttribute('src'); }
             } else if (htmlContent) {
-                // Fallback: srcdoc if webviewUri not provided (backward compat)
+                // HTML preview: use srcdoc and inject base tag for relative asset resolution
+                // (iframe.src with vscode-webview-resource: URIs is blocked by VS Code's sandbox)
                 if (iframe) {
                     iframe.style.display = '';
                     iframe.removeAttribute('src');
@@ -1369,6 +1361,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     iframe.srcdoc = htmlWithBase;
                 }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
+                if (imageImg) { imageImg.removeAttribute('src'); }
+            } else if (webviewUri) {
+                // Fallback: iframe src if htmlContent not available (e.g., backend file read failed)
+                if (iframe) {
+                    iframe.style.display = '';
+                    iframe.removeAttribute('srcdoc');
+                    iframe.src = webviewUri + '?t=' + Date.now(); // cache-buster for refresh
+                }
+                if (imageContainer) { imageContainer.style.display = 'none'; }
+                if (imageImg) { imageImg.removeAttribute('src'); }
             }
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
