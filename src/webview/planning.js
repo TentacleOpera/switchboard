@@ -990,7 +990,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         foldersBtn.className = 'sidebar-folders-btn';
         foldersBtn.title = 'Manage Folders';
         foldersBtn.id = 'btn-manage-folders';
-        foldersBtn.innerHTML = '<svg width="14" height="14" viewBox="0 0 16 16" fill="currentColor" xmlns="http://www.w3.org/2000/svg"><path d="M14.5 3L8.71 3L7.3 1.59C7.11 1.41 6.86 1.3 6.59 1.3L1.5 1.3C0.95 1.3 0.5 1.75 0.5 2.3L0.5 13.3C0.5 13.85 0.95 14.3 1.5 14.3L14.5 14.3C15.05 14.3 15.5 13.85 15.5 13.3L15.5 4C15.5 3.45 15.05 3 14.5 3ZM14.5 13.3L1.5 13.3L1.5 4L14.5 4L14.5 13.3Z"/></svg>';
+        foldersBtn.textContent = 'Manage Folders';
         foldersBtn.addEventListener('click', openFoldersModal);
         
         const toggleBtn = document.createElement('button');
@@ -1009,7 +1009,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             docList.className = 'source-doc-list';
             docList.dataset.sourceId = sourceId;
             // Push content down to avoid overlapping with top-right absolute controls
-            docList.style.paddingTop = '10px';
+            docList.style.paddingTop = '0px';
             treePane.appendChild(docList);
 
             if (!nodes || nodes.length === 0) {
@@ -1370,7 +1370,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     iframe.style.display = '';
                     iframe.removeAttribute('src');
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
+                    console.log('[PlanningPanel] Setting srcdoc for HTML preview, length:', htmlWithBase.length, 'hasNonce:', /nonce="/.test(htmlWithBase));
                     iframe.srcdoc = htmlWithBase;
+                    // Diagnostic: listen for load/error events on the iframe
+                    iframe.onload = () => { console.log('[PlanningPanel] Preview iframe loaded successfully'); };
+                    iframe.onerror = (e) => { console.error('[PlanningPanel] Preview iframe error:', e); };
                 }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }

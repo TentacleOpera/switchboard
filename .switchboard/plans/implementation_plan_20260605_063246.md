@@ -215,4 +215,66 @@ None required. Implementation matches plan exactly.
 
 ---
 
+## Review Pass 2 — 2026-06-05 (Post-Implementation Fix)
+
+### Root Cause Analysis
+
+The initial implementation injected BOTH a permissive CSP `<meta>` tag AND the parent nonce into the preview HTML. This created a **dual-CSP enforcement** scenario in the srcdoc iframe:
+
+1. **Inherited parent CSP** (from the extension's webview HTML): `script-src ... 'nonce-ABC123' 'unsafe-inline' 'unsafe-eval'`
+2. **Injected iframe CSP** (from `_injectLocalCsp`): `default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: ...`
+
+Per the CSP spec, when multiple policies apply to a document, **each must be independently satisfied**. The injected CSP's `default-src 'none'` was MORE restrictive than the inherited parent CSP in several ways:
+- Missing `frame-src` → nested iframes in preview HTML blocked
+- Missing `media-src` → `<video>`/`<audio>` blocked
+- Missing `child-src` → web workers blocked
+- Missing `object-src` → `<object>`/`<embed>` blocked
+
+More critically, the dual-CSP interaction could produce unexpected blocking in certain browser/VS Code versions. The injected CSP added restrictions on top of the inherited parent CSP, rather than relaxing them (which is impossible per the CSP spec — you cannot relax an inherited CSP).
+
+**Additionally**, preview HTML files that had their own CSP `<meta>` tags would end up with THREE simultaneously enforced CSPs, further increasing the chance of unexpected blocking.
+
+### Architecture Finding
+
+On desktop VS Code (Electron), the webview uses an iframe-based architecture:
+1. Main VS Code window
+2. Webview wrapper iframe (loaded from `vscode-webview://.../index.html`) — has its own CSP
+3. Extension content iframe (loaded from `vscode-webview://.../fake.html`) — has the extension's CSP
+4. Our preview srcdoc iframe — inherits the extension's CSP from #3
+
+The wrapper's CSP (`script-src 'sha256-...' 'self'`) does NOT cascade into the extension's iframe or our srcdoc iframe, because the extension's HTML is in a separate iframe document, not a child of the wrapper. CSP inheritance only applies within the same document tree (parent→child for srcdoc/about:blank).
+
+### Fix Applied
+
+**Removed the injected CSP `<meta>` tag entirely.** The inherited parent CSP already covers all necessary resource types. The nonce injection is the only addition needed to satisfy the parent CSP's `script-src` requirement. Key changes:
+
+1. **`PlanningPanelProvider.ts` — `_injectLocalCsp` simplified:**
+   - Removed the CSP `<meta>` tag injection (the `cspTag` variable and all related head/html matching logic)
+   - Added removal of any existing CSP `<meta>` tags in the preview HTML to prevent triple-CSP conflicts
+   - Kept the nonce injection into `<script>` tags
+   - Added diagnostic `console.log` for server-side verification
+
+2. **`planning.js` — `handlePreviewReady` enhanced:**
+   - Added diagnostic `console.log` showing srcdoc length and nonce presence
+   - Added `iframe.onload`/`iframe.onerror` event handlers for debugging
+
+### Files Changed
+
+- `src/services/PlanningPanelProvider.ts` — `_injectLocalCsp` method simplified (removed CSP meta injection, added CSP meta removal, kept nonce injection, added logging)
+- `src/webview/planning.js` — `handlePreviewReady` function (added diagnostic logging for iframe load/error events)
+
+### Verification Results
+
+- **TypeScript (`tsc --noEmit`):** No errors in `PlanningPanelProvider.ts`. Pre-existing errors in unrelated files unchanged.
+- **Regex testing:** CSP removal regex correctly handles double-quoted, single-quoted, case-insensitive, and multi-attribute `<meta>` tags.
+- **Nonce injection regex:** Unchanged from previous review; all 8 test cases still pass.
+
+### Remaining Risks
+
+1. **CSP inheritance may still block in edge cases:** If the inherited parent CSP's `'unsafe-inline'` being ignored (due to nonce presence) causes issues with inline event handlers (`onclick="..."`), those handlers will be blocked. This is by design per CSP Level 3 — inline event handlers are considered unsafe. Preview HTML files that rely on inline event handlers would need to be refactored to use `addEventListener()` instead.
+2. **The `allow-same-origin` flag** gives the preview access to `window.parent`. This is documented and accepted.
+3. **Diagnostic logging** should be removed once the preview is confirmed working in production.
+
+---
+
 **Recommendation:** Complexity 3 → Send to Coder

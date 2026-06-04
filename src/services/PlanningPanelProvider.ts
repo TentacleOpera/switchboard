@@ -678,21 +678,20 @@ export class PlanningPanelProvider {
     }
 
     private _injectLocalCsp(html: string): string {
-        const cspTag = `<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'unsafe-inline' 'unsafe-eval' https: vscode-webview: vscode-webview-resource: vscode-resource:; style-src 'unsafe-inline' https: vscode-webview: vscode-webview-resource: vscode-resource:; img-src data: blob: https: vscode-webview: vscode-webview-resource: vscode-resource:; font-src data: https: vscode-webview: vscode-webview-resource: vscode-resource:; connect-src https: data:;">`;
+        // Inject the parent webview's nonce into all <script> tags so they satisfy
+        // the inherited CSP's nonce requirement. We do NOT inject a separate CSP
+        // <meta> tag because srcdoc iframes inherit the parent document's CSP, and
+        // adding a second CSP creates a dual-policy enforcement scenario that can
+        // produce unexpected blocking. The inherited parent CSP already covers all
+        // necessary resource types (scripts, styles, images, etc.) — the only
+        // additional requirement is the nonce on script tags.
         let processedHtml = html;
-        const headMatch = html.match(/<head\b[^>]*>/i);
-        if (headMatch && headMatch.index !== undefined) {
-            const index = headMatch.index + headMatch[0].length;
-            processedHtml = html.slice(0, index) + '\n  ' + cspTag + html.slice(index);
-        } else {
-            const htmlMatch = html.match(/<html\b[^>]*>/i);
-            if (htmlMatch && htmlMatch.index !== undefined) {
-                const index = htmlMatch.index + htmlMatch[0].length;
-                processedHtml = html.slice(0, index) + '\n<head>' + cspTag + '</head>' + html.slice(index);
-            } else {
-                processedHtml = cspTag + '\n' + html;
-            }
-        }
+
+        // Remove any existing CSP <meta> tags in the preview HTML to prevent
+        // conflicts with the inherited parent CSP. The preview's own CSP could
+        // add restrictions (like blocking 'unsafe-eval' or external sources)
+        // that prevent the preview from functioning correctly.
+        processedHtml = processedHtml.replace(/<meta\b[^>]*\bhttp-equiv=["']Content-Security-Policy["'][^>]*>/gi, '');
 
         if (this._nonce) {
             // Inject nonce into <script> tags that don't already have one,
@@ -2126,6 +2125,7 @@ export class PlanningPanelProvider {
             try {
                 const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
                 const htmlWithCsp = this._injectLocalCsp(htmlContent);
+                console.log('[PlanningPanel] HTML preview: nonce injected:', !!this._nonce, 'content length:', htmlWithCsp.length, 'hasNonceAttr:', /nonce="/.test(htmlWithCsp));
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
                     sourceId,

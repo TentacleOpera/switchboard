@@ -10732,38 +10732,19 @@ What would you like to find?`;
 
     /**
      * Centralized eligibility check for plan mirroring.
-     * A plan is mirror-eligible only if it is registered in plan_registry.json with active status
+     * A plan is mirror-eligible only if it is registered in the plan registry with active status
      * and owned by this workspace. Shared brain directory activity alone never creates ownership.
+     *
+     * Content-based heuristics (workspace_path_match / workspace_transcript_match) are intentionally
+     * NOT used here. They were found to produce excessive false positives: any plan that merely
+     * references the workspace root path in its content (e.g., file paths in proposed changes)
+     * would be treated as eligible, causing old/completed plans from other sessions to appear as
+     * new CREATED cards. The registry is the sole authority for scoping.
      */
     private _isPlanEligibleForWorkspace(stableBrainPath: string, workspaceRoot: string): { eligible: boolean; reason: string } {
         const planId = this._getPlanIdFromStableBrainPath(stableBrainPath);
         if (this._isPlanInRegistry(planId)) {
             return { eligible: true, reason: 'in_plan_registry' };
-        }
-
-        // Scoping check for unregistered plans: check if the plan contains paths belonging to this workspace
-        try {
-            const baseBrainPath = this._getBaseBrainPath(stableBrainPath);
-            if (fs.existsSync(baseBrainPath)) {
-                const content = fs.readFileSync(baseBrainPath, 'utf8');
-                const normalizedRoot = this._getStablePath(workspaceRoot);
-
-                if (content.toLowerCase().includes(normalizedRoot.toLowerCase())) {
-                    return { eligible: true, reason: 'workspace_path_match' };
-                }
-
-                // Fallback: check session transcript
-                const sessionDir = path.dirname(baseBrainPath);
-                const transcriptPath = path.join(sessionDir, '.system_generated', 'logs', 'transcript.jsonl');
-                if (fs.existsSync(transcriptPath)) {
-                    const transcript = fs.readFileSync(transcriptPath, 'utf8');
-                    if (transcript.toLowerCase().includes(normalizedRoot.toLowerCase())) {
-                        return { eligible: true, reason: 'workspace_transcript_match' };
-                    }
-                }
-            }
-        } catch (e) {
-            console.warn('[TaskViewerProvider] Failed to verify plan workspace eligibility:', e);
         }
 
         return { eligible: false, reason: 'not_in_plan_registry' };
@@ -17075,6 +17056,7 @@ What would you like to find?`;
             this._julesStatusPollTimer = undefined;
         }
         this._brainDebounceTimers.forEach(t => clearTimeout(t));
+        this._brainDebounceTimers.clear();
         this._brainDebounceClaims.clear();
         this._planFsDebounceTimers.forEach(t => clearTimeout(t));
         this._recentNativePlanCreations.forEach(t => clearTimeout(t));
