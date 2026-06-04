@@ -258,10 +258,10 @@
             border: 1px solid color-mix(in srgb, var(--accent-teal) 30%, transparent);
             color: var(--accent-teal);
             font-family: var(--font-mono);
-            font-size: 14px;
+            font-size: 18px;
             font-weight: bold;
-            width: 20px;
-            height: 20px;
+            width: 28px;
+            height: 28px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -286,9 +286,9 @@
         }
 
         .strip-icon-btn {
-            width: 20px;
-            height: 20px;
-            padding: 2px;
+            width: 28px;
+            height: 28px;
+            padding: 4px;
             display: flex;
             align-items: center;
             justify-content: center;
@@ -310,13 +310,25 @@
             cursor: not-allowed;
         }
 
+        .controls-strip .strip-icon-btn {
+            width: 28px;
+            height: 28px;
+            padding: 4px;
+            border: 1px solid transparent;
+            background: var(--panel-bg2);
+        }
+        .controls-strip .strip-icon-btn img {
+            width: 18px;
+            height: 18px;
+        }
         .controls-strip .strip-icon-btn:hover:not(:disabled) {
+            border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
         }
 
         .strip-icon-btn img {
-            width: 14px;
-            height: 14px;
+            width: 18px;
+            height: 18px;
             object-fit: contain;
             pointer-events: none;
         }
@@ -562,7 +574,7 @@
         #btn-add-plan {
             color: var(--accent-teal);
             font-family: var(--font-mono);
-            font-size: 18px;
+            font-size: 20px;
             font-weight: bold;
         }
 
@@ -2177,7 +2189,7 @@
                 <img src="{{ICON_DELETE_PROJECT}}" alt="Delete Project">
             </button>
             <button class="strip-icon-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">
-                <img src="{{ICON_41}}" alt="Chat Copy Prompt" style="width: 14px; height: 14px;">
+                <img src="{{ICON_41}}" alt="Chat Copy Prompt" style="width: 18px; height: 18px;">
             </button>
 
             <!-- Spacer to push right-side controls to the right -->

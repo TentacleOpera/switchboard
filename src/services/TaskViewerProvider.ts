@@ -7331,8 +7331,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     // PHASE 1 — UI-CRITICAL, LIGHTWEIGHT
                     // Flush initial shell state and light refreshes BEFORE any heavy
                     // CPU/IO work. This guarantees `terminalStatuses`, `sessionStatus`
-                    // and `julesStatus` reach the webview before `_syncFilesToDb`'s
-                    // directory walk + DB insert burst starts and starves the event loop.
+                    // and `julesStatus` reach the webview before the Antigravity rescan
+                    // directory walk starts and starves the event loop.
                     // The `{ type: 'loading' }` dead-code posts have been removed — the
                     // webview has no handler for them (see R3).
                     const _sidebarInitT0 = Date.now();
@@ -13820,8 +13820,9 @@ What would you like to find?`;
     }
 
     /**
-     * DB-first refresh: reads the kanban DB and pushes data to UI.
-     * Does NOT read runsheets or re-sync from files.
+     * Reload/startup refresh path: rescan brain sources + refresh UI.
+     * Rescans Antigravity plan sources (debounced) to recover missed watcher events,
+     * then refreshes run sheets from the kanban DB.
      * Called after every plan mutation (create, import, dispatch, etc.)
      */
     private async _syncFilesAndRefreshRunSheets(workspaceRoot?: string) {

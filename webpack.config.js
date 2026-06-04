@@ -43,6 +43,25 @@ const extensionConfig = {
                         }
                     }
                 ]
+            },
+            // jsdom's style-rules.js reads default-stylesheet.css via fs.readFileSync at require() time
+            // using __dirname-relative path resolution. When webpack bundles jsdom, __dirname gets
+            // rewritten to the output directory, so the CSS file can't be found at runtime.
+            // Solution: intercept the CSS file import and inline it as a string constant.
+            {
+                test: /jsdom\/lib\/jsdom\/browser\/default-stylesheet\.css$/,
+                type: 'asset/source'
+            },
+            // Transform jsdom's style-rules.js at build time: replace the fs.readFileSync(__dirname-relative)
+            // call with a require() that webpack can resolve and inline. The loader lives in webpack-loaders/
+            // and transforms the actual jsdom source each build — no static copy checked in.
+            {
+                test: /jsdom\/lib\/jsdom\/living\/helpers\/style-rules\.js$/,
+                use: [
+                    {
+                        loader: path.resolve(__dirname, 'webpack-loaders', 'jsdom-css-inline-loader.js')
+                    }
+                ]
             }
         ]
     },

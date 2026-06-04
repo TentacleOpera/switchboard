@@ -108,5 +108,42 @@ Key risks: (1) Rescan failure could block the downstream `_refreshRunSheets` cal
 
 ***
 
+## Review Results (2026-06-04)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | JSDoc on `_syncFilesAndRefreshRunSheets` says "Does NOT read runsheets or re-sync from files" — contradicts actual behavior (method does both) | **MAJOR** | Fixed |
+| 2 | Stale `_syncFilesToDb` reference in comment at line 7334 — method was deleted in commit `dd7d5b8` | **NIT** | Fixed |
+| 3 | Plan line numbers slightly drifted from actual (plan says 13812/13819, actual is 13827/13835) | **NIT** | Noted |
+
+### Stage 2: Balanced Synthesis
+
+- **Core implementation (rescan call + test update)**: Verified correct — matches plan exactly. No logic changes needed.
+- **JSDoc fix**: Applied — updated to accurately describe the method's behavior (rescan + refresh run sheets).
+- **Stale comment fix**: Applied — replaced `_syncFilesToDb` reference with "Antigravity rescan directory walk".
+
+### Files Changed by Review
+
+| File | Change | Lines |
+|------|--------|-------|
+| `src/services/TaskViewerProvider.ts` | Fixed misleading JSDoc on `_syncFilesAndRefreshRunSheets` | 13822-13827 |
+| `src/services/TaskViewerProvider.ts` | Removed stale `_syncFilesToDb` reference in Phase 1 comment | 7334-7335 |
+
+### Validation Results
+
+- **Regex test verification**: All 4 test patterns in `brain-rescan-regression.test.js` verified against updated source — **PASS** (node inline eval)
+- **Stale reference check**: Zero remaining `_syncFilesToDb` references in `src/` — **CLEAN**
+- **Compilation**: Skipped per directive
+- **Automated tests**: Skipped per directive — user to run `npx mocha src/test/brain-rescan-regression.test.js` separately
+
+### Remaining Risks
+
+- Structural regex tests are inherently fragile (acknowledged in plan as out-of-scope). Future method refactors could silently break test assertions.
+- The `_lastAntigravityRescanAt` debouncing (30-min first window, ~2s subsequent) is untested by the regression test — only the call ordering is verified.
+
+***
+
 ### Recommendation
 Send to Coder

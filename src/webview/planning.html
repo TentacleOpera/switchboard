@@ -1443,15 +1443,86 @@
                 0deg,
                 transparent,
                 transparent 2px,
-                rgba(0, 0, 0, 0.08) 2px,
-                rgba(0, 0, 0, 0.08) 4px
+                rgba(0, 0, 0, 0.15) 2px,
+                rgba(0, 0, 0, 0.15) 4px
             );
             z-index: 5;
         }
         .cyber-theme-enabled .cyber-scanlines { display: block; }
-        .cyber-theme-enabled .preview-panel-wrapper h1,
+
+        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        /* Headings: bright teal glow */
+        .cyber-theme-enabled .preview-panel-wrapper h1 {
+            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
+                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
         .cyber-theme-enabled .preview-panel-wrapper h2 {
-            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
+                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h3 {
+            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+
+        /* Preview panel wrapper: subtle outer glow border */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        /* Inline code: neon glow */
+        .cyber-theme-enabled #markdown-preview code,
+        .cyber-theme-enabled #markdown-preview-online code,
+        .cyber-theme-enabled #kanban-preview-pane code {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        /* Code blocks: subtle glow border */
+        .cyber-theme-enabled #markdown-preview pre,
+        .cyber-theme-enabled #markdown-preview-online pre,
+        .cyber-theme-enabled #kanban-preview-pane pre {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
+                        inset 0 0 12px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Blockquotes: glowing left border */
+        .cyber-theme-enabled #markdown-preview blockquote,
+        .cyber-theme-enabled #markdown-preview-online blockquote,
+        .cyber-theme-enabled #kanban-preview-pane blockquote {
+            border-left-color: var(--accent-teal);
+            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        /* Markdown alerts: enhanced glow */
+        .cyber-theme-enabled .alert-note { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent); }
+        .cyber-theme-enabled .alert-tip { box-shadow: 0 0 8px rgba(102, 187, 106, 0.15); }
+        .cyber-theme-enabled .alert-important { box-shadow: 0 0 8px rgba(187, 134, 252, 0.15); }
+        .cyber-theme-enabled .alert-warning { box-shadow: 0 0 8px rgba(255, 183, 77, 0.15); }
+        .cyber-theme-enabled .alert-caution { box-shadow: 0 0 8px rgba(255, 138, 101, 0.15); }
+
+        /* Kanban plan items: neon glow on selection/hover */
+        .cyber-theme-enabled .kanban-plan-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .kanban-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Column badges: neon glow matching their color */
+        .cyber-theme-enabled .kanban-column-badge[data-column="CREATED"] { box-shadow: 0 0 6px rgba(61, 219, 217, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="PLAN_REVIEWED"] { box-shadow: 0 0 6px rgba(187, 134, 252, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODED"] { box-shadow: 0 0 6px rgba(255, 183, 77, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
+
+        /* Active tab: glow accent */
+        .cyber-theme-enabled .research-tab-btn.active {
+            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Controls strip buttons: glow on hover */
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
         }
 
         .preview-panel-wrapper {
