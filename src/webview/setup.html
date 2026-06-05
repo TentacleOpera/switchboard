@@ -463,7 +463,7 @@
             <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
             <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
-            <button class="tab-btn" data-tab="docs" role="tab" aria-selected="false">Docs</button>
+            <button class="tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
             <button class="tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
 
@@ -471,7 +471,10 @@
                 <div style="margin-bottom: 16px; border-bottom: 1px solid var(--border-dim); padding-bottom: 12px;">
                     <div class="section-label" style="margin-bottom: 4px;">Switchboard guide</div>
                     <div class="hint-text" style="margin-bottom: 6px;">Copy this prompt to ask an agent for guidance on Switchboard setup options</div>
-                    <button id="btn-copy-tutorial-prompt" class="action-btn w-full">COPY TUTORIAL PROMPT</button>
+                    <div style="display: flex; gap: 8px;">
+                        <button id="btn-copy-tutorial-prompt" class="action-btn" style="flex: 1;">COPY TUTORIAL PROMPT</button>
+                        <button id="btn-open-docs" class="secondary-btn" style="flex: 1;">OPEN DOCS</button>
+                    </div>
                 </div>
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 12px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
                     GIT IGNORE STRATEGY
@@ -970,25 +973,35 @@
                 <div id="planning-sync-status" style="margin-top: 12px; font-size: 11px; color: var(--text-secondary);">
                     Status: <span id="planning-sync-status-text">Not configured</span>
                 </div>
-                <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
+            </div>
+
+        <div class="tab-content" id="theme-fields" data-tab-content="theme">
+            <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
+                Change the visual look of Switchboard. More themes coming soon for people who don't want to look like they're playing video games at work. More animations coming soon for people who do want to look like they're playing video games at work.
+            </div>
+            <div class="subsection-header">
+                <span>Theme Selection</span>
+            </div>
+            <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 12px;">
+                <label class="db-radio-option">
+                    <input type="radio" name="theme-selection" value="afterburner" checked>
+                    <span>Afterburner</span>
+                </label>
+            </div>
+            <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
+            <div id="theme-animation-settings">
                 <div class="subsection-header">
-                    <span>Visual Theme</span>
+                    <span>Animation</span>
                 </div>
                 <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:6px;">
                     <input id="cyber-animation-toggle" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <div style="display:flex; flex-direction:column; gap:4px;">
-                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Disable Cyber Theme Animation</span>
-                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Turn off the animated rolling CRT sweep beam in the planning panel preview.</span>
+                        <span style="font-size: 11px; color: var(--text-primary); font-weight: 600;">Enable Artifacts panel animation</span>
+                        <span style="font-size: 10px; color: var(--text-secondary); line-height: 1.4;">Show the animated rolling CRT sweep beam in the planning panel preview.</span>
                     </div>
                 </label>
                 <div id="cyber-animation-status" style="min-height:14px; margin-top:6px; font-size:10px; color:var(--accent-teal); font-family:var(--font-mono);"></div>
             </div>
-
-        <div class="tab-content" id="docs-fields" data-tab-content="docs">
-            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                Documentation
-            </div>
-            <button id="btn-open-docs" class="secondary-btn w-full">OPEN DOCS</button>
         </div>
 
         <div class="tab-content" id="status-bar-fields" data-tab-content="status-bar">
@@ -1374,6 +1387,9 @@
 
             // Restore persisted tab if available
             const persistedState = vscode.getState?.() || {};
+            if (persistedState.activeTabId === 'docs') {
+                persistedState.activeTabId = 'theme';
+            }
             if (persistedState.activeTabId) {
                 activeTabId = persistedState.activeTabId;
             }
@@ -1436,6 +1452,17 @@
                 'planning-panel': () => {
                     vscode.postMessage({ type: 'getPlanningSources' });
                     vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
+                },
+                'theme': () => {
+                    vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
+                    const persistedState = (typeof vscode !== 'undefined' && vscode.getState) ? (vscode.getState() || {}) : {};
+                    const savedTheme = persistedState.selectedTheme || 'afterburner';
+                    const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
+                    if (themeRadio) themeRadio.checked = true;
+                    const animationSettings = document.getElementById('theme-animation-settings');
+                    if (animationSettings) {
+                        animationSettings.style.display = savedTheme === 'afterburner' ? '' : 'none';
+                    }
                 }
             };
 
@@ -3318,7 +3345,8 @@
         });
 
         document.getElementById('cyber-animation-toggle')?.addEventListener('change', (e) => {
-            vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: e.target.checked });
+            const isDisabled = !e.target.checked;
+            vscode.postMessage({ type: 'setCyberAnimationDisabledSetting', enabled: isDisabled });
             const statusEl = document.getElementById('cyber-animation-status');
             if (statusEl) {
                 statusEl.textContent = 'Saved';
@@ -3326,6 +3354,19 @@
                     statusEl.textContent = '';
                 }, 2000);
             }
+        });
+
+        document.querySelectorAll('input[name="theme-selection"]').forEach(radio => {
+            radio.addEventListener('change', (e) => {
+                const animationSettings = document.getElementById('theme-animation-settings');
+                if (animationSettings) {
+                    animationSettings.style.display = e.target.value === 'afterburner' ? '' : 'none';
+                }
+                const currentPersisted = (typeof vscode !== 'undefined' && vscode.getState) ? (vscode.getState() || {}) : {};
+                if (typeof vscode !== 'undefined' && vscode.setState) {
+                    vscode.setState({ ...currentPersisted, selectedTheme: e.target.value });
+                }
+            });
         });
  
         document.getElementById('auto-commit-code-review-toggle')?.addEventListener('change', (e) => {
@@ -3722,7 +3763,7 @@
                 case 'cyberAnimationDisabledSetting': {
                     runSetupHydration(() => {
                         const toggle = document.getElementById('cyber-animation-toggle');
-                        if (toggle) toggle.checked = message.enabled === true;
+                        if (toggle) toggle.checked = message.enabled !== true;
                     });
                     break;
                 }

@@ -2183,24 +2183,16 @@
             </div>
         </div>
         <div id="research-content" class="research-tab-content">
+            <div style="margin-bottom: 16px; font-size: 12px; color: var(--text-secondary); line-height: 1.4;">
+                Switchboard Research offers an easy way to use Google AI Studio to quickly perform high quality research, and get the results back into your workspace as a fully formatted document.
+            </div>
             <!-- Step 1: Draft Research Prompt -->
             <div class="planning-card">
                 <div class="planning-card-header">STEP 1: DRAFT RESEARCH PROMPT</div>
-                <div class="planning-card-description">Enter details to build or draft a high-quality research prompt template.</div>
+                <div class="planning-card-description">Send instructions to IDE-agent to draft a detailed research prompt for you.</div>
 
                 <div class="planning-card-section-title" style="margin-top: 12px;">Central Question / Topic</div>
                 <textarea id="research-prompt-input" class="planning-input" rows="4" placeholder="Enter research topic..." style="margin-top: 12px;"></textarea>
-
-                <div class="planning-card-section-title" style="margin-top: 12px;">Context & Specifics (Optional)</div>
-                <textarea id="research-context-input" class="planning-input" rows="3" placeholder="e.g. Australian Health SaaS, MongoDB Atlas, CSFLE, target audience..." style="margin-top: 12px;"></textarea>
-
-                <div class="planning-card-section-title" style="margin-top: 12px;">Research Depth</div>
-                <select id="research-depth" class="planning-input" style="margin-top: 12px; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
-                    <option value="quick" selected>Quick (5-10 sources)</option>
-                    <option value="standard">Standard (15-30 sources)</option>
-                    <option value="deep">Deep (50-100+ sources)</option>
-                    <option value="academic">Academic (100-200+ sources)</option>
-                </select>
 
                 <div class="prompt-buttons-container" style="margin-top: 16px; display: flex; gap: 8px;">
                     <button id="btn-copy-research-prompt" class="planning-button">COPY PROMPT TEMPLATE</button>
@@ -2235,9 +2227,13 @@
                 </div>
 
                 <div class="planning-card-section" style="margin-top: 12px;">
+                    <div id="research-no-folders-warning" style="display: none; color: var(--accent-orange); font-size: 11px; margin-bottom: 6px;">No destination folders set — add folders in Local Docs or click MANAGE FOLDERS.</div>
                     <div class="planning-card-description" style="margin-bottom: 4px;">Destination Folder</div>
-                    <select id="research-destination-folder" class="planning-input" style="background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
-                    </select>
+                    <div style="display: flex; gap: 8px; align-items: center;">
+                        <select id="research-destination-folder" class="planning-input" style="flex: 1; background-color: var(--input-bg); color: var(--input-fg); border: 1px solid var(--border-color); border-radius: 4px; padding: 6px 8px;">
+                        </select>
+                        <button id="btn-manage-research-folders" class="planning-button secondary" style="margin: 0; padding: 6px 12px; white-space: nowrap; height: auto;">MANAGE FOLDERS</button>
+                    </div>
                 </div>
 
                 <div class="planning-controls" style="margin-top: 16px;">

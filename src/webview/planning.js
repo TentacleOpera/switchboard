@@ -6,6 +6,7 @@
 
     // State object (must be declared before use)
     const state = {
+        lastResearchFolder: persistedState.lastResearchFolder || null,
         activeSource: null,
         activeDocId: null,
         activeDocName: null,
@@ -232,20 +233,31 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     if (draftWithAnalystBtn) {
         draftWithAnalystBtn.addEventListener('click', () => {
             const topic = document.getElementById('research-prompt-input')?.value.trim() || '';
-            const context = document.getElementById('research-context-input')?.value.trim() || '';
-            const depthSelect = document.getElementById('research-depth');
-            const depth = depthSelect ? depthSelect.value : 'standard';
 
             vscode.postMessage({
                 type: 'draftResearchPrompt',
                 topic: topic,
-                context: context,
-                depth: depth
+                context: '',
+                depth: 'deep'
             });
             draftWithAnalystBtn.innerText = 'SENT';
             setTimeout(() => {
                 if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
             }, 2000);
+        });
+    }
+
+    const manageResearchFoldersBtn = document.getElementById('btn-manage-research-folders');
+    if (manageResearchFoldersBtn) {
+        manageResearchFoldersBtn.addEventListener('click', openFoldersModal);
+    }
+
+    const researchFolderSelect = document.getElementById('research-destination-folder');
+    if (researchFolderSelect) {
+        researchFolderSelect.addEventListener('change', () => {
+            state.lastResearchFolder = researchFolderSelect.value || null;
+            const currentPersisted = vscode.getState() || {};
+            vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
         });
     }
 
@@ -2211,6 +2223,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 renderFolderList(state.localFolderPaths);
                 renderFolderListModal();
                 const folderSelect = document.getElementById('research-destination-folder');
+                const warningEl = document.getElementById('research-no-folders-warning');
+                const importBtn = document.getElementById('btn-import-research-doc-clipboard');
+                
+                const hasFolders = msg.paths && msg.paths.length > 0;
+                
+                if (warningEl) {
+                    warningEl.style.display = hasFolders ? 'none' : 'block';
+                }
+                if (importBtn) {
+                    importBtn.disabled = !hasFolders;
+                    importBtn.style.opacity = hasFolders ? '1' : '0.4';
+                }
+
                 if (folderSelect) {
                     folderSelect.innerHTML = '';
                     (msg.paths || []).forEach(p => {
@@ -2219,6 +2244,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         opt.textContent = p.split('/').pop() || p;
                         folderSelect.appendChild(opt);
                     });
+
+                    if (hasFolders) {
+                        if (state.lastResearchFolder && msg.paths.includes(state.lastResearchFolder)) {
+                            folderSelect.value = state.lastResearchFolder;
+                        } else {
+                            state.lastResearchFolder = msg.paths[0];
+                            const currentPersisted = vscode.getState() || {};
+                            vscode.setState({ ...currentPersisted, lastResearchFolder: state.lastResearchFolder });
+                            folderSelect.value = state.lastResearchFolder;
+                        }
+                    } else {
+                        state.lastResearchFolder = null;
+                        const currentPersisted = vscode.getState() || {};
+                        vscode.setState({ ...currentPersisted, lastResearchFolder: null });
+                    }
                 }
                 break;
             case 'htmlFoldersListed':
@@ -2573,20 +2613,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     // Research Tab: Prompt Generation Functions
     function generateResearchPrompt() {
-        const depthInput = document.getElementById('research-depth');
         const promptInput = document.getElementById('research-prompt-input');
-        const contextInput = document.getElementById('research-context-input');
 
-        const complexity = depthInput ? depthInput.value : 'quick';
         const customPrompt = promptInput ? promptInput.value.trim() : '';
-        const contextValue = contextInput ? contextInput.value.trim() : '';
-
-        const complexityLabels = {
-            quick: 'Quick (5-10 sources)',
-            standard: 'Standard (15-30 sources)',
-            deep: 'Deep (50-100+ sources)',
-            academic: 'Academic (100-200+ sources)'
-        };
 
         if (!customPrompt) {
             return '';
@@ -2599,11 +2628,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return customPrompt;
         }
 
-        const contextText = contextValue || "General software engineering and technology";
+        const contextText = "General subject matter research";
 
         let prompt = `ROLE: You are a research analyst. Prefer authoritative primary sources over blogs and marketing copy; where sources conflict, say so explicitly.
 
-CONTEXT: ${contextText}. The reader is a software engineer — explain domain-specific concepts; do not assume specialist expertise.
+CONTEXT: ${contextText}. The reader is a domain practitioner — explain domain-specific concepts; do not assume specialist expertise.
 
 CENTRAL QUESTION: ${customPrompt}
 SUB-QUESTIONS (cover all, lead with the first three):
@@ -2614,19 +2643,19 @@ SUB-QUESTIONS (cover all, lead with the first three):
 
 SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.
 
-SCOPE: Primary focus is the central question above. Related domains and alternative approaches as clearly-labelled benchmarks only. Out of scope: unrelated technology stacks, unrelated jurisdictions, and pure marketing comparisons.
+SCOPE: Primary focus is the central question above. Related domains and alternative approaches as clearly-labelled benchmarks only. Out of scope: unrelated domains and jurisdictions.
 
 OUTPUT:
 1) Executive summary (≤ 1 page)
 2) Tiered findings: required vs recommended vs optional — clearly distinguish compliance levels
 3) Focused trade-off evaluation (e.g. searchability vs confidentiality, cost vs coverage)
-4) Defence-in-Depth checklist
+4) Actionable recommendations checklist
 5) Plain-English glossary of domain-specific terms
 6) Full source list with direct links and retrieval dates
 
-DECISION THIS FEEDS: General engineering guidance — end with a recommended default for a platform of typical scale.
+DECISION THIS FEEDS: Recommended action plan — end with a recommended default.
 
-DEPTH: ${complexityLabels[complexity] || complexity}`;
+DEPTH: Deep (50-100+ sources)`;
 
         return prompt;
     }

@@ -76,8 +76,9 @@
             font-family: var(--font-mono);
             font-size: 10px;
             letter-spacing: 0.5px;
-            padding: 4px 8px;
+            padding: 2px 8px;
             min-width: 280px;
+            min-height: 24px;
         }
 
         .workspace-project-select:focus {
@@ -103,7 +104,7 @@
         .controls-strip {
             display: flex;
             align-items: center;
-            gap: 8px;
+            gap: 6px;
             padding: 6px 16px;
             border-bottom: 1px solid var(--border-color);
             background: var(--panel-bg2);
@@ -226,6 +227,12 @@
             border-radius: 2px;
             transition: all 0.15s;
         }
+        
+        .controls-strip .strip-btn {
+            height: 24px;
+            display: inline-flex;
+            align-items: center;
+        }
 
         .strip-btn:hover:not(:disabled) {
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
@@ -289,6 +296,12 @@
             filter: sepia(1) saturate(3) hue-rotate(140deg) brightness(1.2);
         }
 
+        .controls-strip .btn-add-plan {
+            width: 24px;
+            height: 24px;
+            font-size: 16px;
+        }
+
         .strip-icon-btn {
             width: 28px;
             height: 28px;
@@ -316,21 +329,25 @@
         }
 
         .controls-strip .strip-icon-btn {
-            width: 32px;
-            height: 32px;
+            width: 24px;
+            height: 24px;
             padding: 4px;
             border: 1px solid transparent;
             background: var(--panel-bg2);
             border-radius: 3px;
         }
         .controls-strip .strip-icon-btn img {
-            width: 22px;
-            height: 22px;
+            width: 14px;
+            height: 14px;
         }
         .controls-strip .strip-icon-btn:hover:not(:disabled) {
             border-color: transparent;
             background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
             box-shadow: var(--glow-teal);
+        }
+        .controls-strip .kanban-mode-dropdown {
+            min-height: 24px;
+            padding: 2px 6px;
         }
 
         .strip-icon-btn img {
@@ -2221,6 +2238,9 @@
             <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
             </button>
+            <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
+                <img src="{{ICON_22}}" alt="Start Automation">
+            </button>
 
             <!-- Spacer to push right-side controls to the right -->
             <div style="flex: 1;"></div>
@@ -2244,9 +2264,6 @@
         </div>
         <div style="position: relative; display: flex; flex-direction: column; flex: 1; overflow: hidden;">
             <div class="kanban-sub-bar">
-                <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
-                    <img src="{{ICON_22}}" alt="Start Automation" style="width: 17px; height: 17px;">
-                </button>
                 <div class="autoban-timers-inline is-empty" id="autoban-timers-inline"></div>
                 <button class="strip-icon-btn" id="btn-pause-autoban-timer" data-tooltip="Pause automation timers" style="display:none;">
                     <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16" fill="currentColor" width="14" height="14" style="color: var(--accent-teal);">
