@@ -2235,7 +2235,7 @@
             <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
                 <img src="{{ICON_CLI}}" alt="CLI Triggers">
             </button>
-            <button class="strip-icon-btn" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+            <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
                 <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
             </button>
             <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
@@ -6830,8 +6830,8 @@
             collapseCodersEnabled = !collapseCodersEnabled;
             const btn = document.getElementById('btn-collapse-coders');
             if (btn) {
-                btn.classList.toggle('is-active', collapseCodersEnabled);
-                btn.classList.toggle('is-off', !collapseCodersEnabled);
+                btn.classList.toggle('is-active', !collapseCodersEnabled);
+                btn.classList.toggle('is-off', collapseCodersEnabled);
             }
             try {
                 const state = vscode.getState() || {};
@@ -6845,8 +6845,8 @@
         // Restore visual active state from saved toggle state
         const btnCollapse = document.getElementById('btn-collapse-coders');
         if (btnCollapse) {
-            btnCollapse.classList.toggle('is-active', collapseCodersEnabled);
-            btnCollapse.classList.toggle('is-off', !collapseCodersEnabled);
+            btnCollapse.classList.toggle('is-active', !collapseCodersEnabled);
+            btnCollapse.classList.toggle('is-off', collapseCodersEnabled);
         }
 
         // Chat copy prompt button (sub-bar global action)

@@ -652,6 +652,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (statusHtml) {
                 statusHtml.textContent = 'Loading...';
             }
+            const initialState = document.getElementById('html-initial-state');
+            const loadingState = document.getElementById('html-loading-state');
+            const previewFrame = document.getElementById('html-preview-frame');
+            const imageContainer = document.getElementById('image-preview-container');
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'flex';
+            if (previewFrame) previewFrame.style.display = 'none';
+            if (imageContainer) imageContainer.style.display = 'none';
+
             vscode.postMessage({
                 type: 'fetchPreview',
                 sourceId,
@@ -892,11 +901,27 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Re-add sidebar toggle
         const toggleRow = document.createElement('div');
         toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-html');
+            if (modal) {
+                modal.style.display = 'flex';
+                renderHtmlFolderListModal();
+                vscode.postMessage({ type: 'listHtmlFolders' });
+            }
+        });
+
         const toggleBtn = document.createElement('button');
         toggleBtn.className = 'sidebar-toggle-btn';
         toggleBtn.title = 'Toggle sidebar';
         toggleBtn.textContent = state.htmlPreviewCollapsed ? '»' : '«';
         toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+
+        toggleRow.appendChild(foldersBtn);
         toggleRow.appendChild(toggleBtn);
         treePaneHtml.appendChild(toggleRow);
 
@@ -1369,6 +1394,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
         if (sourceId === 'html-folder') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+
+            // Hide loading/initial states, show appropriate preview
+            const initialState = document.getElementById('html-initial-state');
+            const loadingState = document.getElementById('html-loading-state');
+            if (initialState) initialState.style.display = 'none';
+            if (loadingState) loadingState.style.display = 'none';
+
             const iframe = document.getElementById('html-preview-frame');
             const imageContainer = document.getElementById('image-preview-container');
             const imageImg = document.getElementById('image-preview-img');
@@ -1576,6 +1609,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
         // Route html-folder errors to the HTML preview area
         if (sourceId === 'html-folder') {
+            const loadingState = document.getElementById('html-loading-state');
+            if (loadingState) loadingState.style.display = 'none';
+
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
                 statusHtml.textContent = 'Error: ' + error;
@@ -1583,6 +1619,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             const iframe = document.getElementById('html-preview-frame');
             if (iframe) {
+                iframe.style.display = '';
                 iframe.removeAttribute('src');  // Clear any src-based navigation
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
@@ -3442,19 +3479,6 @@ DEPTH: Deep (50-100+ sources)`;
     document.getElementById('btn-add-folder-modal').addEventListener('click', () => {
         vscode.postMessage({ type: 'addLocalFolder' });
     });
-
-    // HTML Folder modal open
-    const btnManageHtmlFolders = document.getElementById('btn-manage-html-folders');
-    if (btnManageHtmlFolders) {
-        btnManageHtmlFolders.addEventListener('click', () => {
-            const modal = document.getElementById('folder-modal-html');
-            if (modal) {
-                modal.style.display = 'flex';
-                renderHtmlFolderListModal();
-                vscode.postMessage({ type: 'listHtmlFolders' });
-            }
-        });
-    }
 
     // HTML Folder modal close (X button)
     const btnCloseHtmlFolderModal = document.getElementById('btn-close-html-folder-modal');

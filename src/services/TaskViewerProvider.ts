@@ -11813,10 +11813,21 @@ What would you like to find?`;
             const runSheetId = `antigravity_${pathHash}`;
             const db = await this._getKanbanDb(resolvedWorkspaceRoot);
             const tombstonedInDb = db ? await db.isTombstoned(pathHash) : false;
-            const isRecentSource =
-                (Date.now() - Math.max(fileCreationTimeMs, mtimeMs)) <= TaskViewerProvider.ANTIGRAVITY_RESCAN_WINDOW_MS;
             if (this._tombstones.has(pathHash) || tombstonedInDb) {
-                if (db && isRecentSource) {
+                // A tombstone means the user deliberately deleted this plan. Only revive it
+                // if the source file was genuinely modified AFTER the deletion (i.e. the user
+                // re-created or re-saved the plan at the same path) — NOT merely because the
+                // file happens to be recent. The previous wall-clock "within 30 min" window
+                // could not tell those apart and resurrected every just-deleted plan, since an
+                // actively-worked plan is always recent.
+                let tombstoneDeletedAtMs = Number.POSITIVE_INFINITY;
+                if (db) {
+                    const tombstoneRow = await db.getPlanByPlanId(pathHash);
+                    const parsed = tombstoneRow?.updatedAt ? Date.parse(tombstoneRow.updatedAt) : NaN;
+                    if (!Number.isNaN(parsed)) { tombstoneDeletedAtMs = parsed; }
+                }
+                const sourceModifiedAfterDeletion = mtimeMs > tombstoneDeletedAtMs;
+                if (db && sourceModifiedAfterDeletion) {
                     for (const candidateSessionId of [pathHash, runSheetId]) {
                         const staleRow = await db.getPlanBySessionId(candidateSessionId);
                         if (staleRow?.status === 'deleted') {
@@ -11839,28 +11850,19 @@ What would you like to find?`;
             // Guard: workspace scoping via registry ownership.
             // New runtime-created plans may auto-claim so they appear immediately in dropdown.
             const eligibility = this._isPlanEligibleForWorkspace(stablePath, resolvedWorkspaceRoot);
-            // Pre-check claim marker for age relaxation (see TOCTOU note in Edge-Case audit).
-            // _tryClaimBrainPlan's atomic wx write remains the authoritative guard.
-            const claimMarkerPath = path.join(path.dirname(baseBrainPath), `.switchboard_claim_${pathHash}.json`);
-            let claimMarkerOwnedByUs = false;
-            try {
-                if (fs.existsSync(claimMarkerPath)) {
-                    const existingClaim = JSON.parse(fs.readFileSync(claimMarkerPath, 'utf8'));
-                    const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
-                    if (existingClaim.workspaceId === wsId) {
-                        claimMarkerOwnedByUs = true;
-                    }
-                }
-            } catch {
-                // ignore — marker may be unreadable or malformed; safe to proceed
-            }
 
             const existingEntry = this._planRegistry.entries[pathHash];
+            // Auto-claim is gated on GENUINE freshness only. Owning a leftover claim marker
+            // does NOT make a plan a fresh candidate — it just means we claimed it at some
+            // point in the past. Treating marker-ownership as "fresh" caused every past-session
+            // plan with a stale, never-cleaned-up marker to be re-imported on every scan (the
+            // 100+ phantom-plan flood). Cross-workspace claim coordination is still enforced
+            // authoritatively by _tryClaimBrainPlan's atomic marker write below.
             const isFreshUnregisteredCandidate =
                 !existingEntry &&
                 !runSheetKnown &&
                 !fs.existsSync(mirrorPath) &&
-                ((Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS || claimMarkerOwnedByUs);
+                (Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS;
 
             // Cross-workspace claim coordination: use an atomic claim marker in the
             // shared brain directory to ensure only one workspace auto-claims a new plan.
@@ -13533,11 +13535,23 @@ What would you like to find?`;
 
             // Write tombstone BEFORE deletion to prevent resurrection
             if (brainSourcePath) {
+                const baseBrainPath = this._getBaseBrainPath(brainSourcePath);
                 const stablePath = isManagedImport
                     ? this._getStablePath(brainSourcePath)
-                    : this._getStablePath(this._getBaseBrainPath(brainSourcePath));
+                    : this._getStablePath(baseBrainPath);
                 const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
                 await this._addTombstone(resolvedWorkspaceRoot, pathHash, sessionId);
+
+                // Remove the cross-workspace claim marker. Markers are otherwise never cleaned
+                // up, and a leftover marker is what lets a later scan re-adopt a deleted plan.
+                try {
+                    const claimMarkerPath = path.join(path.dirname(baseBrainPath), `.switchboard_claim_${pathHash}.json`);
+                    if (fs.existsSync(claimMarkerPath)) {
+                        await fs.promises.unlink(claimMarkerPath);
+                    }
+                } catch (e) {
+                    console.warn(`[TaskViewerProvider] _handleDeletePlan: failed to remove claim marker: ${e}`);
+                }
             }
 
             // AP-1: Atomic deletion — brain first, then mirror, then runsheet; halt on any failure
