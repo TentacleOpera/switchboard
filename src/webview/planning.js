@@ -171,12 +171,6 @@
             statusEl.style.color = '';
             statusEl.textContent = 'Import in progress...';
         }
-        const clipboardStatusEl = document.getElementById('clipboard-import-status');
-        if (clipboardStatusEl) {
-            clipboardStatusEl.style.color = '';
-            clipboardStatusEl.textContent = 'Import in progress...';
-        }
-
         const folderSelect = document.getElementById('research-destination-folder');
         const folderPath = folderSelect ? folderSelect.value : undefined;
 
@@ -683,14 +677,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             container.appendChild(childContainer);
         } else {
             let actions = [];
-            let iconEmoji = '';
             if (sourceId === 'local-folder') {
                 actions = ['Set Context', 'Link Doc', 'Copy Path', 'Delete'];
             } else if (sourceId === 'design-folder') {
                 actions = ['Set Context', 'Link Doc', 'Copy Path'];
-                const ext = (node.name || '').substring((node.name || '').lastIndexOf('.')).toLowerCase();
-                const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
-                iconEmoji = isImage ? '🖼️ ' : '📄 ';
             } else if (sourceId === 'html-folder') {
                 actions = ['Copy Path'];
             } else {
@@ -698,7 +688,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
 
             const cardWrapper = renderDocCard({
-                title: iconEmoji + (node.title || node.name),
+                title: node.title || node.name,
                 subtitle: (node.title && node.title !== node.name) ? node.name : undefined,
                 sourceId,
                 nodeId: node.id,
@@ -2640,7 +2630,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'importResearchDocResult':
                 const docTitleInput = document.getElementById('research-doc-title');
                 const researchStatusEl = document.getElementById('research-import-status');
-                const clipboardStatusEl = document.getElementById('clipboard-import-status');
                 const statusEl = document.getElementById('status');
 
                 const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
@@ -2662,10 +2651,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         researchStatusEl.style.color = 'var(--accent-teal)';
                         researchStatusEl.textContent = successText;
                     }
-                    if (clipboardStatusEl) {
-                        clipboardStatusEl.style.color = 'var(--accent-teal)';
-                        clipboardStatusEl.textContent = successText;
-                    }
                     if (statusEl) {
                         statusEl.style.color = 'var(--accent-teal)';
                         statusEl.textContent = successText;
@@ -2678,10 +2663,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (researchStatusEl) {
                         researchStatusEl.style.color = '#f14c4c';
                         researchStatusEl.textContent = errorText;
-                    }
-                    if (clipboardStatusEl) {
-                        clipboardStatusEl.style.color = '#f14c4c';
-                        clipboardStatusEl.textContent = errorText;
                     }
                     if (statusEl) {
                         statusEl.style.color = '#f14c4c';

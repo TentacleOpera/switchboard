@@ -1261,7 +1261,45 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 .filter((s: any) => s.globs.length > 0);
             await cfg.update('customSources', clean, target);
         }
+
+        // Bridge to the legacy GlobalPlanWatcher (which scans .switchboard/plans) so this
+        // tab is the single control surface. GlobalPlanWatcher's own config listener
+        // restarts it when these keys change.
+        const enabled = cfg.get<boolean>('enabled', true);
+        const scanSb = cfg.get<boolean>('scanSwitchboardPlans', true);
+        const intervalSec = cfg.get<number>('intervalSeconds', 10);
+        const pw = vscode.workspace.getConfiguration('switchboard.planWatcher');
+        await pw.update('periodicScanEnabled', enabled && scanSb, target);
+        await pw.update('scanIntervalMs', Math.min(300, Math.max(3, intervalSec)) * 1000, target);
+
         this.startPlanScanner();
+    }
+
+    /**
+     * One-time migration: seed the unified Plan Scanner from the legacy
+     * switchboard.planWatcher.* settings so the new "Plan Scanner" tab reflects what
+     * the user previously configured. Idempotent (guarded by a globalState flag).
+     */
+    public async migratePlanScannerSettings(): Promise<void> {
+        const flagKey = 'switchboard.planScanner.migratedV1';
+        if (this._context.globalState.get<boolean>(flagKey)) { return; }
+        try {
+            const pw = vscode.workspace.getConfiguration('switchboard.planWatcher');
+            const ps = vscode.workspace.getConfiguration('switchboard.planScanner');
+            const target = vscode.ConfigurationTarget.Workspace;
+            const enabledInspect = pw.inspect<boolean>('periodicScanEnabled');
+            if (enabledInspect?.workspaceValue !== undefined || enabledInspect?.globalValue !== undefined) {
+                await ps.update('scanSwitchboardPlans', pw.get<boolean>('periodicScanEnabled', true), target);
+            }
+            const intervalInspect = pw.inspect<number>('scanIntervalMs');
+            if (intervalInspect?.workspaceValue !== undefined || intervalInspect?.globalValue !== undefined) {
+                const sec = Math.min(300, Math.max(3, Math.round(pw.get<number>('scanIntervalMs', 10000) / 1000)));
+                await ps.update('intervalSeconds', sec, target);
+            }
+        } catch (e) {
+            console.error('[TaskViewerProvider] Plan Scanner settings migration failed:', e);
+        }
+        await this._context.globalState.update(flagKey, true);
     }
 
     /**
