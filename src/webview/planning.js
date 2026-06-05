@@ -523,6 +523,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function renderNode(node, sourceId, depth = 0) {
         let deleteBtnRef = null;
+        const container = document.createElement('div');
+        container.className = 'tree-node-container';
+        container.style.marginLeft = `${depth * 16}px`;
+
         const wrapper = document.createElement('div');
         wrapper.className = 'tree-node';
         wrapper.dataset.sourceId = sourceId;
@@ -537,7 +541,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 wrapper.dataset.sourceFolder = node.metadata.sourceFolder;
             }
         }
-        wrapper.style.marginLeft = `${depth * 16}px`;
 
         const icon = document.createElement('span');
         icon.className = 'icon';
@@ -608,9 +611,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (deleteBtnRef) {
             wrapper.appendChild(deleteBtnRef);
         }
-        wrapper.appendChild(childContainer);
+        
+        container.appendChild(wrapper);
+        container.appendChild(childContainer);
 
-        return { wrapper, childContainer };
+        return { wrapper: container, childContainer };
     }
 
     function loadDocumentPreview(sourceId, docId, docName) {
@@ -1255,25 +1260,21 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         filteredRoots.forEach(({ sourceId, nodes }) => {
             const headerRow = document.createElement('div');
             headerRow.className = 'source-header-row';
-            headerRow.style.cssText = 'display:flex;justify-content:space-between;align-items:center;padding:6px 12px;background:var(--panel-bg2);border-bottom:1px solid var(--accent-teal-dim);';
 
             const header = document.createElement('div');
             header.className = 'source-header';
             header.dataset.sourceId = sourceId;
-            header.style.cssText = 'color:var(--accent-teal);font-weight:600;font-size:11px;letter-spacing:0.5px;text-transform:uppercase;';
             header.textContent = SOURCE_DISPLAY_NAMES[sourceId] || sourceId;
             headerRow.appendChild(header);
 
             const controlsContainer = document.createElement('div');
             controlsContainer.className = 'source-controls';
-            controlsContainer.style.cssText = 'display:flex;align-items:center;gap:8px;';
             controlsContainer.dataset.sourceId = sourceId;
             
             const refreshBtn = document.createElement('button');
             refreshBtn.className = 'source-refresh-btn';
             refreshBtn.textContent = '↻';
             refreshBtn.title = 'Refresh';
-            refreshBtn.style.cssText = 'font-size:11px;padding:2px 6px;background:transparent;color:var(--accent-teal);border:1px solid var(--accent-teal-dim);border-radius:2px;cursor:pointer;';
             refreshBtn.addEventListener('click', () => {
                 refreshBtn.disabled = true;
                 vscode.postMessage({ type: 'refreshSource', sourceId });
@@ -1334,7 +1335,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         
         if (!parentEl) return;
         
-        const childContainer = parentEl.querySelector('.tree-children');
+        const childContainer = parentEl.closest('.tree-node-container')?.querySelector('.tree-children');
         if (!childContainer) return;
         
         childContainer.innerHTML = '';
@@ -1916,11 +1917,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     wrapper.dataset.sourceId = doc.sourceId || 'local-folder';
                     wrapper.dataset.docId = doc.slugPrefix;
                     wrapper.dataset.slugPrefix = doc.slugPrefix;
-                    wrapper.style.cssText = 'padding: 4px 8px; cursor: pointer; display: flex; align-items: center; gap: 8px;';
 
                     const icon = document.createElement('span');
                     icon.textContent = '📄';
-                    icon.style.cssText = 'font-size: 14px;';
 
                     const label = document.createElement('span');
                     let displayLabel = doc.docName;
@@ -1942,7 +1941,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     
                     label.textContent = displayLabel;
                     label.title = doc.docName; // Hover shows the full original title
-                    label.style.cssText = 'font-size: 12px; color: var(--text-primary);';
 
                     // Add delete button for imported docs
                     const deleteBtn = document.createElement('button');

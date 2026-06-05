@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: about:srcdoc blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: about:srcdoc blob: data:;">
     <title>Switchboard Research</title>
     <style>
         :root {
@@ -203,6 +203,10 @@
         .content-row.collapsed .sync-btn,
         .content-row.collapsed .source-badge {
             display: none !important;
+        }
+
+        .content-row.collapsed .tree-node-container {
+            margin-left: 0 !important;
         }
 
         .content-row.collapsed .tree-node {
@@ -585,9 +589,44 @@
             color: var(--text-primary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            padding: 6px 8px;
-            margin-top: 12px;
-            border-bottom: 1px solid var(--border-color);
+            padding: 8px 10px;
+            margin: 8px 0 4px 0;
+            border-left: 3px solid var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
+            border-radius: 3px;
+        }
+
+        .source-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            margin: 4px 0;
+        }
+
+        .source-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-refresh-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-refresh-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
         }
         .source-folder-header:first-of-type {
             margin-top: 4px;
@@ -626,25 +665,56 @@
             white-space: nowrap;
         }
 
+        .tree-node-container {
+            /* No visual styling — purely structural wrapper */
+        }
+
         .tree-node {
-            padding: 6px 8px;
-            cursor: pointer;
-            border-radius: 2px;
+            position: relative;
             display: flex;
             align-items: center;
             gap: 6px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin: 3px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
             user-select: none;
             font-size: 12px;
             line-height: 1.4;
+            transition: all 0.15s;
         }
 
         .tree-node:hover {
-            background: var(--card-bg-hover);
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
         }
 
         .tree-node.selected {
-            background: color-mix(in srgb, var(--accent-teal) 20%, var(--panel-bg2));
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
             color: var(--accent-teal);
+        }
+
+        .tree-node.folder-subheader {
+            background: transparent;
+            border: none;
+            border-left: none;
+            box-shadow: none;
+            padding: 12px 8px 4px 8px;
+            margin: 0;
+            border-radius: 0;
+        }
+        .tree-node.folder-subheader:hover {
+            background: transparent;
+            border-color: transparent;
+            border-left-color: transparent;
+            box-shadow: none;
         }
 
         .tree-node .icon {
@@ -1364,7 +1434,7 @@
         }
 
         .antigravity-artifact-node {
-            padding-left: 24px; /* Indent under session header */
+            margin-left: 24px; /* Indent under session header */
         }
 
         details.planning-card summary.planning-card-header {
@@ -1574,6 +1644,15 @@
                         inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
         }
         .cyber-theme-enabled .kanban-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Tree node items: neon glow on selection/hover */
+        .cyber-theme-enabled .tree-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .tree-node:hover {
             box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
         }
 

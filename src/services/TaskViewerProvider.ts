@@ -217,6 +217,7 @@ type PlanRegistryEntry = {
     updatedAt: string;
     status: 'active' | 'archived' | 'completed' | 'deleted' | 'orphan';
     kanbanColumn?: string;
+    project?: string;
 };
 
 type PlanRegistry = {
@@ -425,6 +426,25 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (pid) { this._setCachedPid(terminal, pid); }
             });
         });
+
+        // Track the last focused workspace root in globalState to coordinate auto-claims across windows.
+        // This is a SOFT filter — the atomic claim marker in _tryClaimBrainPlan is the authoritative guard.
+        if (vscode.window.state.focused) {
+            const initialRoot = this._resolveWorkspaceRoot();
+            if (initialRoot) {
+                void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', initialRoot);
+            }
+        }
+        this._context.subscriptions.push(
+            vscode.window.onDidChangeWindowState((e) => {
+                if (e.focused) {
+                    const currentRoot = this._resolveWorkspaceRoot();
+                    if (currentRoot) {
+                        void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', currentRoot);
+                    }
+                }
+            })
+        );
     }
 
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
@@ -3174,7 +3194,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Called by KanbanProvider when the workspace changes via selectWorkspace.
      */
     public reinitializePlanWatcher(workspaceRoot: string): void {
-        this._resolveWorkspaceRoot(workspaceRoot);
+        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
+        if (resolved) {
+            void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', resolved);
+        }
         this._setupStateWatcher();
         this._setupPlanWatcher();
         this.reinitializeBrainWatcher();
@@ -8962,6 +8985,8 @@ What would you like to find?`;
                     // Debounce: Windows fires multiple events per save (rename + change)
                     const existing = this._brainDebounceTimers.get(stablePath);
                     if (existing) clearTimeout(existing);
+                    // Capture root at event time for validation in the debounce callback
+                    const eventRoot = this._resolveWorkspaceRoot();
                     this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
                         try {
                             this._brainDebounceTimers.delete(stablePath);
@@ -8969,9 +8994,17 @@ What would you like to find?`;
                             this._brainDebounceClaims.delete(stablePath);
                             // Skip if we wrote this brain file ourselves (mirror→brain direction)
                             if (this._recentBrainWrites.has(stablePath)) return;
+                            // Dynamic resolution with validation guard
+                            const dynamicWorkspaceRoot = this._resolveWorkspaceRoot();
+                            if (!dynamicWorkspaceRoot) return;
+                            // If workspace switched during debounce, skip to avoid wrong-root mirroring
+                            if (eventRoot && dynamicWorkspaceRoot !== eventRoot) {
+                                console.log(`[TaskViewerProvider] Brain watcher debounce skipped: workspace changed during debounce window`);
+                                return;
+                            }
                             if (fs.existsSync(fullPath)) {
-                                await this._ensureTombstonesLoaded(workspaceRoot);
-                                await this._mirrorBrainPlan(fullPath, finalAllowAutoClaim, workspaceRoot);
+                                await this._ensureTombstonesLoaded(dynamicWorkspaceRoot);
+                                await this._mirrorBrainPlan(fullPath, finalAllowAutoClaim, dynamicWorkspaceRoot);
                             }
                         } catch (e) {
                             console.error('[TaskViewerProvider] Brain watcher debounce callback failed:', e);
@@ -9003,15 +9036,25 @@ What would you like to find?`;
 
                         const existing = this._brainDebounceTimers.get(stablePath);
                         if (existing) clearTimeout(existing);
+                        // Capture root at event time for validation in the debounce callback
+                        const eventRoot = this._resolveWorkspaceRoot();
                         this._brainDebounceTimers.set(stablePath, setTimeout(async () => {
                             try {
                                 this._brainDebounceTimers.delete(stablePath);
                                 const finalAutoClaim = this._brainDebounceClaims.has(stablePath);
                                 this._brainDebounceClaims.delete(stablePath);
                                 if (this._recentBrainWrites.has(stablePath)) return;
+                                // Dynamic resolution with validation guard
+                                const dynamicWorkspaceRoot = this._resolveWorkspaceRoot();
+                                if (!dynamicWorkspaceRoot) return;
+                                // If workspace switched during debounce, skip to avoid wrong-root mirroring
+                                if (eventRoot && dynamicWorkspaceRoot !== eventRoot) {
+                                    console.log(`[TaskViewerProvider] Brain fs.watch debounce skipped: workspace changed during debounce window`);
+                                    return;
+                                }
                                 if (fs.existsSync(fullPath)) {
-                                    await this._ensureTombstonesLoaded(workspaceRoot);
-                                    await this._mirrorBrainPlan(fullPath, finalAutoClaim, workspaceRoot);
+                                    await this._ensureTombstonesLoaded(dynamicWorkspaceRoot);
+                                    await this._mirrorBrainPlan(fullPath, finalAutoClaim, dynamicWorkspaceRoot);
                                 }
                             } catch (e) {
                                 console.error('[TaskViewerProvider] Brain fs.watch debounce callback failed:', e);
@@ -9942,6 +9985,7 @@ What would you like to find?`;
                 tags: insertTags,
                 dependencies: insertDependencies,
                 repoScope: insertRepoScope,
+                project: entry.project ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -11801,7 +11845,9 @@ What would you like to find?`;
             // Cross-workspace claim coordination: use an atomic claim marker in the
             // shared brain directory to ensure only one workspace auto-claims a new plan.
             // This prevents contamination when multiple IDEs watch the same brain dir.
-            const wouldAutoClaim = !eligibility.eligible && (allowAutoClaim || isFreshUnregisteredCandidate) && !existingEntry;
+            const lastFocusedRoot = this._context.globalState.get<string>('switchboard.lastFocusedWorkspaceRoot') || this._resolveWorkspaceRoot();
+            const isTargetWorkspaceActive = lastFocusedRoot === resolvedWorkspaceRoot;
+            const wouldAutoClaim = isTargetWorkspaceActive && !eligibility.eligible && (allowAutoClaim || isFreshUnregisteredCandidate) && !existingEntry;
             const canClaim = wouldAutoClaim
                 ? await this._tryClaimBrainPlan(baseBrainPath, pathHash, resolvedWorkspaceRoot)
                 : false;
@@ -11848,6 +11894,7 @@ What would you like to find?`;
             if (shouldAutoClaim) {
                 const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
                 const now = new Date().toISOString();
+                const activeProject = this._kanbanProvider?.getProjectFilter() || undefined;
                 await this._registerPlan(resolvedWorkspaceRoot, {
                     planId: pathHash,
                     ownerWorkspaceId: wsId,
@@ -11855,6 +11902,7 @@ What would you like to find?`;
                     brainSourcePath: baseBrainPath,
                     mirrorPath: mirrorFilename,
                     topic,
+                    project: activeProject,
                     createdAt: new Date(fileCreationTimeMs).toISOString(),
                     updatedAt: now,
                     status: 'active'

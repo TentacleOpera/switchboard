@@ -461,10 +461,11 @@ export class PlanningPanelProvider {
             // CRITICAL: must use vscode.Uri.file for out-of-workspace paths
             const brainUri = vscode.Uri.file(brainPath);
             const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(brainUri, '*')  // Watch for new/deleted session directories
+                new vscode.RelativePattern(brainUri, '**/*')  // Watch recursively for all files/dirs
             );
 
             watcher.onDidCreate(refresh);
+            watcher.onDidChange(refresh);
             watcher.onDidDelete(refresh);
             this._antigravityWatchers.push(watcher);
             this._disposables.push(watcher);
@@ -484,13 +485,12 @@ export class PlanningPanelProvider {
         const watchedPaths = new Set<string>();
 
         for (const root of allRoots) {
-            const plansDir = path.join(root, '.switchboard', 'plans');
-            if (!fs.existsSync(plansDir)) { continue; }
-            if (watchedPaths.has(plansDir)) { continue; }
-            watchedPaths.add(plansDir);
+            if (watchedPaths.has(root)) { continue; }
+            watchedPaths.add(root);
 
+            // Create watcher relative to root to handle plans directory created after startup
             const watcher = vscode.workspace.createFileSystemWatcher(
-                new vscode.RelativePattern(vscode.Uri.file(plansDir), '**/*.md')
+                new vscode.RelativePattern(vscode.Uri.file(root), '.switchboard/plans/**/*.md')
             );
 
             const triggerRefresh = () => {
