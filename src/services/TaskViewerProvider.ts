@@ -432,6 +432,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             });
         });
 
+        this._context.subscriptions.push(
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (e.affectsConfiguration('switchboard.theme.name')) {
+                    const theme = this.handleGetThemeSetting();
+                    this.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
+                }
+            })
+        );
+
         // NOTE: We deliberately do NOT track an OS-window-focus "last focused workspace" signal.
         // The active workspace is determined solely by the kanban dropdown
         // (KanbanProvider.getCurrentWorkspaceRoot, the single source of truth used by
@@ -1194,6 +1203,65 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             scanSwitchboardPlans: cfg.get<boolean>('scanSwitchboardPlans', true),
             customSources: Array.isArray(rawCustom) ? rawCustom : [],
         };
+    }
+
+    /** Plan Scanner config for the setup UI: includes per-preset detection + labels. */
+    public handleGetPlanScannerConfig(): {
+        enabled: boolean;
+        intervalSeconds: number;
+        scanSwitchboardPlans: boolean;
+        customSources: Array<{ label?: string; scope?: string; globs?: string[] }>;
+        presets: Array<{ id: string; label: string; shape: string; enabled: boolean; detected: boolean }>;
+    } {
+        const config = this._getPlanScannerConfig();
+        const repoRoots = this._getWorkspaceRoots();
+        const presets = PLAN_SCANNER_PRESETS.map((p) => {
+            const detected = p.shape === 'brain'
+                ? this._getAntigravityPlanRoots().some((r) => fs.existsSync(r))
+                : p.globs.some((g) => expandFlatGlob(g.pattern, repoRoots).some((t) => fs.existsSync(t.dir)));
+            return { id: p.id, label: p.label, shape: p.shape, enabled: config.presets[p.id] !== false, detected };
+        });
+        return {
+            enabled: config.enabled,
+            intervalSeconds: config.intervalSeconds,
+            scanSwitchboardPlans: config.scanSwitchboardPlans,
+            customSources: config.customSources,
+            presets,
+        };
+    }
+
+    /** Persist Plan Scanner settings from the setup UI, then restart the scanner. */
+    public async handleSetPlanScannerConfig(payload: any): Promise<void> {
+        const cfg = vscode.workspace.getConfiguration('switchboard.planScanner');
+        const target = vscode.ConfigurationTarget.Workspace;
+        if (typeof payload?.enabled === 'boolean') {
+            await cfg.update('enabled', payload.enabled, target);
+        }
+        if (typeof payload?.intervalSeconds === 'number' && Number.isFinite(payload.intervalSeconds)) {
+            await cfg.update('intervalSeconds', Math.min(300, Math.max(3, Math.round(payload.intervalSeconds))), target);
+        }
+        if (typeof payload?.scanSwitchboardPlans === 'boolean') {
+            await cfg.update('scanSwitchboardPlans', payload.scanSwitchboardPlans, target);
+        }
+        if (payload?.presets && typeof payload.presets === 'object') {
+            for (const preset of PLAN_SCANNER_PRESETS) {
+                if (typeof payload.presets[preset.id] === 'boolean') {
+                    await cfg.update(preset.configKey, payload.presets[preset.id], target);
+                }
+            }
+        }
+        if (Array.isArray(payload?.customSources)) {
+            const clean = payload.customSources
+                .filter((s: any) => s && Array.isArray(s.globs))
+                .map((s: any) => ({
+                    label: String(s.label || '').slice(0, 120),
+                    scope: s.scope === 'workspace' ? 'workspace' : 'global',
+                    globs: s.globs.filter((g: any) => typeof g === 'string' && g.trim()).map((g: string) => g.trim()),
+                }))
+                .filter((s: any) => s.globs.length > 0);
+            await cfg.update('customSources', clean, target);
+        }
+        this.startPlanScanner();
     }
 
     /**
@@ -3515,6 +3583,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
     }
 
+    public handleGetThemeSetting(): string {
+        return vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+    }
+
+    public async handleSetThemeSetting(theme: string): Promise<void> {
+        await vscode.workspace.getConfiguration('switchboard').update('theme.name', theme, vscode.ConfigurationTarget.Workspace);
+    }
+
     private _postSharedWebviewMessage(message: any): void {
         this._view?.webview.postMessage(message);
         this._setupPanelProvider?.postMessage(message);
@@ -3522,6 +3598,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     public broadcastToWebviews(message: any): void {
         this._postSharedWebviewMessage(message);
+        this._kanbanProvider?.postMessage(message);
     }
 
     private async _postSidebarConfigurationState(workspaceRoot?: string): Promise<void> {
@@ -3567,6 +3644,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             type: 'integrationProviderPreference',
             provider: preferredProvider
         });
+
+        this._view.webview.postMessage({
+            type: 'switchboardThemeNameSetting',
+            theme: this.handleGetThemeSetting()
+        });
     }
 
     public async postSetupPanelState(workspaceRoot?: string): Promise<void> {
@@ -3579,6 +3661,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const visibleAgents = await this.getVisibleAgents(workspaceRoot);
         this._setupPanelProvider.postMessage({ type: 'visibleAgents', agents: visibleAgents });
+
+        this._setupPanelProvider.postMessage({
+            type: 'switchboardThemeNameSetting',
+            theme: this.handleGetThemeSetting()
+        });
 
         const [customAgents, customKanbanColumns] = await Promise.all([
             this.getCustomAgents(workspaceRoot),

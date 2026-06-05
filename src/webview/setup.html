@@ -26,6 +26,108 @@
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
 
+        /* Claude Terracotta — warm terracotta accent on professional dark surfaces */
+        body.theme-claude-terracotta {
+            /* Backgrounds */
+            --bg-color: #1A1A1A;          /* Primary Surface — Main editor/Kanban area */
+            --panel-bg: #121212;          /* Sidebar/Panels — Left sidebar and bottom terminal */
+            --panel-bg2: #1A1A1A;         /* Secondary surface */
+            --bg-dim: #1A1A1A;
+
+            /* Primary Accent (Terracotta) — Active tab indicators, progress bar fills, critical state icons */
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E08868;
+            --glow-teal: 0 0 10px color-mix(in srgb, #D97757 50%, transparent);
+
+            /* Secondary/Action (Muted Terracotta) — Primary action buttons (solid fill), hover states for outlined buttons */
+            --accent-green: #A35941;
+            --accent-red: #e05544;
+            --accent-orange: #D97757;
+
+            /* Borders & Outlines */
+            --border-color: #2D2D2D;      /* Section Dividers */
+            --border-bright: #2D2D2D;
+            --border-dim: #2D2D2D;
+
+            /* Typography */
+            --text-primary: #FFFFFF;      /* Headings/Active Text */
+            --text-secondary: #A0A0A0;   /* Secondary/Body Text */
+        }
+        /* Claude Terracotta — button overrides */
+        body.theme-claude-terracotta .action-btn {
+            background: #A35941;          /* Muted Terracotta solid fill */
+            border-color: #A35941;
+            color: #FFFFFF;
+        }
+        body.theme-claude-terracotta .action-btn:hover:not(:disabled) {
+            background: #D97757;          /* Primary Terracotta on hover */
+            border-color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn {
+            border-color: color-mix(in srgb, #D97757 60%, transparent);  /* Ghost style at 60% opacity */
+            color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, #D97757 10%, transparent);
+            border-color: #D97757;
+            color: #FFFFFF;
+        }
+
+        /* Slightly Darker Black — minimalist monochrome with tonal depth and luminance */
+        body.theme-slightly-darker-black {
+            /* Backgrounds */
+            --bg-color: #0A0A0A;          /* Primary Surface — Deepest black for main workspace */
+            --panel-bg: #0A0A0A;          /* Deepest black */
+            --panel-bg2: #141414;         /* Secondary Surface — Slightly lighter for sidebars and terminal panels */
+            --bg-dim: #141414;
+
+            /* Accents (Monochrome) */
+            --accent-teal: #E0E0E0;       /* Active States — Light gray for active tabs/borders */
+            --accent-teal-dim: color-mix(in srgb, #E0E0E0 40%, transparent);
+            --accent-teal-bright: #FFFFFF;
+            --glow-teal: 0 0 10px color-mix(in srgb, #E0E0E0 30%, transparent);
+            --accent-green: #E0E0E0;
+            --accent-red: #ff4444;
+            --accent-orange: #E0E0E0;
+
+            /* Borders & Dividers */
+            --border-color: #1F1F1F;      /* Subtle Dividers */
+            --border-bright: #333333;     /* Interactive Outlines */
+            --border-dim: #1F1F1F;
+
+            /* Typography */
+            --text-primary: #F5F5F5;      /* Primary Text — High contrast */
+            --text-secondary: #666666;    /* De-emphasized Text — Metadata, timestamps, inactive labels */
+        }
+        /* Slightly Darker Black — button overrides */
+        body.theme-slightly-darker-black .action-btn {
+            background: #FFFFFF;          /* White on black for primary CTAs */
+            border-color: #FFFFFF;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .action-btn:hover:not(:disabled) {
+            background: #E0E0E0;
+            border-color: #E0E0E0;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .secondary-btn {
+            border-color: #333333;        /* Interactive Outlines */
+            color: #E0E0E0;
+        }
+        body.theme-slightly-darker-black .secondary-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.05);  /* Semi-transparent white overlay for hover on dark surfaces */
+            border-color: #E0E0E0;
+            color: #F5F5F5;
+        }
+        /* Slightly Darker Black — special hover effects */
+        body.theme-slightly-darker-black .strip-btn:hover:not(:disabled),
+        body.theme-slightly-darker-black .tab-btn:hover,
+        body.theme-slightly-darker-black .db-radio-option:hover,
+        body.theme-slightly-darker-black .db-action-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
         * {
             box-sizing: border-box;
         }
@@ -463,6 +565,7 @@
             <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
             <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
+            <button class="tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
             <button class="tab-btn" data-tab="theme" role="tab" aria-selected="false">Theme</button>
             <button class="tab-btn" data-tab="status-bar" role="tab" aria-selected="false">Status Bar</button>
         </div>
@@ -975,6 +1078,58 @@
                 </div>
             </div>
 
+        <div class="tab-content" id="plan-scanner-fields" data-tab-content="plan-scanner">
+            <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                Automatically detect plans generated by AI IDEs / agents and add them to your board.
+                Runs in the background even when this panel is minimised, unfocused, or closed.
+                Useless for plain VS Code; essential for Antigravity / Cursor / Claude Code / Windsurf-Devin users.
+            </div>
+
+            <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:10px;">
+                <input id="plan-scanner-enabled" type="checkbox" style="width:auto; margin:0;">
+                <span><strong>Enable Plan Scanner</strong></span>
+            </label>
+
+            <div class="db-subsection" style="margin-top:12px;">
+                <div class="subsection-header"><span>Scan Speed</span></div>
+                <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
+                    How often to sweep for new plans. Faster = plans appear sooner; slower = less background work.
+                </div>
+                <select id="plan-scanner-interval" style="width:100%;">
+                    <option value="3">Very Fast (3s)</option>
+                    <option value="5">Fast (5s)</option>
+                    <option value="10">Normal (10s)</option>
+                    <option value="30">Relaxed (30s)</option>
+                    <option value="60">Slow (60s)</option>
+                </select>
+            </div>
+
+            <div class="db-subsection" style="margin-top:12px;">
+                <div class="subsection-header"><span>IDE Presets</span></div>
+                <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
+                    Built-in plan-folder locations per tool. Detected presets are scanned; missing folders are skipped at no cost.
+                </div>
+                <div id="plan-scanner-presets" style="display:flex; flex-direction:column; gap:8px;"></div>
+                <label class="startup-row" style="display:flex; align-items:center; gap:8px; margin-top:10px; border-top:1px solid var(--border-dim); padding-top:10px;">
+                    <input id="plan-scanner-switchboard" type="checkbox" style="width:auto; margin:0;">
+                    <span>This workspace's <code>.switchboard/plans</code> folder</span>
+                </label>
+            </div>
+
+            <div class="db-subsection" style="margin-top:12px;">
+                <div class="subsection-header"><span>Custom Sources</span></div>
+                <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
+                    Point the scanner at any other tool's plan folder. Use <code>~</code> for your home directory and
+                    <code>&lt;repo&gt;</code> for each workspace root. Example: <code>~/.mytool/plans/*.md</code>
+                </div>
+                <div id="plan-scanner-custom-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                <button id="plan-scanner-add-custom" class="secondary-btn" style="margin-top:8px;">+ Add custom source</button>
+            </div>
+
+            <button id="plan-scanner-save" class="action-btn w-full" style="margin-top:14px;">SAVE PLAN SCANNER SETTINGS</button>
+            <div id="plan-scanner-status" style="min-height:16px; color: var(--accent-teal); font-size: 10px; margin-top: 6px;"></div>
+        </div>
+
         <div class="tab-content" id="theme-fields" data-tab-content="theme">
             <div style="font-size: 11px; color: var(--text-secondary); line-height: 1.5; margin-bottom: 12px;">
                 Change the visual look of Switchboard. More themes coming soon for people who don't want to look like they're playing video games at work. More animations coming soon for people who do want to look like they're playing video games at work.
@@ -986,6 +1141,14 @@
                 <label class="db-radio-option">
                     <input type="radio" name="theme-selection" value="afterburner" checked>
                     <span>Afterburner</span>
+                </label>
+                <label class="db-radio-option">
+                    <input type="radio" name="theme-selection" value="claude-terracotta">
+                    <span>Claude Terracotta</span>
+                </label>
+                <label class="db-radio-option">
+                    <input type="radio" name="theme-selection" value="slightly-darker-black">
+                    <span>Slightly Darker Black</span>
                 </label>
             </div>
             <div style="border-top: 1px solid var(--border-dim); margin: 12px 0;"></div>
@@ -1379,6 +1542,7 @@
 
         // Tab State
         let activeTabId = 'setup';
+        let currentSwitchboardTheme = 'afterburner';
 
         // Initialize tabs
         function initTabs() {
@@ -1453,10 +1617,12 @@
                     vscode.postMessage({ type: 'getPlanningSources' });
                     vscode.postMessage({ type: 'getPlanningPanelSyncMode' });
                 },
+                'plan-scanner': () => {
+                    vscode.postMessage({ type: 'getPlanScannerConfig' });
+                },
                 'theme': () => {
                     vscode.postMessage({ type: 'getCyberAnimationDisabledSetting' });
-                    const persistedState = (typeof vscode !== 'undefined' && vscode.getState) ? (vscode.getState() || {}) : {};
-                    const savedTheme = persistedState.selectedTheme || 'afterburner';
+                    const savedTheme = currentSwitchboardTheme || 'afterburner';
                     const themeRadio = document.querySelector(`input[name="theme-selection"][value="${savedTheme}"]`);
                     if (themeRadio) themeRadio.checked = true;
                     const animationSettings = document.getElementById('theme-animation-settings');
@@ -3362,10 +3528,8 @@
                 if (animationSettings) {
                     animationSettings.style.display = e.target.value === 'afterburner' ? '' : 'none';
                 }
-                const currentPersisted = (typeof vscode !== 'undefined' && vscode.getState) ? (vscode.getState() || {}) : {};
-                if (typeof vscode !== 'undefined' && vscode.setState) {
-                    vscode.setState({ ...currentPersisted, selectedTheme: e.target.value });
-                }
+                currentSwitchboardTheme = e.target.value;
+                vscode.postMessage({ type: 'setThemeSetting', theme: e.target.value });
             });
         });
  
@@ -3464,11 +3628,123 @@
                 }
             });
         });
- 
- 
+
+        // ===== Plan Scanner tab =====
+        function renderPlanScannerConfig(config) {
+            const enabledEl = document.getElementById('plan-scanner-enabled');
+            if (enabledEl) enabledEl.checked = config.enabled !== false;
+            const intervalEl = document.getElementById('plan-scanner-interval');
+            if (intervalEl) intervalEl.value = String(config.intervalSeconds || 10);
+            const swEl = document.getElementById('plan-scanner-switchboard');
+            if (swEl) swEl.checked = config.scanSwitchboardPlans !== false;
+
+            const presetsEl = document.getElementById('plan-scanner-presets');
+            if (presetsEl) {
+                presetsEl.innerHTML = '';
+                (config.presets || []).forEach((p) => {
+                    const label = document.createElement('label');
+                    label.className = 'startup-row';
+                    label.style.cssText = 'display:flex; align-items:center; gap:8px;';
+                    const cb = document.createElement('input');
+                    cb.type = 'checkbox';
+                    cb.checked = p.enabled !== false;
+                    cb.style.cssText = 'width:auto; margin:0;';
+                    cb.dataset.presetId = p.id;
+                    cb.className = 'plan-scanner-preset-cb';
+                    const span = document.createElement('span');
+                    const status = p.detected
+                        ? '<span style="color:var(--accent-teal);">detected</span>'
+                        : '<span style="opacity:0.5;">not found</span>';
+                    span.innerHTML = p.label + ' — ' + status;
+                    label.appendChild(cb);
+                    label.appendChild(span);
+                    presetsEl.appendChild(label);
+                });
+            }
+
+            const customEl = document.getElementById('plan-scanner-custom-list');
+            if (customEl) {
+                customEl.innerHTML = '';
+                (config.customSources || []).forEach((src) => addPlanScannerCustomRow(src));
+            }
+        }
+
+        function addPlanScannerCustomRow(src) {
+            src = src || {};
+            const customEl = document.getElementById('plan-scanner-custom-list');
+            if (!customEl) return;
+            const row = document.createElement('div');
+            row.className = 'plan-scanner-custom-row';
+            row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+            const label = document.createElement('input');
+            label.type = 'text'; label.placeholder = 'Label'; label.value = src.label || '';
+            label.className = 'ps-custom-label'; label.style.cssText = 'flex:1; min-width:0;';
+            const scope = document.createElement('select');
+            scope.className = 'ps-custom-scope'; scope.style.cssText = 'width:auto;';
+            ['global', 'workspace'].forEach((s) => {
+                const o = document.createElement('option');
+                o.value = s; o.textContent = s;
+                if ((src.scope || 'global') === s) o.selected = true;
+                scope.appendChild(o);
+            });
+            const globs = document.createElement('input');
+            globs.type = 'text';
+            globs.placeholder = '~/.tool/plans/*.md, <repo>/.tool/plans/*.md';
+            globs.value = Array.isArray(src.globs) ? src.globs.join(', ') : '';
+            globs.className = 'ps-custom-globs'; globs.style.cssText = 'flex:2; min-width:0;';
+            const remove = document.createElement('button');
+            remove.textContent = '✕'; remove.className = 'secondary-btn'; remove.style.cssText = 'padding:2px 8px;';
+            remove.addEventListener('click', () => row.remove());
+            row.appendChild(label); row.appendChild(scope); row.appendChild(globs); row.appendChild(remove);
+            customEl.appendChild(row);
+        }
+
+        function gatherPlanScannerConfig() {
+            const presets = {};
+            document.querySelectorAll('.plan-scanner-preset-cb').forEach((cb) => { presets[cb.dataset.presetId] = cb.checked; });
+            const customSources = [];
+            document.querySelectorAll('.plan-scanner-custom-row').forEach((row) => {
+                const label = (row.querySelector('.ps-custom-label')?.value || '').trim();
+                const scope = row.querySelector('.ps-custom-scope')?.value || 'global';
+                const globs = (row.querySelector('.ps-custom-globs')?.value || '').split(',').map((s) => s.trim()).filter(Boolean);
+                if (globs.length) customSources.push({ label, scope, globs });
+            });
+            return {
+                enabled: !!document.getElementById('plan-scanner-enabled')?.checked,
+                intervalSeconds: parseInt(document.getElementById('plan-scanner-interval')?.value || '10', 10),
+                scanSwitchboardPlans: !!document.getElementById('plan-scanner-switchboard')?.checked,
+                presets,
+                customSources,
+            };
+        }
+
+        document.getElementById('plan-scanner-add-custom')?.addEventListener('click', () => addPlanScannerCustomRow({}));
+        document.getElementById('plan-scanner-save')?.addEventListener('click', () => {
+            vscode.postMessage({ type: 'setPlanScannerConfig', config: gatherPlanScannerConfig() });
+            const status = document.getElementById('plan-scanner-status');
+            if (status) { status.textContent = 'Saved.'; setTimeout(() => { if (status) status.textContent = ''; }, 2000); }
+        });
+
+
         window.addEventListener('message', (event) => {
             const message = event.data;
             switch (message.type) {
+                case 'switchboardThemeNameSetting':
+                case 'switchboardThemeChanged': {
+                    const theme = message.theme || 'afterburner';
+                    currentSwitchboardTheme = theme;
+                    const themeRadio = document.querySelector(`input[name="theme-selection"][value="${theme}"]`);
+                    if (themeRadio) themeRadio.checked = true;
+                    const animationSettings = document.getElementById('theme-animation-settings');
+                    if (animationSettings) {
+                        animationSettings.style.display = theme === 'afterburner' ? '' : 'none';
+                    }
+                    document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+                    if (theme !== 'afterburner') {
+                        document.body.classList.add(`theme-${theme}`);
+                    }
+                    break;
+                }
                 case 'startupCommands': {
                     runSetupHydration(() => {
                         lastStartupCommands = message.commands || {};
@@ -3502,6 +3778,11 @@
                             if (notionCheckbox) notionCheckbox.checked = message.sources.notion !== false;
                             if (localFolderCheckbox) localFolderCheckbox.checked = message.sources['local-folder'] !== false;
                         });
+                    }
+                    break;
+                case 'planScannerConfig':
+                    if (message.config) {
+                        runSetupHydration(() => renderPlanScannerConfig(message.config));
                     }
                     break;
                 case 'globalSettingsEnabled': {

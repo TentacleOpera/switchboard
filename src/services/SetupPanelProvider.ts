@@ -120,6 +120,15 @@ export class SetupPanelProvider implements vscode.Disposable {
 
         try {
             switch (message?.type) {
+                case 'setThemeSetting': {
+                    const theme = typeof message.theme === 'string' ? message.theme : 'afterburner';
+                    await this._taskViewerProvider.handleSetThemeSetting(theme);
+                    // Broadcast to all other active webviews
+                    this._taskViewerProvider.broadcastToWebviews({ type: 'switchboardThemeChanged', theme });
+                    // Also update the setup panel itself
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme });
+                    break;
+                }
                 case 'ready':
                     await this._taskViewerProvider.postSetupPanelState();
                     if (this._pendingSection) {
@@ -489,6 +498,19 @@ export class SetupPanelProvider implements vscode.Disposable {
                     this._panel.webview.postMessage({ type: 'kanbanStructure', items });
                     break;
                 }
+                case 'getPlanScannerConfig':
+                    this._panel.webview.postMessage({
+                        type: 'planScannerConfig',
+                        config: this._taskViewerProvider.handleGetPlanScannerConfig()
+                    });
+                    break;
+                case 'setPlanScannerConfig':
+                    await this._taskViewerProvider.handleSetPlanScannerConfig(message.config || {});
+                    this._panel.webview.postMessage({
+                        type: 'planScannerConfig',
+                        config: this._taskViewerProvider.handleGetPlanScannerConfig()
+                    });
+                    break;
                 case 'getAccurateCodingSetting':
                     this._panel.webview.postMessage({
                         type: 'accurateCodingSetting',

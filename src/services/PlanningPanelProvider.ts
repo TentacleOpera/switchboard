@@ -293,6 +293,10 @@ export class PlanningPanelProvider {
                     const disabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
                     this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled });
                 }
+                if (e.affectsConfiguration('switchboard.theme.name')) {
+                    const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                }
             })
         );
 
@@ -1477,6 +1481,11 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'importPlans': {
+                // Manual "Import Plans": pick unclaimed plans (any age) to add to the board.
+                await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
+                break;
+            }
             case 'fetchKanbanPlans': {
                 const requestId = typeof msg.requestId === 'number' ? msg.requestId : 0;
                 const guardKey = 'kanban-plans';
@@ -2290,6 +2299,8 @@ export class PlanningPanelProvider {
         await this._sendOnlineDocsReady();
         const cyberAnimationDisabled = vscode.workspace.getConfiguration('switchboard').get<boolean>('theme.disableCyberAnimation', false);
         this._panel?.webview.postMessage({ type: 'cyberAnimationSetting', disabled: cyberAnimationDisabled });
+        const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+        this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
     }
 
     private async _handleFetchChildren(workspaceRoot: string, sourceId: string, parentId?: string): Promise<void> {

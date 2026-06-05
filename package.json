@@ -50,6 +50,10 @@
         "command": "switchboard.setup",
         "title": "Switchboard: Setup AI Protocol Files"
       },
+      {
+        "command": "switchboard.importUnclaimedPlans",
+        "title": "Switchboard: Import Plans (pick unclaimed plans from AI IDE folders)"
+      },
 
       {
         "command": "switchboard.createAgentGrid",
@@ -577,6 +581,18 @@
           "type": "boolean",
           "default": false,
           "description": "Disable the animated rolling CRT sweep beam in the Cyber Panel theme."
+        },
+        "switchboard.theme.name": {
+          "type": "string",
+          "enum": ["afterburner", "claude-terracotta", "slightly-darker-black"],
+          "enumDescriptions": [
+            "Afterburner — Default cyberpunk teal theme with scanline effects",
+            "Claude Terracotta — Warm terracotta accent on professional dark surfaces",
+            "Slightly Darker Black — Minimalist monochrome with tonal depth and luminance"
+          ],
+          "default": "afterburner",
+          "description": "Visual theme for Switchboard webviews. Applies to Setup, Kanban, and Planning panels.",
+          "scope": "window"
         }
       }
     },

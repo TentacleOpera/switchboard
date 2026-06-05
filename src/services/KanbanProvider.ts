@@ -269,6 +269,12 @@ export class KanbanProvider implements vscode.Disposable {
         this._context.subscriptions.push(
             vscode.workspace.onDidChangeWorkspaceFolders(() => {
                 this._allWorkspaceProjectsCache = null;
+            }),
+            vscode.workspace.onDidChangeConfiguration(e => {
+                if (e.affectsConfiguration('switchboard.theme.name')) {
+                    const theme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeChanged', theme });
+                }
             })
         );
     }
@@ -4130,6 +4136,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // Initial load: trigger full file→DB sync to ensure DB is populated,
                 // then kanbanProvider.refresh() is called by fullSync after syncing.
                 await vscode.commands.executeCommand('switchboard.fullSync');
+                {
+                    const currentTheme = vscode.workspace.getConfiguration('switchboard').get<string>('theme.name', 'afterburner');
+                    this._panel?.webview.postMessage({ type: 'switchboardThemeNameSetting', theme: currentTheme });
+                }
                 if (this._pendingTab) {
                     this._panel?.webview.postMessage({ type: 'switchToTab', tab: this._pendingTab });
                     this._pendingTab = undefined;

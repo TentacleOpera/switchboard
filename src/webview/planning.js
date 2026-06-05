@@ -154,35 +154,6 @@
 
 
     // Clipboard Import logic
-    const copyAgentPromptBtn = document.getElementById('btn-copy-agent-prompt');
-    const importPlansBtn = document.getElementById('btn-import-plans');
-
-    if (copyAgentPromptBtn) {
-        copyAgentPromptBtn.addEventListener('click', () => {
-            const prompt = `Please output all features/plans as a single markdown block with each plan separated by this exact format:
-
---- PLAN ---
-[plan 1 content here]
-
---- PLAN ---
-[plan 2 content here]
-
---- PLAN ---
-[plan 3 content here]
-
-Each plan should have its own H1 title (# Plan Title) and full content. I will copy the entire block and import it into my planning system which will automatically split it into separate plan files.`;
-            navigator.clipboard.writeText(prompt).then(() => {
-                copyAgentPromptBtn.innerText = 'COPIED';
-                setTimeout(() => { copyAgentPromptBtn.innerText = 'COPY AGENT PROMPT'; }, 2000);
-            });
-        });
-    }
-
-    if (importPlansBtn) {
-        importPlansBtn.addEventListener('click', () => {
-            vscode.postMessage({ type: 'importPlansFromClipboard' });
-        });
-    }
 
     const importResearchDocClipboardBtn = document.getElementById('btn-import-research-doc-clipboard');
 
@@ -1455,8 +1426,38 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     sourceHeader.className = 'folder-subheader source-folder-header';
                     // Browser-safe basename extraction (no Node path module in webview)
                     const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
-                    sourceHeader.textContent = folderName;
                     sourceHeader.title = sourceFolder; // full path as tooltip for disambiguation
+
+                    const labelSpan = document.createElement('span');
+                    labelSpan.textContent = folderName;
+                    sourceHeader.appendChild(labelSpan);
+
+                    const importBtn = document.createElement('button');
+                    importBtn.className = 'folder-import-btn';
+                    importBtn.textContent = 'Import';
+                    importBtn.title = `Import document from clipboard into ${folderName}`;
+                    importBtn.addEventListener('click', (e) => {
+                        e.stopPropagation();
+
+                        // Disable all import buttons during operation
+                        document.querySelectorAll('.folder-import-btn').forEach(btn => {
+                            btn.disabled = true;
+                            btn.textContent = '...';
+                        });
+
+                        const statusEl = document.getElementById('status');
+                        if (statusEl) {
+                            statusEl.style.color = '';
+                            statusEl.textContent = 'Importing from clipboard...';
+                        }
+
+                        vscode.postMessage({
+                            type: 'importResearchDoc',
+                            folderPath: sourceFolder
+                            // No docTitle — backend extracts from H1 or generates timestamp
+                        });
+                    });
+                    sourceHeader.appendChild(importBtn);
                     docList.appendChild(sourceHeader);
 
                     // Within this source folder, apply existing folder-hierarchy grouping
@@ -2097,8 +2098,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
     }
 
-    function handleThemeChanged() {
-        // Handled automatically via CSS variables
+    function handleThemeChanged(theme) {
+        document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+        if (theme && theme !== 'afterburner') {
+            document.body.classList.add(`theme-${theme}`);
+        }
     }
 
     function handleContainersReady(msg) {
@@ -2637,6 +2641,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const docTitleInput = document.getElementById('research-doc-title');
                 const researchStatusEl = document.getElementById('research-import-status');
                 const clipboardStatusEl = document.getElementById('clipboard-import-status');
+                const statusEl = document.getElementById('status');
 
                 const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
 
@@ -2644,6 +2649,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     btnResearchClipboard.disabled = false;
                     btnResearchClipboard.innerText = 'IMPORT FROM CLIPBOARD';
                 }
+
+                // Reset inline folder import buttons
+                document.querySelectorAll('.folder-import-btn').forEach(btn => {
+                    btn.disabled = false;
+                    btn.textContent = 'Import';
+                });
                 
                 if (msg.success) {
                     const successText = `Imported: ${msg.docTitle || 'Research Doc'}`;
@@ -2654,6 +2665,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (clipboardStatusEl) {
                         clipboardStatusEl.style.color = 'var(--accent-teal)';
                         clipboardStatusEl.textContent = successText;
+                    }
+                    if (statusEl) {
+                        statusEl.style.color = 'var(--accent-teal)';
+                        statusEl.textContent = successText;
                     }
                     if (docTitleInput) {
                         docTitleInput.value = '';
@@ -2668,10 +2683,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         clipboardStatusEl.style.color = '#f14c4c';
                         clipboardStatusEl.textContent = errorText;
                     }
+                    if (statusEl) {
+                        statusEl.style.color = '#f14c4c';
+                        statusEl.textContent = errorText;
+                    }
                 }
                 break;
             case 'themeChanged':
                 handleThemeChanged();
+                break;
+            case 'switchboardThemeNameSetting':
+            case 'switchboardThemeChanged':
+                handleThemeChanged(msg.theme);
                 break;
             case 'containersReady':
                 handleContainersReady(msg);
@@ -3182,6 +3205,12 @@ DEPTH: Deep (50-100+ sources)`;
     const kanbanProjectFilter = document.getElementById('kanban-project-filter');
     const kanbanSearch = document.getElementById('kanban-search');
     const kanbanRefreshBtn = document.getElementById('kanban-refresh-btn');
+    const btnImportKanbanPlans = document.getElementById('btn-import-kanban-plans');
+    if (btnImportKanbanPlans) {
+        btnImportKanbanPlans.addEventListener('click', () => {
+            vscode.postMessage({ type: 'importPlans' });
+        });
+    }
     const kanbanListPane = document.getElementById('kanban-list-pane');
     const kanbanPreviewPane = document.getElementById('kanban-preview-pane');
     const kanbanPreviewContent = document.getElementById('kanban-preview-content');
