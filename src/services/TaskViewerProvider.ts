@@ -9778,7 +9778,7 @@ What would you like to find?`;
                             createdAt: p.createdAt,
                             updatedAt: p.updatedAt,
                             status: p.status as PlanRegistryEntry['status'],
-                            project: p.project || undefined,
+                            project: (p.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : p.project) || undefined,
                         });
                     }
 
@@ -9793,7 +9793,7 @@ What would you like to find?`;
                         createdAt: p.createdAt,
                         updatedAt: p.updatedAt,
                         status: p.status as PlanRegistryEntry['status'],
-                        project: p.project || undefined,
+                        project: (p.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : p.project) || undefined,
                     };
                 }
                 this._planRegistry = { version: 1, entries };
@@ -9901,7 +9901,7 @@ What would you like to find?`;
                 tags: existing?.tags || '',
                 dependencies: existing?.dependencies || '',
                 repoScope: existing?.repoScope || '',
-                project: entry.project ?? existing?.project ?? '',
+                project: (entry.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : entry.project) ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -9988,7 +9988,7 @@ What would you like to find?`;
                 tags: insertTags,
                 dependencies: insertDependencies,
                 repoScope: insertRepoScope,
-                project: entry.project ?? existing?.project ?? '',
+                project: (entry.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : entry.project) ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -11838,12 +11838,30 @@ What would you like to find?`;
             // Guard: workspace scoping via registry ownership.
             // New runtime-created plans may auto-claim so they appear immediately in dropdown.
             const eligibility = this._isPlanEligibleForWorkspace(stablePath, resolvedWorkspaceRoot);
+            // Pre-check claim marker for age relaxation (see TOCTOU note in Edge-Case audit).
+            // _tryClaimBrainPlan's atomic wx write remains the authoritative guard.
+            const claimMarkerPath = path.join(path.dirname(baseBrainPath), `.switchboard_claim_${pathHash}.json`);
+            let claimMarkerExists = false;
+            let claimMarkerOwnedByUs = false;
+            try {
+                if (fs.existsSync(claimMarkerPath)) {
+                    claimMarkerExists = true;
+                    const existingClaim = JSON.parse(fs.readFileSync(claimMarkerPath, 'utf8'));
+                    const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
+                    if (existingClaim.workspaceId === wsId) {
+                        claimMarkerOwnedByUs = true;
+                    }
+                }
+            } catch {
+                // ignore — marker may be unreadable or malformed; safe to proceed
+            }
+
             const existingEntry = this._planRegistry.entries[pathHash];
             const isFreshUnregisteredCandidate =
                 !existingEntry &&
                 !runSheetKnown &&
                 !fs.existsSync(mirrorPath) &&
-                (Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS;
+                ((Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS || !claimMarkerExists || claimMarkerOwnedByUs);
 
             // Cross-workspace claim coordination: use an atomic claim marker in the
             // shared brain directory to ensure only one workspace auto-claims a new plan.
@@ -11898,6 +11916,7 @@ What would you like to find?`;
                 const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
                 const now = new Date().toISOString();
                 const activeProject = this._kanbanProvider?.getProjectFilter() ?? undefined;
+                const insertProject = activeProject === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : activeProject;
                 await this._registerPlan(resolvedWorkspaceRoot, {
                     planId: pathHash,
                     ownerWorkspaceId: wsId,
@@ -11905,7 +11924,7 @@ What would you like to find?`;
                     brainSourcePath: baseBrainPath,
                     mirrorPath: mirrorFilename,
                     topic,
-                    project: activeProject,
+                    project: insertProject,
                     createdAt: new Date(fileCreationTimeMs).toISOString(),
                     updatedAt: now,
                     status: 'active'

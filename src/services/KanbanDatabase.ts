@@ -438,6 +438,13 @@ const MIGRATION_V27_SQL = [
     `UPDATE plans SET worktree_status = 'active' WHERE worktree_id IS NOT NULL`,
 ];
 
+// V28: Normalize project sentinel values stored as '__unassigned__' to empty string.
+// The sentinel is a UI filter value that must never appear in the plans.project column.
+const MIGRATION_V28_SQL = [
+    `UPDATE plans SET project = '' WHERE project = '__unassigned__'`,
+];
+
+
 /**
  * Generic plan upsert. On conflict, updates metadata fields and allows the
  * narrow deleted -> active recovery needed when a live local plan file is
@@ -2173,12 +2180,13 @@ export class KanbanDatabase {
         workspaceId: string
     ): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db || planIds.length === 0) return false;
+        const effectiveProjectName = projectName === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectName;
         try {
             this._db.run('BEGIN');
             for (const planId of planIds) {
                 this._db.run(
                     "UPDATE plans SET project = ? WHERE (plan_id = ? OR session_id = ?) AND workspace_id = ?",
-                    [projectName, planId, planId, workspaceId]
+                    [effectiveProjectName, planId, planId, workspaceId]
                 );
             }
             this._db.run('COMMIT');
@@ -3913,6 +3921,19 @@ export class KanbanDatabase {
             await this.setMigrationVersion(27);
             console.log('[KanbanDatabase] V27 migration completed: worktree_status column added');
         }
+
+        // V28: Normalize project sentinel values from '__unassigned__' to ''
+        const v28 = await this.getMigrationVersion();
+        if (v28 < 28) {
+            for (const sql of MIGRATION_V28_SQL) {
+                try { this._db.exec(sql); } catch (e) {
+                    console.debug('[KanbanDatabase] V28 migration step skipped:', e);
+                }
+            }
+            await this.setMigrationVersion(28);
+            console.log('[KanbanDatabase] V28 migration completed: project values normalized from __unassigned__ to empty string');
+        }
+
 
 
     }

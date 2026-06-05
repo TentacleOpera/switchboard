@@ -1919,9 +1919,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     wrapper.dataset.slugPrefix = doc.slugPrefix;
 
                     const icon = document.createElement('span');
+                    icon.className = 'icon';
                     icon.textContent = '📄';
 
                     const label = document.createElement('span');
+                    label.className = 'label';
                     let displayLabel = doc.docName;
                     
                     // Deduplicate parent title if it prefixes the subpage title or if they are exactly identical
