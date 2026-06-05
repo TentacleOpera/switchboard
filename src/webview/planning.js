@@ -1605,12 +1605,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function handlePreviewError(msg) {
         const { sourceId, requestId, error } = msg;
 
-        if (requestId !== state.previewRequestId) return;
+        if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
         // Route html-folder errors to the HTML preview area
         if (sourceId === 'html-folder') {
+            const initialState = document.getElementById('html-initial-state');
             const loadingState = document.getElementById('html-loading-state');
+            const imageContainer = document.getElementById('image-preview-container');
+            if (initialState) initialState.style.display = 'none';
             if (loadingState) loadingState.style.display = 'none';
+            if (imageContainer) imageContainer.style.display = 'none';
 
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
