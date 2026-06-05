@@ -4144,9 +4144,9 @@
         function getAllInColumn(col) {
             if (col === 'CODED_AUTO') {
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
-                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.sessionId || c.planId || '').filter(Boolean);
+                return currentCards.filter(c => CODED_IDS.includes(c.column)).map(c => c.planId || c.sessionId || '').filter(Boolean);
             }
-            return currentCards.filter(c => c.column === col).map(c => c.sessionId || c.planId || '').filter(Boolean);
+            return currentCards.filter(c => c.column === col).map(c => c.planId || c.sessionId || '').filter(Boolean);
         }
 
         function escapeAttr(value) {
@@ -4806,7 +4806,7 @@
             currentCards = cards;
             // Prune stale selectedCards entries so ASSIGN count and merge buttons stay accurate
             // when cards disappear from the board (deletion, workspace/project filter change)
-            const cardIds = new Set(cards.map(c => c.sessionId || c.planId).filter(Boolean));
+            const cardIds = new Set(cards.map(c => c.planId || c.sessionId).filter(Boolean));
             for (const key of selectedCards.keys()) {
                 const val = selectedCards.get(key);
                 const cardWorkspaceRoot = val && typeof val === 'object' ? val.workspaceRoot : val;
@@ -5016,6 +5016,7 @@
                     postKanbanMessage({
                         type: 'executeMerge',
                         sessionId: btn.dataset.session || '',
+                        planId: btn.dataset.planId || '',
                         rule: lastWorktreeDefaultMergeStrategy || 'squash',
                         workspaceRoot: currentWorkspaceRoot
                     });
@@ -5167,7 +5168,7 @@
             if (isCompleted) {
                 primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
             } else if (card.column === 'MERGE') {
-                primaryActionBtn = `<button class="card-btn merge-action-btn" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Execute Git Merge">Merge</button>`;
+                primaryActionBtn = `<button class="card-btn merge-action-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Execute Git Merge">Merge</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
@@ -5739,7 +5740,7 @@
                         const tgtCount = document.getElementById('count-' + targetColumn);
                         if (tgtCount) tgtCount.textContent = String(parseInt(tgtCount.textContent) + 1);
                     }
-                    postKanbanMessage({ type: 'completePlan', sessionId: id, workspaceRoot: card?.workspaceRoot || workspaceRoot });
+                    postKanbanMessage({ type: 'completePlan', sessionId: card?.sessionId || '', planId: card?.planId || id, workspaceRoot: card?.workspaceRoot || workspaceRoot });
                 });
                 forwardIds.length = 0;
             }
