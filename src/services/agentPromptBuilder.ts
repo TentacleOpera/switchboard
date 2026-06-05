@@ -137,6 +137,10 @@ export interface PromptBuilderOptions {
     workflowFilePathEnabled?: boolean;
     /** Path to the workflow file for non-planner roles. */
     workflowFilePath?: string;
+    /** The research topic for draft-research-prompt mode */
+    researchTopic?: string;
+    /** The research context for draft-research-prompt mode */
+    researchContext?: string;
 }
 
 export function resolveBaseInstructions(
@@ -742,6 +746,23 @@ For each plan:
     }
 
     if (role === 'analyst') {
+        if (options?.instruction === 'draft-research-prompt') {
+            const topic = options.researchTopic || '';
+            const context = options.researchContext || '';
+            const depth = options.researchDepth || 'standard';
+            const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
+            const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
+            
+            const promptParts = [
+                `Read .agent/skills/draft_research_prompt.md and follow it step-by-step. Invoke skill: "draft_research_prompt".`,
+                `PARAMETERS:\n- Topic: ${topic}\n- Context: ${context}\n- Depth: ${depth}`,
+                focusBlock,
+                gitBlock
+            ].filter(Boolean).join('\n\n');
+            
+            return normalizeNewlines(promptParts);
+        }
+
         let baseInstructions = resolveBaseInstructions('analyst', '', options);
         if (cavemanOutputEnabled) {
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;

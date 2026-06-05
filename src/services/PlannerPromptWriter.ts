@@ -55,14 +55,22 @@ export class PlannerPromptWriter {
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
+        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const localFolderService = this._options.getLocalFolderService(workspaceRoot);
         const folderPaths = localFolderService.getFolderPaths();
         if (folderPaths.length === 0) {
             throw new Error("No local docs folder configured. Add a folder in the LOCAL DOCS tab before importing.");
         }
-        const docsDir = folderPaths[0];
+        let docsDir: string;
+        if (options.targetFolder) {
+            if (!folderPaths.includes(options.targetFolder)) {
+                throw new Error(`Target folder "${options.targetFolder}" is not a configured local docs folder.`);
+            }
+            docsDir = options.targetFolder;
+        } else {
+            docsDir = folderPaths[0];
+        }
 
         // Generate collision-resistant filename
         const rawSlug = (docTitle || sourceId)
@@ -147,7 +155,7 @@ export class PlannerPromptWriter {
         content: string,
         docTitle: string,
         sourceId: string,
-        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string } = {}
+        options: { skipDesignDocLink?: boolean; pageOrder?: number; parentDocName?: string; targetFolder?: string } = {}
     ): Promise<{ success?: boolean; error?: string; source?: string; savedPath?: string; message?: string }> {
         const resolvedRoot = path.resolve(workspaceRoot);
         const existingWrite = this._writeQueue.get(resolvedRoot);

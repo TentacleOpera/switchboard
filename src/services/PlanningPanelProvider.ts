@@ -1171,7 +1171,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'importResearchDoc': {
-                await this._handleImportResearchDoc(workspaceRoot, msg.docTitle);
+                await this._handleImportResearchDoc(workspaceRoot, msg.docTitle, msg.folderPath);
                 break;
             }
             case 'airlock_export': {
@@ -1344,6 +1344,44 @@ export class PlanningPanelProvider {
                 } catch (err) {
                     this._panel?.webview.postMessage({
                         type: 'sendToAnalystResult',
+                        success: false,
+                        error: String(err)
+                    });
+                }
+                break;
+            }
+            case 'draftResearchPrompt': {
+                const { topic, context, depth } = msg;
+                if (!topic) {
+                    this._panel?.webview.postMessage({
+                        type: 'draftResearchPromptResult',
+                        success: false,
+                        error: 'No topic provided'
+                    });
+                    break;
+                }
+                try {
+                    // Build the analyst prompt via the prompt builder
+                    const { buildKanbanBatchPrompt } = require('./agentPromptBuilder');
+                    const analystPrompt = buildKanbanBatchPrompt('analyst', [], {
+                        instruction: 'draft-research-prompt',
+                        researchTopic: topic,
+                        researchContext: context || '',
+                        researchDepth: depth || 'standard',
+                        switchboardSafeguardsEnabled: false
+                    });
+                    const result = await vscode.commands.executeCommand<{ success: boolean; error?: string }>(
+                        'switchboard.sendToAnalystFromPlanningPanel',
+                        analystPrompt
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'draftResearchPromptResult',
+                        success: result?.success ?? false,
+                        error: result?.error
+                    });
+                } catch (err) {
+                    this._panel?.webview.postMessage({
+                        type: 'draftResearchPromptResult',
                         success: false,
                         error: String(err)
                     });
@@ -2912,7 +2950,7 @@ export class PlanningPanelProvider {
         await vscode.commands.executeCommand('switchboard.importPlanFromClipboard');
     }
 
-    private async _handleImportResearchDoc(workspaceRoot: string, docTitle?: string): Promise<void> {
+    private async _handleImportResearchDoc(workspaceRoot: string, docTitle?: string, folderPath?: string): Promise<void> {
         if (this._importInProgress) {
             this._panel?.webview.postMessage({ type: 'importResearchDocResult', error: 'Import already in progress' });
             return;
@@ -2947,7 +2985,7 @@ export class PlanningPanelProvider {
                 content,
                 finalDocTitle,
                 'research-clipboard',
-                { skipDesignDocLink: true }
+                { skipDesignDocLink: true, targetFolder: folderPath }
             );
 
             this._lastPanelWriteTimestamp = Date.now();

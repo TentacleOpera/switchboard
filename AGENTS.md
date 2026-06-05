@@ -87,6 +87,7 @@ Skills provide specialized capabilities and domain knowledge. Invoke with `skill
 | `linear_api` | Direct Linear API access via LocalApiServer proxy (replaces call_linear_api) |
 | `web_research` | User asks to "research X", "investigate Y", or needs authoritative sources |
 | `deep_planning` | User requests complex code changes requiring architecture understanding |
+| `draft_research_prompt` | User asks to "draft a research prompt", "create AI Studio prompt", or needs a research prompt for external AI tools |
 
 **Usage**: Call `skill: "archive"` before performing archive operations to access detailed tool documentation and examples.
 

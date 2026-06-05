@@ -194,9 +194,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             clipboardStatusEl.textContent = 'Import in progress...';
         }
 
+        const folderSelect = document.getElementById('research-destination-folder');
+        const folderPath = folderSelect ? folderSelect.value : undefined;
+
         vscode.postMessage({
             type: 'importResearchDoc',
-            docTitle: docTitle || undefined
+            docTitle: docTitle || undefined,
+            folderPath: folderPath || undefined
         });
     };
 
@@ -231,18 +235,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
-    // Research Tab: Send to Analyst Button
-    const sendToAnalystBtn = document.getElementById('btn-send-to-analyst');
-    if (sendToAnalystBtn) {
-        sendToAnalystBtn.addEventListener('click', () => {
-            const prompt = generateResearchPrompt();
+    // Research Tab: Draft with Analyst Agent Button
+    const draftWithAnalystBtn = document.getElementById('btn-draft-with-analyst');
+    if (draftWithAnalystBtn) {
+        draftWithAnalystBtn.addEventListener('click', () => {
+            const topic = document.getElementById('research-prompt-input')?.value.trim() || '';
+            const context = document.getElementById('research-context-input')?.value.trim() || '';
+            const depthSelect = document.getElementById('research-depth');
+            const depth = depthSelect ? depthSelect.value : 'standard';
+
             vscode.postMessage({
-                type: 'sendToAnalyst',
-                prompt: prompt
+                type: 'draftResearchPrompt',
+                topic: topic,
+                context: context,
+                depth: depth
             });
-            sendToAnalystBtn.innerText = 'SENT';
+            draftWithAnalystBtn.innerText = 'SENT';
             setTimeout(() => {
-                if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
+                if (draftWithAnalystBtn) draftWithAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
             }, 2000);
         });
     }
@@ -2213,6 +2223,16 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.localFolderPaths = msg.paths || [];
                 renderFolderList(state.localFolderPaths);
                 renderFolderListModal();
+                const folderSelect = document.getElementById('research-destination-folder');
+                if (folderSelect) {
+                    folderSelect.innerHTML = '';
+                    (msg.paths || []).forEach(p => {
+                        const opt = document.createElement('option');
+                        opt.value = p;
+                        opt.textContent = p.split('/').pop() || p;
+                        folderSelect.appendChild(opt);
+                    });
+                }
                 break;
             case 'htmlFoldersListed':
                 state.htmlFolderPaths = msg.paths || [];
@@ -2291,7 +2311,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     statusEl.textContent = `Failed to delete: ${msg.error || 'Unknown error'}`;
                 }
                 break;
-            case 'analystAvailabilityResult':
+            case 'analystAvailabilityResult': {
                 const analystBtn = document.getElementById('btn-send-to-analyst');
                 if (analystBtn) {
                     analystBtn.disabled = !msg.available;
@@ -2301,7 +2321,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         analystBtn.removeAttribute('title');
                     }
                 }
+                const draftAnalystBtn = document.getElementById('btn-draft-with-analyst');
+                if (draftAnalystBtn) {
+                    draftAnalystBtn.disabled = !msg.available;
+                    if (!msg.available) {
+                        draftAnalystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
+                    } else {
+                        draftAnalystBtn.removeAttribute('title');
+                    }
+                }
                 break;
+            }
             case 'sendToAnalystResult': {
                 const sendToAnalystBtn = document.getElementById('btn-send-to-analyst');
                 if (sendToAnalystBtn) {
@@ -2315,6 +2345,24 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         console.error('[Research] Failed to send to analyst:', msg.error);
                         setTimeout(() => {
                             if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
+                        }, 2000);
+                    }
+                }
+                break;
+            }
+            case 'draftResearchPromptResult': {
+                const draftAnalystBtn = document.getElementById('btn-draft-with-analyst');
+                if (draftAnalystBtn) {
+                    if (msg.success) {
+                        draftAnalystBtn.innerText = 'SENT';
+                        setTimeout(() => {
+                            if (draftAnalystBtn) draftAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
+                        }, 2000);
+                    } else {
+                        draftAnalystBtn.innerText = 'FAILED';
+                        console.error('[Research] Failed to draft prompt with analyst:', msg.error);
+                        setTimeout(() => {
+                            if (draftAnalystBtn) draftAnalystBtn.innerText = 'DRAFT WITH ANALYST AGENT';
                         }, 2000);
                     }
                 }
@@ -2565,13 +2613,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     // Research Tab: Prompt Generation Functions
     function generateResearchPrompt() {
-        const complexityInput = document.querySelector('input[name="complexity"]:checked');
-        const importToggle = document.getElementById('import-toggle');
+        const depthInput = document.getElementById('research-depth');
         const promptInput = document.getElementById('research-prompt-input');
         const contextInput = document.getElementById('research-context-input');
 
-        const complexity = complexityInput ? complexityInput.value : 'quick';
-        const importEnabled = importToggle ? importToggle.checked : false;
+        const complexity = depthInput ? depthInput.value : 'quick';
         const customPrompt = promptInput ? promptInput.value.trim() : '';
         const contextValue = contextInput ? contextInput.value.trim() : '';
 
