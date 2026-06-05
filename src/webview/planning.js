@@ -21,13 +21,15 @@
         researchMode: persistedState.researchMode || 'web',
         localFolderPaths: [],
         htmlFolderPaths: [],
+        designFolderPaths: persistedState.designFolderPaths || [],
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
+        designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
-        editMode: { local: false, kanban: false },
-        editOriginalContent: { local: null, kanban: null },
-        dirtyFlags: { local: false, kanban: false },
-        externalChangePending: { local: false, kanban: false },
+        editMode: { local: false, kanban: false, design: false },
+        editOriginalContent: { local: null, kanban: null, design: null },
+        dirtyFlags: { local: false, kanban: false, design: false },
+        externalChangePending: { local: false, kanban: false, design: false },
         reviewMode: { kanban: false },
         kanbanReviewSelectedText: ''
     };
@@ -48,13 +50,14 @@
         if (toggleBtn) {
             toggleBtn.textContent = collapsed ? '»' : '«';
         }
-    }
-
-    function toggleSidebarCollapsed() {
+    }     function toggleSidebarCollapsed() {
         const activeTab = getActiveTabName();
         if (activeTab === 'html-preview') {
             state.htmlPreviewCollapsed = !state.htmlPreviewCollapsed;
             applySidebarState('html-preview', state.htmlPreviewCollapsed);
+        } else if (activeTab === 'design') {
+            state.designPreviewCollapsed = !state.designPreviewCollapsed;
+            applySidebarState('design', state.designPreviewCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
             // Apply to local and research tabs (they share the same collapsed state)
@@ -68,7 +71,8 @@
         vscode.setState({
             ...currentPersisted,
             docsListCollapsed: state.docsListCollapsed,
-            htmlPreviewCollapsed: state.htmlPreviewCollapsed
+            htmlPreviewCollapsed: state.htmlPreviewCollapsed,
+            designPreviewCollapsed: state.designPreviewCollapsed
         });
     }
 
@@ -76,6 +80,7 @@
     applySidebarState('local', state.docsListCollapsed);
     applySidebarState('research', state.docsListCollapsed);
     applySidebarState('online', state.docsListCollapsed);
+    applySidebarState('design', state.designPreviewCollapsed);
     applySidebarState('html-preview', state.htmlPreviewCollapsed);
 
     // Bind sidebar toggle listeners
@@ -104,6 +109,12 @@
                 }
                 exitEditMode('kanban', true);
             }
+            if (state.dirtyFlags.design && tabName !== 'design') {
+                if (!confirm('You have unsaved changes in Design System. Discard them?')) {
+                    return;
+                }
+                exitEditMode('design', true);
+            }
 
             // If in edit mode but not dirty, auto-exit to clear editor state cleanly
             if (state.editMode.local && tabName !== 'local') {
@@ -111,6 +122,9 @@
             }
             if (state.editMode.kanban && tabName !== 'kanban') {
                 exitEditMode('kanban', true);
+            }
+            if (state.editMode.design && tabName !== 'design') {
+                exitEditMode('design', true);
             }
             if (state.reviewMode.kanban && tabName !== 'kanban') {
                 exitReviewMode('kanban', true);
@@ -125,6 +139,8 @@
             // Apply correct sidebar state for the newly active tab
             if (tabName === 'html-preview') {
                 applySidebarState('html-preview', state.htmlPreviewCollapsed);
+            } else if (tabName === 'design') {
+                applySidebarState('design', state.designPreviewCollapsed);
             } else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
                 applySidebarState(tabName, state.docsListCollapsed);
             }
@@ -535,50 +551,150 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return html;
     }
 
+    function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler, deleteHandler, syncHandler, extraClass }) {
+        const wrapper = document.createElement('div');
+        wrapper.className = 'tree-node' + (extraClass ? ' ' + extraClass : '');
+        if (isSelected) {
+            wrapper.classList.add('selected');
+        }
+        wrapper.dataset.sourceId = sourceId || '';
+        wrapper.dataset.nodeId = nodeId || '';
+        wrapper.dataset.docId = nodeId || '';
+        wrapper.dataset.kind = 'document';
+        wrapper.dataset.name = title;
+        if (nodeMetadata) {
+            if (nodeMetadata.root) {
+                wrapper.dataset.root = nodeMetadata.root;
+            }
+            if (nodeMetadata.sourceFolder) {
+                wrapper.dataset.sourceFolder = nodeMetadata.sourceFolder;
+            }
+            if (nodeMetadata.absolutePath) {
+                wrapper.dataset.absolutePath = nodeMetadata.absolutePath;
+            }
+        }
+
+        const cardText = document.createElement('div');
+        cardText.className = 'card-text';
+
+        const cardTitle = document.createElement('div');
+        cardTitle.className = 'card-title';
+        cardTitle.textContent = title;
+        cardText.appendChild(cardTitle);
+
+        if (subtitle && subtitle !== title) {
+            const cardSubtitle = document.createElement('div');
+            cardSubtitle.className = 'card-subtitle';
+            cardSubtitle.textContent = subtitle;
+            cardText.appendChild(cardSubtitle);
+        }
+
+        wrapper.appendChild(cardText);
+
+        if (actions && actions.length > 0) {
+            const cardActions = document.createElement('div');
+            cardActions.className = 'card-actions';
+
+            actions.forEach(action => {
+                const btn = document.createElement('button');
+                btn.className = 'planning-card-btn';
+                btn.textContent = action;
+
+                btn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    if (action === 'Set Context') {
+                        vscode.postMessage({
+                            type: 'appendToPlannerPrompt',
+                            sourceId: sourceId,
+                            docId: nodeId,
+                            docName: title,
+                            sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
+                        });
+                    } else if (action === 'Link Doc') {
+                        vscode.postMessage({
+                            type: 'linkToDocument',
+                            sourceId: sourceId,
+                            docId: nodeId,
+                            docName: title,
+                            sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
+                        });
+                    } else if (action === 'Copy Path') {
+                        if (nodeMetadata && nodeMetadata.absolutePath) {
+                            navigator.clipboard.writeText(nodeMetadata.absolutePath);
+                        }
+                    } else if (action === 'Delete') {
+                        if (deleteHandler) {
+                            deleteHandler(btn);
+                        }
+                    } else if (action === 'Sync') {
+                        if (syncHandler) {
+                            syncHandler(btn);
+                        }
+                    } else if (action === 'Import') {
+                        vscode.postMessage({
+                            type: 'importFullDoc',
+                            sourceId: sourceId,
+                            docId: nodeId,
+                            docName: title
+                        });
+                    }
+                });
+
+                cardActions.appendChild(btn);
+            });
+
+            wrapper.appendChild(cardActions);
+        }
+
+        if (clickHandler) {
+            wrapper.addEventListener('click', (e) => {
+                clickHandler(wrapper, e);
+            });
+        }
+
+        return wrapper;
+    }
+
     function renderNode(node, sourceId, depth = 0) {
-        let deleteBtnRef = null;
         const container = document.createElement('div');
         container.className = 'tree-node-container';
         container.style.marginLeft = `${depth * 16}px`;
-
-        const wrapper = document.createElement('div');
-        wrapper.className = 'tree-node';
-        wrapper.dataset.sourceId = sourceId;
-        wrapper.dataset.nodeId = node.id;
-        wrapper.dataset.kind = node.kind || '';
-        wrapper.dataset.name = node.name;
-        if (node.metadata) {
-            if (node.metadata.root) {
-                wrapper.dataset.root = node.metadata.root;
-            }
-            if (node.metadata.sourceFolder) {
-                wrapper.dataset.sourceFolder = node.metadata.sourceFolder;
-            }
-        }
-
-        const icon = document.createElement('span');
-        icon.className = 'icon';
-        let fileIcon = '📄';
-        if (sourceId === 'html-folder') {
-            const name = (node.name || '').toLowerCase();
-            const imageExts = ['.png', '.jpg', '.jpeg', '.gif', '.svg'];
-            fileIcon = imageExts.some(ext => name.endsWith(ext)) ? '🖼️' : '🌐';
-        }
-        icon.textContent = (node.kind === 'folder' || node.isDirectory) ? '📁' : fileIcon;
-
-        const label = document.createElement('span');
-        label.className = 'label';
-        label.textContent = node.name;
 
         const childContainer = document.createElement('div');
         childContainer.className = 'tree-children';
         childContainer.style.display = 'none';
 
         if (node.kind === 'folder' || node.isDirectory) {
+            const wrapper = document.createElement('div');
+            wrapper.className = 'tree-node';
+            wrapper.dataset.sourceId = sourceId;
+            wrapper.dataset.nodeId = node.id;
+            wrapper.dataset.kind = node.kind || '';
+            wrapper.dataset.name = node.name;
+            if (node.metadata) {
+                if (node.metadata.root) {
+                    wrapper.dataset.root = node.metadata.root;
+                }
+                if (node.metadata.sourceFolder) {
+                    wrapper.dataset.sourceFolder = node.metadata.sourceFolder;
+                }
+            }
+
+            const icon = document.createElement('span');
+            icon.className = 'icon';
+            icon.textContent = '▶';
+
+            const label = document.createElement('span');
+            label.className = 'label';
+            label.textContent = node.name;
+
+            wrapper.appendChild(icon);
+            wrapper.appendChild(label);
+
             if (node.hasChildren) {
                 wrapper.addEventListener('click', () => {
                     const isExpanded = childContainer.style.display !== 'none';
-                    icon.textContent = isExpanded ? '📁' : '📂';
+                    icon.textContent = isExpanded ? '▶' : '▼';
                     childContainer.style.display = isExpanded ? 'none' : 'block';
 
                     if (!isExpanded && !childContainer.dataset.loaded) {
@@ -592,22 +708,38 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 });
             }
+            container.appendChild(wrapper);
+            container.appendChild(childContainer);
         } else {
-            // Documents & Pages - no tree view, subpages shown in preview as flat TOC
-            wrapper.addEventListener('click', () => {
-                loadDocumentPreview(sourceId, node.id, node.name);
-            });
-
-            // Add delete button only for local-folder documents
+            let actions = [];
+            let iconEmoji = '';
             if (sourceId === 'local-folder') {
-                const deleteBtn = document.createElement('button');
-                deleteBtn.className = 'doc-delete-btn';
-                deleteBtn.innerHTML = '×';
-                deleteBtn.title = 'Move to trash';
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    deleteBtn.disabled = true;
-                    deleteBtn.textContent = '…';
+                actions = ['Set Context', 'Link Doc', 'Copy Path', 'Delete'];
+            } else if (sourceId === 'design-folder') {
+                actions = ['Set Context', 'Link Doc', 'Copy Path'];
+                const ext = (node.name || '').substring((node.name || '').lastIndexOf('.')).toLowerCase();
+                const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+                iconEmoji = isImage ? '🖼️ ' : '📄 ';
+            } else if (sourceId === 'html-folder') {
+                actions = ['Copy Path'];
+            } else {
+                actions = ['Import', 'Link Doc'];
+            }
+
+            const cardWrapper = renderDocCard({
+                title: iconEmoji + (node.title || node.name),
+                subtitle: (node.title && node.title !== node.name) ? node.name : undefined,
+                sourceId,
+                nodeId: node.id,
+                nodeMetadata: node.metadata,
+                actions,
+                isSelected: state.activeSource === sourceId && state.activeDocId === node.id,
+                clickHandler: (wrapper) => {
+                    loadDocumentPreview(sourceId, node.id, node.name);
+                },
+                deleteHandler: (btn) => {
+                    btn.disabled = true;
+                    btn.textContent = '…';
                     vscode.postMessage({
                         type: 'deleteLocalDoc',
                         docId: node.id,
@@ -615,19 +747,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         workspaceRoot: node.metadata ? node.metadata.root : undefined,
                         sourceFolder: node.metadata ? node.metadata.sourceFolder : undefined
                     });
-                });
-                deleteBtnRef = deleteBtn;
-            }
+                }
+            });
+            container.appendChild(cardWrapper);
         }
-
-        wrapper.appendChild(icon);
-        wrapper.appendChild(label);
-        if (deleteBtnRef) {
-            wrapper.appendChild(deleteBtnRef);
-        }
-        
-        container.appendChild(wrapper);
-        container.appendChild(childContainer);
 
         return { wrapper: container, childContainer };
     }
@@ -660,6 +783,62 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (loadingState) loadingState.style.display = 'flex';
             if (previewFrame) previewFrame.style.display = 'none';
             if (imageContainer) imageContainer.style.display = 'none';
+
+            vscode.postMessage({
+                type: 'fetchPreview',
+                sourceId,
+                docId,
+                requestId: state.previewRequestId,
+                sourceFolder
+            });
+            return;
+        }
+        if (sourceId === 'design-folder') {
+            if (state.dirtyFlags.design) {
+                if (!confirm('You have unsaved changes in Design System. Discard them?')) {
+                    return;
+                }
+                exitEditMode('design', true);
+            }
+
+            if (state.selectedEl) {
+                state.selectedEl.classList.remove('selected');
+            }
+            const wrapper = findTreeNode(sourceId, docId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+            if (wrapper) {
+                wrapper.classList.add('selected');
+                state.selectedEl = wrapper;
+            }
+            state.activeSource = sourceId;
+            state.activeDocId = docId;
+            state.activeDocName = docName;
+            state.previewRequestId++;
+
+            const statusDesign = document.getElementById('status-design');
+            if (statusDesign) {
+                statusDesign.textContent = 'Loading...';
+            }
+            const previewDesign = document.getElementById('markdown-preview-design');
+            if (previewDesign) {
+                previewDesign.innerHTML = '<div class="empty-state">Loading preview...</div>';
+                previewDesign.style.display = 'block';
+            }
+            const imageContainerDesign = document.getElementById('image-preview-container-design');
+            if (imageContainerDesign) {
+                imageContainerDesign.style.display = 'none';
+            }
+
+            const btnSetDesign = document.getElementById('btn-set-active-context-design');
+            if (btnSetDesign) btnSetDesign.disabled = false;
+            const btnLinkDesign = document.getElementById('btn-link-to-doc-design');
+            if (btnLinkDesign) btnLinkDesign.disabled = false;
+            const btnEditDesign = document.getElementById('btn-edit-design');
+            if (btnEditDesign) {
+                const ext = docId.substring(docId.lastIndexOf('.')).toLowerCase();
+                const isImage = ['.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+                btnEditDesign.disabled = isImage;
+            }
 
             vscode.postMessage({
                 type: 'fetchPreview',
@@ -1020,6 +1199,173 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    function renderDesignFolderListModal() {
+        const folderListModal = document.getElementById('design-folder-list-modal');
+        if (!folderListModal) return;
+        folderListModal.innerHTML = '';
+
+        const folderPaths = state.designFolderPaths || [];
+
+        if (folderPaths.length === 0) {
+            const empty = document.createElement('div');
+            empty.className = 'folder-list-empty';
+            empty.textContent = 'No folders configured. Click Add Folder to get started.';
+            folderListModal.appendChild(empty);
+            return;
+        }
+
+        folderPaths.forEach(path => {
+            const row = document.createElement('div');
+            row.className = 'folder-list-item';
+
+            const pathSpan = document.createElement('span');
+            pathSpan.className = 'folder-path';
+            pathSpan.textContent = path;
+            pathSpan.title = path;
+
+            const removeBtn = document.createElement('button');
+            removeBtn.className = 'folder-list-remove-btn';
+            removeBtn.textContent = 'Remove';
+            removeBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                vscode.postMessage({ type: 'removeDesignFolder', folderPath: path });
+            });
+
+            row.appendChild(pathSpan);
+            row.appendChild(removeBtn);
+            folderListModal.appendChild(row);
+        });
+    }
+
+    function renderDesignDocs(rootEntry) {
+        const { sourceId, nodes, folderPaths } = rootEntry;
+        const treePaneDesign = document.getElementById('tree-pane-design');
+        if (!treePaneDesign) return;
+
+        treePaneDesign.innerHTML = '';
+
+        // Re-add sidebar toggle
+        const toggleRow = document.createElement('div');
+        toggleRow.className = 'sidebar-toggle-row';
+
+        const foldersBtn = document.createElement('button');
+        foldersBtn.className = 'sidebar-folders-btn';
+        foldersBtn.title = 'Manage Folders';
+        foldersBtn.textContent = 'Manage Folders';
+        foldersBtn.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-design');
+            if (modal) {
+                modal.style.display = 'flex';
+                renderDesignFolderListModal();
+                vscode.postMessage({ type: 'listDesignFolders' });
+            }
+        });
+
+        const toggleBtn = document.createElement('button');
+        toggleBtn.className = 'sidebar-toggle-btn';
+        toggleBtn.title = 'Toggle sidebar';
+        toggleBtn.textContent = state.designPreviewCollapsed ? '»' : '«';
+        toggleBtn.addEventListener('click', toggleSidebarCollapsed);
+
+        toggleRow.appendChild(foldersBtn);
+        toggleRow.appendChild(toggleBtn);
+        treePaneDesign.appendChild(toggleRow);
+
+        const docList = document.createElement('div');
+        docList.className = 'source-doc-list';
+        docList.dataset.sourceId = sourceId;
+        treePaneDesign.appendChild(docList);
+
+        if (!nodes || nodes.length === 0) {
+            docList.innerHTML = '<div class="empty-state" style="padding: 12px; font-size: 12px; color: var(--text-secondary);">No design system folders configured or folders are empty. Click Manage Folders to get started.</div>';
+            return;
+        }
+
+        const folderNodes = (nodes || []).filter(n => n.kind === 'folder');
+        const docNodes = (nodes || []).filter(n => n.kind === 'document');
+
+        // Group nodes by sourceFolder
+        const docsBySourceFolder = new Map();
+        const foldersBySourceFolder = new Map();
+
+        docNodes.forEach(d => {
+            const sourceFolder = d.metadata?.sourceFolder;
+            if (!sourceFolder) return;
+            if (!docsBySourceFolder.has(sourceFolder)) {
+                docsBySourceFolder.set(sourceFolder, []);
+            }
+            docsBySourceFolder.get(sourceFolder).push(d);
+        });
+
+        folderNodes.forEach(f => {
+            const sourceFolder = f.metadata?.sourceFolder;
+            if (!sourceFolder) return;
+            if (!foldersBySourceFolder.has(sourceFolder)) {
+                foldersBySourceFolder.set(sourceFolder, []);
+            }
+            foldersBySourceFolder.get(sourceFolder).push(f);
+        });
+
+        const sourceFolders = [...new Set([
+            ...(folderPaths || []),
+            ...docsBySourceFolder.keys()
+        ])];
+
+        sourceFolders.forEach(sourceFolder => {
+            const folderDocs = docsBySourceFolder.get(sourceFolder) || [];
+            const sourceFolderNodes = foldersBySourceFolder.get(sourceFolder) || [];
+
+            if (folderDocs.length === 0 && sourceFolderNodes.length === 0) return;
+
+            const sourceHeader = document.createElement('div');
+            sourceHeader.className = 'folder-subheader source-folder-header';
+            const folderName = sourceFolder.split(/[\\/]/).filter(Boolean).pop() || sourceFolder;
+            sourceHeader.textContent = folderName;
+            sourceHeader.title = sourceFolder;
+            docList.appendChild(sourceHeader);
+
+            const folderNameMap = new Map();
+            sourceFolderNodes.forEach(f => folderNameMap.set(f.id, f.name));
+
+            const docsByFolder = new Map();
+            const rootDocs = [];
+            folderDocs.forEach(d => {
+                const docPath = d.id || d.relativePath || '';
+                const lastSlashIdx = docPath.lastIndexOf('/');
+                const parentFolderId = lastSlashIdx > 0 ? docPath.substring(0, lastSlashIdx) : null;
+
+                if (parentFolderId && folderNameMap.has(parentFolderId)) {
+                    if (!docsByFolder.has(parentFolderId)) {
+                        docsByFolder.set(parentFolderId, []);
+                    }
+                    docsByFolder.get(parentFolderId).push(d);
+                } else {
+                    rootDocs.push(d);
+                }
+            });
+
+            sourceFolderNodes.forEach(folder => {
+                const folderDocsInSource = docsByFolder.get(folder.id) || [];
+                if (folderDocsInSource.length === 0) return;
+
+                const subheader = document.createElement('div');
+                subheader.className = 'folder-subheader';
+                subheader.textContent = folder.name;
+                docList.appendChild(subheader);
+
+                folderDocsInSource.forEach(doc => {
+                    const { wrapper } = renderNode(doc, sourceId);
+                    docList.appendChild(wrapper);
+                });
+            });
+
+            rootDocs.forEach(doc => {
+                const { wrapper } = renderNode(doc, sourceId);
+                docList.appendChild(wrapper);
+            });
+        });
+    }
+
     function renderLocalDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
         
@@ -1202,58 +1548,66 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             empty.textContent = 'No sessions found in brain directory';
             section.appendChild(empty);
         } else {
-            for (const session of sessions) {
-                // Session row (collapsed header) — use textContent to prevent XSS from filesystem filenames
-                const sessionRow = document.createElement('div');
-                sessionRow.className = 'tree-node folder-subheader';
+            // Sort sessions by timestamp descending (most recent first)
+            const sortedSessions = [...sessions].sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
 
-                const sessionIcon = document.createElement('span');
-                sessionIcon.className = 'icon';
-                sessionIcon.textContent = '🧠';
+            // Group sessions by date
+            const groups = new Map();
+            for (const session of sortedSessions) {
+                const dateKey = new Date(session.timestamp).toLocaleDateString(undefined, { year: 'numeric', month: 'long', day: 'numeric' });
+                if (!groups.has(dateKey)) groups.set(dateKey, []);
+                groups.get(dateKey).push(session);
+            }
 
-                const sessionLabel = document.createElement('span');
-                sessionLabel.className = 'label';
-                sessionLabel.textContent = session.name + '…';
+            // Render groups
+            for (const [dateKey, dateSessions] of groups) {
+                const dateHeader = document.createElement('div');
+                dateHeader.className = 'antigravity-date-subheader';
+                dateHeader.textContent = dateKey;
+                section.appendChild(dateHeader);
 
-                const sessionTs = document.createElement('span');
-                sessionTs.className = 'antigravity-session-ts';
-                sessionTs.textContent = new Date(session.timestamp).toLocaleDateString();
+                for (const session of dateSessions) {
+                    const sessionRow = document.createElement('div');
+                    sessionRow.className = 'tree-node folder-subheader';
 
-                sessionRow.appendChild(sessionIcon);
-                sessionRow.appendChild(sessionLabel);
-                sessionRow.appendChild(sessionTs);
-                section.appendChild(sessionRow);
+                    const sessionLabel = document.createElement('span');
+                    sessionLabel.className = 'label';
+                    sessionLabel.textContent = 'Session: ' + session.name + '…';
 
-                // Artifact rows under each session
-                for (const artifact of session.artifacts) {
-                    const artifactRow = document.createElement('div');
-                    artifactRow.className = 'tree-node antigravity-artifact-node';
-                    artifactRow.dataset.artifactPath = artifact.id;
+                    const sessionTs = document.createElement('span');
+                    sessionTs.className = 'antigravity-session-ts';
+                    sessionTs.textContent = new Date(session.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
-                    const artifactIcon = document.createElement('span');
-                    artifactIcon.className = 'icon';
-                    artifactIcon.textContent = '📄';
+                    sessionRow.appendChild(sessionLabel);
+                    sessionRow.appendChild(sessionTs);
+                    section.appendChild(sessionRow);
 
-                    const artifactLabel = document.createElement('span');
-                    artifactLabel.className = 'label';
-                    artifactLabel.textContent = artifact.name;
-
-                    artifactRow.appendChild(artifactIcon);
-                    artifactRow.appendChild(artifactLabel);
-                    artifactRow.addEventListener('click', () => {
-                        document.querySelectorAll('.tree-node.selected').forEach(n => n.classList.remove('selected'));
-                        artifactRow.classList.add('selected');
-                        // Track active state so buttons (Set as Active Context, etc.) work
-                        state.activeSource = 'antigravity';
-                        state.activeDocId = artifact.id;
-                        state.activeDocName = artifact.name;
-                        vscode.postMessage({
-                            type: 'fetchAntigravityArtifact',
-                            artifactPath: artifact.id,
-                            requestId: ++state.previewRequestId
+                    // Artifact rows under each session
+                    for (const artifact of session.artifacts) {
+                        const artifactCard = renderDocCard({
+                            title: artifact.name,
+                            subtitle: undefined,
+                            sourceId: 'antigravity',
+                            nodeId: artifact.id,
+                            nodeMetadata: { absolutePath: artifact.id },
+                            actions: ['Set Context', 'Link Doc', 'Copy Path'],
+                            isSelected: state.activeSource === 'antigravity' && state.activeDocId === artifact.id,
+                            clickHandler: (cardWrapper, e) => {
+                                document.querySelectorAll('.tree-node.selected').forEach(n => n.classList.remove('selected'));
+                                cardWrapper.classList.add('selected');
+                                state.activeSource = 'antigravity';
+                                state.activeDocId = artifact.id;
+                                state.activeDocName = artifact.name;
+                                vscode.postMessage({
+                                    type: 'fetchAntigravityArtifact',
+                                    artifactPath: artifact.id,
+                                    requestId: ++state.previewRequestId
+                                });
+                            },
+                            extraClass: 'antigravity-artifact-node'
                         });
-                    });
-                    section.appendChild(artifactRow);
+                        section.appendChild(artifactCard);
+                    }
                 }
             }
         }
@@ -1449,6 +1803,63 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return;
         }
 
+        if (sourceId === 'design-folder') {
+            if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
+
+            state.activeDocFilePath = filePath || null;
+
+            const mdPrev = document.getElementById('markdown-preview-design');
+            const mdEd = document.getElementById('markdown-editor-design');
+            const imgCont = document.getElementById('image-preview-container-design');
+            const imgImg = document.getElementById('image-preview-img-design');
+            const statusDesign = document.getElementById('status-design');
+
+            const btnSetDesign = document.getElementById('btn-set-active-context-design');
+            const btnLinkDesign = document.getElementById('btn-link-to-doc-design');
+            const btnEditDesign = document.getElementById('btn-edit-design');
+
+            if (isImage && webviewUri) {
+                if (mdPrev) mdPrev.style.display = 'none';
+                if (mdEd) mdEd.style.display = 'none';
+                if (imgCont) imgCont.style.display = 'flex';
+                if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
+                if (btnEditDesign) btnEditDesign.disabled = true;
+            } else {
+                if (imgCont) imgCont.style.display = 'none';
+                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
+                if (mdPrev && !state.editMode.design) mdPrev.style.display = 'block';
+
+                state.activeDocContent = content || '';
+                if (mdEd) mdEd.value = content || '';
+                if (mdPrev) mdPrev.innerHTML = renderMarkdown(content || '');
+                if (btnEditDesign) btnEditDesign.disabled = false;
+            }
+
+            if (btnSetDesign) btnSetDesign.disabled = false;
+            if (btnLinkDesign) btnLinkDesign.disabled = false;
+
+            if (isAutoRefreshed) {
+                if (state.editMode.design) {
+                    state.externalChangePending.design = true;
+                    if (statusDesign) {
+                        statusDesign.textContent = 'File changed externally — save to overwrite or cancel to reload';
+                        statusDesign.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                    }
+                    return;
+                }
+                if (statusDesign) {
+                    statusDesign.textContent = (docName || 'Loaded') + ' — auto-refreshed';
+                    statusDesign.style.color = 'var(--accent-teal)';
+                }
+            } else {
+                if (statusDesign) {
+                    statusDesign.textContent = docName || 'Loaded';
+                    statusDesign.style.color = '';
+                }
+            }
+            return;
+        }
+
         // Auto-refresh notification
         if (isAutoRefreshed) {
             if (state.editMode.local) {
@@ -1626,6 +2037,23 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 iframe.style.display = '';
                 iframe.removeAttribute('src');  // Clear any src-based navigation
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
+            }
+            return;
+        }
+
+        if (sourceId === 'design-folder') {
+            const statusDesign = document.getElementById('status-design');
+            if (statusDesign) {
+                statusDesign.textContent = 'Error: ' + error;
+                statusDesign.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+            }
+            const previewDesign = document.getElementById('markdown-preview-design');
+            if (previewDesign) {
+                previewDesign.innerHTML = `<div class="empty-state" style="color:var(--vscode-errorForeground, #ff6b6b)">Error: ${error}</div>`;
+            }
+            const imageContainerDesign = document.getElementById('image-preview-container-design');
+            if (imageContainerDesign) {
+                imageContainerDesign.style.display = 'none';
             }
             return;
         }
@@ -1966,19 +2394,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         canSync: doc.canSync
                     });
 
-                    // Manually create doc item with same structure as renderNode
-                    const wrapper = document.createElement('div');
-                    wrapper.className = 'tree-node';
-                    wrapper.dataset.sourceId = doc.sourceId || 'local-folder';
-                    wrapper.dataset.docId = doc.slugPrefix;
-                    wrapper.dataset.slugPrefix = doc.slugPrefix;
-
-                    const icon = document.createElement('span');
-                    icon.className = 'icon';
-                    icon.textContent = '📄';
-
-                    const label = document.createElement('span');
-                    label.className = 'label';
                     let displayLabel = doc.docName;
                     
                     // Deduplicate parent title if it prefixes the subpage title or if they are exactly identical
@@ -1995,52 +2410,59 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             }
                         }
                     }
-                    
-                    label.textContent = displayLabel;
-                    label.title = doc.docName; // Hover shows the full original title
 
-                    // Add delete button for imported docs
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.className = 'doc-delete-btn';
-                    deleteBtn.innerHTML = '×';
-                    deleteBtn.title = 'Delete imported document';
-                    deleteBtn.addEventListener('click', (e) => {
-                        e.stopPropagation();
-                        deleteBtn.disabled = true;
-                        deleteBtn.textContent = '…';
-                        vscode.postMessage({
-                            type: 'deleteImportedDoc',
-                            slugPrefix: doc.slugPrefix,
-                            docName: doc.docName
-                        });
-                    });
+                    const actions = ['Set Context', 'Link Doc'];
+                    if (doc.canSync) {
+                        actions.push('Sync');
+                    }
+                    actions.push('Delete');
 
-                    wrapper.appendChild(icon);
-                    wrapper.appendChild(label);
-                    wrapper.appendChild(deleteBtn);
+                    const wrapper = renderDocCard({
+                        title: displayLabel,
+                        subtitle: (doc.slugPrefix && doc.slugPrefix !== displayLabel) ? doc.slugPrefix : undefined,
+                        sourceId: doc.sourceId || 'local-folder',
+                        nodeId: doc.slugPrefix,
+                        nodeMetadata: null,
+                        actions,
+                        isSelected: state.selectedEl && state.selectedEl.dataset.docId === doc.slugPrefix,
+                        clickHandler: (cardWrapper, e) => {
+                            e.stopPropagation();
 
-                    // Add click handler to load preview from docs directory
-                    wrapper.addEventListener('click', (e) => {
-                        e.stopPropagation();
+                            // Apply selection highlighting
+                            if (state.selectedEl) {
+                                state.selectedEl.classList.remove('selected');
+                            }
+                            cardWrapper.classList.add('selected');
+                            state.selectedEl = cardWrapper;
 
-                        // Apply selection highlighting
-                        if (state.selectedEl) {
-                            state.selectedEl.classList.remove('selected');
+                            state.activeSource = doc.sourceId || 'local-folder';
+                            state.activeDocId = doc.slugPrefix;
+                            state.activeDocName = doc.docName;
+                            state.previewRequestId++;
+
+                            // Send message to load file from docs directory
+                            vscode.postMessage({
+                                type: 'fetchDocsFile',
+                                slugPrefix: doc.slugPrefix,
+                                requestId: state.previewRequestId
+                            });
+                        },
+                        deleteHandler: (btn) => {
+                            btn.disabled = true;
+                            btn.textContent = '…';
+                            vscode.postMessage({
+                                type: 'deleteImportedDoc',
+                                slugPrefix: doc.slugPrefix,
+                                docName: doc.docName
+                            });
+                        },
+                        syncHandler: (btn) => {
+                            btn.disabled = true;
+                            vscode.postMessage({
+                                type: 'syncToSource',
+                                slugPrefix: doc.slugPrefix
+                            });
                         }
-                        wrapper.classList.add('selected');
-                        state.selectedEl = wrapper;
-
-                        state.activeSource = doc.sourceId || 'local-folder';
-                        state.activeDocId = doc.slugPrefix;
-                        state.activeDocName = doc.docName;
-                        state.previewRequestId++;
-
-                        // Send message to load file from docs directory
-                        vscode.postMessage({
-                            type: 'fetchDocsFile',
-                            slugPrefix: doc.slugPrefix,
-                            requestId: state.previewRequestId
-                        });
                     });
 
                     importedDocsContainer.appendChild(wrapper);
@@ -2150,6 +2572,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 break;
             case 'htmlDocsReady':
                 handleHtmlDocsReady(msg);
+                break;
+            case 'designDocsReady':
+                state.designFolderPaths = msg.folderPaths || [];
+                renderDesignDocs(msg);
                 break;
             case 'onlineDocsReady':
                 handleOnlineDocsReady(msg);
@@ -2306,6 +2732,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 state.htmlFolderPaths = msg.paths || [];
                 renderHtmlFolderListModal();
                 break;
+            case 'designFoldersListed':
+                state.designFolderPaths = msg.paths || [];
+                renderDesignFolderListModal();
+                break;
             case 'airlock_exportComplete':
                 handleAirlockExportComplete(msg);
                 break;
@@ -2411,7 +2841,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             }
             case 'saveFileContentResult': {
                 const { success, conflict, diskContent, error, tab } = msg;
-                const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 'kanban-editor');
+                const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
                 
                 if (success) {
                     if (tab === 'local') {
@@ -2423,6 +2853,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             statusLocal.textContent = 'Saved successfully';
                             statusLocal.style.color = 'var(--accent-teal)';
                             setTimeout(() => { statusLocal.textContent = ''; statusLocal.style.color = ''; }, 2000);
+                        }
+                    } else if (tab === 'design') {
+                        state.activeDocContent = textarea.value;
+                        exitEditMode('design', true);
+                        const mdPrevDesign = document.getElementById('markdown-preview-design');
+                        if (mdPrevDesign) {
+                            mdPrevDesign.innerHTML = renderMarkdown(state.activeDocContent);
+                        }
+                        const statusDesign = document.getElementById('status-design');
+                        if (statusDesign) {
+                            statusDesign.textContent = 'Saved successfully';
+                            statusDesign.style.color = 'var(--accent-teal)';
+                            setTimeout(() => { statusDesign.textContent = ''; statusDesign.style.color = ''; }, 2000);
                         }
                     } else {
                         state.editOriginalContent.kanban = textarea.value;
@@ -2447,7 +2890,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 } else if (conflict) {
                     const overwrite = confirm('Save Conflict! The file has been modified on disk by another process. Overwrite disk changes with your edits? (Click Cancel to reload from disk instead)');
                     if (overwrite) {
-                        const filePath = tab === 'local' ? state.activeDocFilePath : (_kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null);
+                        const filePath = (tab === 'local' || tab === 'design') ? state.activeDocFilePath : (_kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null);
                         vscode.postMessage({
                             type: 'saveFileContent',
                             filePath,
@@ -2461,6 +2904,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             textarea.value = diskContent;
                             state.editOriginalContent.local = diskContent;
                             state.dirtyFlags.local = false;
+                        } else if (tab === 'design') {
+                            state.activeDocContent = diskContent;
+                            textarea.value = diskContent;
+                            state.editOriginalContent.design = diskContent;
+                            state.dirtyFlags.design = false;
                         } else {
                             state.editOriginalContent.kanban = diskContent;
                             textarea.value = diskContent;
@@ -2497,6 +2945,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             bannerOnline.classList.toggle('inactive', !isActive);
             if (nameOnline) nameOnline.textContent = docName;
         }
+        const bannerDesign = document.getElementById('active-doc-banner-design');
+        const nameDesign = document.getElementById('active-doc-name-design');
+        if (bannerDesign) {
+            bannerDesign.classList.toggle('inactive', !isActive);
+            if (nameDesign) nameDesign.textContent = docName;
+        }
     }
 
     function handleDisableDesignDoc() {
@@ -2508,6 +2962,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
     if (btnDisableDocOnline) {
         btnDisableDocOnline.addEventListener('click', handleDisableDesignDoc);
+    }
+    const btnDisableDocDesign = document.getElementById('btn-disable-doc-design');
+    if (btnDisableDocDesign) {
+        btnDisableDocDesign.addEventListener('click', handleDisableDesignDoc);
     }
 
     // Button handlers
@@ -3276,15 +3734,15 @@ DEPTH: Deep (50-100+ sources)`;
         if (tab === 'kanban' && state.reviewMode.kanban) {
             exitReviewMode('kanban', true);
         }
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
-        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : 'kanban-editor');
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
+        const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
         
         if (!previewPane || !textarea) return;
         
         let content = '';
-        if (tab === 'local') {
+        if (tab === 'local' || tab === 'design') {
             content = state.activeDocContent || '';
-            state.editOriginalContent.local = content;
+            state.editOriginalContent[tab] = content;
         } else {
             content = state.editOriginalContent.kanban || '';
         }
@@ -3292,9 +3750,9 @@ DEPTH: Deep (50-100+ sources)`;
         textarea.value = content;
         previewPane.classList.add('edit-mode');
         
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
         
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
@@ -3311,14 +3769,14 @@ DEPTH: Deep (50-100+ sources)`;
             }
         }
         
-        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : document.getElementById('kanban-preview-pane');
+        const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
         
-        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : 'btn-edit-kanban');
-        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : 'btn-save-kanban');
-        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : 'btn-cancel-kanban');
+        const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
+        const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
+        const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
         
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
@@ -3337,14 +3795,15 @@ DEPTH: Deep (50-100+ sources)`;
                     filePath: _kanbanSelectedPlan.planFile,
                     requestId: _kanbanPreviewRequestId
                 });
-            } else if (tab === 'local') {
-                if (state.activeSource === 'local-folder' || state.activeSource === 'html-folder') {
+            } else if (tab === 'local' || tab === 'design') {
+                if (state.activeSource === 'local-folder' || state.activeSource === 'html-folder' || state.activeSource === 'design-folder') {
+                    const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
                     vscode.postMessage({
                         type: 'fetchPreview',
                         sourceId: state.activeSource,
                         docId: state.activeDocId,
                         requestId: ++state.previewRequestId,
-                        sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, state.activeDocFilePath.lastIndexOf('/')) : undefined
+                        sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, lastSlash) : undefined
                     });
                 } else {
                     vscode.postMessage({
@@ -3428,6 +3887,78 @@ DEPTH: Deep (50-100+ sources)`;
         setupTextareaTabInterceptor(kanbanEditor);
     }
 
+    const btnEditDesign = document.getElementById('btn-edit-design');
+    const btnSaveDesign = document.getElementById('btn-save-design');
+    const btnCancelDesign = document.getElementById('btn-cancel-design');
+    const markdownEditorDesign = document.getElementById('markdown-editor-design');
+
+    if (btnEditDesign) {
+        btnEditDesign.addEventListener('click', () => enterEditMode('design'));
+    }
+    if (btnSaveDesign) {
+        btnSaveDesign.addEventListener('click', () => {
+            const filePath = state.activeDocFilePath;
+            const content = markdownEditorDesign ? markdownEditorDesign.value : '';
+            const originalContent = state.editOriginalContent.design;
+            if (filePath) {
+                vscode.postMessage({
+                    type: 'saveFileContent',
+                    filePath,
+                    content,
+                    originalContent,
+                    tab: 'design'
+                });
+            }
+        });
+    }
+    if (btnCancelDesign) {
+        btnCancelDesign.addEventListener('click', () => exitEditMode('design', false));
+    }
+    if (markdownEditorDesign) {
+        markdownEditorDesign.addEventListener('input', () => {
+            state.dirtyFlags.design = true;
+        });
+        setupTextareaTabInterceptor(markdownEditorDesign);
+    }
+
+    const btnSetActiveDesign = document.getElementById('btn-set-active-context-design');
+    if (btnSetActiveDesign) {
+        btnSetActiveDesign.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            btnSetActiveDesign.disabled = true;
+            const statusDesign = document.getElementById('status-design');
+            if (statusDesign) {
+                statusDesign.textContent = 'Setting as active planning context...';
+                statusDesign.style.color = '';
+            }
+            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+            vscode.postMessage({
+                type: 'setActivePlanningContext',
+                sourceId: state.activeSource,
+                docId: state.activeDocId,
+                docName: state.activeDocName || state.activeDocId,
+                sourceFolder
+            });
+        });
+    }
+
+    const btnLinkToDesign = document.getElementById('btn-link-to-doc-design');
+    if (btnLinkToDesign) {
+        btnLinkToDesign.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+            const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+            vscode.postMessage({
+                type: 'linkToDocument',
+                sourceId: state.activeSource,
+                docId: state.activeDocId,
+                docName: state.activeDocName || state.activeDocId,
+                sourceFolder
+            });
+        });
+    }
+
     // Folder modal open logic
     function openFoldersModal() {
         const modal = document.getElementById('folder-modal');
@@ -3466,6 +3997,10 @@ DEPTH: Deep (50-100+ sources)`;
             const modalHtml = document.getElementById('folder-modal-html');
             if (modalHtml && modalHtml.style.display !== 'none') {
                 modalHtml.style.display = 'none';
+            }
+            const modalDesign = document.getElementById('folder-modal-design');
+            if (modalDesign && modalDesign.style.display !== 'none') {
+                modalDesign.style.display = 'none';
             }
         }
     });
@@ -3518,7 +4053,56 @@ DEPTH: Deep (50-100+ sources)`;
         });
     }
 
+    // Design Folder modal close (X button)
+    const btnCloseDesignFolderModal = document.getElementById('btn-close-design-folder-modal');
+    if (btnCloseDesignFolderModal) {
+        btnCloseDesignFolderModal.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-design');
+            if (modal) modal.style.display = 'none';
+        });
+    }
+
+    // Design Folder modal close (backdrop click)
+    const folderModalDesign = document.getElementById('folder-modal-design');
+    if (folderModalDesign) {
+        folderModalDesign.addEventListener('click', (e) => {
+            if (e.target.id === 'folder-modal-design') {
+                e.target.style.display = 'none';
+            }
+        });
+    }
+
+    // Modal Design folder management buttons
+    const btnRefreshDesignFoldersModal = document.getElementById('btn-refresh-design-folders-modal');
+    if (btnRefreshDesignFoldersModal) {
+        btnRefreshDesignFoldersModal.addEventListener('click', () => {
+            vscode.postMessage({ type: 'refreshSource', sourceId: 'design-folder' });
+        });
+    }
+
+    const btnAddDesignFolderModal = document.getElementById('btn-add-design-folder-modal');
+    if (btnAddDesignFolderModal) {
+        btnAddDesignFolderModal.addEventListener('click', () => {
+            vscode.postMessage({ type: 'addDesignFolder' });
+        });
+    }
+
+    // Manage design folders button in design content strip
+    const btnManageDesignFolders = document.getElementById('btn-manage-design-folders');
+    if (btnManageDesignFolders) {
+        btnManageDesignFolders.addEventListener('click', () => {
+            const modal = document.getElementById('folder-modal-design');
+            if (modal) {
+                modal.style.display = 'flex';
+                renderDesignFolderListModal();
+                vscode.postMessage({ type: 'listDesignFolders' });
+            }
+        });
+    }
+
     vscode.postMessage({ type: 'fetchRoots' });
     vscode.postMessage({ type: 'listHtmlFolders' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
+    vscode.postMessage({ type: 'listDesignFolders' });
+    vscode.postMessage({ type: 'refreshSource', sourceId: 'design-folder' });
 })();

@@ -1847,6 +1847,8 @@
                         aria-label="Toggle plan mode">ACTIVE</button>
                     <button id="btn-delete-plan" class="icon-btn delete" title="Delete active plan"
                         aria-label="Delete plan">DELETE</button>
+                    <button id="btn-import-plans" class="icon-btn" title="Scan configured AI IDE folders and pick unclaimed plans to add (any age)"
+                        aria-label="Import plans">IMPORT</button>
                 </div>
             </div>
             <div class="dropdown-container">
@@ -2237,6 +2239,13 @@
                 const sessionId = runSheetSelect ? runSheetSelect.value : null;
                 if (!sessionId) return;
                 vscode.postMessage({ type: 'deletePlan', sessionId });
+            });
+        }
+
+        const btnImportPlans = document.getElementById('btn-import-plans');
+        if (btnImportPlans) {
+            btnImportPlans.addEventListener('click', () => {
+                vscode.postMessage({ type: 'importPlans' });
             });
         }
 

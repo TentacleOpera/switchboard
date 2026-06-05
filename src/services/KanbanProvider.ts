@@ -4170,6 +4170,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // "Sync Board" button: same full sync path.
                 await vscode.commands.executeCommand('switchboard.fullSync');
                 break;
+            case 'importPlans':
+                // Manual "Import plans": pick unclaimed plans (any age) to add to the board.
+                await vscode.commands.executeCommand('switchboard.importUnclaimedPlans');
+                break;
             case 'reassignPlansWorkspace': {
                 const sessionIds: string[] = msg.sessionIds;
                 const targetWorkspaceRoot: string = msg.targetWorkspaceRoot;

@@ -17,6 +17,7 @@ export class LocalFolderService {
 
     private static readonly _EXCLUDED_DIRS = new Set(['node_modules', '.git', '.switchboard']);
     private static readonly _MAX_DEPTH = 10;
+    private static readonly _TITLE_EXTRACTION_FILE_LIMIT = 200;
     private static readonly _ANTIGRAVITY_BRAIN_PATHS = [
         path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain'),
         path.join(os.homedir(), '.gemini', 'antigravity-ide', 'brain'),
@@ -154,6 +155,7 @@ export class LocalFolderService {
         isFolder?: boolean;
         parentId?: string;
         sourceFolder: string;
+        title?: string;
     }>> {
         const folderPaths = this.getFolderPaths();
         if (folderPaths.length === 0) { return []; }
@@ -165,6 +167,7 @@ export class LocalFolderService {
             isFolder?: boolean;
             parentId?: string;
             sourceFolder: string;
+            title?: string;
         }> = [];
 
         const seenAbsolutePaths = new Set<string>();
@@ -192,6 +195,7 @@ export class LocalFolderService {
             isFolder?: boolean;
             parentId?: string;
             sourceFolder: string;
+            title?: string;
         }>,
         parentId: string | null,
         folderIndex: number,
@@ -243,6 +247,23 @@ export class LocalFolderService {
                     parentId: parentIdVal,
                     sourceFolder: root
                 });
+                if (results.length <= LocalFolderService._TITLE_EXTRACTION_FILE_LIMIT) {
+                    try {
+                        const buf = Buffer.alloc(1000);
+                        const fd = await fs.promises.open(fullPath, 'r');
+                        const { bytesRead } = await fd.read(buf, 0, 1000, 0);
+                        await fd.close();
+                        const head = buf.toString('utf8', 0, bytesRead);
+                        // Extract first # Heading or frontmatter title/topic
+                        const fmMatch = head.match(/^---\s*\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m) ||
+                                        head.match(/^---\s*\n[\s\S]*?^topic:\s*["']?(.+?)["']?\s*$/m);
+                        const h1Match = head.match(/^#\s+(.+)$/m);
+                        const extractedTitle = fmMatch ? fmMatch[1].trim() : h1Match ? h1Match[1].trim() : undefined;
+                        if (extractedTitle) {
+                            results[results.length - 1].title = extractedTitle;
+                        }
+                    } catch { /* title extraction failure is non-critical */ }
+                }
             }
         }
 
@@ -296,6 +317,7 @@ export class LocalFolderService {
         isFolder?: boolean;
         parentId?: string;
         sourceFolder: string;
+        title?: string;
     }>> {
         const folderPaths = this.getHtmlFolderPaths();
         if (folderPaths.length === 0) { return []; }
@@ -307,6 +329,7 @@ export class LocalFolderService {
             isFolder?: boolean;
             parentId?: string;
             sourceFolder: string;
+            title?: string;
         }> = [];
 
         const seenAbsolutePaths = new Set<string>();
@@ -334,6 +357,7 @@ export class LocalFolderService {
             isFolder?: boolean;
             parentId?: string;
             sourceFolder: string;
+            title?: string;
         }>,
         parentId: string | null,
         folderIndex: number,
@@ -385,6 +409,20 @@ export class LocalFolderService {
                     parentId: parentIdVal,
                     sourceFolder: root
                 });
+                const ext = path.extname(entry.name).toLowerCase();
+                if (['.html', '.htm'].includes(ext)) {
+                    try {
+                        const buf = Buffer.alloc(1000);
+                        const fd = await fs.promises.open(fullPath, 'r');
+                        const { bytesRead } = await fd.read(buf, 0, 1000, 0);
+                        await fd.close();
+                        const head = buf.toString('utf8', 0, bytesRead);
+                        const titleMatch = head.match(/<title[^>]*>([^<]+)<\/title>/i);
+                        if (titleMatch && titleMatch[1].trim()) {
+                            results[results.length - 1].title = titleMatch[1].trim();
+                        }
+                    } catch { /* title extraction failure is non-critical */ }
+                }
             }
         }
 
@@ -394,6 +432,171 @@ export class LocalFolderService {
     private _isHtmlOrImageFile(filename: string): boolean {
         const ext = path.extname(filename).toLowerCase();
         return ['.html', '.htm', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+    }
+
+    getDesignFolderPaths(): string[] {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const paths = config.get<string[]>('research.designFolderPaths', []);
+        const seen = new Set<string>();
+        return paths
+            .map(p => this.resolveFolderPath(p))
+            .filter(p => p && !seen.has(p) && seen.add(p) as unknown as boolean);
+    }
+
+    getDesignFolderPath(): string {
+        const paths = this.getDesignFolderPaths();
+        return paths[0] ?? '';
+    }
+
+    async addDesignFolderPath(folderPath: string): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const currentPaths = config.get<string[]>('research.designFolderPaths', []);
+        const resolvedInput = this.resolveFolderPath(folderPath);
+        
+        const isDuplicate = currentPaths.some(p => this.resolveFolderPath(p) === resolvedInput);
+        if (!isDuplicate) {
+            const newPaths = [...currentPaths, folderPath];
+            await config.update('research.designFolderPaths', newPaths, this._getConfigurationTarget());
+        }
+    }
+
+    async removeDesignFolderPath(folderPath: string): Promise<void> {
+        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const currentPaths = config.get<string[]>('research.designFolderPaths', []);
+        const resolvedToRemove = this.resolveFolderPath(folderPath);
+        
+        const newPaths = currentPaths.filter(p => this.resolveFolderPath(p) !== resolvedToRemove);
+        await config.update('research.designFolderPaths', newPaths, this._getConfigurationTarget());
+    }
+
+    async listDesignFiles(): Promise<Array<{
+        id: string;
+        name: string;
+        relativePath: string;
+        isFolder?: boolean;
+        parentId?: string;
+        sourceFolder: string;
+        title?: string;
+    }>> {
+        const folderPaths = this.getDesignFolderPaths();
+        if (folderPaths.length === 0) { return []; }
+
+        const items: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }> = [];
+
+        const seenAbsolutePaths = new Set<string>();
+
+        for (let i = 0; i < folderPaths.length; i++) {
+            const folderPath = folderPaths[i];
+            try {
+                const stat = await fs.promises.stat(folderPath);
+                if (!stat.isDirectory()) { continue; }
+            } catch { continue; }
+
+            await this._scanDesignFolder(folderPath, folderPath, items, null, i, seenAbsolutePaths, 0);
+        }
+
+        return items;
+    }
+
+    private async _scanDesignFolder(
+        root: string,
+        current: string,
+        results: Array<{
+            id: string;
+            name: string;
+            relativePath: string;
+            isFolder?: boolean;
+            parentId?: string;
+            sourceFolder: string;
+            title?: string;
+        }>,
+        parentId: string | null,
+        folderIndex: number,
+        seenAbsolutePaths: Set<string>,
+        depth: number = 0
+    ): Promise<void> {
+        if (depth >= LocalFolderService._MAX_DEPTH) { return; }
+
+        let entries: fs.Dirent[];
+        try {
+            entries = await fs.promises.readdir(current, { withFileTypes: true });
+        } catch { return; }
+
+        const subfolderScans: Promise<void>[] = [];
+
+        for (const entry of entries) {
+            if (entry.name.startsWith('.')) { continue; }
+            if (entry.isSymbolicLink()) { continue; }
+            if (entry.isDirectory() && LocalFolderService._EXCLUDED_DIRS.has(entry.name)) { continue; }
+
+            const fullPath = path.join(current, entry.name);
+            const resolvedPath = path.resolve(fullPath);
+
+            if (seenAbsolutePaths.has(resolvedPath)) { continue; }
+            seenAbsolutePaths.add(resolvedPath);
+
+            const relativePath = path.relative(root, fullPath);
+            const id = `${folderIndex}:${relativePath}`;
+            const parentIdVal = parentId ? `${folderIndex}:${parentId}` : undefined;
+
+            if (entry.isDirectory()) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: true,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+                subfolderScans.push(
+                    this._scanDesignFolder(root, fullPath, results, relativePath, folderIndex, seenAbsolutePaths, depth + 1)
+                );
+            } else if (entry.isFile() && this._isDesignOrImageFile(entry.name)) {
+                results.push({
+                    id,
+                    name: entry.name,
+                    relativePath,
+                    isFolder: false,
+                    parentId: parentIdVal,
+                    sourceFolder: root
+                });
+                // Extract title for markdown if applicable
+                const ext = path.extname(entry.name).toLowerCase();
+                if (['.md', '.txt', '.markdown', '.rst', '.adoc'].includes(ext)) {
+                    if (results.length <= LocalFolderService._TITLE_EXTRACTION_FILE_LIMIT) {
+                        try {
+                            const buf = Buffer.alloc(1000);
+                            const fd = await fs.promises.open(fullPath, 'r');
+                            const { bytesRead } = await fd.read(buf, 0, 1000, 0);
+                            await fd.close();
+                            const head = buf.toString('utf8', 0, bytesRead);
+                            const fmMatch = head.match(/^---\s*\n[\s\S]*?^title:\s*["']?(.+?)["']?\s*$/m) ||
+                                            head.match(/^---\s*\n[\s\S]*?^topic:\s*["']?(.+?)["']?\s*$/m);
+                            const h1Match = head.match(/^#\s+(.+)$/m);
+                            const extractedTitle = fmMatch ? fmMatch[1].trim() : h1Match ? h1Match[1].trim() : undefined;
+                            if (extractedTitle) {
+                                results[results.length - 1].title = extractedTitle;
+                            }
+                        } catch { /* title extraction failure is non-critical */ }
+                    }
+                }
+            }
+        }
+
+        await Promise.all(subfolderScans);
+    }
+
+    private _isDesignOrImageFile(filename: string): boolean {
+        const ext = path.extname(filename).toLowerCase();
+        return ['.md', '.txt', '.markdown', '.rst', '.adoc', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
     }
 
     // ── Delete ──────────────────────────────────────────────────

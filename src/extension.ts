@@ -636,6 +636,11 @@ export async function activate(context: vscode.ExtensionContext) {
         )
     );
 
+    // Start the unified Plan Scanner at activation (not just on webview resolve) so it
+    // claims newly generated IDE plans even when the Switchboard panel is minimised,
+    // unfocused, or never opened this session, and on the first sweep after a restart.
+    taskViewerProvider.startPlanScanner();
+
     // Register core commands immediately after primary dependencies are ready.
     // This prevents 'command not found' errors if the user interacts with the
     // sidebar (e.g. clicks "OPEN AGENT TERMINALS") before the rest of activation completes.
@@ -830,6 +835,13 @@ export async function activate(context: vscode.ExtensionContext) {
         await taskViewerProvider.fullSync();
     });
     context.subscriptions.push(fullSyncDisposable);
+
+    // Manual "Import plans" — list unclaimed plans across configured sources (any age)
+    // and let the user pick which to add to the board.
+    const importPlansDisposable = vscode.commands.registerCommand('switchboard.importUnclaimedPlans', async () => {
+        await taskViewerProvider.handleImportUnclaimedPlans();
+    });
+    context.subscriptions.push(importPlansDisposable);
 
     // Reset Kanban Database command — deletes local DB and rebuilds from plan files
     const resetKanbanDbDisposable = vscode.commands.registerCommand('switchboard.resetKanbanDb', async (targetWorkspaceRoot?: string) => {

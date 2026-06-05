@@ -22,6 +22,7 @@ export interface TreeNode {
     url?: string;
     spaceId?: string;                          // NEW: breadcrumb tracking
     metadata?: Record<string, string>;          // NEW: adapter-specific data (e.g. _pageId, _docId)
+    title?: string;                             // NEW: extracted H1/HTML title for display
 }
 
 export interface ResearchSourceAdapter {

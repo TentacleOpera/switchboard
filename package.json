@@ -336,6 +336,13 @@
           "description": "Paths to local folders containing HTML prototype files (.html, .htm) for preview in the HTML Previews tab. Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "resource"
         },
+        "switchboard.research.designFolderPaths": {
+          "type": "array",
+          "items": { "type": "string" },
+          "default": [],
+          "description": "Paths to local folders containing design system files (.md, .txt, .markdown, .rst, .adoc) and image assets (.png, .jpg, .jpeg, .gif, .svg). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
+          "scope": "resource"
+        },
         "switchboard.research.antigravityBrainEnabled": {
           "type": "boolean",
           "default": false,
@@ -467,6 +474,64 @@
           "maximum": 300000,
           "description": "Interval in milliseconds between periodic scans for new plan files. Minimum 2s, maximum 5m.",
           "scope": "resource"
+        },
+        "switchboard.planScanner.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Master switch for the Plan Scanner: periodically scan AI IDE/agent folders for newly generated plan files and import them onto the kanban. Configure in Setup → Plan Scanner.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.intervalSeconds": {
+          "type": "integer",
+          "default": 10,
+          "minimum": 3,
+          "maximum": 300,
+          "description": "Seconds between Plan Scanner sweeps. Lower = plans appear faster; higher = less background work. Min 3s, max 5m.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.presets.antigravity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan Google Antigravity brain plans (~/.gemini/antigravity*/brain/*/implementation_plan.md). Auto-skipped if the folders don't exist.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.presets.windsurfDevin": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan Windsurf / Devin Desktop plans (~/.devin/plans, ~/.windsurf/plans, and <repo>/.devin/plans, <repo>/.windsurf/plans). Auto-skipped if the folders don't exist.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.presets.cursor": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan Cursor plans (~/.cursor/plans and <repo>/.cursor/plans). Auto-skipped if the folders don't exist.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.presets.claudeCode": {
+          "type": "boolean",
+          "default": true,
+          "description": "Scan Claude Code plans (~/.claude/plans and <repo>/.claude/plans). Auto-skipped if the folders don't exist.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.scanSwitchboardPlans": {
+          "type": "boolean",
+          "default": true,
+          "description": "Include the workspace's own .switchboard/plans folder in periodic scans.",
+          "scope": "resource"
+        },
+        "switchboard.planScanner.customSources": {
+          "type": "array",
+          "default": [],
+          "description": "Custom plan-file sources for any other tool. Each entry: { label, scope ('global'|'workspace'), globs (array of paths; ~ expands to home, <repo> expands to each workspace root) }.",
+          "scope": "resource",
+          "items": {
+            "type": "object",
+            "properties": {
+              "label": { "type": "string" },
+              "scope": { "type": "string", "enum": ["global", "workspace"] },
+              "globs": { "type": "array", "items": { "type": "string" } }
+            }
+          }
         },
         "switchboard.notionBackup": {
           "type": "object",

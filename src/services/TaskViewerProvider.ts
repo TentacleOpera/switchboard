@@ -34,6 +34,7 @@ import {
 } from './agentPromptBuilder';
 import { NotionFetchService } from './NotionFetchService';
 import { NotionBackupService } from './NotionBackupService';
+import { PLAN_SCANNER_PRESETS, expandFlatGlob, type ResolvedFlatTarget } from './PlanScannerPresets';
 import { NotionBrowseService } from './NotionBrowseService';
 import { ClickUpSyncService, type ClickUpApplyOptions, type ClickUpList, type ClickUpMappingSelection, type ClickUpTask } from './ClickUpSyncService';
 import { ClickUpDocsAdapter } from './ClickUpDocsAdapter';
@@ -256,6 +257,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _brainDebounceTimers = new Map<string, NodeJS.Timeout>();  // debounce brain watcher events
     private _brainDebounceClaims = new Set<string>(); // track whether any event in the debounce window requested auto-claim
     private _lastAntigravityRescanAt = 0;
+    private _planScannerTimer?: NodeJS.Timeout;        // unified Plan Scanner periodic sweep
+    private _planScannerScanInProgress = false;        // guard against overlapping sweeps
+    private _planScannerConfigListener?: vscode.Disposable;
     private _configuredPlanSyncTimer?: NodeJS.Timeout;
     private _managedImportMirrorsForActiveFolder = new Set<string>();
     private _recentActionDispatches = new Map<string, NodeJS.Timeout>(); // short TTL dedupe for sidebar actions
@@ -428,24 +432,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             });
         });
 
-        // Track the last focused workspace root in globalState to coordinate auto-claims across windows.
-        // This is a SOFT filter — the atomic claim marker in _tryClaimBrainPlan is the authoritative guard.
-        if (vscode.window.state.focused) {
-            const initialRoot = this._resolveWorkspaceRoot();
-            if (initialRoot) {
-                void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', initialRoot);
-            }
-        }
-        this._context.subscriptions.push(
-            vscode.window.onDidChangeWindowState((e) => {
-                if (e.focused) {
-                    const currentRoot = this._resolveWorkspaceRoot();
-                    if (currentRoot) {
-                        void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', currentRoot);
-                    }
-                }
-            })
-        );
+        // NOTE: We deliberately do NOT track an OS-window-focus "last focused workspace" signal.
+        // The active workspace is determined solely by the kanban dropdown
+        // (KanbanProvider.getCurrentWorkspaceRoot, the single source of truth used by
+        // _resolveWorkspaceRoot). A separate focus signal previously competed with it and
+        // silently blocked brain-plan auto-claims; cross-window claim races are handled
+        // authoritatively by the atomic claim marker in _tryClaimBrainPlan.
     }
 
     public setTerminalAgentInfo(suffixedName: string, role: string, displayName: string): void {
@@ -1098,6 +1090,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         this._ensureOwnershipRegistryInitialized().then(() => {
             this._setupBrainWatcher();
             void this._refreshConfiguredPlanWatcher();
+            this.startPlanScanner();
             // Note: _syncFilesAndRefreshRunSheets is NOT called here because
             // resolveWebviewView() already calls it in its Promise.all block.
             // This prevents the heavy file sync from running multiple times.
@@ -1105,6 +1098,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             console.error('[TaskViewerProvider] Registry initialization failed, starting brain watcher anyway:', e);
             this._setupBrainWatcher();
             void this._refreshConfiguredPlanWatcher();
+            this.startPlanScanner();
         });
     }
 
@@ -1165,9 +1159,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         ];
     }
 
-    private _getAntigravityRoot(): string {
-        return this._getAntigravityRoots()[0];
-    }
 
     private _getAntigravityPlanRoots(): string[] {
         return this._getAntigravityRoots().flatMap(antigravityRoot => [
@@ -1180,6 +1171,109 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _isAntigravitySourcePath(candidate: string): boolean {
         const resolvedCandidate = path.resolve(candidate);
         return this._getAntigravityPlanRoots().some(root => this._isPathWithin(root, resolvedCandidate));
+    }
+
+    /** Read the unified Plan Scanner config. */
+    private _getPlanScannerConfig(): {
+        enabled: boolean;
+        intervalSeconds: number;
+        presets: Record<string, boolean>;
+        scanSwitchboardPlans: boolean;
+        customSources: Array<{ label?: string; scope?: string; globs?: string[] }>;
+    } {
+        const cfg = vscode.workspace.getConfiguration('switchboard.planScanner');
+        const presets: Record<string, boolean> = {};
+        for (const preset of PLAN_SCANNER_PRESETS) {
+            presets[preset.id] = cfg.get<boolean>(preset.configKey, true);
+        }
+        const rawCustom = cfg.get<any[]>('customSources', []);
+        return {
+            enabled: cfg.get<boolean>('enabled', true),
+            intervalSeconds: Math.min(300, Math.max(3, cfg.get<number>('intervalSeconds', 10))),
+            presets,
+            scanSwitchboardPlans: cfg.get<boolean>('scanSwitchboardPlans', true),
+            customSources: Array.isArray(rawCustom) ? rawCustom : [],
+        };
+    }
+
+    /**
+     * Resolve enabled FLAT plan-source globs (Cursor / Windsurf-Devin / Claude Code /
+     * custom) into concrete, existing directories. Antigravity is NOT included here —
+     * it is brain-shape and uses the explicit three roots from _getAntigravityPlanRoots().
+     */
+    private _getFlatPlanScannerTargets(): ResolvedFlatTarget[] {
+        const config = this._getPlanScannerConfig();
+        if (!config.enabled) { return []; }
+        const repoRoots = this._getWorkspaceRoots();
+        const targets: ResolvedFlatTarget[] = [];
+
+        for (const preset of PLAN_SCANNER_PRESETS) {
+            if (preset.shape !== 'flat') { continue; }
+            if (config.presets[preset.id] === false) { continue; }
+            for (const g of preset.globs) {
+                targets.push(...expandFlatGlob(g.pattern, repoRoots));
+            }
+        }
+        for (const src of config.customSources) {
+            if (!src || !Array.isArray(src.globs)) { continue; }
+            for (const pattern of src.globs) {
+                if (typeof pattern === 'string') {
+                    targets.push(...expandFlatGlob(pattern, repoRoots));
+                }
+            }
+        }
+
+        const seen = new Set<string>();
+        return targets.filter(t => {
+            const key = `${t.dir}|${t.suffix}|${t.recursive}`;
+            if (seen.has(key)) { return false; }
+            seen.add(key);
+            return fs.existsSync(t.dir);
+        });
+    }
+
+    /**
+     * True if a path lives under any configured plan source — Antigravity brain
+     * (the explicit three roots) OR an enabled flat source dir. Used to relax plan
+     * validation and path-containment for trusted external plan files.
+     */
+    private _isConfiguredPlanSourcePath(candidate: string): boolean {
+        if (this._isAntigravitySourcePath(candidate)) { return true; }
+        const resolved = path.resolve(candidate);
+        return this._getFlatPlanScannerTargets().some(t => this._isPathWithin(t.dir, resolved));
+    }
+
+    /** Collect flat external plan candidate files (Cursor / Windsurf-Devin / Claude Code / custom). */
+    private _collectFlatPlanScannerCandidates(): string[] {
+        const out: string[] = [];
+        for (const t of this._getFlatPlanScannerTargets()) {
+            try {
+                if (t.recursive) {
+                    this._walkForSuffix(t.dir, t.suffix, out);
+                } else {
+                    for (const entry of fs.readdirSync(t.dir, { withFileTypes: true })) {
+                        if (entry.isFile() && entry.name.toLowerCase().endsWith(t.suffix)) {
+                            out.push(path.join(t.dir, entry.name));
+                        }
+                    }
+                }
+            } catch { /* unreadable dir; skip */ }
+        }
+        return out;
+    }
+
+    private _walkForSuffix(dir: string, suffix: string, out: string[]): void {
+        let entries: fs.Dirent[];
+        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        for (const entry of entries) {
+            const full = path.join(dir, entry.name);
+            if (entry.isDirectory()) {
+                if (entry.name.toLowerCase() === 'completed') { continue; }
+                this._walkForSuffix(full, suffix, out);
+            } else if (entry.isFile() && entry.name.toLowerCase().endsWith(suffix)) {
+                out.push(full);
+            }
+        }
     }
 
     private _getAntigravitySourceKind(candidate: string): 'brain' | 'artifact' | undefined {
@@ -1212,8 +1306,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
     // F-05/F-06 SECURITY: Path containment check using path.relative
     private _isPathWithinRoot(candidate: string, root: string): boolean {
-        // Allow Antigravity source directories
-        if (this._isAntigravitySourcePath(candidate)) return true;
+        // Allow configured external plan sources (Antigravity brain + flat IDE plan dirs)
+        if (this._isConfiguredPlanSourcePath(candidate)) return true;
 
         // Allow configured custom plan folder
         try {
@@ -3195,10 +3289,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
      * Called by KanbanProvider when the workspace changes via selectWorkspace.
      */
     public reinitializePlanWatcher(workspaceRoot: string): void {
-        const resolved = this._resolveWorkspaceRoot(workspaceRoot);
-        if (resolved) {
-            void this._context.globalState.update('switchboard.lastFocusedWorkspaceRoot', resolved);
-        }
+        // Resolve for its side effects (validates/caches the active root). The workspace is
+        // owned by the kanban dropdown — no separate focus signal is recorded here.
+        this._resolveWorkspaceRoot(workspaceRoot);
         this._setupStateWatcher();
         this._setupPlanWatcher();
         this.reinitializeBrainWatcher();
@@ -8207,6 +8300,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                             await this._handleDeletePlan(data.sessionId);
                         }
                         break;
+                    case 'importPlans':
+                        await this.handleImportUnclaimedPlans();
+                        break;
                     case 'completePlan':
                         if (data.sessionId) {
                             await this._handleCompletePlan(data.sessionId);
@@ -11155,6 +11251,68 @@ What would you like to find?`;
         return candidates;
     }
 
+    /**
+     * Start (or restart) the unified Plan Scanner periodic sweep. Runs in the
+     * extension host independent of the webview, so it claims new plans even when
+     * the Switchboard panel is minimised, unfocused, or closed entirely, and on the
+     * first sweep after a restart. Safe to call repeatedly (idempotent restart).
+     *
+     * Called from extension activation AND from deferred init so it runs whether or
+     * not the panel is ever opened. Cross-workspace claim coordination + tombstones
+     * are still enforced inside _mirrorBrainPlan.
+     */
+    public startPlanScanner(): void {
+        // (Re)register the config listener once so interval/enabled changes apply live.
+        if (!this._planScannerConfigListener) {
+            this._planScannerConfigListener = vscode.workspace.onDidChangeConfiguration((e) => {
+                if (e.affectsConfiguration('switchboard.planScanner')) {
+                    this.startPlanScanner();
+                }
+            });
+            this._context.subscriptions.push(this._planScannerConfigListener);
+        }
+
+        if (this._planScannerTimer) {
+            clearInterval(this._planScannerTimer);
+            this._planScannerTimer = undefined;
+        }
+
+        const config = this._getPlanScannerConfig();
+        if (!config.enabled) {
+            console.log('[TaskViewerProvider] Plan Scanner disabled');
+            return;
+        }
+
+        const intervalMs = config.intervalSeconds * 1000;
+        this._planScannerTimer = setInterval(() => { void this._planScannerSweep(); }, intervalMs);
+        console.log(`[TaskViewerProvider] Plan Scanner started (${config.intervalSeconds}s)`);
+    }
+
+    public stopPlanScanner(): void {
+        if (this._planScannerTimer) {
+            clearInterval(this._planScannerTimer);
+            this._planScannerTimer = undefined;
+        }
+    }
+
+    /** One Plan Scanner sweep over the active workspace (overlap-guarded). */
+    private async _planScannerSweep(): Promise<void> {
+        if (this._planScannerScanInProgress) { return; }
+        this._planScannerScanInProgress = true;
+        try {
+            const workspaceRoot = this._resolveWorkspaceRoot();
+            if (!workspaceRoot) { return; }
+            // _syncFilesAndRefreshRunSheets() runs the (now unified) external-plan
+            // rescan and refreshes the board. UI posts are no-ops when no view is open,
+            // but the claim into the DB still happens — so closed/minimised panels work.
+            await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        } catch (e) {
+            console.error('[TaskViewerProvider] Plan Scanner sweep failed:', e);
+        } finally {
+            this._planScannerScanInProgress = false;
+        }
+    }
+
     private async _rescanAntigravityPlanSources(workspaceRoot: string): Promise<void> {
         const now = Date.now();
         const cutoff = this._lastAntigravityRescanAt > 0
@@ -11162,9 +11320,19 @@ What would you like to find?`;
             : now - TaskViewerProvider.ANTIGRAVITY_RESCAN_WINDOW_MS;
         this._lastAntigravityRescanAt = now;
 
-        const candidateFiles = this._getAntigravityPlanRoots()
-            .filter(root => fs.existsSync(root))
-            .flatMap(root => this._collectAntigravityPlanCandidates(root));
+        // Unified external-plan discovery, gated on the Plan Scanner config.
+        // Brain-shape (Antigravity, explicit three roots) + flat-shape (Cursor /
+        // Windsurf-Devin / Claude Code / custom) all flow through the SAME
+        // _mirrorBrainPlan claim path so they share the mirror + claim-marker +
+        // tombstone + anti-flood guards (no per-IDE resurrection divergence).
+        const scannerConfig = this._getPlanScannerConfig();
+        const brainCandidates = (scannerConfig.enabled && scannerConfig.presets['antigravity'] !== false)
+            ? this._getAntigravityPlanRoots()
+                .filter(root => fs.existsSync(root))
+                .flatMap(root => this._collectAntigravityPlanCandidates(root))
+            : [];
+        const flatCandidates = scannerConfig.enabled ? this._collectFlatPlanScannerCandidates() : [];
+        const candidateFiles = [...brainCandidates, ...flatCandidates];
 
         for (const filePath of candidateFiles) {
             let stats: fs.Stats;
@@ -11359,7 +11527,7 @@ What would you like to find?`;
             // Brain-sourced files are always agent-created artifacts written intentionally;
             // accept any H1-headed .md without requiring Switchboard-specific section headers.
             // The EXCLUDED_BRAIN_FILENAMES list already guards against known noise files.
-            if (this._isAntigravitySourcePath(filePath)) { return true; }
+            if (this._isConfiguredPlanSourcePath(filePath)) { return true; }
 
             // Relaxed validation for additional plan folder: any .md with H1 is accepted
             if (options?.isAdditionalFolder) {
@@ -11864,12 +12032,15 @@ What would you like to find?`;
                 !fs.existsSync(mirrorPath) &&
                 (Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS;
 
-            // Cross-workspace claim coordination: use an atomic claim marker in the
-            // shared brain directory to ensure only one workspace auto-claims a new plan.
-            // This prevents contamination when multiple IDEs watch the same brain dir.
-            const lastFocusedRoot = this._context.globalState.get<string>('switchboard.lastFocusedWorkspaceRoot') || this._resolveWorkspaceRoot();
-            const isTargetWorkspaceActive = lastFocusedRoot === resolvedWorkspaceRoot;
-            const wouldAutoClaim = isTargetWorkspaceActive && !eligibility.eligible && (allowAutoClaim || isFreshUnregisteredCandidate) && !existingEntry;
+            // Cross-workspace claim coordination is enforced AUTHORITATIVELY by the atomic
+            // `wx` claim-marker write inside _tryClaimBrainPlan below — only one workspace can
+            // win the race for a given plan. We deliberately do NOT gate auto-claim on "is the
+            // Switchboard VS Code window currently focused": brain plans are authored in an
+            // external IDE (Antigravity), so this window is by definition NOT focused at
+            // creation time, and (with multiple windows open) the last-focused root can point
+            // at a different workspace. A focus gate therefore suppresses essentially every new
+            // brain plan — which is exactly the "plans never appear" regression.
+            const wouldAutoClaim = !eligibility.eligible && (allowAutoClaim || isFreshUnregisteredCandidate) && !existingEntry;
             const canClaim = wouldAutoClaim
                 ? await this._tryClaimBrainPlan(baseBrainPath, pathHash, resolvedWorkspaceRoot)
                 : false;
@@ -13214,8 +13385,8 @@ What would you like to find?`;
 
         try {
             const resolvedPath = path.resolve(brainSourcePath);
-            if (!this._isAntigravitySourcePath(resolvedPath)) {
-                vscode.window.showErrorMessage('Brain source path is outside the expected Antigravity plan directories.');
+            if (!this._isConfiguredPlanSourcePath(resolvedPath)) {
+                vscode.window.showErrorMessage('Plan path is outside the configured plan-source directories.');
                 return;
             }
 
@@ -13268,6 +13439,136 @@ What would you like to find?`;
         } catch (e) {
             vscode.window.showErrorMessage(`Failed to claim plan: ${e}`);
         }
+    }
+
+    /** Human-friendly age string for a duration in ms. */
+    private _humanAge(ms: number): string {
+        const s = Math.floor(ms / 1000);
+        if (s < 60) { return 'just now'; }
+        const m = Math.floor(s / 60);
+        if (m < 60) { return `${m}m ago`; }
+        const h = Math.floor(m / 60);
+        if (h < 24) { return `${h}h ago`; }
+        const d = Math.floor(h / 24);
+        return `${d}d ago`;
+    }
+
+    /** Display label for which tool a plan source path belongs to. */
+    private _labelForPlanSource(filePath: string): string {
+        if (this._isAntigravitySourcePath(filePath)) { return 'Antigravity'; }
+        const resolved = path.resolve(filePath);
+        const repoRoots = this._getWorkspaceRoots();
+        for (const preset of PLAN_SCANNER_PRESETS) {
+            if (preset.shape !== 'flat') { continue; }
+            for (const g of preset.globs) {
+                for (const t of expandFlatGlob(g.pattern, repoRoots)) {
+                    if (this._isPathWithin(t.dir, resolved)) { return preset.label; }
+                }
+            }
+        }
+        return 'Custom';
+    }
+
+    /** Clear any tombstone for a plan hash (explicit manual claim overrides a prior deletion). */
+    private async _clearPlanTombstone(workspaceRoot: string, pathHash: string): Promise<void> {
+        this._tombstones.delete(pathHash);
+        const db = await this._getKanbanDb(workspaceRoot);
+        if (!db) { return; }
+        for (const sid of [pathHash, `antigravity_${pathHash}`]) {
+            const row = await db.getPlanBySessionId(sid);
+            if (row?.status === 'deleted') {
+                await db.deletePlan(sid);
+            }
+        }
+    }
+
+    /**
+     * Manual "Import plans" entry point (kanban button / command). Discovers ALL
+     * unclaimed plan files across configured sources — brain + flat, REGARDLESS of
+     * age — and lets the user pick which to add. Because the user explicitly chooses,
+     * the anti-flood recency window does not apply (force-claim via allowAutoClaim),
+     * and a prior deletion is overridden (tombstone cleared) for picked items.
+     */
+    public async handleImportUnclaimedPlans(): Promise<void> {
+        const workspaceRoot = this._resolveWorkspaceRoot();
+        if (!workspaceRoot) {
+            vscode.window.showWarningMessage('Select a workspace in the kanban board first.');
+            return;
+        }
+        await this._activateWorkspaceContext(workspaceRoot);
+        await this._ensureTombstonesLoaded(workspaceRoot);
+        const db = await this._getKanbanDb(workspaceRoot);
+
+        const config = this._getPlanScannerConfig();
+        const brainCandidates = (config.presets['antigravity'] !== false)
+            ? this._getAntigravityPlanRoots().filter(r => fs.existsSync(r)).flatMap(r => this._collectAntigravityPlanCandidates(r))
+            : [];
+        const flatCandidates = this._collectFlatPlanScannerCandidates();
+        const allCandidates = Array.from(new Set([...brainCandidates, ...flatCandidates]));
+
+        type Item = vscode.QuickPickItem & { sourcePath: string; pathHash: string; tombstoned: boolean };
+        const items: Item[] = [];
+        for (const filePath of allCandidates) {
+            try {
+                const stablePath = this._getStablePath(this._getBaseBrainPath(filePath));
+                const pathHash = crypto.createHash('sha256').update(stablePath).digest('hex');
+                const sessionId = `antigravity_${pathHash}`;
+                // Skip plans already actively on the board.
+                const activeRow = db ? await db.getPlanBySessionId(sessionId) : null;
+                if (activeRow && activeRow.status !== 'deleted') { continue; }
+                const tombstoned = this._tombstones.has(pathHash) || (db ? await db.isTombstoned(pathHash) : false);
+
+                let topic = '';
+                let stat: fs.Stats | null = null;
+                try {
+                    const content = await fs.promises.readFile(filePath, 'utf8');
+                    const h1 = content.match(/^#\s+(.+)$/m);
+                    topic = h1 ? h1[1].trim() : '';
+                    stat = await fs.promises.stat(filePath);
+                } catch { continue; }
+                if (!topic) { topic = path.basename(path.dirname(filePath)) || path.basename(filePath); }
+
+                const ide = this._labelForPlanSource(filePath);
+                const age = stat ? this._humanAge(Date.now() - Math.max(stat.birthtimeMs, stat.mtimeMs)) : '';
+                items.push({
+                    label: topic,
+                    description: [ide, age, tombstoned ? 'previously deleted' : ''].filter(Boolean).join(' · '),
+                    detail: filePath,
+                    sourcePath: filePath,
+                    pathHash,
+                    tombstoned,
+                });
+            } catch { /* skip unreadable candidate */ }
+        }
+
+        if (items.length === 0) {
+            this._showTemporaryNotification('No unclaimed plans found in configured sources.');
+            return;
+        }
+        items.sort((a, b) => a.label.localeCompare(b.label));
+
+        const picked = await vscode.window.showQuickPick(items, {
+            canPickMany: true,
+            title: 'Import plans onto the board',
+            placeHolder: `${items.length} unclaimed plan(s) found — select which to add`,
+        });
+        if (!picked || picked.length === 0) { return; }
+
+        let claimed = 0;
+        for (const item of picked) {
+            try {
+                if (item.tombstoned) {
+                    await this._clearPlanTombstone(workspaceRoot, item.pathHash);
+                }
+                // allowAutoClaim=true force-claims regardless of the recency window.
+                await this._mirrorBrainPlan(item.sourcePath, true, workspaceRoot, true);
+                claimed++;
+            } catch (e) {
+                console.error('[TaskViewerProvider] Import plan failed:', item.sourcePath, e);
+            }
+        }
+        await this._syncFilesAndRefreshRunSheets(workspaceRoot);
+        this._showTemporaryNotification(`Imported ${claimed} plan(s).`);
     }
 
     private async _findReviewFilesForSession(sessionId: string, reviewsDir: string): Promise<string[]> {
@@ -15667,8 +15968,14 @@ What would you like to find?`;
      * block the UI.
      */
     private async _promotePlanToBrain(planFileAbsolute: string, fileName: string): Promise<void> {
-        const brainDir = path.join(os.homedir(), '.gemini', 'antigravity', 'brain');
-        if (!fs.existsSync(brainDir)) return;
+        // Promote into the first EXISTING brain root. All antigravity roots
+        // (antigravity-cli / antigravity-ide / antigravity) are treated identically;
+        // we must not hardcode a single one or promotion silently no-ops for users
+        // who only have one of the other clients installed.
+        const brainDir = this._getAntigravityRoots()
+            .map(root => path.join(root, 'brain'))
+            .find(dir => fs.existsSync(dir));
+        if (!brainDir) return;
 
         const destPath = path.join(brainDir, fileName);
         // Mark as our own write so the brain watcher doesn't re-mirror it
@@ -17110,6 +17417,7 @@ What would you like to find?`;
 
     public dispose() {
         this._stopAutobanEngine();
+        this.stopPlanScanner();
         if (this._postAutobanStateDebounceTimer) {
             clearTimeout(this._postAutobanStateDebounceTimer);
             this._postAutobanStateDebounceTimer = null;
