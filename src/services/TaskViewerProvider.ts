@@ -360,7 +360,8 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private static readonly EXCLUDED_BRAIN_FILENAMES = new Set([
         'task.md', 'walkthrough.md', 'readme.md',
         'grumpy_critique.md', 'balanced_review.md', 'post_mortem.md',
-        'review_response.md', 'meeting_notes.md', 'scratchpad.md'
+        'review_response.md', 'meeting_notes.md', 'scratchpad.md',
+        'analysis_results.md', 'research_notes.md', 'experiment_results.md'
     ]);
 
     constructor(
@@ -11861,7 +11862,7 @@ What would you like to find?`;
                 !existingEntry &&
                 !runSheetKnown &&
                 !fs.existsSync(mirrorPath) &&
-                ((Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS || !claimMarkerExists || claimMarkerOwnedByUs);
+                ((Date.now() - fileCreationTimeMs) <= TaskViewerProvider.NEW_BRAIN_PLAN_AUTOCLAIM_WINDOW_MS || claimMarkerOwnedByUs);
 
             // Cross-workspace claim coordination: use an atomic claim marker in the
             // shared brain directory to ensure only one workspace auto-claims a new plan.
