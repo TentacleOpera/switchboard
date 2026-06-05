@@ -9778,6 +9778,7 @@ What would you like to find?`;
                             createdAt: p.createdAt,
                             updatedAt: p.updatedAt,
                             status: p.status as PlanRegistryEntry['status'],
+                            project: p.project || undefined,
                         });
                     }
 
@@ -9792,6 +9793,7 @@ What would you like to find?`;
                         createdAt: p.createdAt,
                         updatedAt: p.updatedAt,
                         status: p.status as PlanRegistryEntry['status'],
+                        project: p.project || undefined,
                     };
                 }
                 this._planRegistry = { version: 1, entries };
@@ -9899,6 +9901,7 @@ What would you like to find?`;
                 tags: existing?.tags || '',
                 dependencies: existing?.dependencies || '',
                 repoScope: existing?.repoScope || '',
+                project: entry.project ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
                 updatedAt: entry.updatedAt || new Date().toISOString(),
@@ -11894,7 +11897,7 @@ What would you like to find?`;
             if (shouldAutoClaim) {
                 const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
                 const now = new Date().toISOString();
-                const activeProject = this._kanbanProvider?.getProjectFilter() || undefined;
+                const activeProject = this._kanbanProvider?.getProjectFilter() ?? undefined;
                 await this._registerPlan(resolvedWorkspaceRoot, {
                     planId: pathHash,
                     ownerWorkspaceId: wsId,
