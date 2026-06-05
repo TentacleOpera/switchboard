@@ -310,3 +310,66 @@ Key risks: (1) `buildKanbanBatchPrompt` analyst change is dead code without a ne
 9. Test import with an invalid `folderPath` (e.g., send a crafted message) — verify the write is rejected with an error.
 
 **Recommendation:** Send to Coder (Complexity 6 — multi-file changes with moderate logic and one security-sensitive validation)
+
+---
+
+## Reviewer Pass Results (2026-06-05)
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | File | Details |
+|---|---------|----------|------|---------|
+| 1 | Dead code: `btn-send-to-analyst` refs in JS | MAJOR | `planning.js` lines 2315, 2336 | HTML button removed but JS still had `getElementById('btn-send-to-analyst')` in `analystAvailabilityResult` handler and entire `sendToAnalystResult` case handler — both unreachable dead code |
+| 2 | Dead code: `btn-import-research-doc` refs in JS | MAJOR | `planning.js` lines 170, 177-179, 2170, 2173-2176 | Old "IMPORT RESEARCH DOC" button removed from HTML but JS still referenced it in `handleResearchImportClick` (disable/label guard), event listener registration, and `importResearchDocResult` handler. Result handler also used wrong label text `'IMPORT RESEARCH DOC'` instead of `'IMPORT FROM CLIPBOARD'` |
+| 3 | `sendToAnalyst` backend handler kept but no JS sender | NIT | `PlanningPanelProvider.ts` line 1323 | Backend handler retained per plan's backward-compat requirement, but no webview JS sends this message type anymore. Effectively dead code on server side. Harmless. |
+| 4 | `analystAvailabilityResult` updates dead button | NIT | `planning.js` line 2315 | Subsumed by Finding 1 — same dead reference |
+| 5 | `targetFolder` validation uses `includes()` on strings | NIT | `PlannerPromptWriter.ts` line 67 | Exact string match; same service produces both dropdown values and validation list. No real mismatch risk in the normal round-trip flow. |
+
+### Stage 2: Balanced Synthesis
+
+- **Fix now (MAJOR):** Findings 1 & 2 — remove dead button references from JS
+- **Defer (NIT):** Finding 3 — `sendToAnalyst` backend handler kept for backward compat per plan spec
+- **Defer (NIT):** Finding 5 — `includes()` validation is safe for same-service round-trip
+
+### Code Fixes Applied
+
+**File: `src/webview/planning.js`** (4 changes, -44 lines / +4 lines)
+
+1. Removed dead `analystBtn` block from `analystAvailabilityResult` handler (referenced removed `btn-send-to-analyst`)
+2. Removed entire `sendToAnalystResult` case handler (referenced removed `btn-send-to-analyst`)
+3. Removed dead `importResearchDocBtn` variable, its disable/label guard in `handleResearchImportClick`, and its event listener registration (referenced removed `btn-import-research-doc`)
+4. Removed dead `btnResearch` variable from `importResearchDocResult` handler; fixed `btnResearchClipboard.innerText` reset label from `'IMPORT RESEARCH DOC'` to `'IMPORT FROM CLIPBOARD'`
+
+### Verification Results
+
+- **TypeScript check:** 2 pre-existing errors in `ClickUpSyncService.ts` and `KanbanProvider.ts` (unrelated `import()` extension issues). No new errors introduced.
+- **Dead reference audit:** `grep` for `btn-send-to-analyst` and `btn-import-research-doc` (without `-clipboard`) across `src/` returns zero matches post-fix.
+- **Compilation:** Skipped per review instructions.
+- **Tests:** Skipped per review instructions.
+
+### Implementation Compliance Summary
+
+| Plan Requirement | Status | Notes |
+|-----------------|--------|-------|
+| New skill file `draft_research_prompt.md` | PASS | Matches plan skeleton exactly |
+| `agentPromptBuilder.ts` draft-research-prompt branch | PASS | Correct logic, proper defaults, skill reference + parameters |
+| `PromptBuilderOptions` new fields (`researchTopic`, `researchContext`) | PASS | Added at lines 140-143 |
+| AGENTS.md skill registration | PASS | Row added at line 90 |
+| `planning.html` 3-step layout | PASS | Clean Step 1/2/3 cards with correct element IDs |
+| Removed old elements (radio buttons, import toggle, collapsible, old buttons) | PASS | All removed from HTML |
+| `generateResearchPrompt()` reads from `<select>` | PASS | Reads `research-depth` select value, no import-toggle logic |
+| "DRAFT WITH ANALYST AGENT" button handler | PASS | Posts `draftResearchPrompt` message with topic/context/depth |
+| Destination folder dropdown population | PASS | Populated in `localFoldersListed` handler |
+| Import handler reads folder + passes `folderPath` | PASS | Reads `research-destination-folder` select value |
+| `draftResearchPrompt` backend handler | PASS | Calls `buildKanbanBatchPrompt`, dispatches via command, proper error handling |
+| `importResearchDoc` accepts `folderPath` | PASS | Passes to `_handleImportResearchDoc` |
+| `_handleImportResearchDoc` signature + `targetFolder` pass-through | PASS | Accepts optional `folderPath`, passes as `targetFolder` in options |
+| `_writeDocToDocsDir` `targetFolder` validation | PASS | Validates against `getFolderPaths()`, throws on mismatch |
+| `writeContentToDocsDir` `targetFolder` in options type | PASS | Type includes `targetFolder`, passed through via options spread |
+| `sendToAnalyst` handler preserved for backward compat | PASS | Still present in PlanningPanelProvider.ts |
+| Dead code cleanup for removed buttons | **FIXED** | Was incomplete in implementation; fixed in this review pass |
+
+### Remaining Risks
+
+1. **NIT (deferred):** `sendToAnalyst` backend handler in `PlanningPanelProvider.ts` is effectively dead code (no JS sender). Consider removing in a future cleanup pass.
+2. **NIT (deferred):** `targetFolder` validation uses `Array.includes()` for exact string match. On case-insensitive filesystems (macOS), a differently-cased path would be rejected. Not a practical risk since the same service produces both the dropdown values and the validation list.

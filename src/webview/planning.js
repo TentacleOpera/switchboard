@@ -167,17 +167,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
-    const importResearchDocBtn = document.getElementById('btn-import-research-doc');
     const importResearchDocClipboardBtn = document.getElementById('btn-import-research-doc-clipboard');
 
     const handleResearchImportClick = () => {
         const docTitleInput = document.getElementById('research-doc-title');
         const docTitle = docTitleInput ? docTitleInput.value.trim() : '';
-        
-        if (importResearchDocBtn) {
-            importResearchDocBtn.disabled = true;
-            importResearchDocBtn.innerText = 'IMPORTING...';
-        }
+
         if (importResearchDocClipboardBtn) {
             importResearchDocClipboardBtn.disabled = true;
             importResearchDocClipboardBtn.innerText = 'IMPORTING...';
@@ -204,9 +199,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     };
 
-    if (importResearchDocBtn) {
-        importResearchDocBtn.addEventListener('click', handleResearchImportClick);
-    }
     if (importResearchDocClipboardBtn) {
         importResearchDocClipboardBtn.addEventListener('click', handleResearchImportClick);
     }
@@ -2166,17 +2158,12 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const docTitleInput = document.getElementById('research-doc-title');
                 const researchStatusEl = document.getElementById('research-import-status');
                 const clipboardStatusEl = document.getElementById('clipboard-import-status');
-                
-                const btnResearch = document.getElementById('btn-import-research-doc');
+
                 const btnResearchClipboard = document.getElementById('btn-import-research-doc-clipboard');
-                
-                if (btnResearch) {
-                    btnResearch.disabled = false;
-                    btnResearch.innerText = 'IMPORT RESEARCH DOC';
-                }
+
                 if (btnResearchClipboard) {
                     btnResearchClipboard.disabled = false;
-                    btnResearchClipboard.innerText = 'IMPORT RESEARCH DOC';
+                    btnResearchClipboard.innerText = 'IMPORT FROM CLIPBOARD';
                 }
                 
                 if (msg.success) {
@@ -2312,15 +2299,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             case 'analystAvailabilityResult': {
-                const analystBtn = document.getElementById('btn-send-to-analyst');
-                if (analystBtn) {
-                    analystBtn.disabled = !msg.available;
-                    if (!msg.available) {
-                        analystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
-                    } else {
-                        analystBtn.removeAttribute('title');
-                    }
-                }
                 const draftAnalystBtn = document.getElementById('btn-draft-with-analyst');
                 if (draftAnalystBtn) {
                     draftAnalystBtn.disabled = !msg.available;
@@ -2328,24 +2306,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         draftAnalystBtn.title = 'Analyst terminal not available. Configure an analyst agent to enable this feature.';
                     } else {
                         draftAnalystBtn.removeAttribute('title');
-                    }
-                }
-                break;
-            }
-            case 'sendToAnalystResult': {
-                const sendToAnalystBtn = document.getElementById('btn-send-to-analyst');
-                if (sendToAnalystBtn) {
-                    if (msg.success) {
-                        sendToAnalystBtn.innerText = 'SENT';
-                        setTimeout(() => {
-                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
-                        }, 2000);
-                    } else {
-                        sendToAnalystBtn.innerText = 'FAILED';
-                        console.error('[Research] Failed to send to analyst:', msg.error);
-                        setTimeout(() => {
-                            if (sendToAnalystBtn) sendToAnalystBtn.innerText = 'SEND ANALYST REQUEST';
-                        }, 2000);
                     }
                 }
                 break;
