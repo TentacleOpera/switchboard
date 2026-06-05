@@ -11842,11 +11842,9 @@ What would you like to find?`;
             // Pre-check claim marker for age relaxation (see TOCTOU note in Edge-Case audit).
             // _tryClaimBrainPlan's atomic wx write remains the authoritative guard.
             const claimMarkerPath = path.join(path.dirname(baseBrainPath), `.switchboard_claim_${pathHash}.json`);
-            let claimMarkerExists = false;
             let claimMarkerOwnedByUs = false;
             try {
                 if (fs.existsSync(claimMarkerPath)) {
-                    claimMarkerExists = true;
                     const existingClaim = JSON.parse(fs.readFileSync(claimMarkerPath, 'utf8'));
                     const wsId = await this._getOrCreateWorkspaceId(resolvedWorkspaceRoot);
                     if (existingClaim.workspaceId === wsId) {
