@@ -354,3 +354,63 @@ Key risks: multi-panel broadcast requires extending `_postSharedWebviewMessage` 
 8. Change the theme via VS Code Settings UI (`switchboard.theme.name`) and verify all open panels update immediately.
 
 **Recommendation:** Send to Coder
+
+---
+
+## Review Results (2026-06-05)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Description |
+|---|----------|-------------|
+| 1 | NIT | Sidebar (implementation.html) receives `switchboardThemeNameSetting` message but has no theme CSS or message handler — message is dead on arrival. Plan scopes themes to Setup/Kanban/Planning only, so this is a plan-level inconsistency, not an implementation bug. |
+| 2 | NIT | Setup panel receives theme message twice on `setThemeSetting` (once via `broadcastToWebviews` → `_postSharedWebviewMessage`, once via direct `postMessage`). Handler is idempotent — no visual glitch. |
+| 3 | NIT | VS Code color theme change (`themeChanged` in planning.js) strips all `theme-*` classes from planning panel body without re-applying the active Switchboard theme. Other panels don't have this handler. Minor behavioral inconsistency. |
+| 4 | NIT | `--bg-dim` and `--accent-green` not defined in kanban.html `:root` but added by theme classes — no regression, consistent with existing kanban structure. |
+
+**No CRITICAL or MAJOR findings.**
+
+### Stage 2: Balanced Synthesis
+
+- **Finding 1 (sidebar dead message):** Keep as-is. Harmless and provides forward-compatibility. Not worth removing.
+- **Finding 2 (double-fire):** Keep as-is. Idempotent, defensive coding.
+- **Finding 3 (theme strip on VS Code color change):** Defer. The `themeChanged` handler was a no-op stub before; new impl at least strips stale classes. Proper fix would require re-reading Switchboard theme from state on VS Code color theme change — separate concern.
+- **Finding 4 (missing CSS vars in kanban :root):** Not a bug. Theme classes add the variables correctly.
+
+### Code Fixes Applied
+
+None — no CRITICAL or MAJOR findings required code changes.
+
+### Verification
+
+- **Typecheck (`tsc --noEmit`):** 2 pre-existing errors in unrelated files (ClickUpSyncService.ts, KanbanProvider.ts — relative import path extensions). No regressions from theme changes.
+- **CSS palette audit:** All CSS variable values in setup.html, kanban.html, and planning.html match the plan's authoritative palettes exactly. No deviations.
+- **Backend audit:** All config listeners, broadcast paths, init-time hydration, and message handlers implemented per plan.
+- **Frontend audit:** Radio buttons, JS handlers, body class management all implemented per plan.
+
+### Remaining Risks
+
+1. **Sidebar theme support gap:** implementation.html has no theme CSS or handlers. If sidebar theming is desired later, CSS classes and a message handler will need to be added.
+2. **VS Code color theme vs. Switchboard theme interaction:** The planning panel's `themeChanged` handler strips Switchboard theme classes when VS Code color theme changes. A future fix should re-apply the active Switchboard theme after stripping.
+3. **`color-mix()` browser support:** The theme CSS uses `color-mix(in srgb, ...)` which requires Chromium 111+. VS Code's Electron version supports this, but older VS Code versions (pre-1.77) may not render these expressions correctly.
+
+---
+
+## Post-Review Fix (2026-06-05)
+
+### CRITICAL Bug Found: `handleThemeChanged` regex destroys `cyber-theme-enabled` class
+
+**Severity: CRITICAL**
+
+The `handleThemeChanged` function in all three webviews used the regex `/theme-\S+/g` to strip old theme classes from `document.body.className`. This regex inadvertently matched `theme-enabled` inside the existing `cyber-theme-enabled` class on the planning panel's `<body>` tag, reducing it to `cyber-` and destroying all CRT effects (scanlines, grid overlay, neon glow, sweep beam animation).
+
+**Root cause:** The planning.html `<body>` tag has `class="cyber-theme-enabled"` hardcoded (from commit dc68b39, "Cyberpunk Theme Default Enablement"). The greedy regex `/theme-\S+/g` matches any substring starting with `theme-`, including `theme-enabled` inside `cyber-theme-enabled`.
+
+**Impact:** After any Switchboard visual theme change (or even just receiving the init-time `switchboardThemeNameSetting` message with value `afterburner`), the planning panel loses all CRT/cyberpunk visual effects — scanlines disappear, grid background vanishes, neon glow on headings/code/borders is gone, and the animated sweep beam stops. The preview area reverts to a flat black background.
+
+**Files changed:**
+- `src/webview/planning.js` (line 2091-2105): Replaced `document.body.className.replace(/theme-\S+/g, '')` with `document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black')` plus explicit `cyber-theme-enabled` toggle. When Afterburner is active, `cyber-theme-enabled` is added; when any other Switchboard visual theme is active, it is removed. Added `state.switchboardTheme` tracking so the VS Code `themeChanged` handler can correctly re-apply the cyber theme state.
+- `src/webview/setup.html` (line 3742): Same regex fix applied preventively.
+- `src/webview/kanban.html` (line 5889): Same regex fix applied preventively.
+
+**Verification:** Typecheck passes (same 2 pre-existing errors, no regressions).

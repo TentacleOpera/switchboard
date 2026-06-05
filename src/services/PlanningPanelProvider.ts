@@ -54,6 +54,8 @@ export class PlanningPanelProvider {
     private _docsFolderWatcher: vscode.FileSystemWatcher | undefined;
     private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _localDocsDebounce: NodeJS.Timeout | undefined;
+    private _lastLocalDocsSignature = ''; // content dedup: skip re-posting an unchanged local-docs list
+    private _lastWebviewRootsSignature = ''; // skip reassigning webview.options when roots are unchanged (avoids reload loop)
     private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlDocsDebounce: NodeJS.Timeout | undefined;
     private _designFolderWatchers: vscode.FileSystemWatcher[] = [];
@@ -230,6 +232,9 @@ export class PlanningPanelProvider {
     }
 
     public async open(): Promise<void> {
+        // Force the next local-docs send to render (the dedup cache must not starve a
+        // freshly revealed/created panel).
+        this._lastLocalDocsSignature = '';
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
             return;
@@ -1920,15 +1925,26 @@ export class PlanningPanelProvider {
             } catch (err) {}
         }
 
+        const localResourceRoots = [
+            vscode.Uri.joinPath(this._extensionUri, 'dist'),
+            vscode.Uri.joinPath(this._extensionUri, 'webview'),
+            vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
+            ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri),
+            ...folderUris
+        ];
+
+        // CRITICAL: assigning `webview.options` RELOADS the entire webview (resets the
+        // DOM → default tab + "Loading…" placeholders). This is called on every docs
+        // refresh, and the freshly-loaded webview re-posts `fetchRoots`, which calls
+        // back here — an infinite reload loop (the ~500ms flicker). Only reassign when
+        // the resource roots actually changed.
+        const signature = JSON.stringify(localResourceRoots.map(u => u.toString()));
+        if (signature === this._lastWebviewRootsSignature) { return; }
+        this._lastWebviewRootsSignature = signature;
+
         this._panel.webview.options = {
             enableScripts: true,
-            localResourceRoots: [
-                vscode.Uri.joinPath(this._extensionUri, 'dist'),
-                vscode.Uri.joinPath(this._extensionUri, 'webview'),
-                vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
-                ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri),
-                ...folderUris
-            ]
+            localResourceRoots
         };
     }
 
@@ -2071,17 +2087,35 @@ export class PlanningPanelProvider {
                 }
             }
 
+            const mappedNodes = this._mapLocalFilesToTreeNodes(allFiles);
+
+            // Content dedup: watched folders (e.g. an active Claude/Cursor projects dir)
+            // can churn many times a second from file CONTENT edits that don't change the
+            // list of docs. Re-posting an identical list re-renders the tree, flashes
+            // "loading local docs", and steals the active tab. Skip when nothing changed.
+            const signature = JSON.stringify({
+                folderPaths: configuredFolderPaths,
+                nodes: mappedNodes,
+                antigravitySessions,
+                antigravityEnabled: agEnabled
+            });
+            if (signature === this._lastLocalDocsSignature) {
+                return;
+            }
+            this._lastLocalDocsSignature = signature;
+
             console.log('[PlanningPanel] Sending localDocsReady, total nodes count:', allFiles.length);
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
                 folderPaths: configuredFolderPaths, // Send active root's folder paths, not workspace root
-                nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                nodes: mappedNodes,
                 antigravitySessions,           // NEW — undefined-safe in webview
                 antigravityEnabled: agEnabled  // NEW — tells webview whether to show toggle as checked
             });
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
+            this._lastLocalDocsSignature = ''; // force re-render on next successful send
             this._panel?.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',

@@ -4075,11 +4075,11 @@
             let actualMovedCount = 0;
 
             sessionIds.forEach(id => {
-                const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
                 if (!cardEl) return;
 
                 // Resolve actual source column from currentCards (cards have no data-column attribute)
-                const cardData = currentCards.find(c => (c.sessionId || c.planId) === id);
+                const cardData = currentCards.find(c => (c.planId || c.sessionId) === id);
                 const actualColumn = cardData ? cardData.column : sourceColumn;
 
                 // When coders are collapsed, actual coder columns display in CODED_AUTO DOM container
@@ -4126,7 +4126,7 @@
             if (!container) return [];
             const ids = [];
             container.querySelectorAll('.kanban-card.selected').forEach(el => {
-                ids.push(el.dataset.session || el.dataset.planId || '');
+                ids.push(el.dataset.planId || el.dataset.session || '');
             });
             return ids.filter(Boolean);
         }
@@ -4136,7 +4136,7 @@
             const container = cardEl ? cardEl.closest('.column-body') : null;
             if (!container) return [];
             return Array.from(container.querySelectorAll('.kanban-card.selected'))
-                .map(el => el.dataset.session || el.dataset.planId || '')
+                .map(el => el.dataset.planId || el.dataset.session || '')
                 .filter(Boolean);
         }
 
@@ -4213,7 +4213,7 @@
             const label = def ? def.label : column;
             countEl.textContent = sessionIds.length + ' plan(s) selected from "' + label + '" column';
             listEl.innerHTML = sessionIds.map(id => {
-                const card = currentCards.find(c => c.sessionId === id);
+                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 const topic = card ? escapeHtml(card.topic || card.sessionId) : escapeHtml(id);
                 return '<li>' + topic + '</li>';
             }).join('');
@@ -4913,7 +4913,7 @@
                 // Card selection toggle (click on card body, not on buttons)
                 el.addEventListener('click', (e) => {
                     if (e.target.closest('.card-btn') || e.target.closest('button')) return;
-                    const pid = el.dataset.session || el.dataset.planId || '';
+                    const pid = el.dataset.planId || el.dataset.session || '';
                     if (!pid) return; // Skip if no valid ID — also prevents empty selectPlan message
                     if (selectedCards.has(pid)) {
                         selectedCards.delete(pid);
@@ -4933,7 +4933,7 @@
                 });
 
                 // Re-apply selection state after re-render
-                const pid = el.dataset.session || el.dataset.planId || '';
+                const pid = el.dataset.planId || el.dataset.session || '';
                 if (pid && selectedCards.has(pid)) {
                     el.classList.add('selected');
                 }
@@ -4964,7 +4964,7 @@
             document.querySelectorAll('.card-btn.copy').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const column = btn.dataset.column || btn.closest('.kanban-column')?.dataset?.column;
-                    const sessionId = btn.dataset.session || '';
+                    const sessionId = btn.dataset.planId || btn.dataset.session || '';
                     
                     // Optimistic UI: highlight target column and move card immediately
                     let nextCol = null;
@@ -5487,7 +5487,7 @@
                 (e.currentTarget && e.currentTarget.classList && e.currentTarget.classList.contains('kanban-card'))
                     ? e.currentTarget
                     : e.target.closest('.kanban-card');
-            const draggedId = draggedCardEl?.dataset.session || draggedCardEl?.dataset.planId;
+            const draggedId = draggedCardEl?.dataset.planId || draggedCardEl?.dataset.session;
             if (!draggedCardEl || !draggedId) return;
             draggedSessionId = draggedId;
             draggedCardEl.classList.add('dragging');
@@ -5504,7 +5504,7 @@
 
             // Add dragging class to all cards being transferred
             idsToTransfer.forEach(id => {
-                const el = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const el = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
                 if (el) el.classList.add('dragging');
             });
 
@@ -5587,7 +5587,7 @@
                 const dispatchGroups = new Map();
 
                 sessionIds.forEach(id => {
-                    const card = currentCards.find(c => c.sessionId === id);
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                     if (!card) return;
                     const resolvedTarget = resolveCodedAutoTarget(card);
                     if (card.column === resolvedTarget) return;
@@ -5615,7 +5615,7 @@
                     dispatchGroups.set(groupKey, group);
 
                     // DOM optimistic update
-                    const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
                     if (cardEl && targetBody) {
                         // Source DOM column: cards in coder cols are already in CODED_AUTO dom container when collapsed
                         const sourceDomCol = CODED_IDS.includes(card.column) ? 'CODED_AUTO' :
@@ -5693,7 +5693,7 @@
             const effectiveTargetColumn = (showingBacklog && targetColumn === 'CREATED') ? 'BACKLOG' : targetColumn;
 
             sessionIds.forEach(id => {
-                const card = currentCards.find(c => c.sessionId === id);
+                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 if (!card || card.column === effectiveTargetColumn) return;
 
                 // BACKLOG cards are treated as index 0 (same as CREATED) for forward/backward calculation
@@ -5717,8 +5717,8 @@
                     targetBody.addEventListener('animationend', () => targetBody.classList.remove('highlight'), { once: true });
                 }
                 completingIds.forEach(id => {
-                    const card = currentCards.find(c => c.sessionId === id);
-                    const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                    const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                    const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
                     if (cardEl && targetBody) {
                         const emptyState = targetBody.querySelector('.empty-state');
                         if (emptyState) emptyState.remove();
@@ -5746,7 +5746,7 @@
 
             // Special handling: backward drags FROM COMPLETED trigger uncomplete/restore
             const uncompleteIds = backwardIds.filter(id => {
-                const card = currentCards.find(c => c.sessionId === id);
+                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
                 return card && card.column === 'COMPLETED';
             });
             if (uncompleteIds.length > 0) {
@@ -5781,7 +5781,7 @@
 
             // Capture source columns BEFORE the optimistic update loop mutates card.column
             const sourceColumnForPrompt = forwardIds.length > 0
-                ? (currentCards.find(c => c.sessionId === forwardIds[0])?.column || effectiveTargetColumn)
+                ? (currentCards.find(c => (c.planId || c.sessionId) === forwardIds[0])?.column || effectiveTargetColumn)
                 : effectiveTargetColumn;
 
             // DOM target is the displayed column slot (targetColumn); logical target may differ (effectiveTargetColumn)
@@ -5792,8 +5792,8 @@
             }
 
             validIds.forEach(id => {
-                const card = currentCards.find(c => c.sessionId === id);
-                const cardEl = document.querySelector(`.kanban-card[data-session="${id}"]`);
+                const card = currentCards.find(c => (c.planId || c.sessionId) === id);
+                const cardEl = document.querySelector(`.kanban-card[data-plan-id="${id}"]`) || document.querySelector(`.kanban-card[data-session="${id}"]`);
                 // Source DOM column: BACKLOG cards display in CREATED slot when showingBacklog
                 const sourceDomColumn = (card && card.column === 'BACKLOG' && showingBacklog) ? 'CREATED' : (card?.column || targetColumn);
                 if (cardEl && targetBody) {
@@ -5886,7 +5886,8 @@
             switch (msg.type) {
                 case 'switchboardThemeNameSetting':
                 case 'switchboardThemeChanged': {
-                    document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+                    // Only remove Switchboard visual theme classes — preserve other body classes
+                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
                     if (msg.theme && msg.theme !== 'afterburner') {
                         document.body.classList.add(`theme-${msg.theme}`);
                     }
@@ -6232,7 +6233,7 @@
                         btn = document.querySelector(`.card-btn.copy[data-plan-id="${msg.planId}"]`);
                     }
                     if (!btn && msg.sessionId) {
-                        btn = document.querySelector(`.card-btn.copy[data-session="${msg.sessionId}"]`);
+                        btn = document.querySelector(`.card-btn.copy[data-plan-id="${msg.sessionId}"]`) || document.querySelector(`.card-btn.copy[data-session="${msg.sessionId}"]`);
                     }
                     if (btn) {
                         if (msg.success) {
@@ -6313,7 +6314,7 @@
                 case 'promptOnDropResult': {
                     // Visual feedback when prompt-mode drop completes: flash the target column count badge green
                     if (msg.success && Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
-                        const card = currentCards.find(c => msg.sessionIds.includes(c.sessionId));
+                        const card = currentCards.find(c => msg.sessionIds.includes(c.planId) || msg.sessionIds.includes(c.sessionId));
                         if (card) {
                             const countEl = document.getElementById('count-' + card.column);
                             if (countEl) {

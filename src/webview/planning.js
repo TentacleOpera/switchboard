@@ -7,6 +7,7 @@
     // State object (must be declared before use)
     const state = {
         lastResearchFolder: persistedState.lastResearchFolder || null,
+        switchboardTheme: 'afterburner',  // Track active Switchboard visual theme for cyber-theme toggle
         activeSource: null,
         activeDocId: null,
         activeDocName: null,
@@ -1558,26 +1559,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 section.appendChild(dateHeader);
 
                 for (const session of dateSessions) {
-                    const sessionRow = document.createElement('div');
-                    sessionRow.className = 'tree-node folder-subheader';
-
-                    const sessionLabel = document.createElement('span');
-                    sessionLabel.className = 'label';
-                    sessionLabel.textContent = 'Session: ' + session.name + '…';
-
-                    const sessionTs = document.createElement('span');
-                    sessionTs.className = 'antigravity-session-ts';
-                    sessionTs.textContent = new Date(session.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
-
-                    sessionRow.appendChild(sessionLabel);
-                    sessionRow.appendChild(sessionTs);
-                    section.appendChild(sessionRow);
+                    const sessionTime = new Date(session.timestamp).toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
 
                     // Artifact rows under each session
                     for (const artifact of session.artifacts) {
                         const artifactCard = renderDocCard({
                             title: artifact.name,
-                            subtitle: undefined,
+                            subtitle: 'Session at ' + sessionTime,
                             sourceId: 'antigravity',
                             nodeId: artifact.id,
                             nodeMetadata: { absolutePath: artifact.id },
@@ -2089,9 +2077,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     }
 
     function handleThemeChanged(theme) {
-        document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
-        if (theme && theme !== 'afterburner') {
-            document.body.classList.add(`theme-${theme}`);
+        // Track the active Switchboard visual theme
+        if (theme) { state.switchboardTheme = theme; }
+        // Remove Switchboard visual theme classes
+        document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
+        // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic only.
+        // Toggle cyber-theme-enabled: on for afterburner, off for any other Switchboard visual theme.
+        if (state.switchboardTheme === 'afterburner') {
+            document.body.classList.add('cyber-theme-enabled');
+        } else {
+            document.body.classList.remove('cyber-theme-enabled');
+            document.body.classList.add(`theme-${state.switchboardTheme}`);
         }
     }
 

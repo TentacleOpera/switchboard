@@ -3739,7 +3739,8 @@
                     if (animationSettings) {
                         animationSettings.style.display = theme === 'afterburner' ? '' : 'none';
                     }
-                    document.body.className = document.body.className.replace(/theme-\S+/g, '').trim();
+                    // Only remove Switchboard visual theme classes — preserve other body classes
+                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
                     if (theme !== 'afterburner') {
                         document.body.classList.add(`theme-${theme}`);
                     }

@@ -1596,7 +1596,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 if (newContent !== content) {
                     // Suppress state watcher for 500ms after self-write
                     this._selfStateWriteUntil = Date.now() + 500;
-                    await fs.promises.writeFile(statePath, newContent);
+                    await this._writeFileAtomic(statePath, newContent);
                 }
 
             } catch (e) {
@@ -5124,7 +5124,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             state.lastAccessedClickUpLists = this._lastAccessedClickUpLists;
             state.lastAccessedLinearProjects = this._lastAccessedLinearProjects;
 
-            await fs.promises.writeFile(statePath, JSON.stringify(state, null, 2), 'utf8');
+            await this._writeFileAtomic(statePath, JSON.stringify(state, null, 2));
         } catch (e) {
             console.error('[TaskViewer] Failed to persist last-accessed:', e);
         }
@@ -7543,11 +7543,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     ) {
         this._view = webviewView;
 
-        // Add codicons to localResourceRoots for webview-safe URI access
-        const codiconsUri = vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'codicons');
         webviewView.webview.options = {
             enableScripts: true,
-            localResourceRoots: [this._extensionUri, codiconsUri]
+            localResourceRoots: [this._extensionUri]
         };
 
         // CRITICAL: Assign the static HTML shell (OPEN AGENT TERMINALS, OPEN
@@ -12090,7 +12088,8 @@ What would you like to find?`;
             const stablePath = this._getStablePath(baseBrainPath);
 
             if (this._brainPlanBlacklist.has(stablePath)) {
-                console.log(`[TaskViewerProvider] Mirror skipped (brain_plan_blacklist): ${path.basename(brainFilePath)}`);
+                // (skip silently — the periodic scanner re-evaluates every candidate each
+                // sweep, so logging here floods the console with one line per blacklisted plan)
                 return;
             }
 
@@ -12171,8 +12170,8 @@ What would you like to find?`;
                 : false;
             const shouldAutoClaim = wouldAutoClaim && canClaim;
             if (!eligibility.eligible && !shouldAutoClaim) {
-                const claimReason = wouldAutoClaim && !canClaim ? ', claim lost to another workspace' : '';
-                console.log(`[TaskViewerProvider] Mirror skipped (${eligibility.reason}${claimReason}): ${path.basename(brainFilePath)}`);
+                // (skip silently — fires for every unclaimed candidate on every periodic
+                // sweep; logging here floods the console.)
                 return;
             }
 
@@ -17312,11 +17311,6 @@ What would you like to find?`;
             // Inject shared defaults
             const sharedDefaultsUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'dist', 'webview', 'sharedDefaults.js')).toString();
             content = content.replace('<!-- SHARED_DEFAULTS_SCRIPT -->', `<script src="${sharedDefaultsUri}" nonce="${nonce}"></script>`);
-
-            // Inject Codicon CSS with webview-safe URI
-            const codiconUri = webview.asWebviewUri(vscode.Uri.joinPath(this._extensionUri, 'node_modules', '@vscode', 'codicons', 'dist', 'codicon.css'));
-            const codiconLink = `<link href="${codiconUri}" rel="stylesheet" />`;
-            content = content.replace('</head>', `${codiconLink}\n</head>`);
 
             return content;
         } catch (e) {
