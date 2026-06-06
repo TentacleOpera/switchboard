@@ -1206,11 +1206,19 @@ export class KanbanDatabase {
     /** @deprecated session_id is no longer the unique key; use hasPlanByPlanFile instead. */
     public async hasPlan(sessionId: string): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
+        // Try session_id first
         const stmt = this._db.prepare('SELECT 1 FROM plans WHERE session_id = ? LIMIT 1', [sessionId]);
         try {
-            return stmt.step();
+            if (stmt.step()) return true;
         } finally {
             stmt.free();
+        }
+        // Fallback: sessionId might actually be a planId
+        const stmt2 = this._db.prepare('SELECT 1 FROM plans WHERE plan_id = ? LIMIT 1', [sessionId]);
+        try {
+            return stmt2.step();
+        } finally {
+            stmt2.free();
         }
     }
 
@@ -1322,15 +1330,26 @@ export class KanbanDatabase {
         if (!(await this.ensureReady()) || !this._db) {
             return null;
         }
+        // Try session_id first
         const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
         try {
             if (stmt.step()) {
                 const row = stmt.getAsObject();
                 return (row.plan_file as string) || null;
             }
-            return null;
         } finally {
             stmt.free();
+        }
+        // Fallback: sessionId might actually be a planId
+        const stmt2 = this._db.prepare('SELECT plan_file FROM plans WHERE plan_id = ?', [sessionId]);
+        try {
+            if (stmt2.step()) {
+                const row = stmt2.getAsObject();
+                return (row.plan_file as string) || null;
+            }
+            return null;
+        } finally {
+            stmt2.free();
         }
     }
 
@@ -1469,18 +1488,22 @@ export class KanbanDatabase {
 
     public async updatePlanWorktree(sessionId: string, worktreeId: number | null): Promise<void> {
         if (!this._db) return;
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return;
         this._db.run(
-            'UPDATE plans SET worktree_id = ? WHERE session_id = ?',
-            [worktreeId, sessionId]
+            'UPDATE plans SET worktree_id = ? WHERE plan_id = ?',
+            [worktreeId, plan.planId]
         );
         await this._persist();
     }
 
     public async updatePlanWorktreeStatus(sessionId: string, status: 'none' | 'active' | 'merged' | 'deleted'): Promise<void> {
         if (!this._db) return;
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return;
         this._db.run(
-            'UPDATE plans SET worktree_status = ? WHERE session_id = ?',
-            [status, sessionId]
+            'UPDATE plans SET worktree_status = ? WHERE plan_id = ?',
+            [status, plan.planId]
         );
         await this._persist();
     }
@@ -1601,9 +1624,11 @@ export class KanbanDatabase {
         this._db.run('BEGIN');
         try {
             for (const sessionId of uniqueSessionIds) {
+                const plan = await this.getPlanBySessionId(sessionId);
+                if (!plan) continue;
                 this._db.run(
-                    "UPDATE plans SET status = 'active', updated_at = ? WHERE session_id = ? AND status = 'deleted'",
-                    [now, sessionId]
+                    "UPDATE plans SET status = 'active', updated_at = ? WHERE plan_id = ? AND status = 'deleted'",
+                    [now, plan.planId]
                 );
             }
             this._db.run('COMMIT');
@@ -1648,19 +1673,21 @@ export class KanbanDatabase {
     /** @deprecated plan_file is now the unique key; file renames create new plans. */
     public async updatePlanFile(sessionId: string, planFile: string, skipTimestampUpdate?: boolean): Promise<boolean> {
         console.log(`[KanbanDatabase] updatePlanFile: sessionId=${sessionId}, planFile=${planFile}, skipTimestampUpdate=${skipTimestampUpdate}`);
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return false;
         const sql = skipTimestampUpdate
-            ? 'UPDATE plans SET plan_file = ? WHERE session_id = ?'
-            : 'UPDATE plans SET plan_file = ?, updated_at = ? WHERE session_id = ?';
+            ? 'UPDATE plans SET plan_file = ? WHERE plan_id = ?'
+            : 'UPDATE plans SET plan_file = ?, updated_at = ? WHERE plan_id = ?';
         const params = skipTimestampUpdate
-            ? [this._ensureRelativePlanFile(planFile), sessionId]
-            : [this._ensureRelativePlanFile(planFile), new Date().toISOString(), sessionId];
+            ? [this._ensureRelativePlanFile(planFile), plan.planId]
+            : [this._ensureRelativePlanFile(planFile), new Date().toISOString(), plan.planId];
         const result = this._persistedUpdate(sql, params);
         if (this._db) {
             try {
-                const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE session_id = ?', [sessionId]);
+                const stmt = this._db.prepare('SELECT plan_file FROM plans WHERE plan_id = ?', [plan.planId]);
                 if (stmt.step()) {
                     const row = stmt.getAsObject();
-                    console.log(`[KanbanDatabase] updatePlanFile VERIFY: sessionId=${sessionId}, plan_file now=${row.plan_file}`);
+                    console.log(`[KanbanDatabase] updatePlanFile VERIFY: planId=${plan.planId}, plan_file now=${row.plan_file}`);
                 }
                 stmt.free();
             } catch (e) {
@@ -1672,8 +1699,10 @@ export class KanbanDatabase {
 
     public async updateSessionId(oldSessionId: string, newSessionId: string): Promise<boolean> {
         console.log(`[KanbanDatabase] updateSessionId: oldSessionId=${oldSessionId}, newSessionId=${newSessionId}`);
-        const sql = 'UPDATE plans SET session_id = ?, updated_at = ? WHERE session_id = ?';
-        const params = [newSessionId, new Date().toISOString(), oldSessionId];
+        const plan = await this.getPlanBySessionId(oldSessionId);
+        if (!plan) return false;
+        const sql = 'UPDATE plans SET session_id = ?, updated_at = ? WHERE plan_id = ?';
+        const params = [newSessionId, new Date().toISOString(), plan.planId];
         const result = this._persistedUpdate(sql, params);
         return result;
     }
@@ -1755,9 +1784,11 @@ export class KanbanDatabase {
 
     /** @deprecated session_id is no longer the unique key; use deletePlanByPlanFile instead. */
     public async deletePlan(sessionId: string): Promise<boolean> {
+        const plan = await this.getPlanBySessionId(sessionId);
+        if (!plan) return false;
         return this._persistedUpdate(
-            'DELETE FROM plans WHERE session_id = ?',
-            [sessionId]
+            'DELETE FROM plans WHERE plan_id = ?',
+            [plan.planId]
         );
     }
 
@@ -2579,6 +2610,8 @@ export class KanbanDatabase {
         this._db.run('BEGIN');
         try {
             for (const u of updates) {
+                const plan = await this.getPlanBySessionId(u.sessionId);
+                if (!plan) continue;
                 const setClauses = ['topic = ?', 'plan_file = ?'];
                 const params: unknown[] = [u.topic, this._ensureRelativePlanFile(u.planFile)];
 
@@ -2605,9 +2638,9 @@ export class KanbanDatabase {
                     params.push(u.repoScope);
                 }
 
-                params.push(u.sessionId);
+                params.push(plan.planId);
                 this._db.run(
-                    `UPDATE plans SET ${setClauses.join(', ')} WHERE session_id = ?`,
+                    `UPDATE plans SET ${setClauses.join(', ')} WHERE plan_id = ?`,
                     params
                 );
             }
@@ -2653,9 +2686,11 @@ export class KanbanDatabase {
         this._db.run('BEGIN');
         try {
             for (const sessionId of sessionIds) {
+                const plan = await this.getPlanBySessionId(sessionId);
+                if (!plan) continue;
                 this._db.run(
-                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE session_id = ?',
-                    ['completed', 'COMPLETED', now, sessionId]
+                    'UPDATE plans SET status = ?, kanban_column = ?, updated_at = ? WHERE plan_id = ?',
+                    ['completed', 'COMPLETED', now, plan.planId]
                 );
             }
             this._db.run('COMMIT');

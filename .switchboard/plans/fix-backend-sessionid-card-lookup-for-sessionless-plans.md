@@ -1111,3 +1111,49 @@ for (const sessionId of sessionIds) {
 ---
 
 Complexity 5 → **Send to Coder**
+
+## Review Pass Results (2026-06-06)
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| ID | Severity | Finding | Status |
+|----|----------|---------|--------|
+| C1 | CRITICAL | Fix #29 (`_getKanbanPlanRecordForSession`) NOT IMPLEMENTED — line 1917 still uses `entry.sessionId === sessionId` without `planId` fallback. Dispatch and metadata refresh silently fail for sessionless plans. | **Fixed** |
+| C2 | CRITICAL | Fixes #30-39: ALL TEN KanbanDatabase.ts deprecated write methods NOT IMPLEMENTED — still use `WHERE session_id = ?` with zero fallback. Production bug: `deletePlan(planId)` on TaskViewerProvider line 9514 silently no-ops for Antigravity plans. Worktree, revive, metadata batch, and complete methods all fail for sessionless plans. | **Fixed** |
+| M1 | MAJOR | `KanbanDispatchCard.planId` is `planId?: string` (optional) instead of `planId: string` (required) as specified in the plan. Inconsistent with `KanbanCard.planId: string` and `KanbanPlanRecord.planId: string`. | **Fixed** |
+| N1 | NIT | Line 7415 `routedSessions` push missing `planId` field. Functionally correct today (sessionId is pre-resolved), but fragile. | **Fixed** |
+
+### Stage 2: Balanced Synthesis
+
+All findings fixed — no deferrals.
+
+- C1: Added `|| entry.planId === sessionId` to the `.find()` predicate.
+- C2: Implemented all 10 DB write method fallbacks per plan spec. Used `getPlanBySessionId`-then-resolve pattern for `deletePlan`, `updatePlanWorktree`, `updatePlanWorktreeStatus`, `updatePlanFile`, `updateSessionId`, `reviveDeletedPlans`, `updateMetadataBatch`, `completeMultiple`. Used dual-stmt fallback for `hasPlan` and `getPlanFilePath` (read-only methods where dual-stmt is cleaner).
+- M1: Changed `planId?: string` to `planId: string` on `KanbanDispatchCard`. Updated `_selectAutobanPlanReviewedCards` return type and `routedSessions` type to include `planId: string`. Added `planId: card.planId` to `selectedCards.push` and `routedSessions[targetRole].push`.
+- N1: Added `planId: card.planId` to `routedSessions` push.
+
+### Files Changed
+
+| File | Changes |
+|------|---------|
+| `src/services/TaskViewerProvider.ts` | Fix #29: Added `planId` fallback to `_getKanbanPlanRecordForSession`. Fix M1: Changed `KanbanDispatchCard.planId` from optional to required. Updated `_selectAutobanPlanReviewedCards` return type, `selectedCards.push`, `routedSessions` type and push to include `planId: string`. |
+| `src/services/KanbanDatabase.ts` | Fixes #30-39: Added `getPlanBySessionId`-then-resolve fallback to `deletePlan`, `updatePlanWorktree`, `updatePlanWorktreeStatus`, `updatePlanFile`, `updateSessionId`, `reviveDeletedPlans`, `updateMetadataBatch`, `completeMultiple`. Added dual-stmt fallback to `hasPlan` and `getPlanFilePath`. All SQL now uses `WHERE plan_id = ?` with resolved `plan.planId`. |
+
+### Validation Results
+
+- **Typecheck**: PASS (only pre-existing errors in ClickUpSyncService.ts and KanbanProvider.ts import paths — unrelated to this plan)
+- **Compilation**: SKIPPED per review instructions
+- **Tests**: SKIPPED per review instructions
+
+### Remaining Risks
+
+1. The `reviveDeletedPlans` method now calls `getPlanBySessionId` (an async SELECT) inside a transaction loop. This adds an extra read per row but is acceptable for typical batch sizes (< 20 plans). If batch sizes grow significantly, consider pre-resolving all IDs before the transaction.
+2. The `updateMetadataBatch` and `completeMultiple` methods also call `getPlanBySessionId` inside transaction loops — same consideration as above.
+3. The `hasPlan` and `getPlanFilePath` dual-stmt approach (try `session_id` first, then `plan_id`) is slightly less efficient than the `getPlanBySessionId`-then-resolve pattern but avoids an extra allocation for read-only methods. Both patterns are correct.
+4. The `KanbanDispatchCard.planId: string` change means all construction sites must provide `planId`. Both current sites (`_collectKanbanCardsInColumns` and `_getAutobanStateFromDb`) already pass `row.planId`, which is always present from `KanbanPlanRecord`. Future construction sites must also provide it.
+
+### Pre-existing Implementation (Verified Correct)
+
+Fixes #1-28 (KanbanProvider.ts and TaskViewerProvider.ts Sections A-B) were already correctly implemented before this review pass:
+- #1-23: All `_cardMatchesIds`, `_cardId`, `(c.planId || c.sessionId)`, dual-keyed `idToCard` map, `_resolveSessionIds` fallback, `_cardsToPromptPlans`/`_buildRepoScopeMap` planId-primary keying, MERGE column handler — all verified in place.
+- #24-28: `KanbanDispatchCard` type (now with required `planId`), `_collectKanbanCardsInColumns` planId-primary map keying and card construction, `_getAutobanStateFromDb` planId-primary map keying and card construction, `_activeDispatchSessions` map keying via `_dispatchCardId`, `_releaseSettledDispatchLocks` key consistency — all verified in place.

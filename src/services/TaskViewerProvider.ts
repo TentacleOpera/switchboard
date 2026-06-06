@@ -92,7 +92,7 @@ type DispatchReadinessEntry = {
 
 type KanbanDispatchCard = {
     sessionId: string;
-    planId?: string;
+    planId: string;
     lastActivity: string;
     planFile?: string;
     sourceColumn: string;
@@ -1914,7 +1914,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const workspaceId = await this._getWorkspaceIdForRoot(workspaceRoot);
-        return (await db.getBoard(workspaceId)).find(entry => entry.sessionId === sessionId);
+        return (await db.getBoard(workspaceId)).find(entry => entry.sessionId === sessionId || entry.planId === sessionId);
     }
 
     private _getEffectiveKanbanColumnForSession(
@@ -5722,9 +5722,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         eligibleCards: KanbanDispatchCard[],
         batchSize: number
-    ): Promise<Array<{ sessionId: string; complexity: string; sourceColumn: string }>> {
+    ): Promise<Array<{ sessionId: string; planId: string; complexity: string; sourceColumn: string }>> {
         const complexityFilter = this._autobanState.complexityFilter;
-        const selectedCards: Array<{ sessionId: string; complexity: string; sourceColumn: string }> = [];
+        const selectedCards: Array<{ sessionId: string; planId: string; complexity: string; sourceColumn: string }> = [];
 
         for (const card of eligibleCards) {
             let complexity: string = '8'; // default to high
@@ -5741,7 +5741,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 continue;
             }
 
-            selectedCards.push({ sessionId: this._dispatchCardId(card), complexity, sourceColumn: card.sourceColumn });
+            selectedCards.push({ sessionId: this._dispatchCardId(card), planId: card.planId, complexity, sourceColumn: card.sourceColumn });
             if (selectedCards.length >= batchSize) {
                 break;
             }
@@ -7405,14 +7405,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; planId?: string; sourceColumn: string }>> = {
+            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; planId: string; sourceColumn: string }>> = {
                 intern: [],
                 coder: [],
                 lead: []
             };
             for (const card of selectedCards) {
                 const targetRole = this._autobanRoutePlanReviewedCard(card.complexity, routingMode);
-                routedSessions[targetRole].push({ sessionId: card.sessionId, sourceColumn: card.sourceColumn });
+                routedSessions[targetRole].push({ sessionId: card.sessionId, planId: card.planId, sourceColumn: card.sourceColumn });
             }
 
             console.log(`[Autoban] PLAN REVIEWED routing (${complexityFilter}, ${routingMode}): ${routedSessions.intern.length} → intern, ${routedSessions.coder.length} → coder, ${routedSessions.lead.length} → lead`);
