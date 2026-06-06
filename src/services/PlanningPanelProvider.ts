@@ -2023,11 +2023,12 @@ export class PlanningPanelProvider {
             const activeRoot = this._getWorkspaceRoot();
             let configuredFolderPaths: string[] = []; // Track configured folder paths for webview
 
-            // Compute configured folder paths for the active root directly
-            // (independent of the dedup scanning loop below)
-            if (activeRoot) {
-                const activeService = this._getLocalFolderService(activeRoot);
-                configuredFolderPaths = activeService.getFolderPaths();
+            // Compute configured folder paths using the first root (global settings)
+            // With global settings, all roots return the same paths, so use first root
+            const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
+            if (configRoot) {
+                const configService = this._getLocalFolderService(configRoot);
+                configuredFolderPaths = configService.getFolderPaths();
             }
 
             const seenFilePaths = new Set<string>(); // Deduplicate files across roots
@@ -2088,6 +2089,7 @@ export class PlanningPanelProvider {
             }
 
             const mappedNodes = this._mapLocalFilesToTreeNodes(allFiles);
+            const workspaceItems = this._buildKanbanWorkspaceItems();
 
             // Content dedup: watched folders (e.g. an active Claude/Cursor projects dir)
             // can churn many times a second from file CONTENT edits that don't change the
@@ -2097,7 +2099,8 @@ export class PlanningPanelProvider {
                 folderPaths: configuredFolderPaths,
                 nodes: mappedNodes,
                 antigravitySessions,
-                antigravityEnabled: agEnabled
+                antigravityEnabled: agEnabled,
+                workspaceItems
             });
             if (signature === this._lastLocalDocsSignature) {
                 return;
@@ -2108,10 +2111,11 @@ export class PlanningPanelProvider {
             this._panel.webview.postMessage({
                 type: 'localDocsReady',
                 sourceId: 'local-folder',
-                folderPaths: configuredFolderPaths, // Send active root's folder paths, not workspace root
+                folderPaths: configuredFolderPaths,
                 nodes: mappedNodes,
-                antigravitySessions,           // NEW — undefined-safe in webview
-                antigravityEnabled: agEnabled  // NEW — tells webview whether to show toggle as checked
+                workspaceItems,
+                antigravitySessions,
+                antigravityEnabled: agEnabled
             });
         } catch (err) {
             console.error('[PlanningPanel] Failed to fetch local-folder roots:', err);
@@ -2121,6 +2125,7 @@ export class PlanningPanelProvider {
                 sourceId: 'local-folder',
                 folderPaths: [],
                 nodes: [],
+                workspaceItems: this._buildKanbanWorkspaceItems(),
                 error: String(err)
             });
         }
@@ -2139,11 +2144,11 @@ export class PlanningPanelProvider {
                 const activeRoot = this._getWorkspaceRoot();
                 let configuredFolderPaths: string[] = [];
 
-                // Compute configured HTML folder paths for the active root directly
-                // (independent of the dedup scanning loop below)
-                if (activeRoot) {
-                    const activeService = this._getLocalFolderService(activeRoot);
-                    configuredFolderPaths = activeService.getHtmlFolderPaths();
+                // Compute configured HTML folder paths using the first root (global settings)
+                const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
+                if (configRoot) {
+                    const configService = this._getLocalFolderService(configRoot);
+                    configuredFolderPaths = configService.getHtmlFolderPaths();
                 }
 
                 const seenFilePaths = new Set<string>();
@@ -2204,11 +2209,13 @@ export class PlanningPanelProvider {
                     localResourceRoots: [...baseRoots, ...extraRoots]
                 };
 
+                const workspaceItems = this._buildKanbanWorkspaceItems();
                 this._panel.webview.postMessage({
                     type: 'htmlDocsReady',
                     sourceId: 'html-folder',
                     folderPaths: configuredFolderPaths,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles)
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems
                 });
             } catch (err) {
                 console.error('[PlanningPanel] Failed to fetch html-folder roots:', err);
@@ -2217,6 +2224,7 @@ export class PlanningPanelProvider {
                     sourceId: 'html-folder',
                     folderPaths: [],
                     nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
                 });
             }
@@ -2236,9 +2244,11 @@ export class PlanningPanelProvider {
                 const activeRoot = this._getWorkspaceRoot();
                 let configuredFolderPaths: string[] = [];
 
-                if (activeRoot) {
-                    const activeService = this._getLocalFolderService(activeRoot);
-                    configuredFolderPaths = activeService.getDesignFolderPaths();
+                // Compute configured design folder paths using the first root (global settings)
+                const configRoot = allRoots.length > 0 ? allRoots[0] : activeRoot;
+                if (configRoot) {
+                    const configService = this._getLocalFolderService(configRoot);
+                    configuredFolderPaths = configService.getDesignFolderPaths();
                 }
 
                 const seenFilePaths = new Set<string>();
@@ -2281,11 +2291,13 @@ export class PlanningPanelProvider {
                 // Update webview options localResourceRoots
                 this._updateWebviewRoots();
 
+                const workspaceItems = this._buildKanbanWorkspaceItems();
                 this._panel.webview.postMessage({
                     type: 'designDocsReady',
                     sourceId: 'design-folder',
                     folderPaths: configuredFolderPaths,
-                    nodes: this._mapLocalFilesToTreeNodes(allFiles)
+                    nodes: this._mapLocalFilesToTreeNodes(allFiles),
+                    workspaceItems
                 });
             } catch (err) {
                 console.error('[PlanningPanel] Failed to fetch design-folder roots:', err);
@@ -2294,6 +2306,7 @@ export class PlanningPanelProvider {
                     sourceId: 'design-folder',
                     folderPaths: [],
                     nodes: [],
+                    workspaceItems: this._buildKanbanWorkspaceItems(),
                     error: String(err)
                 });
             }

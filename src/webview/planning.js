@@ -32,8 +32,42 @@
         dirtyFlags: { local: false, kanban: false, design: false },
         externalChangePending: { local: false, kanban: false, design: false },
         reviewMode: { kanban: false },
-        kanbanReviewSelectedText: ''
+        kanbanReviewSelectedText: '',
+        localWorkspaceRootFilter: '',
+        htmlWorkspaceRootFilter: '',
+        designWorkspaceRootFilter: ''
     };
+
+    function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
+        const select = document.getElementById(selectElementId);
+        if (!select) return;
+        const current = selectedValue || '';
+        select.innerHTML = '<option value="">All Workspaces</option>';
+        for (const item of workspaceItems) {
+            const option = document.createElement('option');
+            option.value = item.workspaceRoot;
+            option.textContent = item.label;
+            if (item.workspaceRoot === current) {
+                option.selected = true;
+            }
+            select.appendChild(option);
+        }
+    }
+
+    document.getElementById('local-workspace-filter')?.addEventListener('change', (e) => {
+        state.localWorkspaceRootFilter = e.target.value;
+        handleLocalDocsReady(state._lastLocalDocsMsg || {});
+    });
+    document.getElementById('html-workspace-filter')?.addEventListener('change', (e) => {
+        state.htmlWorkspaceRootFilter = e.target.value;
+        handleHtmlDocsReady(state._lastHtmlDocsMsg || {});
+    });
+    document.getElementById('design-workspace-filter')?.addEventListener('change', (e) => {
+        state.designWorkspaceRootFilter = e.target.value;
+        const msg = state._lastDesignDocsMsg || {};
+        state.designFolderPaths = msg.folderPaths || [];
+        renderDesignDocs(msg);
+    });
 
     function getActiveTabName() {
         const activeBtn = document.querySelector('.research-tab-btn.active');
@@ -984,10 +1018,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleHtmlDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleHtmlDocsReady called:', msg);
+        state._lastHtmlDocsMsg = msg;
         state.htmlFolderPaths = msg.folderPaths || [];
+        populateWorkspaceDropdown('html-workspace-filter', msg.workspaceItems || [], state.htmlWorkspaceRootFilter);
+        const filteredNodes = state.htmlWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.htmlWorkspaceRootFilter)
+            : (msg.nodes || []);
         renderHtmlDocs({
             sourceId: msg.sourceId || 'html-folder',
-            nodes: msg.nodes || [],
+            nodes: filteredNodes,
             folderPaths: msg.folderPaths || [],
             error: msg.error
         });
@@ -1669,10 +1708,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
 
     function handleLocalDocsReady(msg) {
         console.log('[PlanningPanel Webview] handleLocalDocsReady called:', msg);
+        state._lastLocalDocsMsg = msg;
         state.localFolderPaths = msg.folderPaths || [];
+        populateWorkspaceDropdown('local-workspace-filter', msg.workspaceItems || [], state.localWorkspaceRootFilter);
+        const filteredNodes = state.localWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.localWorkspaceRootFilter)
+            : (msg.nodes || []);
         renderLocalDocs({
             sourceId: msg.sourceId || 'local-folder',
-            nodes: msg.nodes || [],
+            nodes: filteredNodes,
             folderPaths: msg.folderPaths || [],
             error: msg.error
         });
@@ -2564,8 +2608,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 handleHtmlDocsReady(msg);
                 break;
             case 'designDocsReady':
+                state._lastDesignDocsMsg = msg;
                 state.designFolderPaths = msg.folderPaths || [];
-                renderDesignDocs(msg);
+                populateWorkspaceDropdown('design-workspace-filter', msg.workspaceItems || [], state.designWorkspaceRootFilter);
+                const filteredNodes = state.designWorkspaceRootFilter
+                    ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
+                    : (msg.nodes || []);
+                renderDesignDocs({
+                    sourceId: msg.sourceId || 'design-folder',
+                    nodes: filteredNodes,
+                    folderPaths: msg.folderPaths || []
+                });
                 break;
             case 'onlineDocsReady':
                 handleOnlineDocsReady(msg);
@@ -4107,6 +4160,7 @@ DEPTH: Deep (50-100+ sources)`;
     }
 
     vscode.postMessage({ type: 'fetchRoots' });
+    vscode.postMessage({ type: 'refreshSource', sourceId: 'local-folder' });
     vscode.postMessage({ type: 'listHtmlFolders' });
     vscode.postMessage({ type: 'refreshSource', sourceId: 'html-folder' });
     vscode.postMessage({ type: 'listDesignFolders' });

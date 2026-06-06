@@ -233,6 +233,27 @@
             flex-shrink: 0;
         }
 
+        .workspace-filter-select {
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            cursor: pointer;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .workspace-filter-select:hover {
+            border-color: var(--accent-teal-dim);
+        }
+        .workspace-filter-select:focus {
+            outline: 1px solid var(--accent-teal);
+        }
+
         .strip-btn {
             background: transparent;
             border: 1px solid var(--border-color);
@@ -274,6 +295,7 @@
 
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
+        .content-row.collapsed #tree-pane-design,
         .content-row.collapsed #tree-pane-html {
             padding: 4px;
             overflow: hidden;
@@ -817,6 +839,9 @@
             align-items: stretch;
             padding: 10px 12px;
             gap: 8px;
+        }
+        .tree-node:has(.card-text) .card-actions {
+            margin-top: 0;
         }
 
         .tree-node.folder-subheader {
@@ -2256,6 +2281,9 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-local">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-local">
+                <select id="local-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-link-to-doc-local" class="strip-btn" disabled>Link to Document</button>
@@ -2465,6 +2493,9 @@
                 <button class="btn-disable-doc" id="btn-disable-doc-design">Turn off</button>
             </div>
             <div class="controls-strip" id="controls-strip-design">
+                <select id="design-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
                 <button id="btn-set-active-context-design" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-link-to-doc-design" class="strip-btn" disabled>Link to Document</button>
                 <button id="btn-edit-design" class="strip-btn" disabled>Edit</button>
@@ -2498,6 +2529,9 @@
         </div>
         <div id="html-preview-content" class="research-tab-content">
             <div class="controls-strip" id="controls-strip-html">
+                <select id="html-workspace-filter" class="workspace-filter-select">
+                    <option value="">All Workspaces</option>
+                </select>
                 <span id="status-html" style="margin-left: 0; font-size: 12px; color: var(--text-secondary);">No folder configured</span>
             </div>
             <div class="content-row">

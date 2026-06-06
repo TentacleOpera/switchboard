@@ -331,21 +331,21 @@
           "items": { "type": "string" },
           "default": [],
           "description": "Paths to local folders containing research files (.md, .txt, .markdown, .rst, .adoc). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
-          "scope": "resource"
+          "scope": "application"
         },
         "switchboard.research.htmlFolderPaths": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
           "description": "Paths to local folders containing HTML prototype files (.html, .htm) for preview in the HTML Previews tab. Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
-          "scope": "resource"
+          "scope": "application"
         },
         "switchboard.research.designFolderPaths": {
           "type": "array",
           "items": { "type": "string" },
           "default": [],
           "description": "Paths to local folders containing design system files (.md, .txt, .markdown, .rst, .adoc) and image assets (.png, .jpg, .jpeg, .gif, .svg). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
-          "scope": "resource"
+          "scope": "application"
         },
         "switchboard.research.antigravityBrainEnabled": {
           "type": "boolean",

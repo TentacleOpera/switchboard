@@ -56,13 +56,12 @@ export class LocalFolderService {
     }
 
     private _getConfigurationTarget(): vscode.ConfigurationTarget {
-        const folder = vscode.workspace.getWorkspaceFolder(vscode.Uri.file(this._workspaceRoot));
-        return folder ? vscode.ConfigurationTarget.WorkspaceFolder : vscode.ConfigurationTarget.Workspace;
+        return vscode.ConfigurationTarget.Global;
     }
 
     /** Read the legacy singular setting; returns the raw string or empty string. */
     private _getLegacyFolderPath(): string {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         return config.get<string>('research.localFolderPath', '');
     }
 
@@ -78,7 +77,7 @@ export class LocalFolderService {
     }
 
     getFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const paths = config.get<string[]>('research.localFolderPaths', []);
 
         // Legacy fallback: read singular setting if array is empty
@@ -101,7 +100,7 @@ export class LocalFolderService {
     }
 
     async addFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         let currentPaths = config.get<string[]>('research.localFolderPaths', []);
 
         // Migrate legacy singular setting into the array before adding
@@ -121,7 +120,7 @@ export class LocalFolderService {
     }
 
     async removeFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         let currentPaths = config.get<string[]>('research.localFolderPaths', []);
 
         // Migrate legacy singular setting into the array before removing
@@ -276,7 +275,7 @@ export class LocalFolderService {
     }
 
     getHtmlFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const paths = config.get<string[]>('research.htmlFolderPaths', []);
         const seen = new Set<string>();
         return paths
@@ -290,7 +289,7 @@ export class LocalFolderService {
     }
 
     async addHtmlFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
         const resolvedInput = this.resolveFolderPath(folderPath);
         
@@ -302,7 +301,7 @@ export class LocalFolderService {
     }
 
     async removeHtmlFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const currentPaths = config.get<string[]>('research.htmlFolderPaths', []);
         const resolvedToRemove = this.resolveFolderPath(folderPath);
         
@@ -435,7 +434,7 @@ export class LocalFolderService {
     }
 
     getDesignFolderPaths(): string[] {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const paths = config.get<string[]>('research.designFolderPaths', []);
         const seen = new Set<string>();
         return paths
@@ -449,7 +448,7 @@ export class LocalFolderService {
     }
 
     async addDesignFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const currentPaths = config.get<string[]>('research.designFolderPaths', []);
         const resolvedInput = this.resolveFolderPath(folderPath);
         
@@ -461,7 +460,7 @@ export class LocalFolderService {
     }
 
     async removeDesignFolderPath(folderPath: string): Promise<void> {
-        const config = vscode.workspace.getConfiguration('switchboard', vscode.Uri.file(this._workspaceRoot));
+        const config = vscode.workspace.getConfiguration('switchboard');
         const currentPaths = config.get<string[]>('research.designFolderPaths', []);
         const resolvedToRemove = this.resolveFolderPath(folderPath);
         
