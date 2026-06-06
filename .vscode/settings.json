@@ -29,5 +29,6 @@
 	],
 	"switchboard.statusBar.showTerminalControls": true,
 	"switchboard.statusBar.showKanbanButton": true,
-	"switchboard.statusBar.showArtifactsButton": true
+	"switchboard.statusBar.showArtifactsButton": true,
+	"switchboard.theme.name": "afterburner"
 }

@@ -282,15 +282,27 @@
         }
 
         .content-row {
-            display: grid;
-            grid-template-columns: 280px 1fr;
+            display: flex;
             flex: 1;
             overflow: hidden;
-            transition: grid-template-columns 0.2s ease;
+        }
+        .content-row > * {
+            transition: flex 0.2s ease;
+        }
+        .content-row > :first-child {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .content-row > :last-child {
+            flex: 3;
+            overflow-y: auto;
         }
 
-        .content-row.collapsed {
-            grid-template-columns: 40px 1fr;
+        .content-row.collapsed > :first-child {
+            flex: 0 0 40px !important;
+        }
+        .content-row.collapsed > :last-child {
+            flex: 1 !important;
         }
 
         .content-row.collapsed #tree-pane,
@@ -2055,7 +2067,7 @@
 
         .preview-panel-wrapper {
             position: relative;
-            flex: 2;
+            flex: 3;
             height: 100%;
             overflow: hidden;
             display: flex;
@@ -2301,7 +2313,7 @@
                     </div>
                     <div class="empty-state">Loading local docs...</div>
                 </div>
-                <div class="preview-panel-wrapper" style="flex: 2;">
+                <div class="preview-panel-wrapper">
                     <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
                         <div class="preview-content-wrapper">
                             <style>
@@ -2344,7 +2356,7 @@
                     </div>
                     <div class="empty-state">Loading online docs...</div>
                 </div>
-                <div class="preview-panel-wrapper" style="flex: 2;">
+                <div class="preview-panel-wrapper">
                     <div id="preview-pane-online" style="flex: 1; width: 100%; box-sizing: border-box;">
                         <div class="preview-content-wrapper">
                             <div id="markdown-preview-online">
@@ -2473,7 +2485,7 @@
                 <div id="kanban-list-pane">
                     <!-- Plan rows rendered by JS -->
                 </div>
-                <div class="preview-panel-wrapper" style="flex: 2;">
+                <div class="preview-panel-wrapper">
                     <div id="kanban-preview-pane" class="kanban-preview-pane" style="flex: 1; height: 100%; width: 100%; box-sizing: border-box;">
                         <div id="kanban-preview-content">
                             <!-- Markdown preview rendered by JS -->
@@ -2511,7 +2523,7 @@
                     </div>
                     <div class="empty-state">Loading design docs...</div>
                 </div>
-                <div class="preview-panel-wrapper" style="flex: 2;">
+                <div class="preview-panel-wrapper">
                     <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
                         <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
                             <div id="markdown-preview-design">
