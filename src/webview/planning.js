@@ -35,7 +35,10 @@
         kanbanReviewSelectedText: '',
         localWorkspaceRootFilter: '',
         htmlWorkspaceRootFilter: '',
-        designWorkspaceRootFilter: ''
+        designWorkspaceRootFilter: '',
+        _lastLocalDocsMsg: null,
+        _lastHtmlDocsMsg: null,
+        _lastDesignDocsMsg: null
     };
 
     function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
@@ -66,7 +69,14 @@
         state.designWorkspaceRootFilter = e.target.value;
         const msg = state._lastDesignDocsMsg || {};
         state.designFolderPaths = msg.folderPaths || [];
-        renderDesignDocs(msg);
+        const filteredNodes = state.designWorkspaceRootFilter
+            ? (msg.nodes || []).filter(n => n.metadata?.root === state.designWorkspaceRootFilter)
+            : (msg.nodes || []);
+        renderDesignDocs({
+            sourceId: msg.sourceId || 'design-folder',
+            nodes: filteredNodes,
+            folderPaths: msg.folderPaths || []
+        });
     });
 
     function getActiveTabName() {

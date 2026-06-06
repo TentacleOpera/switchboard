@@ -888,7 +888,7 @@ export class PlanningPanelProvider {
                 console.log('[PlanningPanel] Received fetchRoots, _panel exists:', !!this._panel);
                 const sources = this._researchImportService.getAvailableSources();
                 console.log('[PlanningPanel] Available sources at fetchRoots:', sources);
-                await this._handleFetchRoots();
+                await this._handleFetchRoots(true);
                 break;
             }
             case 'submitComment': {
@@ -1130,7 +1130,7 @@ export class PlanningPanelProvider {
                 await this._cacheService?.clearSourceCache(sourceId);
                 // Refresh only the affected pane to avoid cross-pane flicker
                 if (sourceId === 'local-folder') {
-                    await this._sendLocalDocsReady();
+                    await this._sendLocalDocsReady(true);
                 } else if (sourceId === 'html-folder') {
                     await this._sendHtmlDocsReady();
                 } else if (sourceId === 'design-folder') {
@@ -2015,7 +2015,7 @@ export class PlanningPanelProvider {
         }));
     }
 
-    private async _sendLocalDocsReady(): Promise<void> {
+    private async _sendLocalDocsReady(force: boolean = false): Promise<void> {
         try {
             const allRoots = this._getWorkspaceRoots();
             const allFiles: Array<{ id: string; name: string; relativePath: string; isFolder?: boolean; parentId?: string; _root?: string; sourceFolder?: string; title?: string }> = [];
@@ -2102,7 +2102,7 @@ export class PlanningPanelProvider {
                 antigravityEnabled: agEnabled,
                 workspaceItems
             });
-            if (signature === this._lastLocalDocsSignature) {
+            if (!force && signature === this._lastLocalDocsSignature) {
                 return;
             }
             this._lastLocalDocsSignature = signature;
@@ -2188,26 +2188,11 @@ export class PlanningPanelProvider {
                     return;
                 }
 
-                // Update webview localResourceRoots dynamically
-                const extensionUri = this._extensionUri;
-                const baseRoots = [
-                    vscode.Uri.joinPath(extensionUri, 'dist'),
-                    vscode.Uri.joinPath(extensionUri, 'webview'),
-                    vscode.Uri.joinPath(extensionUri, 'node_modules'),
-                    ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri)
-                ];
-
-                const extraRoots: vscode.Uri[] = [];
-                for (const folderPath of scannedPaths) {
-                    if (folderPath && fs.existsSync(folderPath)) {
-                        extraRoots.push(vscode.Uri.file(folderPath));
-                    }
-                }
-
-                this._panel.webview.options = {
-                    ...this._panel.webview.options,
-                    localResourceRoots: [...baseRoots, ...extraRoots]
-                };
+                // Update webview localResourceRoots — use _updateWebviewRoots() which
+                // has a dedup check to avoid unnecessary webview reloads (assigning
+                // webview.options unconditionally reloads the webview, resetting the
+                // DOM to "Loading…" placeholders and triggering the stuck-on-loading bug).
+                this._updateWebviewRoots();
 
                 const workspaceItems = this._buildKanbanWorkspaceItems();
                 this._panel.webview.postMessage({
@@ -2339,8 +2324,8 @@ export class PlanningPanelProvider {
         });
     }
 
-    private async _handleFetchRoots(): Promise<void> {
-        await this._sendLocalDocsReady();
+    private async _handleFetchRoots(forceLocalDocs: boolean = false): Promise<void> {
+        await this._sendLocalDocsReady(forceLocalDocs);
         await this._sendHtmlDocsReady();
         await this._sendDesignDocsReady();
         await this._sendOnlineDocsReady();
