@@ -639,8 +639,8 @@ export async function activate(context: vscode.ExtensionContext) {
     // Start the unified Plan Scanner at activation (not just on webview resolve) so it
     // claims newly generated IDE plans even when the Switchboard panel is minimised,
     // unfocused, or never opened this session, and on the first sweep after a restart.
-    // Seed it once from the legacy planWatcher.* settings, then start.
-    void taskViewerProvider.migratePlanScannerSettings().finally(() => taskViewerProvider.startPlanScanner());
+    // It governs ONLY external IDE plan sources and never touches GlobalPlanWatcher.
+    taskViewerProvider.startPlanScanner();
 
     // Register core commands immediately after primary dependencies are ready.
     // This prevents 'command not found' errors if the user interacts with the

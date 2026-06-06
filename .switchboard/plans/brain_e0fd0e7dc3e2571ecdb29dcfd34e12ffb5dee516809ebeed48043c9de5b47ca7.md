@@ -78,5 +78,42 @@ Key risks: orphan temp files on crash (pre-existing, acceptable); concurrent wri
 4. Verify that the extension loads correctly on startup and correctly reads the state.
 5. (Crash test) Force-kill the VS Code process during a state update, then reopen — verify `state.json` is not truncated.
 
+## Reviewer Pass Results
+
+### Stage 1: Grumpy Principal Engineer Findings
+
+| # | Finding | Severity | Details |
+|---|---------|----------|---------|
+| 1 | `_processUpdateQueue` uses `_writeFileAtomic` | — | Verified at line 1599. Correct replacement. |
+| 2 | `_persistLastAccessed` uses `_writeFileAtomic` | — | Verified at line 5127. Correct replacement; encoding `'utf8'` preserved inside `_writeFileAtomic`. |
+| 3 | `_writeFileAtomic` lacks temp-file cleanup on rename failure | NIT | Pre-existing issue in the helper method (lines 16845-16850). If `rename` throws, orphan temp file remains. Out of scope for this plan. |
+| 4 | Race condition between `_persistLastAccessed` and update queue | — | Pre-existing, acknowledged. Atomic writes reduce corruption window. |
+| 5 | `fs.writeFileSync` at line 1577 not converted to atomic | NIT | Initialization path creates `state.json` from scratch. Sync write is low-risk for truncation. Out of scope — plan targeted async `writeFile` call sites only. |
+
+### Stage 2: Balanced Synthesis
+
+- **Keep**: Both `_writeFileAtomic` replacements are correct and complete.
+- **Fix Now**: Nothing needed.
+- **Defer**: (1) Add try/catch cleanup to `_writeFileAtomic` for orphan temp files on rename failure (NIT, pre-existing). (2) Consider converting `fs.writeFileSync` init path to atomic write for consistency (NIT, low risk).
+
+### Code Fixes Applied
+
+None — implementation verified correct with no CRITICAL or MAJOR findings.
+
+### Verification Results
+
+- **`_processUpdateQueue` (line 1599)**: Uses `this._writeFileAtomic(statePath, newContent)` ✓
+- **`_persistLastAccessed` (line 5127)**: Uses `this._writeFileAtomic(statePath, JSON.stringify(state, null, 2))` ✓
+- **`_writeFileAtomic` method (line 16845)**: Unchanged, temp-file + rename pattern ✓
+- **No remaining `fs.promises.writeFile(statePath, ...)` calls**: Confirmed ✓
+- **Compilation**: Skipped per review instructions
+- **Tests**: Skipped per review instructions
+
+### Remaining Risks
+
+- `_writeFileAtomic` orphan temp files on rename failure (pre-existing, NIT)
+- `fs.writeFileSync` init path not atomic (low risk, NIT)
+- Concurrent writes from `_persistLastAccessed` bypassing update queue (pre-existing race, reduced by atomic writes)
+
 ## Recommendation
 **Send to Intern** — Complexity 2, two-line substitution using an existing helper method.

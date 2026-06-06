@@ -279,6 +279,17 @@ export class KanbanProvider implements vscode.Disposable {
         );
     }
 
+    /** Check if a card matches any ID in the given array (planId-primary, sessionId-legacy). */
+    private _cardMatchesIds(card: KanbanCard, ids: string[]): boolean {
+        const cardKey = card.planId || card.sessionId;
+        return ids.includes(cardKey) || (!!card.sessionId && ids.includes(card.sessionId));
+    }
+
+    /** Get the primary identifier for a card (planId-first, sessionId-legacy). */
+    private _cardId(card: KanbanCard): string {
+        return card.planId || card.sessionId;
+    }
+
     /** Resolve the best available identifier for a card. Returns sessionId if present, otherwise planId. */
     private _resolveSessionId(planId?: string, sessionId?: string): string | undefined {
         if (sessionId) { return sessionId; }
@@ -296,7 +307,7 @@ export class KanbanProvider implements vscode.Disposable {
             for (const pid of planIds) {
                 if (!pid) { continue; }
                 const card = this._lastCards.find(c => c.planId === pid);
-                if (card?.sessionId) { resolved.add(card.sessionId); }
+                if (card) { resolved.add(card.sessionId || card.planId); }
             }
         }
         return Array.from(resolved);
@@ -1733,9 +1744,10 @@ export class KanbanProvider implements vscode.Disposable {
     }
 
     private _calculateBlockingDependencies(cards: KanbanCard[]): void {
-        const sessionIdToCard = new Map<string, KanbanCard>();
+        const idToCard = new Map<string, KanbanCard>();
         for (const card of cards) {
-            sessionIdToCard.set(card.sessionId, card);
+            if (card.planId) { idToCard.set(card.planId, card); }
+            if (card.sessionId) { idToCard.set(card.sessionId, card); }
         }
 
         for (const card of cards) {
@@ -1745,7 +1757,7 @@ export class KanbanProvider implements vscode.Disposable {
             }
 
             const blocking = card.dependencies.some(dep => {
-                const depCard = sessionIdToCard.get(dep);
+                const depCard = idToCard.get(dep);
                 if (!depCard) return false;
                 // Dependencies in COMPLETED or CODE REVIEWED are not blocking
                 return depCard.column !== 'COMPLETED' && depCard.column !== 'CODE REVIEWED';
@@ -2215,14 +2227,15 @@ export class KanbanProvider implements vscode.Disposable {
 
         const promptPlans: BatchPromptPlan[] = [];
         for (const card of cards) {
-            const repoScope = repoScopeMap?.get(card.sessionId) || '';
+            const cardKey = this._cardId(card);
+            const repoScope = repoScopeMap?.get(cardKey) || '';
             const workingDir = repoScope
                 ? resolveWorkingDir(workspaceRoot, repoScope)
                 : '';
             
             let worktreePath: string | undefined;
             if (hasDb) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
+                const plan = await db.getPlanBySessionId(cardKey);
                 if (plan && plan.worktreeId) {
                     const worktree = await db.getWorktreeById(plan.worktreeId);
                     if (worktree) {
@@ -2236,7 +2249,7 @@ export class KanbanProvider implements vscode.Disposable {
                 absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
                 complexity: card.complexity,
                 workingDir,
-                sessionId: card.sessionId,
+                sessionId: cardKey,
                 dependencies: card.dependencies?.join(', ') || undefined,
                 worktreePath
             });
@@ -2297,9 +2310,10 @@ export class KanbanProvider implements vscode.Disposable {
         const db = this._getKanbanDb(workspaceRoot);
         if (await db.ensureReady()) {
             for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
                 if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
+                    repoScopeMap.set(cardKey, plan.repoScope);
                 }
             }
         }
@@ -2961,9 +2975,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const db = this._getKanbanDb(workspaceRoot);
         if (await db.ensureReady()) {
             for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
                 if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
+                    repoScopeMap.set(cardKey, plan.repoScope);
                 }
             }
         }
@@ -3162,9 +3177,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const db = this._getKanbanDb(workspaceRoot);
         if (await db.ensureReady()) {
             for (const card of cards) {
-                const plan = await db.getPlanBySessionId(card.sessionId);
+                const cardKey = this._cardId(card);
+                const plan = await db.getPlanBySessionId(cardKey);
                 if (plan?.repoScope) {
-                    repoScopeMap.set(card.sessionId, plan.repoScope);
+                    repoScopeMap.set(cardKey, plan.repoScope);
                 }
             }
         }
@@ -4096,7 +4112,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
         const filtered: string[] = [];
         let skippedCount = 0;
         for (const sid of sessionIds) {
-            const card = this._lastCards.find(c => c.sessionId === sid);
+            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sid);
             const complexity = card?.complexity;
             if (complexity && complexity !== 'Unknown') {
                 const num = parseInt(complexity, 10);
@@ -4542,7 +4558,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             workspaceRoot: workspaceRoot || undefined
                         });
                         if (dispatched && role === 'lead') {
-                            const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                            const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                             if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                 await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                             }
@@ -4557,7 +4573,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                     if (role === 'lead' && targetColumn === 'LEAD CODED' && leadUsesIde) {
                         // IDE Lead mode: copy lead prompt to clipboard instead of CLI dispatch
-                        const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                        const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                         if (card && workspaceRoot) {
                             const plans = await this._cardsToPromptPlans([card], workspaceRoot, new Map());
                             const leadPrompt = await this.generateUnifiedPrompt('lead', plans, workspaceRoot);
@@ -4580,7 +4596,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             // Pair programming: when a high-complexity card is dispatched to Lead,
                             // also dispatch the Coder terminal with the Routine prompt.
                             if (role === 'lead' && targetColumn === 'LEAD CODED') {
-                                const card = this._lastCards.find(c => c.sessionId === sessionId && c.workspaceRoot === workspaceRoot);
+                                const card = this._lastCards.find(c => (c.planId || c.sessionId) === sessionId && c.workspaceRoot === workspaceRoot);
                                 if (card && !this._isLowComplexity(card) && card.complexity !== 'Unknown') {
                                     await this._dispatchWithPairProgrammingIfNeeded([card], workspaceRoot);
                                 }
@@ -4912,7 +4928,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 await this._refreshBoard(workspaceRoot);
                 const sourceCards = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot && sessionIds.includes(card.sessionId)
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, sessionIds)
                 );
                 if (sourceCards.length === 0) {
                     this._panel?.webview.postMessage({ type: 'promptOnDropResult', sessionIds, success: false });
@@ -4995,7 +5011,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, new Map());
                 const prompt = await this.generateUnifiedPrompt('planner', plans, workspaceRoot, { instruction: 'improve-plan' });
                 await vscode.env.clipboard.writeText(prompt);
-                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'CREATED', 'improve-plan', workspaceRoot);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'CREATED', 'improve-plan', workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch planner prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to PLAN REVIEWED.`, isError: false });
                 break;
@@ -5024,7 +5040,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const plans = await this._cardsToPromptPlans(sourceCards, workspaceRoot, repoScopeMap);
                 const prompt = await this.generateUnifiedPrompt('coder', plans, workspaceRoot, { instruction: 'low-complexity' });
                 await vscode.env.clipboard.writeText(prompt);
-                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', undefined, workspaceRoot);
+                const advanced = await this._advanceSessionsInColumn(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', undefined, workspaceRoot);
                 await this._refreshBoard(workspaceRoot);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: `Copied batch low-complexity prompt (${sourceCards.length} plans). Advanced ${advanced.length} plans to CODER CODED.`, isError: false });
                 break;
@@ -5045,7 +5061,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     vscode.window.showInformationMessage('No LOW-complexity PLAN REVIEWED plans available for Jules dispatch.');
                     break;
                 }
-                const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => card.sessionId), 'PLAN REVIEWED', workspaceRoot);
+                const eligibleSessionIds = await this._getEligibleSessionIds(sourceCards.map(card => this._cardId(card)), 'PLAN REVIEWED', workspaceRoot);
                 let dispatchedCount = 0;
                 for (const sessionId of eligibleSessionIds) {
                     const dispatched = await vscode.commands.executeCommand<boolean>('switchboard.triggerAgentFromKanban', 'jules', sessionId, undefined, workspaceRoot);
@@ -5109,7 +5125,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                             });
                             if (dispatched && dispatchSpec.role === 'lead') {
                                 const leadCards = this._lastCards.filter(card =>
-                                    card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                                 ).filter(card => !this._isLowComplexity(card) && card.complexity !== 'Unknown');
                                 if (leadCards.length > 0) {
                                     await this._dispatchWithPairProgrammingIfNeeded(leadCards, workspaceRoot);
@@ -5153,7 +5169,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     vscode.window.showInformationMessage(`No plans in ${column} to move.`);
                     break;
                 }
-                const sessionIds = sourceCards.map(card => card.sessionId);
+                const sessionIds = sourceCards.map(card => this._cardId(card));
 
                 // PLAN REVIEWED uses dynamic complexity routing per-session
                 if (column === 'PLAN REVIEWED') {
@@ -5236,12 +5252,12 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 let chatPlans: BatchPromptPlan[] = [];
                 if (Array.isArray(msg.sessionIds) && msg.sessionIds.length > 0) {
                     const selectedCards = this._lastCards.filter(card =>
-                        card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                        card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                     );
                     chatPlans = selectedCards.map(card => ({
                         topic: card.topic,
                         absolutePath: this._resolvePlanFilePath(workspaceRoot, card.planFile),
-                        sessionId: card.sessionId,
+                        sessionId: this._cardId(card),
                     }));
                 }
 
@@ -5269,7 +5285,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 // This is required for CODED_AUTO: the frontend resolves it to LEAD CODED,
                 // but selected cards may actually be in INTERN CODED or CODER CODED.
                 // This aligns with moveSelected (line 2046) which also trusts sessionIds directly.
-                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId));
+                const sourceCards = this._lastCards.filter(card => card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds));
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No matching plans found for prompt generation.');
                     break;
@@ -5354,7 +5370,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 }
 
                 // Get next column BEFORE generating prompt so we can use destination role
-                const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, sourceCards[0]?.sessionId);
+                const nextCol = await this._getNextColumnId(column, workspaceRoot, undefined, this._cardId(sourceCards[0]));
 
                 // Generate prompt — if nextCol is a custom column, its role overrides source role
                 const prompt = await this._generatePromptForColumn(sourceCards, column, workspaceRoot, nextCol ?? undefined);
@@ -5366,7 +5382,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     break;
                 }
 
-                const sessionIds = sourceCards.map(card => card.sessionId);
+                const sessionIds = sourceCards.map(card => this._cardId(card));
 
                 const dispatchSpec = await this._resolveKanbanDispatchSpec(workspaceRoot, nextCol);
                 if (dispatchSpec?.source === 'custom-user' && this._taskViewerProvider) {
@@ -5535,15 +5551,17 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const dbAll = this._getKanbanDb(workspaceRoot);
                 if (await dbAll.ensureReady()) {
                     for (const card of reviewedCards) {
-                        await dbAll.updateColumn(card.sessionId, 'COMPLETED');
-                        _schedulePlanStateWrite(dbAll, workspaceRoot, card.sessionId, 'COMPLETED',
+                        const cardKey = this._cardId(card);
+                        await dbAll.updateColumn(cardKey, 'COMPLETED');
+                        _schedulePlanStateWrite(dbAll, workspaceRoot, cardKey, 'COMPLETED',
                             'completed').catch(() => { /* fire-and-forget */ });
-                        await dbAll.updateStatus(card.sessionId, 'completed');
+                        await dbAll.updateStatus(cardKey, 'completed');
                     }
                 }
                 let successCount = 0;
                 for (const card of reviewedCards) {
-                    const ok = await vscode.commands.executeCommand<boolean>('switchboard.completePlanFromKanban', card.sessionId, workspaceRoot);
+                    const cardKey = this._cardId(card);
+                    const ok = await vscode.commands.executeCommand<boolean>('switchboard.completePlanFromKanban', cardKey, workspaceRoot);
                     if (ok) { successCount++; }
                 }
                 await this._refreshBoard(workspaceRoot);
@@ -5672,7 +5690,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 break;
             case 'pairProgramCard': {
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
-                const card = this._lastCards.find(c => c.sessionId === resolvedSessionId);
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === resolvedSessionId);
                 if (!card || !this._currentWorkspaceRoot) { break; }
                 if (card.column !== 'PLAN REVIEWED') {
                     vscode.window.showWarningMessage('Pair Program is only available for PLAN REVIEWED cards.');
@@ -5682,9 +5700,10 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const repoScopeMap = new Map<string, string>();
                 const db = this._getKanbanDb(this._currentWorkspaceRoot);
                 if (await db.ensureReady()) {
-                    const plan = await db.getPlanBySessionId(card.sessionId);
+                    const cardKey = this._cardId(card);
+                    const plan = await db.getPlanBySessionId(cardKey);
                     if (plan?.repoScope) {
-                        repoScopeMap.set(card.sessionId, plan.repoScope);
+                        repoScopeMap.set(cardKey, plan.repoScope);
                     }
                 }
 
@@ -5806,7 +5825,7 @@ This step is what moves the plan forward in the Switchboard pipeline.
 
                 await this._refreshBoard(workspaceRoot);
                 const sourceCards = this._lastCards.filter(card =>
-                    card.workspaceRoot === workspaceRoot && msg.sessionIds.includes(card.sessionId)
+                    card.workspaceRoot === workspaceRoot && this._cardMatchesIds(card, msg.sessionIds)
                 );
                 if (sourceCards.length === 0) {
                     vscode.window.showInformationMessage('No matching plans found.');
@@ -6007,7 +6026,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
 
                     if (Array.isArray(sessionIds) && sessionIds.length > 0) {
                         const cards = this._lastCards.filter(c =>
-                            c.workspaceRoot === workspaceRoot && sessionIds.includes(c.sessionId)
+                            c.workspaceRoot === workspaceRoot && this._cardMatchesIds(c, sessionIds)
                         );
                         const repoScopeMap = await this._buildRepoScopeMap(cards, workspaceRoot);
                         plans = await this._cardsToPromptPlans(cards, workspaceRoot, repoScopeMap);
@@ -6083,7 +6102,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const resolvedSessionId = this._resolveSessionId(msg.planId, msg.sessionId);
                 if (!workspaceRoot || !resolvedSessionId) { break; }
-                const card = this._lastCards.find(c => c.sessionId === resolvedSessionId);
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === resolvedSessionId);
                 if (!card) { break; }
                 try {
                     const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot);
@@ -6099,7 +6118,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
             case 'copyExecutePrompt': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot || !msg.sessionId) { break; }
-                const card = this._lastCards.find(c => c.sessionId === msg.sessionId);
+                const card = this._lastCards.find(c => (c.planId || c.sessionId) === msg.sessionId);
                 if (!card) { break; }
                 try {
                     const prompt = await this._generatePromptForColumn([card], card.column, workspaceRoot, msg.targetColumn);
@@ -6503,7 +6522,7 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                 if (!workspaceId) break;
                 const rule = await db.getMeta('worktree_default_merge_strategy') || 'squash';
                 const dbRows = await db.getBoard(workspaceId);
-                const sessionIds = dbRows.filter(row => row.kanbanColumn === 'MERGE').map(row => row.sessionId).filter(Boolean);
+                const sessionIds = dbRows.filter(row => row.kanbanColumn === 'MERGE').map(row => row.planId || row.sessionId).filter(Boolean);
                 for (const sessionId of sessionIds) {
                     try {
                         await this._executeMergeRule(workspaceRoot, sessionId, rule);

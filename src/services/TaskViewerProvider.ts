@@ -92,6 +92,7 @@ type DispatchReadinessEntry = {
 
 type KanbanDispatchCard = {
     sessionId: string;
+    planId?: string;
     lastActivity: string;
     planFile?: string;
     sourceColumn: string;
@@ -300,9 +301,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _autobanState: AutobanConfigState = normalizeAutobanConfigState();
     private _singleColumnAutobanState: SingleColumnAutobanConfig = DEFAULT_SINGLE_COLUMN_CONFIG;
     private _postAutobanStateDebounceTimer: ReturnType<typeof setTimeout> | null = null;
-    // Tracks session IDs currently dispatched, keyed by the source column that dispatched them.
-    // Prevents duplicate dispatch within the same column while still allowing downstream column ticks.
     private _activeDispatchSessions = new Map<string, string>();
+
+    /** Get the primary identifier for a dispatch card (planId-first, sessionId-legacy). */
+    private _dispatchCardId(card: KanbanDispatchCard): string {
+        return card.planId || card.sessionId;
+    }
     // Safety-net sweep: checks every 60s whether source columns are empty and stops autoban if so.
     private _autobanEmptyColumnSweepTimer?: NodeJS.Timeout;
     // Dedupe key set: tracks recently processed mirror events (sessionId+stablePath) to prevent watcher churn re-processing
@@ -1262,44 +1266,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             await cfg.update('customSources', clean, target);
         }
 
-        // Bridge to the legacy GlobalPlanWatcher (which scans .switchboard/plans) so this
-        // tab is the single control surface. GlobalPlanWatcher's own config listener
-        // restarts it when these keys change.
-        const enabled = cfg.get<boolean>('enabled', true);
-        const scanSb = cfg.get<boolean>('scanSwitchboardPlans', true);
-        const intervalSec = cfg.get<number>('intervalSeconds', 10);
-        const pw = vscode.workspace.getConfiguration('switchboard.planWatcher');
-        await pw.update('periodicScanEnabled', enabled && scanSb, target);
-        await pw.update('scanIntervalMs', Math.min(300, Math.max(3, intervalSec)) * 1000, target);
-
+        // NOTE: deliberately does NOT touch switchboard.planWatcher.* — GlobalPlanWatcher
+        // independently owns .switchboard/plans detection. The Plan Scanner only governs
+        // external IDE plan sources (Antigravity brain + flat Cursor/Claude/Devin/custom).
         this.startPlanScanner();
-    }
-
-    /**
-     * One-time migration: seed the unified Plan Scanner from the legacy
-     * switchboard.planWatcher.* settings so the new "Plan Scanner" tab reflects what
-     * the user previously configured. Idempotent (guarded by a globalState flag).
-     */
-    public async migratePlanScannerSettings(): Promise<void> {
-        const flagKey = 'switchboard.planScanner.migratedV1';
-        if (this._context.globalState.get<boolean>(flagKey)) { return; }
-        try {
-            const pw = vscode.workspace.getConfiguration('switchboard.planWatcher');
-            const ps = vscode.workspace.getConfiguration('switchboard.planScanner');
-            const target = vscode.ConfigurationTarget.Workspace;
-            const enabledInspect = pw.inspect<boolean>('periodicScanEnabled');
-            if (enabledInspect?.workspaceValue !== undefined || enabledInspect?.globalValue !== undefined) {
-                await ps.update('scanSwitchboardPlans', pw.get<boolean>('periodicScanEnabled', true), target);
-            }
-            const intervalInspect = pw.inspect<number>('scanIntervalMs');
-            if (intervalInspect?.workspaceValue !== undefined || intervalInspect?.globalValue !== undefined) {
-                const sec = Math.min(300, Math.max(3, Math.round(pw.get<number>('scanIntervalMs', 10000) / 1000)));
-                await ps.update('intervalSeconds', sec, target);
-            }
-        } catch (e) {
-            console.error('[TaskViewerProvider] Plan Scanner settings migration failed:', e);
-        }
-        await this._context.globalState.update(flagKey, true);
     }
 
     /**
@@ -1350,14 +1320,15 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     }
 
     /** Collect flat external plan candidate files (Cursor / Windsurf-Devin / Claude Code / custom). */
-    private _collectFlatPlanScannerCandidates(): string[] {
+    private async _collectFlatPlanScannerCandidates(): Promise<string[]> {
         const out: string[] = [];
         for (const t of this._getFlatPlanScannerTargets()) {
             try {
                 if (t.recursive) {
-                    this._walkForSuffix(t.dir, t.suffix, out);
+                    await this._walkForSuffix(t.dir, t.suffix, out);
                 } else {
-                    for (const entry of fs.readdirSync(t.dir, { withFileTypes: true })) {
+                    const entries = await fs.promises.readdir(t.dir, { withFileTypes: true });
+                    for (const entry of entries) {
                         if (entry.isFile() && entry.name.toLowerCase().endsWith(t.suffix)) {
                             out.push(path.join(t.dir, entry.name));
                         }
@@ -1368,14 +1339,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         return out;
     }
 
-    private _walkForSuffix(dir: string, suffix: string, out: string[]): void {
+    private async _walkForSuffix(dir: string, suffix: string, out: string[]): Promise<void> {
         let entries: fs.Dirent[];
-        try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+        try { entries = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
         for (const entry of entries) {
             const full = path.join(dir, entry.name);
             if (entry.isDirectory()) {
                 if (entry.name.toLowerCase() === 'completed') { continue; }
-                this._walkForSuffix(full, suffix, out);
+                await this._walkForSuffix(full, suffix, out);
             } else if (entry.isFile() && entry.name.toLowerCase().endsWith(suffix)) {
                 out.push(full);
             }
@@ -2232,7 +2203,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         workspaceRoot: string,
         workspaceId: string,
         sourceColumn: string
-    ): Promise<{ cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[]; currentColumnBySession: Map<string, string> } | null> {
+    ): Promise<{ cardsInColumn: KanbanDispatchCard[]; currentColumnBySession: Map<string, string> } | null> {
         const db = await this._getKanbanDb(workspaceRoot);
         if (!db) return null;
 
@@ -2242,9 +2213,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         }
 
         const currentColumnBySession = new Map<string, string>();
-        const cardsInColumn: { sessionId: string; lastActivity: string; planFile?: string }[] = [];
+        const cardsInColumn: KanbanDispatchCard[] = [];
         for (const row of rows) {
-            currentColumnBySession.set(row.sessionId, row.kanbanColumn);
+            currentColumnBySession.set(row.planId || row.sessionId, row.kanbanColumn);
             if (row.kanbanColumn !== sourceColumn) continue;
 
             const rawPlanFile = String(row.planFile || '').trim();
@@ -2258,8 +2229,10 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
             cardsInColumn.push({
                 sessionId: row.sessionId,
+                planId: row.planId,
                 lastActivity: row.updatedAt || row.createdAt || '',
-                planFile: resolvedPlanPath
+                planFile: resolvedPlanPath,
+                sourceColumn
             });
         }
 
@@ -5742,7 +5715,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
     private _getEligibleAutobanCards(cardsInColumn: KanbanDispatchCard[]): KanbanDispatchCard[] {
         return [...cardsInColumn]
             .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
-            .filter(card => this._activeDispatchSessions.get(card.sessionId) !== card.sourceColumn);
+            .filter(card => this._activeDispatchSessions.get(this._dispatchCardId(card)) !== card.sourceColumn);
     }
 
     private async _selectAutobanPlanReviewedCards(
@@ -5768,7 +5741,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 continue;
             }
 
-            selectedCards.push({ sessionId: card.sessionId, complexity, sourceColumn: card.sourceColumn });
+            selectedCards.push({ sessionId: this._dispatchCardId(card), complexity, sourceColumn: card.sourceColumn });
             if (selectedCards.length >= batchSize) {
                 break;
             }
@@ -6561,7 +6534,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const activeRows = await db.getBoard(wsId);
         for (const row of activeRows) {
             if (row.status !== 'active') { continue; }
-            currentColumnBySession.set(row.sessionId, row.kanbanColumn);
+            currentColumnBySession.set(row.planId || row.sessionId, row.kanbanColumn);
             if (!sourceColumnSet.has(row.kanbanColumn)) { continue; }
 
             const rawPlanFile = typeof row.planFile === 'string' ? row.planFile.trim() : '';
@@ -6572,7 +6545,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 console.warn(`[Kanban Dispatch] Skipping session ${row.sessionId}: missing plan file (${rawPlanFile || 'none'})`);
                 continue;
             }
-            cardsInColumn.push({ sessionId: row.sessionId, lastActivity: row.updatedAt || row.createdAt, planFile: resolvedPlanPath, sourceColumn: row.kanbanColumn });
+            cardsInColumn.push({ sessionId: row.sessionId, planId: row.planId, lastActivity: row.updatedAt || row.createdAt, planFile: resolvedPlanPath, sourceColumn: row.kanbanColumn });
         }
 
         return { cardsInColumn, currentColumnBySession };
@@ -7368,7 +7341,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
 
         const dispatchWithAutobanTerminal = async (
             targetRole: string,
-            requestedCards: Array<Pick<KanbanDispatchCard, 'sessionId' | 'sourceColumn'>>
+            requestedCards: Array<Pick<KanbanDispatchCard, 'sessionId' | 'planId' | 'sourceColumn'>>
         ): Promise<boolean> => {
             const selection = await this._selectAutobanTerminal(targetRole, workspaceRoot);
             if (!selection) {
@@ -7388,9 +7361,9 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             if (cards.length === 0) {
                 return false;
             }
-            const sessionIds = cards.map(card => card.sessionId);
+            const sessionIds = cards.map(card => this._dispatchCardId(card as KanbanDispatchCard));
 
-            cards.forEach(card => this._activeDispatchSessions.set(card.sessionId, card.sourceColumn));
+            cards.forEach(card => this._activeDispatchSessions.set(this._dispatchCardId(card as KanbanDispatchCard), card.sourceColumn));
             const ok = await this.handleKanbanBatchTrigger(
                 targetRole,
                 sessionIds,
@@ -7432,7 +7405,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 return;
             }
 
-            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; sourceColumn: string }>> = {
+            const routedSessions: Record<'intern' | 'coder' | 'lead', Array<{ sessionId: string; planId?: string; sourceColumn: string }>> = {
                 intern: [],
                 coder: [],
                 lead: []
@@ -7503,14 +7476,14 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const batchSize = normalizeAutobanBatchSize(this._autobanState.batchSize);
         const orderedCandidates = [...cardsInColumn]
             .sort((a, b) => (a.lastActivity || '').localeCompare(b.lastActivity || ''))
-            .filter(card => this._activeDispatchSessions.get(card.sessionId) !== sourceColumn);
+            .filter(card => this._activeDispatchSessions.get(this._dispatchCardId(card)) !== sourceColumn);
 
         const availableLowSessions: string[] = [];
         for (const card of orderedCandidates) {
             const complexity = await this._kanbanProvider.getComplexityFromPlan(resolvedWorkspaceRoot, card.planFile || '');
             const score = parseComplexityScore(complexity);
             if (score > 0 && score <= 4) {
-                availableLowSessions.push(card.sessionId);
+                availableLowSessions.push(this._dispatchCardId(card));
             }
         }
 
@@ -11346,7 +11319,7 @@ What would you like to find?`;
         return entries;
     }
 
-    private _collectAntigravityPlanCandidates(rootDir: string): string[] {
+    private async _collectAntigravityPlanCandidates(rootDir: string): Promise<string[]> {
         const candidates: string[] = [];
         const pendingDirs = [rootDir];
         while (pendingDirs.length > 0) {
@@ -11355,7 +11328,9 @@ What would you like to find?`;
 
             let entriesInDir: fs.Dirent[];
             try {
-                entriesInDir = fs.readdirSync(currentDir, { withFileTypes: true });
+                // Async readdir so the recursive walk never blocks the extension-host
+                // event loop (keeps GlobalPlanWatcher + UI responsive between directories).
+                entriesInDir = await fs.promises.readdir(currentDir, { withFileTypes: true });
             } catch {
                 continue;
             }
@@ -11449,15 +11424,23 @@ What would you like to find?`;
         // _mirrorBrainPlan claim path so they share the mirror + claim-marker +
         // tombstone + anti-flood guards (no per-IDE resurrection divergence).
         const scannerConfig = this._getPlanScannerConfig();
-        const brainCandidates = (scannerConfig.enabled && scannerConfig.presets['antigravity'] !== false)
-            ? this._getAntigravityPlanRoots()
-                .filter(root => fs.existsSync(root))
-                .flatMap(root => this._collectAntigravityPlanCandidates(root))
-            : [];
-        const flatCandidates = scannerConfig.enabled ? this._collectFlatPlanScannerCandidates() : [];
+        let brainCandidates: string[] = [];
+        if (scannerConfig.enabled && scannerConfig.presets['antigravity'] !== false) {
+            const existingRoots = this._getAntigravityPlanRoots().filter(root => fs.existsSync(root));
+            const collected = await Promise.all(existingRoots.map(root => this._collectAntigravityPlanCandidates(root)));
+            brainCandidates = collected.flat();
+        }
+        const flatCandidates = scannerConfig.enabled ? await this._collectFlatPlanScannerCandidates() : [];
         const candidateFiles = [...brainCandidates, ...flatCandidates];
 
+        let processed = 0;
         for (const filePath of candidateFiles) {
+            // Yield to the event loop every few candidates so a large sweep never
+            // starves GlobalPlanWatcher's real-time events or the UI between items.
+            if (++processed % 15 === 0) {
+                await new Promise<void>(resolve => setImmediate(resolve));
+            }
+
             let stats: fs.Stats;
             try {
                 stats = await fs.promises.stat(filePath);
@@ -13624,10 +13607,13 @@ What would you like to find?`;
         const db = await this._getKanbanDb(workspaceRoot);
 
         const config = this._getPlanScannerConfig();
-        const brainCandidates = (config.presets['antigravity'] !== false)
-            ? this._getAntigravityPlanRoots().filter(r => fs.existsSync(r)).flatMap(r => this._collectAntigravityPlanCandidates(r))
-            : [];
-        const flatCandidates = this._collectFlatPlanScannerCandidates();
+        let brainCandidates: string[] = [];
+        if (config.presets['antigravity'] !== false) {
+            const existingRoots = this._getAntigravityPlanRoots().filter(r => fs.existsSync(r));
+            const collected = await Promise.all(existingRoots.map(r => this._collectAntigravityPlanCandidates(r)));
+            brainCandidates = collected.flat();
+        }
+        const flatCandidates = await this._collectFlatPlanScannerCandidates();
         const allCandidates = Array.from(new Set([...brainCandidates, ...flatCandidates]));
 
         type Item = vscode.QuickPickItem & { sourcePath: string; pathHash: string; tombstoned: boolean };
@@ -13935,7 +13921,8 @@ What would you like to find?`;
                     ? `Delete this plan? This will permanently delete the source file in the additional plan folder and the plan mirror${reviewSuffix}. This cannot be undone.`
                     : `Delete this plan? This will permanently delete the brain file, plan mirror${reviewSuffix}. This cannot be undone.`
                 : `Delete this plan? The workspace plan file${reviewSuffix} will be removed.`;
-            const dialogText = this._activeDispatchSessions.has(sessionId)
+            const isLocked = this._activeDispatchSessions.has(sessionId) || (sheet?.planId ? this._activeDispatchSessions.has(sheet.planId) : false);
+            const dialogText = isLocked
                 ? `This plan is currently being processed. Delete anyway?\n\n${baseDialogText}`
                 : baseDialogText;
             const answer = await vscode.window.showWarningMessage(dialogText, { modal: true }, 'Delete');
@@ -14059,6 +14046,9 @@ What would you like to find?`;
 
             await log.deleteRunSheet(sessionId);
             this._activeDispatchSessions.delete(sessionId);
+            if (sheet?.planId) {
+                this._activeDispatchSessions.delete(sheet.planId);
+            }
             console.log(`[TaskViewerProvider] _handleDeletePlan: runsheet deleted for sessionId=${sessionId}`);
 
             if (db && (!brainSourcePath || isManagedImport)) {
