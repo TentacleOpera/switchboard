@@ -618,6 +618,7 @@ export class PlanningPanelProvider {
                 true   // ignore delete (handled via onDidDelete)
             );
 
+            // TODO: Keep onDidChange and onDidCreate refresh logic in sync
             this._activeDocWatcher.onDidChange(() => {
                 if (gen !== this._watcherGeneration) { return; } // stale watcher
                 if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
@@ -636,6 +637,42 @@ export class PlanningPanelProvider {
                     if (!workspaceRoot) return;
 
                     console.log('[PlanningPanel] Auto-refreshing active document:', filePath);
+                    this._isAutoRefreshing = true;
+                    try {
+                        if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
+                            // Re-fetch local doc or HTML doc
+                            await this._handleFetchPreview(workspaceRoot, this._activePreviewSourceId, this._activePreviewDocId!, -1, this._activePreviewSourceFolder!);
+                        } else if (this._activePreviewSourceId === 'kanban-plan') {
+                            await this._handleFetchKanbanPlanPreview(this._activePreviewDocId!, -1);
+                        } else {
+                            // Re-fetch imported doc via fetchDocsFile
+                            await this._handleFetchDocsFile(workspaceRoot, this._activePreviewDocId!, -1);
+                        }
+                    } finally {
+                        this._isAutoRefreshing = false;
+                    }
+                }, 300);
+            });
+
+            // TODO: Keep onDidCreate and onDidChange refresh logic in sync
+            this._activeDocWatcher.onDidCreate(() => {
+                if (gen !== this._watcherGeneration) { return; } // stale watcher
+                if (Date.now() - this._lastPanelWriteTimestamp < 1000) { return; } // panel-initiated write
+                if (filePath !== this._activePreviewPath) { return; } // stale path
+
+                if (this._activeDocWatchDebounce) {
+                    clearTimeout(this._activeDocWatchDebounce);
+                }
+
+                this._activeDocWatchDebounce = setTimeout(async () => {
+                    if (gen !== this._watcherGeneration || filePath !== this._activePreviewPath) { return; }
+                    
+                    const workspaceRoot = this._activePreviewWorkspaceRoot
+                        || this._getWorkspaceRoot()
+                        || (this._getWorkspaceRoots().length > 0 ? this._getWorkspaceRoots()[0] : undefined);
+                    if (!workspaceRoot) return;
+
+                    console.log('[PlanningPanel] Auto-refreshing active document (create):', filePath);
                     this._isAutoRefreshing = true;
                     try {
                         if (this._activePreviewSourceId === 'local-folder' || this._activePreviewSourceId === 'html-folder') {
@@ -3329,7 +3366,7 @@ export class PlanningPanelProvider {
                     finalDocTitle = h1Match[1].trim();
                 } else {
                     const timestamp = new Date().toISOString().split('.')[0].replace(/:/g, '-');
-                    finalDocTitle = `Research-${timestamp}`;
+                    finalDocTitle = `Imported Document ${timestamp}`;
                 }
             }
 

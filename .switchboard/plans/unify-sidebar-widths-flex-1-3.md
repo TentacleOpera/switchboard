@@ -185,4 +185,41 @@ Key risks: The original plan missed that `.kanban-preview-pane { flex: 2 }` is d
 - **Low**: Pure CSS/layout change with no functional logic. Risk is limited to visual regression.
 - **Mitigation**: The verification steps above cover all five tabs and both expanded/collapsed states.
 
+## Reviewer Pass
+
+### Stage 1 — Grumpy Findings
+
+**[NIT] Dead CSS at line 1699:** `.kanban-preview-pane { flex: 2; ... }` is dead code — the element carries an inline `style="flex: 1;"` that overrides it. Noted and fixed during review.
+
+**[NIT] `#tree-pane-design` absent from base tree-pane styling rule (line 668):** Pre-existing visual inconsistency — the Design System sidebar does not inherit `background`, `border-right`, or `padding` from the base rule shared by the other three tree panes. Out of scope for this width-unification plan; no functional impact on the 1:3 ratio or collapse behavior.
+
+**[NIT] `#kanban-content-row` retains its own `display: flex` (line 1697):** Harmless redundancy since it also carries class `.content-row`; same computed value, no visual difference.
+
+### Stage 2 — Balanced Synthesis
+
+- **Kept:** The flexbox 1:3 ratio, `!important` on collapsed child selectors, `transition: flex` on children, and all four removed inline `style="flex: 2;"` attributes are correct and complete.
+- **Fixed:** Removed dead `flex: 2;` from `.kanban-preview-pane` CSS rule (`src/webview/planning.html:1699`).
+- **Deferred:** `#tree-pane-design` missing from base tree-pane rule is a pre-existing visual inconsistency, not introduced by this plan.
+
+### Fixed Items
+
+- `src/webview/planning.html:1699` — Removed dead `flex: 2;` from `.kanban-preview-pane` rule.
+
+### Files Changed (Review)
+
+- `src/webview/planning.html` — CSS only (`line 1699`).
+
+### Validation Results
+
+- No remaining `grid-template-columns` or `280px` references in `planning.html`.
+- No inline `style="flex: 2;"` attributes remain on any `.preview-panel-wrapper`.
+- All five tabs (`#local-content`, `#online-content`, `#design-content`, `#html-preview-content`, `#kanban-content`) use `.content-row` as the layout container.
+- No JavaScript in `planning.js` references `element.style.width`, `getComputedStyle` for widths, or hard-coded pixel values for layout math.
+- Compilation skipped per session instructions; tests skipped per session instructions.
+
+### Remaining Risks
+
+- **Low / Pre-existing:** `#tree-pane-design` missing from the base `#tree-pane` styling rule may render the Design System sidebar without the `background`, `border-right`, and `padding` that other tabs have. Does not affect the 1:3 ratio or collapse behavior.
+- **None:** The core width-unification change is complete, correct, and low-risk.
+
 **Recommendation:** Send to Coder.
