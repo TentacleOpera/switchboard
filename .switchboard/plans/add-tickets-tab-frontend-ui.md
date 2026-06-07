@@ -414,3 +414,44 @@ No changes needed — `planning.js` is already an entry point. The added code wi
 - Extract shared ClickUp/Linear handler logic into a single `TicketIntegrationService`
 - Add a provider selector toggle UI if both ClickUp and Linear are configured
 - Implement ClickUp "Ask Agent" (currently stubbed)
+- Implement true client-side ClickUp pagination (requires `ClickUpSyncService.getListTasks()` to support partial/page-based returns instead of fetching all pages internally)
+
+---
+
+## Reviewer Pass (2026-06-07)
+
+### Stage 1: Grumpy Adversarial Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| R1 | CRITICAL | `integrationProviderPreference` message missing `workspaceRoot` — frontend `currentWorkspaceRoot` always empty string, all IPC calls send `undefined` workspace root, wrong root in multi-root workspaces |
+| R2 | CRITICAL | `clickUpProjectLoading` variable used (lines 3345, 5175, 5400, 5403) but never declared in state variable block — implicit global / potential ReferenceError in strict mode |
+| R3 | MAJOR | `linearRefineTask`/`clickupRefineTask` backend handlers sent wrong response types (`linearTaskImported`/`clickupTaskImported`) — frontend showed "Task imported successfully!" on refine operations |
+| R4 | MAJOR | `refineTask` command registration expects `data.id` but backend sent `data.issueId`/`data.taskId` — refine operations received `undefined` ID and would fail |
+| R5 | MAJOR | ClickUp "Load More" pagination UI is dead code — `getListTasks()` fetches all pages internally, `hasMore`/`page` never set in response, Load More button never appears |
+| R6 | NIT | `saveTicketsState()` function defined but never called — state never persisted across tab switches or panel reloads |
+| R7 | NIT | ClickUp detail view ignores `renderedDescriptionHtml` from backend — markdown descriptions render as escaped plain text instead of rendered HTML (Linear detail view correctly uses it) |
+
+### Stage 2: Balanced Synthesis
+
+All findings valid. R1-R4 and R6-R7 fixed in code. R5 is a design gap (not a regression — `TaskViewerProvider` has the same behavior) noted as follow-up.
+
+### Fixes Applied
+
+| Fix | Files Changed | Description |
+|-----|---------------|-------------|
+| R1 | `src/services/PlanningPanelProvider.ts:987` | Added `workspaceRoot` to `integrationProviderPreference` message so frontend can populate `currentWorkspaceRoot` |
+| R2 | `src/webview/planning.js:85` | Added `let clickUpProjectLoading = false;` declaration in ClickUp state block |
+| R3 | `src/services/PlanningPanelProvider.ts:2340-2407`, `src/webview/planning.js:3382-3389` | Changed refine response types to `linearTaskRefined`/`clickupTaskRefined`; added frontend IPC handlers with correct "Task refined successfully!" alert |
+| R4 | `src/services/PlanningPanelProvider.ts:2358,2392` | Changed `{ issueId }` → `{ id: issueId }` and `{ taskId }` → `{ id: taskId }` to match command registration's expected `data.id` field |
+| R6 | `src/webview/planning.js:311,317-321` | Added `restoreTicketsState()` on tickets tab activation, `saveTicketsState()` on tab deactivation |
+| R7 | `src/webview/planning.js:3364,5337-5348` | Store `renderedDescriptionHtml` in `selectedClickUpIssue`; use it in `renderTicketsClickUpTaskDetail` when available (matching Linear detail view pattern) |
+
+### Validation Results
+- Compilation skipped per user instructions
+- Tests skipped per user instructions
+- All fixes are minimal, targeted, and follow existing patterns in the codebase
+
+### Remaining Risks
+- ClickUp "Load More" button is dead code — `getListTasks()` fetches all pages internally. To make it functional, `ClickUpSyncService` would need a `page`/`limit` API that returns partial results with a `hasMore` flag. This matches existing `TaskViewerProvider` behavior (no regression).
+- `importLinearTask`/`importClickUpTask` commands receive a single object argument from `PlanningPanelProvider` but `TaskViewerProvider`'s method signatures expect positional parameters. The command registration in `extension.ts` destructures the object, so this works, but it's a different calling convention than `TaskViewerProvider`'s own internal calls.

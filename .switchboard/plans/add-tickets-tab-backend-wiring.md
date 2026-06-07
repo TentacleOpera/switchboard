@@ -202,4 +202,43 @@ These are ~20 lines each and safe to duplicate (no internal state dependencies).
 - Factory wiring follows exact same pattern as existing docs adapter factories
 
 **Remaining Risks:**
-- None identified - implementation is straightforward wiring of existing services
+- ClickUp "Load More" pagination UI is dead code — `getListTasks()` fetches all pages internally, so `clickUpProjectHasMore` is always false and the Load More button never appears. A future refactor could add a streaming/partial-results API to `ClickUpSyncService` for large lists, but this matches the existing `TaskViewerProvider` behavior.
+- `importLinearTask`/`importClickUpTask` commands receive a single object argument from `PlanningPanelProvider` but `TaskViewerProvider`'s method signatures expect positional parameters. The command registration in `extension.ts` destructures the object, so this works, but it's a different calling convention than `TaskViewerProvider`'s own internal calls.
+
+---
+
+## Reviewer Pass (2026-06-07)
+
+### Stage 1: Grumpy Adversarial Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| R1 | CRITICAL | `integrationProviderPreference` message missing `workspaceRoot` — frontend `currentWorkspaceRoot` always empty, wrong root in multi-root workspaces |
+| R2 | CRITICAL | `clickUpProjectLoading` variable used but never declared in planning.js — implicit global / potential ReferenceError |
+| R3 | MAJOR | `_resolveWorkspaceRoot` didn't validate against `_getAllowedRoots()` (workspace identity mappings) — rejects valid roots in control-plane setups |
+| R4 | MAJOR | `linearRefineTask`/`clickupRefineTask` sent wrong response type (`linearTaskImported`/`clickupTaskImported`) — frontend showed "Task imported successfully!" on refine |
+| R5 | MAJOR | `refineTask` command registration expects `data.id` but PlanningPanelProvider sent `data.issueId`/`data.taskId` — refine operations received `undefined` ID |
+| R6 | MAJOR | `clickupLoadProject` handler ignores `page`/`isLoadMore` from frontend — but `getListTasks()` handles pagination internally, so this matches TaskViewerProvider behavior (not a bug, but Load More UI is dead code) |
+| R7 | NIT | `saveTicketsState()` never called — state never persisted across tab switches |
+| R8 | NIT | ClickUp detail view ignores `renderedDescriptionHtml` from backend — markdown renders as raw text |
+
+### Stage 2: Balanced Synthesis
+
+All findings valid. R1-R5 and R7-R8 fixed in code. R6 noted as follow-up (not a regression — matches existing TaskViewerProvider behavior).
+
+### Fixes Applied
+
+| Fix | Files Changed | Description |
+|-----|---------------|-------------|
+| R1 | `src/services/PlanningPanelProvider.ts:987` | Added `workspaceRoot` to `integrationProviderPreference` message |
+| R2 | `src/webview/planning.js:85` | Added `let clickUpProjectLoading = false;` declaration |
+| R3 | `src/services/PlanningPanelProvider.ts:847-858` | `_resolveWorkspaceRoot` now validates against `_getAllowedRoots()` including workspace identity mappings |
+| R4 | `src/services/PlanningPanelProvider.ts:2340-2407`, `src/webview/planning.js:3382-3389` | Changed refine response types to `linearTaskRefined`/`clickupTaskRefined`; added frontend handlers with correct "refined" alert |
+| R5 | `src/services/PlanningPanelProvider.ts:2358,2392` | Changed `{ issueId }` → `{ id: issueId }` and `{ taskId }` → `{ id: taskId }` to match command registration's `data.id` |
+| R7 | `src/webview/planning.js:311,317-321` | Added `restoreTicketsState()` on tab activation, `saveTicketsState()` on tab deactivation |
+| R8 | `src/webview/planning.js:3364,5337-5348` | Store `renderedDescriptionHtml` in `selectedClickUpIssue`; use it in `renderTicketsClickUpTaskDetail` when available |
+
+### Validation Results
+- Compilation skipped per user instructions
+- Tests skipped per user instructions
+- All fixes are minimal, targeted, and follow existing patterns in the codebase

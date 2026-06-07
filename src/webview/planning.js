@@ -82,6 +82,7 @@
     let clickUpCurrentPage = 0;
     let clickUpProjectHasMore = false;
     let clickUpSpacesLoadedOnce = false;
+    let clickUpProjectLoading = false;
     let clickUpHierarchyLoading = false;
     let clickUpImportPending = false;
     let pendingClickUpDetailIssueId = '';
@@ -307,10 +308,16 @@
                     initTicketsTab();
                     ticketsInitialized = true;
                 }
+                restoreTicketsState();
                 // Trigger initial load if not yet loaded
                 if (lastIntegrationProvider && !ticketsLoadedOnce) {
                     if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
                     else loadLinearProject();
+                }
+            } else {
+                // Save tickets state when switching away
+                if (ticketsInitialized) {
+                    saveTicketsState();
                 }
             }
         });
@@ -3353,7 +3360,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     task: msg.task,
                     subtasks: msg.subtasks || [],
                     comments: msg.comments || [],
-                    attachments: msg.attachments || []
+                    attachments: msg.attachments || [],
+                    renderedDescriptionHtml: msg.renderedDescriptionHtml
                 };
                 renderTicketsTab();
                 break;
@@ -3376,6 +3384,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     alert('Task imported successfully!');
                 } else {
                     alert('Import failed: ' + (msg.error || 'Unknown error'));
+                }
+                break;
+            case 'linearTaskRefined':
+            case 'clickupTaskRefined':
+                if (msg.success) {
+                    alert('Task refined successfully!');
+                } else {
+                    alert('Refine failed: ' + (msg.error || 'Unknown error'));
                 }
                 break;
         }
@@ -5318,10 +5334,17 @@ DEPTH: Deep (50-100+ sources)`;
         detailStatus.textContent = task.status || 'Unknown status';
         detailAssignee.textContent = `Assignee: ${task.assignees?.length ? task.assignees.map(a => a.username || a.email).join(', ') : 'Unassigned'}`;
 
-        const plainHtml = escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
-        if (_lastTicketsClickUpDetailDescriptionHtml !== plainHtml) {
-            detailDescription.innerHTML = plainHtml;
-            _lastTicketsClickUpDetailDescriptionHtml = plainHtml;
+        if (selectedClickUpIssue.renderedDescriptionHtml) {
+            if (_lastTicketsClickUpDetailDescriptionHtml !== selectedClickUpIssue.renderedDescriptionHtml) {
+                detailDescription.innerHTML = selectedClickUpIssue.renderedDescriptionHtml;
+                _lastTicketsClickUpDetailDescriptionHtml = selectedClickUpIssue.renderedDescriptionHtml;
+            }
+        } else {
+            const plainHtml = escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
+            if (_lastTicketsClickUpDetailDescriptionHtml !== plainHtml) {
+                detailDescription.innerHTML = plainHtml;
+                _lastTicketsClickUpDetailDescriptionHtml = plainHtml;
+            }
         }
 
         if (detailSubtasks) {

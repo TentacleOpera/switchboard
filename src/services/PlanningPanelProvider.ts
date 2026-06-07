@@ -816,13 +816,45 @@ export class PlanningPanelProvider {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
+    private _getAllowedRoots(): Set<string> {
+        const roots = this._getWorkspaceRoots();
+        const allowedRoots = new Set<string>(roots);
+        try {
+            const { getMappingsFromIndex } = require('./WorkspaceIdentityService');
+            const cfg = getMappingsFromIndex();
+            if (cfg?.enabled && Array.isArray(cfg.mappings)) {
+                for (const m of cfg.mappings) {
+                    const parent = m.parentFolder || (m as any).parentWorkspaceFolder;
+                    if (typeof parent === 'string') {
+                        const p = parent.trim();
+                        const expanded = p.startsWith('~')
+                            ? path.join(require('os').homedir(), p.slice(1))
+                            : p;
+                        allowedRoots.add(path.resolve(expanded));
+                    }
+                    for (const wf of m.workspaceFolders ?? []) {
+                        const expanded = wf.startsWith('~')
+                            ? path.join(require('os').homedir(), wf.slice(1))
+                            : wf;
+                        allowedRoots.add(path.resolve(expanded));
+                    }
+                }
+            }
+        } catch { /* fall through */ }
+        return allowedRoots;
+    }
+
     private _resolveWorkspaceRoot(explicitRoot?: string): string | undefined {
+        const allowedRoots = this._getAllowedRoots();
         if (explicitRoot) {
             const resolved = path.resolve(explicitRoot);
-            const allRoots = this._getWorkspaceRoots();
-            if (allRoots.includes(resolved)) return resolved;
+            if (allowedRoots.has(resolved)) return resolved;
         }
-        return this._getWorkspaceRoot() || this._getWorkspaceRoots()[0];
+        const defaultRoot = this._getWorkspaceRoot() || this._getWorkspaceRoots()[0];
+        if (defaultRoot && allowedRoots.has(path.resolve(defaultRoot))) return defaultRoot;
+        // Fallback to first allowed root
+        const firstAllowed = Array.from(allowedRoots)[0];
+        return firstAllowed;
     }
 
     private _mapClickUpTaskToSidebar(task: any): any {
@@ -984,7 +1016,7 @@ export class PlanningPanelProvider {
                     const provider = (clickUpConfig?.setupComplete) ? 'clickup'
                         : (linearConfig?.setupComplete) ? 'linear'
                         : null;
-                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider });
+                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider, workspaceRoot });
                 } catch (err) {
                     console.warn('[PlanningPanel] Failed to determine integration provider preference:', err);
                 }
@@ -2313,7 +2345,7 @@ export class PlanningPanelProvider {
 
                 if (!workspaceRoot || !issueId) {
                     this._panel?.webview.postMessage({
-                        type: 'linearTaskImported',
+                        type: 'linearTaskRefined',
                         success: false,
                         error: 'Missing workspace or issue ID'
                     });
@@ -2323,16 +2355,16 @@ export class PlanningPanelProvider {
                 try {
                     const result = await vscode.commands.executeCommand(
                         'switchboard.refineTask',
-                        { workspaceRoot, issueId, title, description, provider: 'linear' }
+                        { workspaceRoot, id: issueId, title, description, provider: 'linear' }
                     );
                     this._panel?.webview.postMessage({
-                        type: 'linearTaskImported',
+                        type: 'linearTaskRefined',
                         success: true
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to refine Linear task:', error);
                     this._panel?.webview.postMessage({
-                        type: 'linearTaskImported',
+                        type: 'linearTaskRefined',
                         success: false,
                         error: error instanceof Error ? error.message : String(error)
                     });
@@ -2347,7 +2379,7 @@ export class PlanningPanelProvider {
 
                 if (!workspaceRoot || !taskId) {
                     this._panel?.webview.postMessage({
-                        type: 'clickupTaskImported',
+                        type: 'clickupTaskRefined',
                         success: false,
                         error: 'Missing workspace or task ID'
                     });
@@ -2357,16 +2389,16 @@ export class PlanningPanelProvider {
                 try {
                     const result = await vscode.commands.executeCommand(
                         'switchboard.refineTask',
-                        { workspaceRoot, taskId, title, description, provider: 'clickup' }
+                        { workspaceRoot, id: taskId, title, description, provider: 'clickup' }
                     );
                     this._panel?.webview.postMessage({
-                        type: 'clickupTaskImported',
+                        type: 'clickupTaskRefined',
                         success: true
                     });
                 } catch (error) {
                     console.error('[PlanningPanel] Failed to refine ClickUp task:', error);
                     this._panel?.webview.postMessage({
-                        type: 'clickupTaskImported',
+                        type: 'clickupTaskRefined',
                         success: false,
                         error: error instanceof Error ? error.message : String(error)
                     });
