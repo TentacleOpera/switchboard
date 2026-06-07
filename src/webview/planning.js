@@ -720,7 +720,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         seen.add(data);
 
         const isArray = Array.isArray(data);
-        const entries = isArray ? data : Object.entries(data);
         const isOpen = depth < maxDepth;
 
         const details = document.createElement('details');
@@ -1992,10 +1991,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
-    function escapeHtml(str) {
-        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
-    }
-
     function viewRawJson() {
         const jsonCont = document.getElementById('json-preview-container-design');
         const mdPrev = document.getElementById('markdown-preview-design');
@@ -2110,6 +2105,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
                     }
                 }
+                state.activeDocContent = content || '';
+                if (mdEd) mdEd.value = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
             } else if (msg.fileType === 'yaml') {
                 // YAML preview — use pre-parsed JSON from backend
@@ -2130,6 +2127,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.<br><button onclick="viewRawJson()">View Raw</button></div>`;
                     }
                 }
+                state.activeDocContent = content || '';
+                if (mdEd) mdEd.value = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
             } else if (msg.fileType === 'css' || msg.fileType === 'xml' || msg.fileType === 'text') {
                 // Plain text / code preview in markdown container
@@ -3231,9 +3230,30 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         state.activeDocContent = textarea.value;
                         exitEditMode('design', true);
                         const mdPrevDesign = document.getElementById('markdown-preview-design');
-                        if (state.activeFileType === 'json' || state.activeFileType === 'yaml') {
-                            // Tree will be re-rendered by handlePreviewReady after auto-refresh
-                            // or by exitEditMode branching above
+                        if (state.activeFileType === 'json') {
+                            // Render JSON tree immediately from saved content
+                            const jsonCont = document.getElementById('json-preview-container-design');
+                            if (jsonCont) {
+                                jsonCont.style.display = 'block';
+                                jsonCont.innerHTML = '';
+                                try {
+                                    jsonCont.appendChild(renderJsonTree(JSON.parse(state.activeDocContent)));
+                                } catch (e) {
+                                    jsonCont.innerHTML = `<div class="json-error">Parse error: ${e.message}</div>`;
+                                }
+                            }
+                        } else if (state.activeFileType === 'yaml') {
+                            // YAML needs parsedJson from backend — trigger re-fetch
+                            if (state.activeSource && state.activeDocId) {
+                                const lastSlash = state.activeDocFilePath ? Math.max(state.activeDocFilePath.lastIndexOf('/'), state.activeDocFilePath.lastIndexOf('\\')) : -1;
+                                vscode.postMessage({
+                                    type: 'fetchPreview',
+                                    sourceId: state.activeSource,
+                                    docId: state.activeDocId,
+                                    requestId: ++state.previewRequestId,
+                                    sourceFolder: state.activeDocFilePath ? state.activeDocFilePath.substring(0, lastSlash) : undefined
+                                });
+                            }
                         } else {
                             if (mdPrevDesign) {
                                 mdPrevDesign.innerHTML = renderMarkdown(state.activeDocContent);

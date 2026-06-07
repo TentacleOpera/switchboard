@@ -671,3 +671,49 @@ function escapeHtml(str) {
 ---
 
 **Recommendation:** Complexity 6 → **Send to Coder**
+
+## Reviewer Pass — 2026-06-07
+
+### Stage 1: Adversarial Findings
+
+| ID | Severity | Finding |
+|----|----------|---------|
+| CRITICAL-1 | CRITICAL | `state.activeDocContent` and `mdEd.value` never set for JSON/YAML branches in `handlePreviewReady`. Only the markdown else-branch (line 2162-2163) assigned these. Consequence: edit mode opens with empty textarea; `viewRawJson()` shows stale content; `exitEditMode` JSON re-render uses wrong data. |
+| CRITICAL-2 | CRITICAL | YAML save produces blank preview. `exitEditMode('design', true)` passes `discard=true`, which skips the JSON/YAML tree re-render block (gated by `!discard`). The `saveFileContentResult` handler had an empty block for JSON/YAML, relying on auto-refresh to re-render — but there's a timing gap where the preview is blank. |
+| MAJOR-1 | MAJOR | Dead `const entries = isArray ? data : Object.entries(data)` in `renderJsonTree` — computed but never used (else-branch iterates with `Object.entries(data)` directly). |
+| MAJOR-2 | MAJOR | Three `function escapeHtml()` declarations in the same IIFE scope (lines 107, 1995, 4166). JS hoisting means only the last one takes effect; the plan-added one at line 1995 is dead code and doesn't handle null/undefined. |
+| NIT-1 | NIT | `renderJsonTree` doesn't gracefully handle `undefined` input (produces `json-undefined` class). Already guarded at call sites; deferred. |
+
+### Stage 2: Balanced Synthesis
+
+| Finding | Verdict | Action |
+|---------|---------|--------|
+| CRITICAL-1 | **Fix now** | Added `state.activeDocContent = content \|\| '';` and `if (mdEd) mdEd.value = content \|\| '';` to both JSON and YAML branches in `handlePreviewReady` |
+| CRITICAL-2 | **Fix now** | Replaced empty `saveFileContentResult` JSON/YAML block with: JSON → immediate client-side tree render; YAML → explicit `fetchPreview` re-fetch to get fresh `parsedJson` from backend |
+| MAJOR-1 | **Fix now** | Removed unused `entries` variable from `renderJsonTree` |
+| MAJOR-2 | **Fix now** | Removed duplicate `escapeHtml` at line 1995 (plan-added dead code) |
+| NIT-1 | **Defer** | Already guarded at call sites |
+
+### Fixes Applied
+
+| File | Fix |
+|------|-----|
+| `src/webview/planning.js:2108-2109` | Added `state.activeDocContent` and `mdEd.value` assignments to JSON branch in `handlePreviewReady` |
+| `src/webview/planning.js:2130-2131` | Added `state.activeDocContent` and `mdEd.value` assignments to YAML branch in `handlePreviewReady` |
+| `src/webview/planning.js:3233-3261` | Replaced empty `saveFileContentResult` JSON/YAML block with active rendering: JSON tree from `state.activeDocContent`, YAML re-fetch via `fetchPreview` message |
+| `src/webview/planning.js:722` | Removed dead `entries` variable from `renderJsonTree` |
+| `src/webview/planning.js:1995` | Removed duplicate `escapeHtml` function declaration (dead code due to JS hoisting) |
+
+### Validation Results
+
+- **Compilation:** Skipped per session directive
+- **Automated tests:** Skipped per session directive
+- **Manual verification:** All 14 checklist items should be re-verified, with emphasis on items 4 (JSON edit), 5 (YAML edit), and 13 (edit-mode CSS) which were directly impacted by CRITICAL-1 and CRITICAL-2
+
+### Remaining Risks
+
+| Risk | Status |
+|------|--------|
+| YAML re-fetch after save may have brief blank gap | **Mitigated** — explicit `fetchPreview` sent immediately after save; gap is now only the round-trip latency, not dependent on file watcher timing |
+| `escapeHtml` still has two declarations (lines 107, 4166) | **Low priority** — both are functional; the one at 4166 wins by hoisting. Could consolidate in a future cleanup pass |
+| `renderJsonTree` with `undefined` input | **Deferred** — all call sites guard against `undefined` before calling |
