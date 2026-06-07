@@ -77,3 +77,28 @@ Key risks: wording may be over-broad for non-URL inline citations (e.g., footnot
 ---
 
 **Recommendation:** Complexity 1 → **Send to Intern**
+
+## Reviewer Pass — Completed
+
+**Date:** 2026-06-07
+**Result:** ✅ PASS — Change implemented correctly, no fixes needed.
+
+### Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | Inline-source ban appended to SOURCE GUIDANCE (line 3567) | — | ✅ Verified |
+| 2 | Structured-prompt bypass intact (lines 3547-3552) | — | ✅ Verified |
+| 3 | Wording matches plan spec exactly | — | ✅ Verified |
+| 4 | Plan line numbers stale (plan says 3176, actual is 3567) | NIT | Noted — cosmetic only |
+
+### Files Changed
+- `src/webview/planning.js` — 1 string append in `generateResearchPrompt()` SOURCE GUIDANCE line
+
+### Validation Results
+- No CRITICAL or MAJOR findings.
+- No code fixes applied — implementation matches plan exactly.
+- Static string change; manual verification per plan checklist recommended.
+
+### Remaining Risks
+- None. Structured-prompt bypass is by design; `agentPromptBuilder.ts` `DEEP_RESEARCH_DIRECTIVE` is a separate system (out of scope per plan).
