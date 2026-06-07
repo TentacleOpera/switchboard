@@ -55,6 +55,7 @@ export class PlanningPanelProvider {
     private _localFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _localDocsDebounce: NodeJS.Timeout | undefined;
     private _lastLocalDocsSignature = ''; // content dedup: skip re-posting an unchanged local-docs list
+    private _lastPreviewContentByPath: Map<string, string> = new Map(); // content dedup: skip re-sending unchanged preview content
     private _lastWebviewRootsSignature = ''; // skip reassigning webview.options when roots are unchanged (avoids reload loop)
     private _htmlFolderWatchers: vscode.FileSystemWatcher[] = [];
     private _htmlDocsDebounce: NodeJS.Timeout | undefined;
@@ -2405,9 +2406,21 @@ export class PlanningPanelProvider {
         }
     }
 
+    private _getPreviewCacheKey(sourceId: string, docId: string, sourceFolder?: string): string {
+        return `${sourceId}:${docId}:${sourceFolder || ''}`;
+    }
+
     private async _handleFetchPreview(workspaceRoot: string, sourceId: string, docId: string, requestId: number, sourceFolder?: string): Promise<void> {
         // Race guard — track latest request per source
         this._latestRequestIds.set(sourceId, requestId);
+
+        // Single-entry cache: clear stale entries for other documents
+        const currentKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
+        for (const key of this._lastPreviewContentByPath.keys()) {
+            if (key !== currentKey) {
+                this._lastPreviewContentByPath.delete(key);
+            }
+        }
 
         // Handle html-folder directly
         if (sourceId === 'html-folder') {
@@ -2462,6 +2475,15 @@ export class PlanningPanelProvider {
 
             try {
                 const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
+
+                // Dedup: compare raw content before CSP injection (nonce may rotate)
+                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
+                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
+                if (htmlContent === lastContent) {
+                    return;
+                }
+                this._lastPreviewContentByPath.set(cacheKey, htmlContent);
+
                 const htmlWithCsp = this._injectLocalCsp(htmlContent);
                 console.log('[PlanningPanel] HTML preview: nonce injected:', !!this._nonce, 'content length:', htmlWithCsp.length, 'hasNonceAttr:', /nonce="/.test(htmlWithCsp));
                 this._panel?.webview.postMessage({
@@ -2540,6 +2562,14 @@ export class PlanningPanelProvider {
 
             try {
                 const docContent = await fs.promises.readFile(resolvedPath, 'utf8');
+
+                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
+                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
+                if (docContent === lastContent) {
+                    return;
+                }
+                this._lastPreviewContentByPath.set(cacheKey, docContent);
+
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
                     sourceId,
@@ -2582,6 +2612,13 @@ export class PlanningPanelProvider {
                     this._activePreviewSourceFolder = sourceFolder;
                     this._activePreviewWorkspaceRoot = workspaceRoot;
                     this._setupActiveDocWatcher(resolvedPath);
+
+                    const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
+                    const lastContent = this._lastPreviewContentByPath.get(cacheKey);
+                    if (result.content === lastContent) {
+                        return;
+                    }
+                    this._lastPreviewContentByPath.set(cacheKey, result.content || '');
 
                     this._panel?.webview.postMessage({ 
                         type: 'previewReady', 

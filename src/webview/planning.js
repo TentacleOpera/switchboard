@@ -423,8 +423,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     function renderMarkdown(markdown) {
         if (!markdown) return '';
 
+        // Normalize line endings to prevent layout differences
+        let processed = markdown.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+
         // Escape HTML first
-        let processed = markdown
+        processed = processed
             .replace(/&/g, '&amp;')
             .replace(/</g, '&lt;')
             .replace(/>/g, '&gt;');
@@ -1866,6 +1869,17 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
                 if (mdPrev && !state.editMode.design) mdPrev.style.display = 'block';
 
+                // Skip re-render if content hasn't changed (prevents line-length flicker)
+                if (state.activeDocContent === (content || '')) {
+                    if (isAutoRefreshed) {
+                        if (statusDesign) {
+                            statusDesign.textContent = (docName || 'Loaded') + ' — auto-refreshed';
+                            statusDesign.style.color = 'var(--accent-teal)';
+                        }
+                    }
+                    return;
+                }
+
                 state.activeDocContent = content || '';
                 if (mdEd) mdEd.value = content || '';
                 if (mdPrev) mdPrev.innerHTML = renderMarkdown(content || '');
@@ -2013,6 +2027,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     statusEl2.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
                     setTimeout(() => { statusEl2.textContent = ''; statusEl2.style.color = ''; }, 5000);
                 }
+            }
+            return;
+        }
+
+        // Skip re-render if content hasn't changed (prevents line-length flicker)
+        if (state.activeDocContent === content) {
+            if (msg.isAutoRefreshed) {
+                targetStatus.textContent = 'Externally updated — refreshed';
+                setTimeout(() => { if (targetStatus.textContent === 'Externally updated — refreshed') targetStatus.textContent = ''; }, 2000);
             }
             return;
         }

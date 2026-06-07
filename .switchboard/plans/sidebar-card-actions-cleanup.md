@@ -212,3 +212,50 @@ actions.forEach(action => {
 
 ## Recommendation
 **Complexity: 3 → Send to Intern**
+
+---
+
+## Reviewer Pass — Completed
+
+**Reviewer Mode:** In-place direct review, no auxiliary workflow.
+**Date:** 2026-06-07
+
+### Stage 1 — Grumpy Adversarial Critique
+
+- **[NIT]** The `activeContextSet` handler carries a comment — *"No local strip button to re-enable (card action used instead)"* — that states the bleeding obvious. Comments should explain *why*, not *what*. If the code is self-explanatory, silence is golden.
+- **[NIT]** Dead CSS walks among us. The `.doc-delete-btn` ruleset (18px icon button with hover-reveal and red hover) lingers in the stylesheet like a ghost, entirely unused since `renderDocCard` now emits `.card-icon-btn.card-delete-btn`. It's harmless but it bloats the payload and confuses the next poor soul who greps for "delete". **Severity: NIT** — no runtime impact, just untidy.
+- **[NIT]** `selectDoc` unconditionally enables `btnAppendToPromptsOnline` and `btnLinkToOnline` regardless of which tab's document was selected. This means clicking a Local Docs card eagerly lights up the Online Docs top-strip buttons. This is *pre-existing* behavior (present before this plan) and therefore out of scope for this review, but it is architecturally sloppy.
+- **[NIT]** The `deleteHandler` in both tree-node and imported-doc branches does `btn.textContent = '…'` on a 22px icon button. It works, but it's visually cramped. A spinner class or opacity pulse would be more elegant. Again, pre-existing pattern.
+
+**Verdict:** Zero CRITICAL or MAJOR findings. The implementation is mechanically sound.
+
+### Stage 2 — Balanced Synthesis
+
+| Finding | Action | Status |
+|---------|--------|--------|
+| Dead `.doc-delete-btn` CSS + collapsed-rule reference | Remove the unused ruleset and its entry in the `.content-row.collapsed` list | **Fixed** |
+| Obvious comment in `activeContextSet` | Leave as-is; comment is technically redundant but inoffensive | **Deferred** |
+| Pre-existing `selectDoc` cross-tab button enabling | Out of scope for this plan; do not touch | **Deferred** |
+| Cramped `…` loading state on icon delete buttons | Pre-existing UX quirk; no regression introduced | **Deferred** |
+
+### Fixes Applied
+
+1. **`src/webview/planning.html`** — Removed dead `.doc-delete-btn` CSS block (lines 892-924) and its reference in `.content-row.collapsed` (line 324). The new `.card-icon-btn.card-delete-btn` fully supersedes it.
+
+### Validation Results
+
+- **Static analysis (grep):** No remaining references to `btn-set-active-context-local`, `btn-link-to-doc-local`, `btnAppendToPrompts` (local), `Copy Path`, `btnSetActiveLocal`, or `btnLinkToLocal` in `planning.js` or `planning.html`.
+- **Action array audit:** `local-folder` → `['Set Context', 'Link Doc', 'Delete']`; `design-folder` → `['Set Context', 'Link Doc']`; `html-folder` → `['Link Doc']`; Antigravity → `['Set Context', 'Link Doc']`. All `Copy Path` eradicated.
+- **Event listener audit:** Only Online and Design tab top-strip button listeners remain; Local Docs listeners fully removed.
+- **Cache/reference audit:** Local cached references cleaned up; `activeContextSet` handler no longer touches removed buttons.
+- **CSS audit:** `.card-icon-btn` block present with hover-reveal, teal hover, red delete hover, and disabled state. No syntax errors.
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Remaining Risks
+
+- None material. The only deferred items are pre-existing behavior quirks or stylistic preferences that do not affect correctness.
+
+### Files Changed During Review
+
+- `src/webview/planning.html` — Removed dead `.doc-delete-btn` CSS ruleset and collapsed-rule reference.
