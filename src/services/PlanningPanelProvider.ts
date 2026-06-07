@@ -25,6 +25,8 @@ export interface PlanningPanelAdapterFactories {
     getLinearDocsAdapter: (root: string) => LinearDocsAdapter;
     getClickUpDocsAdapter: (root: string) => ClickUpDocsAdapter;
     getCacheService: (root: string) => PlanningPanelCacheService;
+    getLinearSyncService: (root: string) => any;
+    getClickUpSyncService: (root: string) => any;
 }
 
 interface KanbanPlanSummary {
@@ -75,6 +77,8 @@ export class PlanningPanelProvider {
     private _activePreviewSourceFolder: string | null = null;
     private _activePreviewWorkspaceRoot: string | undefined;
     private _watcherGeneration: number = 0;
+    private _activeDesignDocSourceId: string | null = null;
+    private _activeDesignDocId: string | null = null;
 
     private _resolvedConfigCache: {
         configPath: string | null;
@@ -236,6 +240,7 @@ export class PlanningPanelProvider {
         // Force the next local-docs send to render (the dedup cache must not starve a
         // freshly revealed/created panel).
         this._lastLocalDocsSignature = '';
+        this._lastPreviewContentByPath.clear();
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
             return;
@@ -811,6 +816,48 @@ export class PlanningPanelProvider {
         return (vscode.workspace.workspaceFolders || []).map(folder => folder.uri.fsPath);
     }
 
+    private _resolveWorkspaceRoot(explicitRoot?: string): string | undefined {
+        if (explicitRoot) {
+            const resolved = path.resolve(explicitRoot);
+            const allRoots = this._getWorkspaceRoots();
+            if (allRoots.includes(resolved)) return resolved;
+        }
+        return this._getWorkspaceRoot() || this._getWorkspaceRoots()[0];
+    }
+
+    private _mapClickUpTaskToSidebar(task: any): any {
+        return {
+            id: task.id,
+            title: task.name,
+            identifier: task.id,
+            status: task.status?.status || 'Unknown',
+            assignees: task.assignees || [],
+            description: task.description?.trim() || 'No description provided.',
+            markdownDescription: task.markdownDescription || '',
+            list: task.list,
+            url: task.url,
+            parentId: task.parentId || task.parent || null
+        };
+    }
+
+    private _mapClickUpComment(comment: any): any {
+        return {
+            id: comment.id,
+            comment_text: comment.comment_text,
+            user: comment.user,
+            date: comment.date
+        };
+    }
+
+    private _mapClickUpAttachment(attachment: any): any {
+        return {
+            id: attachment.id,
+            url: attachment.url,
+            title: attachment.title,
+            filename: attachment.filename
+        };
+    }
+
     /**
      * Resolve the effective workspace root: if this workspace is part of a
      * workspaceDatabaseMapping, return the parent workspace root; otherwise
@@ -927,6 +974,20 @@ export class PlanningPanelProvider {
                 const sources = this._researchImportService.getAvailableSources();
                 console.log('[PlanningPanel] Available sources at fetchRoots:', sources);
                 await this._handleFetchRoots(true);
+
+                // Send integration provider preference
+                try {
+                    const [clickUpConfig, linearConfig] = await Promise.all([
+                        this._adapterFactories.getClickUpSyncService(workspaceRoot).loadConfig(),
+                        this._adapterFactories.getLinearSyncService(workspaceRoot).loadConfig()
+                    ]);
+                    const provider = (clickUpConfig?.setupComplete) ? 'clickup'
+                        : (linearConfig?.setupComplete) ? 'linear'
+                        : null;
+                    this._panel?.webview.postMessage({ type: 'integrationProviderPreference', provider });
+                } catch (err) {
+                    console.warn('[PlanningPanel] Failed to determine integration provider preference:', err);
+                }
                 break;
             }
             case 'submitComment': {
@@ -1645,6 +1706,42 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'copyKanbanPlanPrompt': {
+                const sessionId = String(msg.sessionId || '');
+                const column = String(msg.column || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!sessionId) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId: '', error: 'No sessionId' });
+                    break;
+                }
+                try {
+                    const success = await vscode.commands.executeCommand<boolean>(
+                        'switchboard.copyPlanFromKanban', sessionId, column, wsRoot
+                    );
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: !!success, sessionId });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanPromptCopied', success: false, sessionId, error: String(err) });
+                }
+                break;
+            }
+            case 'moveKanbanPlanColumn': {
+                const planFile = String(msg.planFile || '');
+                const newColumn = String(msg.newColumn || '');
+                const wsRoot = String(msg.workspaceRoot || workspaceRoot);
+                if (!planFile || !newColumn) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: false, error: 'Missing planFile or newColumn' });
+                    break;
+                }
+                try {
+                    const moved = await vscode.commands.executeCommand<boolean>(
+                        'switchboard.moveKanbanCardByPlanFile', wsRoot, planFile, newColumn
+                    );
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: !!moved, error: moved ? undefined : 'Column update failed' });
+                } catch (err) {
+                    this._panel?.webview.postMessage({ type: 'kanbanPlanColumnChanged', success: false, error: String(err) });
+                }
+                break;
+            }
             case 'saveFileContent': {
                 const filePath = String(msg.filePath || '');
                 const content = String(msg.content || '');
@@ -1679,11 +1776,600 @@ export class PlanningPanelProvider {
                         this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, conflict: true, diskContent, tab });
                         break;
                     }
+
+                    // Validate JSON/YAML before write
+                    const saveExt = path.extname(resolved).toLowerCase();
+                    if (saveExt === '.json') {
+                        try { JSON.parse(content); }
+                        catch (e: any) {
+                            this._panel?.webview.postMessage({
+                                type: 'saveFileContentResult',
+                                success: false,
+                                error: `Invalid JSON: ${e.message}`,
+                                tab
+                            });
+                            break;
+                        }
+                    }
+                    if (saveExt === '.yaml' || saveExt === '.yml') {
+                        const yaml = require('js-yaml');
+                        try { yaml.load(content); }
+                        catch (e: any) {
+                            this._panel?.webview.postMessage({
+                                type: 'saveFileContentResult',
+                                success: false,
+                                error: `Invalid YAML: ${e.message}`,
+                                tab
+                            });
+                            break;
+                        }
+                    }
+
                     this._lastPanelWriteTimestamp = Date.now();
                     await fs.promises.writeFile(resolved, content, 'utf8');
                     this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: true, tab });
                 } catch (err) {
                     this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: String(err), tab });
+                }
+                break;
+            }
+            case 'linearLoadProject': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectLoaded',
+                        status: 'error',
+                        issues: [],
+                        message: 'No workspace open.'
+                    });
+                    break;
+                }
+
+                const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                const config = await linear.loadConfig();
+                if (!config?.setupComplete) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectLoaded',
+                        status: 'setup-required',
+                        issues: [],
+                        message: 'Set up Linear in Setup before using the Project tab.'
+                    });
+                    break;
+                }
+
+                try {
+                    const issues = await linear.queryIssues({
+                        search: typeof msg.search === 'string' ? msg.search : '',
+                        stateId: typeof msg.stateId === 'string' ? msg.stateId : '',
+                        limit: 100
+                    });
+                    const excludeNames = config.excludeProjectNames || [];
+                    const includeNames = config.includeProjectNames || [];
+                    const projectName = includeNames.length === 1 && excludeNames.length === 0
+                        ? includeNames[0]
+                        : includeNames.length > 0
+                            ? `${includeNames.slice(0, 2).join(', ')}${includeNames.length > 2 ? '...' : ''}`
+                            : `${config.teamName || 'Configured Linear Team'} (team-wide)`;
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectLoaded',
+                        status: 'loaded',
+                        issues,
+                        projectName
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'project',
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'linearLoadProjects': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectsLoaded',
+                        status: 'error',
+                        projects: [],
+                        message: 'No workspace open.'
+                    });
+                    break;
+                }
+
+                const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                const config = await linear.loadConfig();
+                if (!config?.setupComplete) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectsLoaded',
+                        status: 'setup-required',
+                        projects: [],
+                        message: 'Set up Linear in Setup before using the Project tab.'
+                    });
+                    break;
+                }
+
+                try {
+                    const projects = await linear.getAvailableProjects();
+                    this._panel?.webview.postMessage({
+                        type: 'linearProjectsLoaded',
+                        status: 'loaded',
+                        projects
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'project',
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'linearLoadTaskDetails': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                if (!workspaceRoot || !issueId) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: 'Select a Linear issue first.'
+                    });
+                    break;
+                }
+
+                try {
+                    const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                    const issue = await linear.getIssue(issueId);
+                    let subtasks: any[] = [];
+                    let comments: any[] = [];
+                    let attachments: any[] = [];
+                    if (issue) {
+                        try { subtasks = await linear.getSubtasks(issueId); } catch (e) {
+                            console.warn('[PlanningPanel] Failed to load Linear subtasks:', e);
+                        }
+                        try { comments = await linear.getComments(issueId); } catch (e) {
+                            console.warn('[PlanningPanel] Failed to load Linear comments:', e);
+                        }
+                        try { attachments = await linear.getAttachments(issueId); } catch (e) {
+                            console.warn('[PlanningPanel] Failed to load Linear attachments:', e);
+                        }
+                    }
+
+                    if (!issue) {
+                        this._panel?.webview.postMessage({
+                            type: 'linearError',
+                            scope: 'task',
+                            issueId,
+                            error: `Linear issue ${issueId} was not found.`
+                        });
+                        break;
+                    }
+
+                    let renderedDescriptionHtml = '';
+                    const descriptionMd = (issue.description || '').trim() || 'No description provided.';
+                    try {
+                        renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                    } catch {
+                        renderedDescriptionHtml = '';
+                    }
+
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskDetailsLoaded',
+                        issue,
+                        subtasks,
+                        comments,
+                        attachments,
+                        renderedDescriptionHtml
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearError',
+                        scope: 'task',
+                        issueId,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'linearSaveProjectSelection': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    break;
+                }
+                const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+
+                try {
+                    const config = await linear.loadConfig();
+                    if (config) {
+                        config.selectedProjectName = String(msg.projectName || '').trim();
+                        await linear.saveConfig(config);
+                    }
+                } catch (error) {
+                    console.error('Failed to save Linear project selection:', error);
+                }
+                break;
+            }
+            case 'clickupLoadSpaces': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const spaces = await clickUp.getSpaces();
+                    this._panel?.webview.postMessage({
+                        type: 'clickupSpacesLoaded',
+                        spaces
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: error instanceof Error ? error.message : 'Failed to load Spaces'
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadFolders': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const folders = await clickUp.getFolders(msg.spaceId);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupFoldersLoaded',
+                        spaceId: msg.spaceId,
+                        folders,
+                        directLists: await clickUp.getLists(msg.spaceId)
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: error instanceof Error ? error.message : 'Failed to load Folders'
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadLists': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const lists = await clickUp.getLists(msg.spaceId, msg.folderId);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupListsLoaded',
+                        spaceId: msg.spaceId,
+                        folderId: msg.folderId,
+                        lists
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'hierarchy',
+                        error: error instanceof Error ? error.message : 'Failed to load Lists'
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadProject': {
+                const loadSeq = msg.loadSeq;
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupProjectLoaded',
+                        status: 'error',
+                        message: 'No workspace open.',
+                        loadSeq
+                    });
+                    break;
+                }
+
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                const config = await clickUp.loadConfig();
+
+                if (!config?.setupComplete) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupProjectLoaded',
+                        status: 'setup-required',
+                        message: 'ClickUp setup is incomplete. Please complete setup in the Setup panel.',
+                        loadSeq
+                    });
+                    break;
+                }
+
+                const listId = msg.listId || config.selectedListId;
+                if (!listId) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupProjectLoaded',
+                        status: 'setup-required',
+                        message: 'No list selected. Please select a Space, Folder, and List to view tasks.',
+                        loadSeq
+                    });
+                    break;
+                }
+
+                try {
+                    const tasks = await clickUp.getListTasks(listId, {
+                        includeClosed: msg.includeClosed || false,
+                        archived: false
+                    });
+
+                    this._panel?.webview.postMessage({
+                        type: 'clickupProjectLoaded',
+                        status: 'loaded',
+                        tasks: tasks.map(t => this._mapClickUpTaskToSidebar(t)),
+                        listName: config.selectedListName || 'Unknown List',
+                        loadSeq
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'project',
+                        error: error instanceof Error ? error.message : 'Failed to load ClickUp project',
+                        loadSeq
+                    });
+                }
+                break;
+            }
+            case 'clickupLoadTaskDetails': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const details = await clickUp.getTaskDetails(msg.taskId);
+
+                    let renderedDescriptionHtml = '';
+                    const descriptionMd = (details.task.markdownDescription || details.task.description || '').trim() || 'No description provided.';
+                    try {
+                        renderedDescriptionHtml = await vscode.commands.executeCommand<string>('markdown.api.render', descriptionMd) || '';
+                    } catch {
+                        renderedDescriptionHtml = '';
+                    }
+
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskDetailsLoaded',
+                        task: this._mapClickUpTaskToSidebar(details.task),
+                        subtasks: details.subtasks.map(s => this._mapClickUpTaskToSidebar(s)),
+                        comments: details.comments.map(c => this._mapClickUpComment(c)),
+                        attachments: details.attachments.map(a => this._mapClickUpAttachment(a)),
+                        renderedDescriptionHtml
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupError',
+                        scope: 'task',
+                        taskId: msg.taskId,
+                        error: error instanceof Error ? error.message : 'Failed to load task details'
+                    });
+                }
+                break;
+            }
+            case 'clickupSaveSpaceSelection': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const config = await clickUp.loadConfig();
+                    if (config) {
+                        config.selectedSpaceId = String(msg.spaceId || '').trim();
+                        config.selectedFolderId = '';
+                        config.selectedListId = '';
+                        config.selectedListName = '';
+                        await clickUp.saveConfig(config);
+                    }
+                } catch (error) {
+                    console.error('Failed to save ClickUp space selection:', error);
+                }
+                break;
+            }
+            case 'clickupSaveFolderSelection': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const config = await clickUp.loadConfig();
+                    if (config) {
+                        config.selectedFolderId = String(msg.folderId || '').trim();
+                        config.selectedListId = '';
+                        config.selectedListName = '';
+                        await clickUp.saveConfig(config);
+                    }
+                } catch (error) {
+                    console.error('Failed to save ClickUp folder selection:', error);
+                }
+                break;
+            }
+            case 'clickupSaveListSelection': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+
+                try {
+                    const config = await clickUp.loadConfig();
+                    if (config) {
+                        config.selectedListId = String(msg.listId || '').trim();
+                        config.selectedListName = String(msg.listName || '').trim();
+                        config.selectedSpaceId = String(msg.spaceId || '').trim();
+                        config.selectedFolderId = String(msg.folderId || '').trim();
+                        await clickUp.saveConfig(config);
+                    }
+                } catch (error) {
+                    console.error('Failed to save ClickUp list selection:', error);
+                }
+                break;
+            }
+            // ===== TICKETS TAB IMPORT/REFINE DELEGATION =====
+            case 'linearImportTask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                const includeSubtasks = Boolean(msg.includeSubtasks);
+
+                if (!workspaceRoot || !issueId) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: false,
+                        error: 'Missing workspace or issue ID'
+                    });
+                    break;
+                }
+
+                try {
+                    const result = await vscode.commands.executeCommand(
+                        'switchboard.importLinearTask',
+                        { workspaceRoot, issueId, includeSubtasks }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: true
+                    });
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to import Linear task:', error);
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'clickupImportTask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const taskId = String(msg.taskId || '').trim();
+                const includeSubtasks = Boolean(msg.includeSubtasks);
+
+                if (!workspaceRoot || !taskId) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: false,
+                        error: 'Missing workspace or task ID'
+                    });
+                    break;
+                }
+
+                try {
+                    const result = await vscode.commands.executeCommand(
+                        'switchboard.importClickUpTask',
+                        { workspaceRoot, taskId, includeSubtasks }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: true
+                    });
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to import ClickUp task:', error);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'linearRefineTask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const issueId = String(msg.issueId || '').trim();
+                const title = String(msg.title || '').trim();
+                const description = String(msg.description || '').trim();
+
+                if (!workspaceRoot || !issueId) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: false,
+                        error: 'Missing workspace or issue ID'
+                    });
+                    break;
+                }
+
+                try {
+                    const result = await vscode.commands.executeCommand(
+                        'switchboard.refineTask',
+                        { workspaceRoot, issueId, title, description, provider: 'linear' }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: true
+                    });
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to refine Linear task:', error);
+                    this._panel?.webview.postMessage({
+                        type: 'linearTaskImported',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'clickupRefineTask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                const taskId = String(msg.taskId || '').trim();
+                const title = String(msg.title || '').trim();
+                const description = String(msg.description || '').trim();
+
+                if (!workspaceRoot || !taskId) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: false,
+                        error: 'Missing workspace or task ID'
+                    });
+                    break;
+                }
+
+                try {
+                    const result = await vscode.commands.executeCommand(
+                        'switchboard.refineTask',
+                        { workspaceRoot, taskId, title, description, provider: 'clickup' }
+                    );
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: true
+                    });
+                } catch (error) {
+                    console.error('[PlanningPanel] Failed to refine ClickUp task:', error);
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskImported',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
                 }
                 break;
             }
@@ -1703,6 +2389,8 @@ export class PlanningPanelProvider {
                 undefined,
                 vscode.ConfigurationTarget.Workspace
             );
+            this._activeDesignDocSourceId = null;
+            this._activeDesignDocId = null;
             // Send updated state back to panel
             await this._sendActiveDesignDocState();
         } catch (err) {
@@ -1777,6 +2465,10 @@ export class PlanningPanelProvider {
             await vscode.workspace.getConfiguration('switchboard').update(
                 'planner.designDocEnabled', true, vscode.ConfigurationTarget.Workspace
             );
+
+            this._activeDesignDocSourceId = sourceId;
+            this._activeDesignDocId = docId;
+            await this._sendActiveDesignDocState();
 
             this._panel?.webview.postMessage({ type: 'activeContextSet', success: true });
         } catch (err) {
@@ -1940,7 +2632,9 @@ export class PlanningPanelProvider {
         this._panel?.webview.postMessage({
             type: 'activeDesignDocUpdated',
             enabled,
-            docName: docName || 'None'
+            docName: docName || 'None',
+            sourceId: this._activeDesignDocSourceId,
+            docId: this._activeDesignDocId
         });
     }
 
@@ -2480,6 +3174,18 @@ export class PlanningPanelProvider {
                 const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
                 const lastContent = this._lastPreviewContentByPath.get(cacheKey);
                 if (htmlContent === lastContent) {
+                    // Cache hit — notify frontend for user-initiated requests only
+                    // (auto-refresh dedup is preserved to prevent flicker)
+                    if (requestId >= 0) {
+                        this._panel?.webview.postMessage({
+                            type: 'previewReady',
+                            sourceId,
+                            requestId,
+                            webviewUri,
+                            docName: path.basename(resolvedPath),
+                            isAutoRefreshed: false
+                        });
+                    }
                     return;
                 }
                 this._lastPreviewContentByPath.set(cacheKey, htmlContent);
@@ -2566,9 +3272,45 @@ export class PlanningPanelProvider {
                 const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
                 const lastContent = this._lastPreviewContentByPath.get(cacheKey);
                 if (docContent === lastContent) {
+                    // Cache hit — notify frontend for user-initiated requests only
+                    if (requestId >= 0) {
+                        this._panel?.webview.postMessage({
+                            type: 'previewReady',
+                            sourceId,
+                            requestId,
+                            webviewUri,
+                            content: docContent,
+                            docName: path.basename(resolvedPath),
+                            isAutoRefreshed: false,
+                            filePath: resolvedPath
+                        });
+                    }
                     return;
                 }
                 this._lastPreviewContentByPath.set(cacheKey, docContent);
+
+                // Map extension to a preview category
+                // Unmapped extensions default to 'text'
+                const fileTypeMap: Record<string, string> = {
+                    '.json': 'json',
+                    '.css': 'css', '.scss': 'css', '.less': 'css', '.sass': 'css',
+                    '.yaml': 'yaml', '.yml': 'yaml',
+                    '.xml': 'xml',
+                    '.md': 'markdown', '.txt': 'markdown', '.markdown': 'markdown',
+                    '.rst': 'markdown', '.adoc': 'markdown',
+                };
+                const fileType = isImage ? 'image' : (fileTypeMap[fileExt] || 'text');
+
+                // For YAML: parse on backend and send parsed result to frontend
+                let parsedJson: any = undefined;
+                if (fileType === 'yaml') {
+                    try {
+                        const yaml = require('js-yaml');
+                        parsedJson = yaml.load(docContent);
+                    } catch (e: any) {
+                        // Will be handled as error on frontend — send raw content only
+                    }
+                }
 
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
@@ -2577,6 +3319,8 @@ export class PlanningPanelProvider {
                     webviewUri,
                     content: docContent,
                     docName: path.basename(resolvedPath),
+                    fileType,
+                    parsedJson,
                     isAutoRefreshed: this._isAutoRefreshing,
                     filePath: resolvedPath
                 });
@@ -2616,6 +3360,18 @@ export class PlanningPanelProvider {
                     const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
                     const lastContent = this._lastPreviewContentByPath.get(cacheKey);
                     if (result.content === lastContent) {
+                        // Cache hit — notify frontend for user-initiated requests only
+                        if (requestId >= 0) {
+                            this._panel?.webview.postMessage({
+                                type: 'previewReady',
+                                sourceId,
+                                requestId,
+                                content: result.content || '',
+                                docName: result.docTitle,
+                                isAutoRefreshed: false,
+                                filePath: resolvedPath
+                            });
+                        }
                         return;
                     }
                     this._lastPreviewContentByPath.set(cacheKey, result.content || '');

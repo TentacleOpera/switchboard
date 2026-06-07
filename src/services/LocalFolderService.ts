@@ -595,7 +595,18 @@ export class LocalFolderService {
 
     private _isDesignOrImageFile(filename: string): boolean {
         const ext = path.extname(filename).toLowerCase();
-        return ['.md', '.txt', '.markdown', '.rst', '.adoc', '.png', '.jpg', '.jpeg', '.gif', '.svg'].includes(ext);
+        return [
+            // Documents
+            '.md', '.txt', '.markdown', '.rst', '.adoc',
+            // Images
+            '.png', '.jpg', '.jpeg', '.gif', '.svg',
+            // Structured data & design tokens
+            '.json',
+            // Stylesheets
+            '.css', '.scss', '.less', '.sass',
+            // Config / markup
+            '.yaml', '.yml', '.xml'
+        ].includes(ext);
     }
 
     // ── Delete ──────────────────────────────────────────────────

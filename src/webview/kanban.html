@@ -1152,7 +1152,6 @@
             background: transparent;
             cursor: pointer;
             transition: all 0.15s;
-            margin-left: 4px;
         }
         .mode-toggle:focus {
             outline: none;
@@ -1187,7 +1186,6 @@
             background: transparent;
             cursor: pointer;
             transition: all 0.15s;
-            margin-right: 4px;
         }
         .complexity-routing-btn:focus {
             outline: none;
@@ -4323,7 +4321,7 @@
 
 
                 const rightSide = isCreated
-                    ? `<div style="display: flex; align-items: center; gap: 8px; line-height: 1;">
+                    ? `<div style="display: flex; align-items: center; gap: 4px; line-height: 1;">
                             <button class="column-header-btn" id="btn-add-plan" data-tooltip="Add Plan">+</button>
                             <button class="column-header-btn" id="btn-import-clipboard" data-tooltip="Import plan(s) from clipboard&#10;&#10;Multi-plan? Separate with markers:&#10;### PLAN 1 START&#10;[plan 1 content]&#10;### PLAN 2 START&#10;[plan 2 content]"><img src="${ICON_IMPORT_CLIPBOARD}" alt="Import"></button>
                             <span class="column-count" id="count-${escapeAttr(def.id)}">0</span>

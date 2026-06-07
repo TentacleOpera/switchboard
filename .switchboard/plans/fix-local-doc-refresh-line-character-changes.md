@@ -220,4 +220,39 @@ if (state.activeDocContent === content) {
 
 ---
 
+## Reviewer Pass (2026-06-07)
+
+### Stage 1: Grumpy Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | **MAJOR** | `state.activeDocContent = content` stores raw `content` (could be `undefined`) while design-folder branch stores `content \|\| ''`. Guard at line 2035 compares `state.activeDocContent === content` — if both are `undefined`, guard skips the first render of empty-content documents. | `planning.js:2043` |
+| 2 | NIT | Online source auto-refresh via `_handleFetchDocsFile` has no dedup — out of scope but noted. | `PlanningPanelProvider.ts:650` |
+| 3 | NIT | `Map.keys()` iteration with in-loop deletion at line 2419 — ES6-spec-safe but a code smell. | `PlanningPanelProvider.ts:2419` |
+| 4 | NIT | Plan specified `&& !isImage` in design-folder guard; implementation omits it correctly (guard is inside `else` of image branch). Plan was over-specified. | `planning.js:1873` |
+
+### Stage 2: Balanced Synthesis
+
+- **#1 Fixed.** Normalized `state.activeDocContent = content || ''` and guard to `state.activeDocContent === (content || '')` at lines 2035/2043, matching the design-folder branch pattern.
+- **#2 Deferred.** Online sources use `_handleFetchDocsFile`, a separate code path. No evidence of flicker; out of scope.
+- **#3 Accepted.** ES6-spec-safe, single-entry map, not worth a code change.
+- **#4 Accepted.** Implementation is correct; plan was over-specified.
+
+### Files Changed
+
+- `src/webview/planning.js` — Lines 2035, 2043, 2045: Normalized `content || ''` in local/online branch guard and assignment to match design-folder branch pattern.
+
+### Validation Results
+
+- **Skip compilation** per session directive.
+- **Skip tests** per session directive.
+- Manual verification: both branches now use identical normalization (`content || ''`) in guard and assignment, eliminating the `undefined` edge case.
+
+### Remaining Risks
+
+- Online source auto-refresh path (`_handleFetchDocsFile`) has no content dedup. If online source flicker is observed, a separate plan is needed.
+- `adapter.fetchContent()` return value is not normalized at the backend — if it returns `undefined`, `content` in the message will be `undefined`. The frontend guard now handles this correctly, but backend dedup for online sources would be a cleaner fix.
+
+---
+
 **Recommendation:** Send to Coder (complexity 3).

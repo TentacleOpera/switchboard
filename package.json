@@ -54,7 +54,6 @@
         "command": "switchboard.importUnclaimedPlans",
         "title": "Switchboard: Import Plans (pick unclaimed plans from AI IDE folders)"
       },
-
       {
         "command": "switchboard.createAgentGrid",
         "title": "Switchboard: Open Agent Terminals"
@@ -325,24 +324,29 @@
           "description": "Require session token authentication for all inbox dispatch messages. Disable only for development.",
           "scope": "application"
         },
-
         "switchboard.research.localFolderPaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Paths to local folders containing research files (.md, .txt, .markdown, .rst, .adoc). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "application"
         },
         "switchboard.research.htmlFolderPaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Paths to local folders containing HTML prototype files (.html, .htm) for preview in the HTML Previews tab. Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "application"
         },
         "switchboard.research.designFolderPaths": {
           "type": "array",
-          "items": { "type": "string" },
+          "items": {
+            "type": "string"
+          },
           "default": [],
           "description": "Paths to local folders containing design system files (.md, .txt, .markdown, .rst, .adoc) and image assets (.png, .jpg, .jpeg, .gif, .svg). Paths may be absolute or relative to the workspace root, and support ~ for home directory.",
           "scope": "application"
@@ -531,9 +535,22 @@
           "items": {
             "type": "object",
             "properties": {
-              "label": { "type": "string" },
-              "scope": { "type": "string", "enum": ["global", "workspace"] },
-              "globs": { "type": "array", "items": { "type": "string" } }
+              "label": {
+                "type": "string"
+              },
+              "scope": {
+                "type": "string",
+                "enum": [
+                  "global",
+                  "workspace"
+                ]
+              },
+              "globs": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
             }
           }
         },
@@ -542,7 +559,9 @@
           "default": [],
           "description": "Directories the chat/consultation agent is told to write plans to. Empty = the workspace's .switchboard/plans folder. Add more than one to let the agent choose. Each path is also scanned for ingestion. Tokens: ~ expands to home, <repo> expands to each workspace root.",
           "scope": "resource",
-          "items": { "type": "string" }
+          "items": {
+            "type": "string"
+          }
         },
         "switchboard.notionBackup": {
           "type": "object",
@@ -591,7 +610,11 @@
         },
         "switchboard.theme.name": {
           "type": "string",
-          "enum": ["afterburner", "claude-terracotta", "slightly-darker-black"],
+          "enum": [
+            "afterburner",
+            "claude-terracotta",
+            "slightly-darker-black"
+          ],
           "enumDescriptions": [
             "Afterburner — Default cyberpunk teal theme with scanline effects",
             "Claude Terracotta — Warm terracotta accent on professional dark surfaces",
@@ -635,7 +658,6 @@
     "test:regression:native-project-api": "node src/test/native-project-api-commands-regression.test.js",
     "test:contract:research-modal": "node src/test/research-modal-contract.test.js",
     "test:contract:request-id-wire": "node src/test/research-modal-request-id-wire-contract.test.js",
-
     "test:integration:all": "npm run test:regression:plan-sync && npm run test:regression:native-project-api && node src/test/integrations/run-integration-tests.js all",
     "clean:switchboard": "node -e \"const fs=require('fs'),p=require('path'),d=p.join('.switchboard');['inbox','outbox','cooldowns'].forEach(f=>{try{fs.rmSync(p.join(d,f),{recursive:true,force:true})}catch{}});['bridge_debug.log','auth_token'].forEach(f=>{try{fs.unlinkSync(p.join(d,f))}catch{}});console.log('Switchboard transient state cleaned.')\""
   },
@@ -643,6 +665,7 @@
     "@mermaid-js/mermaid-cli": "^10.0.0",
     "@testing-library/react-native": "^12.7.0",
     "@types/adm-zip": "^0.5.7",
+    "@types/js-yaml": "^4.0.9",
     "@types/mocha": "^10.0.10",
     "@types/node": "22.x",
     "@types/sinon": "^21.0.1",
@@ -667,6 +690,7 @@
     "adm-zip": "^0.5.16",
     "docx": "^9.6.0",
     "dompurify": "^3.3.1",
+    "js-yaml": "^4.2.0",
     "jsdom": "^28.0.0",
     "mermaid": "^11.14.0",
     "proper-lockfile": "^4.1.2",

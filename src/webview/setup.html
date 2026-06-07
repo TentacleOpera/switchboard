@@ -562,7 +562,8 @@
             <button class="tab-btn active" data-tab="setup" role="tab" aria-selected="true">Setup</button>
             <button class="tab-btn" data-tab="kanban" role="tab" aria-selected="false">Kanban</button>
             <button class="tab-btn" data-tab="database" role="tab" aria-selected="false">Database</button>
-            <button class="tab-btn" data-tab="multi-repo" role="tab" aria-selected="false">Multi-Repo</button>
+            <button class="tab-btn" data-tab="control-plane" role="tab" aria-selected="false">Control Plane</button>
+            <button class="tab-btn" data-tab="mappings" role="tab" aria-selected="false">Mappings</button>
             <button class="tab-btn" data-tab="integration" role="tab" aria-selected="false">Integrations</button>
             <button class="tab-btn" data-tab="artifacts-panel" role="tab" aria-selected="false">Artifacts Panel</button>
             <button class="tab-btn" data-tab="plan-scanner" role="tab" aria-selected="false">Plan Scanner</button>
@@ -676,15 +677,27 @@
                 </div>
             </div>
 
-        <div class="tab-content" id="multi-repo-fields" data-tab-content="multi-repo">
+        <div class="tab-content" id="control-plane-fields" data-tab-content="control-plane">
                 <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
-                    Map multiple workspace folders to a shared kanban.db for centralized plan management.
+                    EXTERNAL SWITCHBOARD CONFIGURATION
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-teal); border-radius: 2px;">
+                    Run Switchboard outside the main repository. Useful when your team or organization locks down edits to <code>AGENTS.md</code> or <code>.agent/</code> files, which prevents Switchboard from scaffolding inside the repo itself.
+                </div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; line-height: 1.5;">
+                    The Control Plane creates a parent workspace (e.g. <code>~/Projects/</code>) that holds the shared <code>.switchboard/</code>, <code>.agent/</code>, and <code>AGENTS.md</code> configuration. Your actual repositories live as sibling folders and share this external configuration.
+                </div>
+                <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">OPEN CONTROL PLANE SETUP</button>
+            </div>
+
+        <div class="tab-content" id="mappings-fields" data-tab-content="mappings">
+                <div style="font-size: 10px; color: var(--text-secondary); margin: 10px 0 4px; font-family: var(--font-mono); letter-spacing: 1px;">
+                    WORKSPACE-TO-DATABASE ROUTING
                 </div>
                 <div style="font-size: 11px; color: var(--text-secondary); margin: 8px 0; padding: 8px; background: var(--panel-bg); border-left: 2px solid var(--accent-warning); border-radius: 2px;">
                     <strong>Note:</strong> When enabled, any workspace folders <em>not</em> listed below will automatically use their own local database (located at <code>.switchboard/kanban.db</code> within each folder).
                 </div>
-                <button id="btn-open-control-plane-modal" class="secondary-btn w-full" style="margin-top: 12px;">CENTRALIZE CONFIGURATION</button>
-                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px;">
+                <label class="startup-row" style="display:flex; align-items:flex-start; gap:8px; margin-top:12px;">
                     <input id="workspace-mapping-enabled" type="checkbox" style="width:auto; margin:0; margin-top:2px;">
                     <span>Enable workspace-to-database mapping</span>
                 </label>
@@ -1521,7 +1534,8 @@
             const tabIdMap = {
                 'startup-fields': 'setup',
                 'db-sync-fields': 'database',
-                'multi-repo-fields': 'multi-repo',
+                'control-plane-fields': 'control-plane',
+                'mappings-fields': 'mappings',
                 'project-mgmt-fields': 'integration',
                 'planning-panel-fields': 'planning-panel'
             };
@@ -1561,6 +1575,9 @@
             const persistedState = vscode.getState?.() || {};
             if (persistedState.activeTabId === 'docs') {
                 persistedState.activeTabId = 'theme';
+            }
+            if (persistedState.activeTabId === 'multi-repo') {
+                persistedState.activeTabId = 'control-plane';
             }
             if (persistedState.activeTabId) {
                 activeTabId = persistedState.activeTabId;
@@ -1617,7 +1634,10 @@
                 'integration': () => {
                     requestIntegrationSetupStates();
                 },
-                'multi-repo': () => {
+                'control-plane': () => {
+                    vscode.postMessage({ type: 'getControlPlaneStatus' });
+                },
+                'mappings': () => {
                     vscode.postMessage({ type: 'getWorkspaceMappings' });
                     vscode.postMessage({ type: 'getGlobalSettingsEnabled' });
                 },
@@ -2000,7 +2020,7 @@
 
         function openControlPlaneSetup(mode) {
             setControlPlaneSetupMode(mode);
-            activateTab('multi-repo');
+            activateTab('control-plane');
             openControlPlaneModal();
             requestControlPlaneStatus();
         }

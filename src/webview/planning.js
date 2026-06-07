@@ -13,6 +13,7 @@
         activeDocName: null,
         activeDocContent: null,
         activeDocFilePath: null,
+        activeFileType: null,  // 'json' | 'yaml' | 'markdown' | 'css' | 'xml' | 'text' | 'image' | null
         activeContainers: new Map(),
         importedDocs: new Map(), // slugPrefix -> { sourceId, docId, docName }
         previewRequestId: 0,
@@ -36,10 +37,116 @@
         localWorkspaceRootFilter: '',
         htmlWorkspaceRootFilter: '',
         designWorkspaceRootFilter: '',
+        activeDesignDocEnabled: false,
+        activeDesignDocSourceId: null,
+        activeDesignDocId: null,
         _lastLocalDocsMsg: null,
         _lastHtmlDocsMsg: null,
         _lastDesignDocsMsg: null
     };
+
+    // Tickets tab state
+    let ticketsInitialized = false;
+    let ticketsLoadedOnce = false;
+    let lastIntegrationProvider = null;
+    let currentWorkspaceRoot = '';
+
+    // Linear state
+    let linearProjectIssues = [];
+    let selectedLinearIssue = null;
+    let linearProjectStatus = 'idle';
+    let linearProjectMessage = '';
+    let linearProjectSearchValue = '';
+    let linearProjectStateFilterValue = '';
+    let linearProjectPickerValue = '';
+    let _restoredLinearProjectPickerValue = '';
+    let linearAvailableProjects = [];
+    let linearProjectLoadedOnce = false;
+    let linearProjectLoading = false;
+    let linearTaskDetailsTimeoutId = null;
+
+    // ClickUp state
+    let clickUpProjectIssues = [];
+    let selectedClickUpIssue = null;
+    let clickUpProjectStatus = 'idle';
+    let clickUpProjectMessage = '';
+    let clickUpAvailableSpaces = [];
+    let clickUpAvailableFolders = [];
+    let clickUpAvailableListsInFolder = [];
+    let clickUpAvailableDirectLists = [];
+    let clickUpSelectedSpaceId = '';
+    let clickUpSelectedFolderId = '';
+    let clickUpSelectedListId = '';
+    let clickUpProjectSearchValue = '';
+    let clickUpProjectStatusFilterValue = '';
+    let clickUpCurrentPage = 0;
+    let clickUpProjectHasMore = false;
+    let clickUpSpacesLoadedOnce = false;
+    let clickUpHierarchyLoading = false;
+    let clickUpImportPending = false;
+    let pendingClickUpDetailIssueId = '';
+
+    // Cached HTML strings for DOM guard comparisons
+    let _lastTicketsStateFilterHtml = '';
+    let _lastTicketsProjectPickerHtml = '';
+    let _lastTicketsIssuesContainerHtml = '';
+    let _lastTicketsDetailDescriptionHtml = '';
+    let _lastTicketsDetailSubtasksHtml = '';
+    let _lastTicketsDetailCommentsHtml = '';
+    let _lastTicketsDetailAttachmentsHtml = '';
+    let _lastTicketsHierarchyHtml = '';
+    let _lastTicketsClickUpIssuesContainerHtml = '';
+    let _lastTicketsClickUpDetailDescriptionHtml = '';
+    let _lastTicketsClickUpDetailSubtasksHtml = '';
+    let _lastTicketsClickUpDetailCommentsHtml = '';
+    let _lastTicketsClickUpDetailAttachmentsHtml = '';
+    let _lastTicketsClickUpStateFilterHtml = '';
+
+    // Helper functions for tickets tab
+    function escapeHtml(value) {
+        return String(value || '')
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#39;');
+    }
+
+    function escapeAttr(value) {
+        return String(value || '').replace(/"/g, '&quot;');
+    }
+
+    function getTicketsTabElements() {
+        return {
+            listView: document.getElementById('tickets-issues-container')?.parentElement,
+            taskView: document.querySelector('.tickets-task-view'),
+            searchInput: document.getElementById('tickets-search'),
+            projectPicker: document.getElementById('tickets-project-picker'),
+            stateFilter: document.getElementById('tickets-state-filter'),
+            clickUpStatusFilter: document.getElementById('tickets-status-filter'),
+            refreshButton: document.getElementById('tickets-refresh'),
+            emptyState: document.getElementById('tickets-empty-state'),
+            issuesContainer: document.getElementById('tickets-issues-container'),
+            loadMoreButton: document.getElementById('tickets-load-more'),
+            detailTitle: document.getElementById('tickets-detail-title'),
+            detailStatus: document.getElementById('tickets-detail-status'),
+            detailAssignee: document.getElementById('tickets-detail-assignee'),
+            detailDescription: document.getElementById('tickets-detail-description'),
+            detailSubtasks: document.getElementById('tickets-detail-subtasks'),
+            detailComments: document.getElementById('tickets-detail-comments'),
+            detailAttachments: document.getElementById('tickets-detail-attachments'),
+            detailImportButton: document.getElementById('tickets-detail-import'),
+            detailRefineButton: document.getElementById('tickets-detail-refine'),
+            detailAskAgentButton: document.getElementById('tickets-detail-ask-agent'),
+            backToListButton: document.getElementById('tickets-back-to-list'),
+            backToParentButton: document.getElementById('tickets-back-to-parent'),
+            hierarchyNav: document.getElementById('tickets-hierarchy-nav')
+        };
+    }
+
+    function isTicketsTabActive() {
+        return document.querySelector('.research-tab-btn.active')?.dataset.tab === 'tickets';
+    }
 
     function populateWorkspaceDropdown(selectElementId, workspaceItems, selectedValue) {
         const select = document.getElementById(selectElementId);
@@ -192,6 +299,19 @@
 
             if (tabName === 'kanban') {
                 vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+            }
+
+            // Tickets tab initialization
+            if (tabName === 'tickets') {
+                if (!ticketsInitialized) {
+                    initTicketsTab();
+                    ticketsInitialized = true;
+                }
+                // Trigger initial load if not yet loaded
+                if (lastIntegrationProvider && !ticketsLoadedOnce) {
+                    if (lastIntegrationProvider === 'clickup') loadClickUpSpaces();
+                    else loadLinearProject();
+                }
             }
         });
     });
@@ -365,6 +485,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
     const markdownPreview = document.getElementById('markdown-preview');
     const markdownPreviewOnline = document.getElementById('markdown-preview-online');
     const btnAppendToPromptsOnline = document.getElementById('btn-append-to-prompts-online');
+    const btnSetActiveContextLocal = document.getElementById('btn-set-active-context-local');
     const btnExportToSource = document.getElementById('btn-export-to-source');
     const statusEl = document.getElementById('status');
     const statusElOnline = document.getElementById('status-online');
@@ -563,6 +684,82 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return html;
     }
 
+    function renderJsonTree(data, depth, maxDepth, seen) {
+        depth = depth || 0;
+        maxDepth = maxDepth || 2;
+        seen = seen || new WeakSet();
+
+        // Primitives
+        if (data === null) {
+            const span = document.createElement('span');
+            span.className = 'json-null';
+            span.textContent = 'null';
+            return span;
+        }
+        if (typeof data !== 'object') {
+            const span = document.createElement('span');
+            span.className = 'json-' + typeof data;
+            span.textContent = typeof data === 'string' ? '"' + data + '"' : String(data);
+            return span;
+        }
+
+        // Circular reference guard — only track objects/arrays
+        if (seen.has(data)) {
+            const span = document.createElement('span');
+            span.className = 'json-null';
+            span.textContent = '[Circular]';
+            return span;
+        }
+        seen.add(data);
+
+        const isArray = Array.isArray(data);
+        const entries = isArray ? data : Object.entries(data);
+        const isOpen = depth < maxDepth;
+
+        const details = document.createElement('details');
+        details.className = 'json-node';
+        if (isOpen) details.open = true;
+
+        const summary = document.createElement('summary');
+        summary.className = 'json-bracket';
+        const countLabel = isArray
+            ? `${data.length} items`
+            : `${Object.keys(data).length} keys`;
+        summary.textContent = isArray ? `[ ${countLabel} ]` : `{ ${countLabel} }`;
+        details.appendChild(summary);
+
+        const children = document.createElement('div');
+        children.className = 'json-children';
+
+        if (isArray) {
+            data.forEach((item, i) => {
+                const row = document.createElement('div');
+                row.className = 'json-row';
+                const idx = document.createElement('span');
+                idx.className = 'json-number';
+                idx.textContent = String(i) + ':';
+                row.appendChild(idx);
+                row.appendChild(renderJsonTree(item, depth + 1, maxDepth, seen));
+                children.appendChild(row);
+            });
+        } else {
+            for (const [key, val] of Object.entries(data)) {
+                const row = document.createElement('div');
+                row.className = 'json-row';
+                const keySpan = document.createElement('span');
+                keySpan.className = 'json-key';
+                keySpan.textContent = '"' + key + '"';
+                row.appendChild(keySpan);
+                row.appendChild(document.createTextNode(': '));
+                row.appendChild(renderJsonTree(val, depth + 1, maxDepth, seen));
+                children.appendChild(row);
+            }
+        }
+
+        details.appendChild(children);
+        return details;
+    }
+
     function renderDocCard({ title, subtitle, sourceId, nodeId, nodeMetadata, actions, isSelected, clickHandler, deleteHandler, syncHandler, extraClass }) {
         const wrapper = document.createElement('div');
         wrapper.className = 'tree-node' + (extraClass ? ' ' + extraClass : '');
@@ -731,7 +928,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         } else {
             let actions = [];
             if (sourceId === 'local-folder') {
-                actions = ['Set Context', 'Link Doc', 'Delete'];
+                actions = ['Import', 'Link Doc', 'Delete'];
             } else if (sourceId === 'design-folder') {
                 actions = ['Set Context', 'Link Doc'];
             } else if (sourceId === 'html-folder') {
@@ -784,6 +981,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.activeDocId = docId;
             state.activeDocName = docName;
             state.previewRequestId++;
+            updateLocalActiveContextButtonState();
 
             const statusHtml = document.getElementById('status-html');
             if (statusHtml) {
@@ -828,6 +1026,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.activeDocId = docId;
             state.activeDocName = docName;
             state.previewRequestId++;
+            updateLocalActiveContextButtonState();
 
             const statusDesign = document.getElementById('status-design');
             if (statusDesign) {
@@ -888,6 +1087,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         state.activeDocId = docId;
         state.activeDocName = docName;
         state.previewRequestId++;
+        updateLocalActiveContextButtonState();
 
         if (btnAppendToPromptsOnline) btnAppendToPromptsOnline.disabled = false;
         const btnLinkToOnline = document.getElementById('btn-link-to-doc-online');
@@ -1633,6 +1833,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                                 state.activeSource = 'antigravity';
                                 state.activeDocId = artifact.id;
                                 state.activeDocName = artifact.name;
+                                updateLocalActiveContextButtonState();
                                 vscode.postMessage({
                                     type: 'fetchAntigravityArtifact',
                                     artifactPath: artifact.id,
@@ -1784,6 +1985,20 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         });
     }
 
+    function escapeHtml(str) {
+        return str.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
+    }
+
+    function viewRawJson() {
+        const jsonCont = document.getElementById('json-preview-container-design');
+        const mdPrev = document.getElementById('markdown-preview-design');
+        if (jsonCont) jsonCont.style.display = 'none';
+        if (mdPrev && !state.editMode.design) {
+            mdPrev.style.display = 'block';
+            mdPrev.innerHTML = `<pre><code>${escapeHtml(state.activeDocContent || '')}</code></pre>`;
+        }
+    }
+
     function handlePreviewReady(msg) {
         const { sourceId, requestId, content, docName, pages, isAutoRefreshed, filePath, htmlContent, webviewUri, isImage } = msg;
 
@@ -1820,8 +2035,15 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 if (imageContainer) { imageContainer.style.display = 'none'; }
                 if (imageImg) { imageImg.removeAttribute('src'); }
+            } else if (webviewUri && iframe && iframe.srcdoc) {
+                // Cache hit: content hasn't changed, iframe already has srcdoc content
+                // Just ensure iframe is visible — do NOT modify src or srcdoc
+                iframe.style.display = '';
+                if (imageContainer) { imageContainer.style.display = 'none'; }
+                if (imageImg) { imageImg.removeAttribute('src'); }
             } else if (webviewUri) {
-                // Fallback: iframe src if htmlContent not available (e.g., backend file read failed)
+                // Fallback: iframe src if htmlContent not available and no existing srcdoc
+                // (e.g., backend file read failed on first attempt)
                 if (iframe) {
                     iframe.style.display = '';
                     iframe.removeAttribute('srcdoc');
@@ -1847,11 +2069,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (requestId !== undefined && requestId !== -1 && requestId !== state.previewRequestId) return;
 
             state.activeDocFilePath = filePath || null;
+            state.activeFileType = msg.fileType || null;
 
             const mdPrev = document.getElementById('markdown-preview-design');
             const mdEd = document.getElementById('markdown-editor-design');
             const imgCont = document.getElementById('image-preview-container-design');
             const imgImg = document.getElementById('image-preview-img-design');
+            const jsonCont = document.getElementById('json-preview-container-design');
             const statusDesign = document.getElementById('status-design');
 
             const btnSetDesign = document.getElementById('btn-set-active-context-design');
@@ -1861,11 +2085,60 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (isImage && webviewUri) {
                 if (mdPrev) mdPrev.style.display = 'none';
                 if (mdEd) mdEd.style.display = 'none';
+                if (jsonCont) jsonCont.style.display = 'none';
                 if (imgCont) imgCont.style.display = 'flex';
                 if (imgImg) imgImg.src = webviewUri + '?t=' + Date.now();
                 if (btnEditDesign) btnEditDesign.disabled = true;
-            } else {
+            } else if (msg.fileType === 'json') {
+                // JSON preview
                 if (imgCont) imgCont.style.display = 'none';
+                if (mdPrev) mdPrev.style.display = 'none';
+                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
+                if (jsonCont && !state.editMode.design) {
+                    jsonCont.style.display = 'block';
+                    jsonCont.innerHTML = '';
+                    try {
+                        jsonCont.appendChild(renderJsonTree(JSON.parse(content)));
+                    } catch (e) {
+                        jsonCont.innerHTML = `<div class="json-error">Failed to parse JSON: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
+                    }
+                }
+                if (btnEditDesign) btnEditDesign.disabled = false;
+            } else if (msg.fileType === 'yaml') {
+                // YAML preview — use pre-parsed JSON from backend
+                if (imgCont) imgCont.style.display = 'none';
+                if (mdPrev) mdPrev.style.display = 'none';
+                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
+                if (jsonCont && !state.editMode.design) {
+                    jsonCont.style.display = 'block';
+                    jsonCont.innerHTML = '';
+                    if (msg.parsedJson !== undefined) {
+                        try {
+                            jsonCont.appendChild(renderJsonTree(msg.parsedJson));
+                        } catch (e) {
+                            jsonCont.innerHTML = `<div class="json-error">Failed to render YAML tree: ${e.message}<br><button onclick="viewRawJson()">View Raw</button></div>`;
+                        }
+                    } else {
+                        // Backend parse failed — show raw
+                        jsonCont.innerHTML = `<div class="json-error">Invalid YAML on disk — cannot render tree.<br><button onclick="viewRawJson()">View Raw</button></div>`;
+                    }
+                }
+                if (btnEditDesign) btnEditDesign.disabled = false;
+            } else if (msg.fileType === 'css' || msg.fileType === 'xml' || msg.fileType === 'text') {
+                // Plain text / code preview in markdown container
+                if (imgCont) imgCont.style.display = 'none';
+                if (jsonCont) jsonCont.style.display = 'none';
+                if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
+                if (mdPrev && !state.editMode.design) {
+                    mdPrev.style.display = 'block';
+                    const langClass = msg.fileType === 'css' ? 'language-css' : (msg.fileType === 'xml' ? 'language-xml' : '');
+                    mdPrev.innerHTML = `<pre><code class="${langClass}">${escapeHtml(content)}</code></pre>`;
+                }
+                if (btnEditDesign) btnEditDesign.disabled = false;
+            } else {
+                // Markdown (default) — existing path
+                if (imgCont) imgCont.style.display = 'none';
+                if (jsonCont) jsonCont.style.display = 'none';
                 if (mdEd && !state.editMode.design) mdEd.style.display = 'none';
                 if (mdPrev && !state.editMode.design) mdPrev.style.display = 'block';
 
@@ -2032,7 +2305,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
 
         // Skip re-render if content hasn't changed (prevents line-length flicker)
-        if (state.activeDocContent === content) {
+        if (state.activeDocContent === (content || '')) {
             if (msg.isAutoRefreshed) {
                 targetStatus.textContent = 'Externally updated — refreshed';
                 setTimeout(() => { if (targetStatus.textContent === 'Externally updated — refreshed') targetStatus.textContent = ''; }, 2000);
@@ -2040,9 +2313,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return;
         }
 
-        state.activeDocContent = content;
+        state.activeDocContent = content || '';
 
-        targetPreview.innerHTML = renderMarkdown(content);
+        targetPreview.innerHTML = renderMarkdown(content || '');
 
         if (targetBtnAppend) targetBtnAppend.disabled = false;
         if (btnImportFullDoc) btnImportFullDoc.disabled = false;
@@ -2490,6 +2763,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             state.activeDocId = doc.slugPrefix;
                             state.activeDocName = doc.docName;
                             state.previewRequestId++;
+                            updateLocalActiveContextButtonState();
 
                             // Send message to load file from docs directory
                             vscode.postMessage({
@@ -2588,6 +2862,28 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             case 'kanbanContextSet':
                 handleKanbanContextSet(msg);
                 break;
+            case 'kanbanPlanPromptCopied': {
+                const btn = document.querySelector(`.kanban-plan-copy-prompt[data-session-id="${msg.sessionId}"]`);
+                if (btn) {
+                    btn.textContent = msg.success ? 'Copied!' : 'Failed';
+                    setTimeout(() => {
+                        btn.textContent = 'Copy Prompt';
+                    }, 2000);
+                }
+                if (msg.success) {
+                    // Refresh plan list to show new column
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                }
+                break;
+            }
+            case 'kanbanPlanColumnChanged': {
+                if (msg.success) {
+                    vscode.postMessage({ type: 'fetchKanbanPlans', requestId: Date.now() });
+                } else {
+                    console.error('[Kanban Sidebar] Failed to move plan column:', msg.error);
+                }
+                break;
+            }
             case 'commentResult': {
                 const { ok, message } = msg;
                 if (ok) {
@@ -2844,6 +3140,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         state.activeDocId = null;
                         state.activeDocName = null;
                         state.activeSource = null;
+                        updateLocalActiveContextButtonState();
                         if (state.selectedEl) {
                             state.selectedEl.classList.remove('selected');
                             state.selectedEl = null;
@@ -2867,6 +3164,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         state.activeDocId = null;
                         state.activeDocName = null;
                         state.activeSource = null;
+                        updateLocalActiveContextButtonState();
                         if (state.selectedEl) {
                             state.selectedEl.classList.remove('selected');
                             state.selectedEl = null;
@@ -2926,8 +3224,13 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         state.activeDocContent = textarea.value;
                         exitEditMode('design', true);
                         const mdPrevDesign = document.getElementById('markdown-preview-design');
-                        if (mdPrevDesign) {
-                            mdPrevDesign.innerHTML = renderMarkdown(state.activeDocContent);
+                        if (state.activeFileType === 'json' || state.activeFileType === 'yaml') {
+                            // Tree will be re-rendered by handlePreviewReady after auto-refresh
+                            // or by exitEditMode branching above
+                        } else {
+                            if (mdPrevDesign) {
+                                mdPrevDesign.innerHTML = renderMarkdown(state.activeDocContent);
+                            }
                         }
                         const statusDesign = document.getElementById('status-design');
                         if (statusDesign) {
@@ -2989,12 +3292,118 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
                 break;
             }
+            // ===== TICKETS TAB IPC HANDLERS =====
+            case 'linearProjectLoaded':
+                linearProjectIssues = Array.isArray(msg.issues) ? msg.issues : [];
+                linearProjectStatus = 'loaded';
+                linearProjectMessage = '';
+                linearProjectLoading = false;
+                ticketsLoadedOnce = true;
+                renderTicketsTab();
+                break;
+            case 'linearProjectsLoaded':
+                linearAvailableProjects = msg.projects || [];
+                break;
+            case 'linearTaskDetailsLoaded':
+                selectedLinearIssue = {
+                    issue: msg.issue,
+                    subtasks: msg.subtasks || [],
+                    comments: msg.comments || [],
+                    attachments: msg.attachments || [],
+                    renderedDescriptionHtml: msg.renderedDescriptionHtml
+                };
+                renderTicketsTab();
+                break;
+            case 'clickupSpacesLoaded':
+                clickUpAvailableSpaces = msg.spaces || [];
+                clickUpAvailableFolders = [];
+                clickUpAvailableListsInFolder = [];
+                clickUpAvailableDirectLists = [];
+                clickUpHierarchyLoading = false;
+                renderTicketsTab();
+                break;
+            case 'clickupFoldersLoaded':
+                clickUpAvailableFolders = msg.folders || [];
+                clickUpAvailableListsInFolder = [];
+                clickUpAvailableDirectLists = msg.directLists || [];
+                clickUpHierarchyLoading = false;
+                renderTicketsTab();
+                break;
+            case 'clickupListsLoaded':
+                if (clickUpSelectedFolderId) {
+                    clickUpAvailableListsInFolder = msg.lists || [];
+                } else {
+                    clickUpAvailableDirectLists = msg.lists || [];
+                }
+                clickUpHierarchyLoading = false;
+                renderTicketsTab();
+                break;
+            case 'clickupProjectLoaded':
+                clickUpProjectIssues = msg.tasks || [];
+                clickUpProjectStatus = 'loaded';
+                clickUpProjectMessage = '';
+                clickUpProjectLoading = false;
+                clickUpCurrentPage = msg.page || 0;
+                clickUpProjectHasMore = msg.hasMore || false;
+                ticketsLoadedOnce = true;
+                renderTicketsTab();
+                break;
+            case 'clickupTaskDetailsLoaded':
+                selectedClickUpIssue = {
+                    task: msg.task,
+                    subtasks: msg.subtasks || [],
+                    comments: msg.comments || [],
+                    attachments: msg.attachments || []
+                };
+                renderTicketsTab();
+                break;
+            case 'integrationProviderPreference':
+                lastIntegrationProvider = msg.provider || null;
+                currentWorkspaceRoot = msg.workspaceRoot || '';
+                if (isTicketsTabActive()) {
+                    if (lastIntegrationProvider === 'clickup') {
+                        loadClickUpSpaces();
+                    } else if (lastIntegrationProvider === 'linear') {
+                        loadLinearProject();
+                    }
+                }
+                break;
+            case 'linearTaskImported':
+            case 'clickupTaskImported':
+                const { detailImportButton } = getTicketsTabElements();
+                if (detailImportButton) detailImportButton.disabled = false;
+                if (msg.success) {
+                    alert('Task imported successfully!');
+                } else {
+                    alert('Import failed: ' + (msg.error || 'Unknown error'));
+                }
+                break;
         }
     });
 
     // Active Design Doc Banner handlers
     const btnDisableDocLocal = document.getElementById('btn-disable-doc-local');
     const btnDisableDocOnline = document.getElementById('btn-disable-doc-online');
+
+    function updateLocalActiveContextButtonState() {
+        if (!btnSetActiveContextLocal) return;
+        const hasSelection = state.activeSource && state.activeDocId;
+        const isLocalSelection = state.activeSource === 'local-folder';
+        const isThisDocActive = state.activeDesignDocEnabled &&
+            state.activeDesignDocSourceId === state.activeSource &&
+            state.activeDesignDocId === state.activeDocId;
+
+        if (!hasSelection || !isLocalSelection) {
+            btnSetActiveContextLocal.disabled = true;
+            btnSetActiveContextLocal.textContent = 'Set as Active Planning Context';
+        } else if (isThisDocActive) {
+            btnSetActiveContextLocal.disabled = false;
+            btnSetActiveContextLocal.textContent = 'Turn off';
+        } else {
+            btnSetActiveContextLocal.disabled = false;
+            btnSetActiveContextLocal.textContent = 'Set as Active Planning Context';
+        }
+    }
 
     function updateActiveDocBanner(msg) {
         const bannerLocal = document.getElementById('active-doc-banner-local');
@@ -3019,6 +3428,10 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             bannerDesign.classList.toggle('inactive', !isActive);
             if (nameDesign) nameDesign.textContent = docName;
         }
+        state.activeDesignDocEnabled = msg.enabled || false;
+        state.activeDesignDocSourceId = msg.sourceId || null;
+        state.activeDesignDocId = msg.docId || null;
+        updateLocalActiveContextButtonState();
     }
 
     function handleDisableDesignDoc() {
@@ -3151,7 +3564,7 @@ SUB-QUESTIONS (cover all, lead with the first three):
   3. What are the key trade-offs and failure modes?
   4. What is the current state of the art and recent developments?
 
-SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability.
+SOURCE GUIDANCE: Prefer official documentation, standards bodies, and peer-reviewed sources; distrust vendor marketing claims. Date-check all sources — flag anything older than 2 years. Separate "required" from "recommended" from "opinion" in every finding. Where law or standards are silent or ambiguous, say so rather than assuming applicability. Do not insert sources inline among the text; place all citations and links in the "Full source list" section only.
 
 SCOPE: Primary focus is the central question above. Related domains and alternative approaches as clearly-labelled benchmarks only. Out of scope: unrelated domains and jurisdictions.
 
@@ -3393,6 +3806,10 @@ DEPTH: Deep (50-100+ sources)`;
 
             const columnDef = _kanbanAvailableColumns.find(c => c.id === plan.column);
 
+            const columnOptions = _kanbanAvailableColumns.map(col =>
+                `<option value="${escapeHtml(col.id)}" ${col.id === plan.column ? 'selected' : ''}>${escapeHtml(col.label)}</option>`
+            ).join('');
+
             itemDiv.innerHTML = `
                 <div style="width: 100%;">
                     <div style="display: flex; align-items: flex-start; gap: 8px;">
@@ -3402,8 +3819,12 @@ DEPTH: Deep (50-100+ sources)`;
                         ${escapeHtml(metaParts.join(' · '))} · ${escapeHtml(displayTime)}
                     </div>
                     <div class="kanban-plan-actions">
-                        <span class="kanban-column-badge" data-column="${escapeHtml(plan.column)}">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                        <span class="kanban-column-badge clickable" data-column="${escapeHtml(plan.column)}" title="Click to change column">${escapeHtml(columnDef ? columnDef.label : plan.column)}</span>
+                        <select class="kanban-column-dropdown" style="display:none;" data-session-id="${escapeHtml(plan.sessionId || '')}" data-plan-file="${escapeHtml(plan.planFile || '')}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}">
+                            ${columnOptions}
+                        </select>
                         ${plan.planFile ? `<button class="kanban-plan-copy-link" data-plan-file="${escapeHtml(plan.planFile)}" title="Copy plan file path">Copy Link</button>` : ''}
+                        ${plan.sessionId ? `<button class="kanban-plan-copy-prompt" data-session-id="${escapeHtml(plan.sessionId)}" data-column="${escapeHtml(plan.column)}" data-workspace-root="${escapeHtml(plan.workspaceRoot)}" title="Copy prompt and advance">Copy Prompt</button>` : ''}
                     </div>
                 </div>
             `;
@@ -3461,6 +3882,64 @@ DEPTH: Deep (50-100+ sources)`;
                             }, 2000);
                         });
                     }
+                });
+            }
+
+            const copyPromptBtn = itemDiv.querySelector('.kanban-plan-copy-prompt');
+            if (copyPromptBtn) {
+                copyPromptBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const sessionId = copyPromptBtn.dataset.sessionId;
+                    const column = copyPromptBtn.dataset.column;
+                    const workspaceRoot = copyPromptBtn.dataset.workspaceRoot;
+                    if (sessionId) {
+                        copyPromptBtn.textContent = 'Copying…';
+                        vscode.postMessage({
+                            type: 'copyKanbanPlanPrompt',
+                            sessionId,
+                            column,
+                            workspaceRoot
+                        });
+                    }
+                });
+            }
+
+            const columnBadge = itemDiv.querySelector('.kanban-column-badge.clickable');
+            const columnDropdown = itemDiv.querySelector('.kanban-column-dropdown');
+            if (columnBadge && columnDropdown) {
+                columnBadge.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    const isHidden = columnDropdown.style.display === 'none';
+                    // Hide all other dropdowns first
+                    document.querySelectorAll('.kanban-column-dropdown').forEach(el => {
+                        el.style.display = 'none';
+                    });
+                    columnDropdown.style.display = isHidden ? 'block' : 'none';
+                    if (isHidden) {
+                        columnDropdown.focus();
+                    }
+                });
+
+                columnDropdown.addEventListener('change', (e) => {
+                    e.stopPropagation();
+                    const newColumn = columnDropdown.value;
+                    const planFile = columnDropdown.dataset.planFile;
+                    const workspaceRoot = columnDropdown.dataset.workspaceRoot;
+                    if (planFile && newColumn) {
+                        vscode.postMessage({
+                            type: 'moveKanbanPlanColumn',
+                            planFile,
+                            newColumn,
+                            workspaceRoot
+                        });
+                    }
+                    columnDropdown.style.display = 'none';
+                });
+
+                columnDropdown.addEventListener('blur', () => {
+                    setTimeout(() => {
+                        columnDropdown.style.display = 'none';
+                    }, 200);
                 });
             }
 
@@ -3753,9 +4232,9 @@ DEPTH: Deep (50-100+ sources)`;
         }
         const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
         const textarea = document.getElementById(tab === 'local' ? 'markdown-editor-local' : (tab === 'design' ? 'markdown-editor-design' : 'kanban-editor'));
-        
+
         if (!previewPane || !textarea) return;
-        
+
         let content = '';
         if (tab === 'local' || tab === 'design') {
             content = state.activeDocContent || '';
@@ -3763,18 +4242,24 @@ DEPTH: Deep (50-100+ sources)`;
         } else {
             content = state.editOriginalContent.kanban || '';
         }
-        
+
         textarea.value = content;
         previewPane.classList.add('edit-mode');
-        
+
         const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
         const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
         const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
-        
+
         if (btnEdit) btnEdit.style.display = 'none';
         if (btnSave) btnSave.style.display = '';
         if (btnCancel) btnCancel.style.display = '';
-        
+
+        // Hide JSON preview container when entering edit mode for design tab
+        if (tab === 'design') {
+            const jsonCont = document.getElementById('json-preview-container-design');
+            if (jsonCont) jsonCont.style.display = 'none';
+        }
+
         state.editMode[tab] = true;
         state.dirtyFlags[tab] = false;
     }
@@ -3785,22 +4270,44 @@ DEPTH: Deep (50-100+ sources)`;
                 return false;
             }
         }
-        
+
         const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
         if (previewPane) {
             previewPane.classList.remove('edit-mode');
         }
-        
+
         const btnEdit = document.getElementById(tab === 'local' ? 'btn-edit-local' : (tab === 'design' ? 'btn-edit-design' : 'btn-edit-kanban'));
         const btnSave = document.getElementById(tab === 'local' ? 'btn-save-local' : (tab === 'design' ? 'btn-save-design' : 'btn-save-kanban'));
         const btnCancel = document.getElementById(tab === 'local' ? 'btn-cancel-local' : (tab === 'design' ? 'btn-cancel-design' : 'btn-cancel-kanban'));
-        
+
         if (btnEdit) btnEdit.style.display = '';
         if (btnSave) btnSave.style.display = 'none';
         if (btnCancel) btnCancel.style.display = 'none';
-        
+
         state.editMode[tab] = false;
         state.dirtyFlags[tab] = false;
+
+        // Show JSON tree instead of markdown preview for JSON/YAML files
+        if (tab === 'design' && !discard) {
+            if (state.activeFileType === 'json' || state.activeFileType === 'yaml') {
+                const mdPrev = document.getElementById('markdown-preview-design');
+                const jsonCont = document.getElementById('json-preview-container-design');
+                if (mdPrev) mdPrev.style.display = 'none';
+                if (jsonCont) {
+                    jsonCont.style.display = 'block';
+                    jsonCont.innerHTML = '';
+                    try {
+                        if (state.activeFileType === 'json') {
+                            jsonCont.appendChild(renderJsonTree(JSON.parse(state.activeDocContent)));
+                        }
+                        // For YAML: the tree was already rendered from parsedJson in handlePreviewReady;
+                        // after save, re-fetch triggers handlePreviewReady which will re-render
+                    } catch (e) {
+                        jsonCont.innerHTML = `<div class="json-error">Parse error: ${e.message}</div>`;
+                    }
+                }
+            }
+        }
 
         // Trigger deferred reload if an external change was pending
         if (state.externalChangePending[tab]) {
@@ -3960,6 +4467,29 @@ DEPTH: Deep (50-100+ sources)`;
         });
     }
 
+    if (btnSetActiveContextLocal) {
+        btnSetActiveContextLocal.addEventListener('click', () => {
+            if (!state.activeSource || !state.activeDocId) return;
+            const isThisDocActive = state.activeDesignDocEnabled &&
+                state.activeDesignDocSourceId === state.activeSource &&
+                state.activeDesignDocId === state.activeDocId;
+
+            if (isThisDocActive) {
+                vscode.postMessage({ type: 'disableDesignDoc' });
+            } else {
+                const wrapper = findTreeNode(state.activeSource, state.activeDocId);
+                const sourceFolder = wrapper ? wrapper.dataset.sourceFolder : undefined;
+                vscode.postMessage({
+                    type: 'setActivePlanningContext',
+                    sourceId: state.activeSource,
+                    docId: state.activeDocId,
+                    docName: state.activeDocName || state.activeDocId,
+                    sourceFolder
+                });
+            }
+        });
+    }
+
     const btnLinkToDesign = document.getElementById('btn-link-to-doc-design');
     if (btnLinkToDesign) {
         btnLinkToDesign.addEventListener('click', () => {
@@ -4068,6 +4598,911 @@ DEPTH: Deep (50-100+ sources)`;
         btnAddHtmlFolderModal.addEventListener('click', () => {
             vscode.postMessage({ type: 'addHtmlFolder' });
         });
+    }
+
+    // ===== TICKETS TAB IMPLEMENTATION =====
+
+    function initTicketsTab() {
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton, backToListButton, backToParentButton } = getTicketsTabElements();
+
+        // Search input with debounce
+        let searchDebounceTimer = null;
+        searchInput?.addEventListener('input', (e) => {
+            clearTimeout(searchDebounceTimer);
+            searchDebounceTimer = setTimeout(() => {
+                if (lastIntegrationProvider === 'linear') {
+                    linearProjectSearchValue = e.target.value;
+                    renderTicketsLinearList();
+                } else if (lastIntegrationProvider === 'clickup') {
+                    clickUpProjectSearchValue = e.target.value;
+                    renderTicketsClickUpList();
+                }
+            }, 300);
+        });
+
+        // Project picker (Linear)
+        projectPicker?.addEventListener('change', (e) => {
+            linearProjectPickerValue = e.target.value;
+            renderTicketsLinearList();
+        });
+
+        // State filter (Linear)
+        stateFilter?.addEventListener('change', (e) => {
+            linearProjectStateFilterValue = e.target.value;
+            renderTicketsLinearList();
+        });
+
+        // Status filter (ClickUp)
+        clickUpStatusFilter?.addEventListener('change', (e) => {
+            clickUpProjectStatusFilterValue = e.target.value;
+            renderTicketsClickUpList();
+        });
+
+        // Refresh button
+        refreshButton?.addEventListener('click', () => {
+            if (lastIntegrationProvider === 'linear') {
+                loadLinearProject(true);
+            } else if (lastIntegrationProvider === 'clickup') {
+                if (clickUpSelectedListId) {
+                    loadClickUpProject(true);
+                } else {
+                    loadClickUpSpaces();
+                }
+            }
+        });
+
+        // Load more button (ClickUp pagination)
+        loadMoreButton?.addEventListener('click', loadMoreClickUpTasks);
+
+        // Back buttons
+        backToListButton?.addEventListener('click', () => {
+            selectedLinearIssue = null;
+            selectedClickUpIssue = null;
+            renderTicketsTab();
+        });
+
+        backToParentButton?.addEventListener('click', () => {
+            const parentId = backToParentButton.dataset.parentId;
+            if (parentId) {
+                loadLinearTaskDetails(parentId);
+            }
+        });
+
+        // Detail action buttons (delegated)
+        document.querySelector('.tickets-task-view')?.addEventListener('click', (e) => {
+            const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
+            const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
+            const askAgentBtn = e.target.closest('#tickets-detail-ask-agent');
+
+            if (importBtn) {
+                const id = importBtn.dataset.importIssueId || importBtn.dataset.importTaskId;
+                const provider = lastIntegrationProvider;
+                handleTicketsImport(provider, id, true);
+            }
+
+            if (refineBtn) {
+                const id = refineBtn.dataset.refineIssueId || refineBtn.dataset.refineTaskId;
+                const title = refineBtn.dataset.issueTitle || '';
+                const description = refineBtn.dataset.issueDescription || '';
+                const provider = lastIntegrationProvider;
+                handleTicketsRefine(provider, id, title, description);
+            }
+
+            if (askAgentBtn) {
+                // Show "not yet implemented" stub
+                alert('Ask Agent feature is not yet implemented in the Planning panel.');
+            }
+        });
+
+        // Issue card clicks (delegated)
+        document.getElementById('tickets-issues-container')?.addEventListener('click', (e) => {
+            const card = e.target.closest('[data-linear-issue-id], [data-clickup-task-id]');
+            if (card) {
+                const linearId = card.dataset.linearIssueId;
+                const clickUpId = card.dataset.clickupTaskId;
+                if (linearId) {
+                    loadLinearTaskDetails(linearId);
+                } else if (clickUpId) {
+                    loadClickUpTaskDetails(clickUpId);
+                }
+            }
+        });
+    }
+
+    // ===== RENDERING FUNCTIONS =====
+
+    function renderTicketsTab() {
+        if (!isTicketsTabActive()) return;
+
+        if (lastIntegrationProvider === 'linear') {
+            renderTicketsLinearPanel();
+        } else if (lastIntegrationProvider === 'clickup') {
+            renderTicketsClickUpPanel();
+        }
+    }
+
+    function renderTicketsLinearPanel() {
+        if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
+
+        const { listView, taskView, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState } = getTicketsTabElements();
+        if (!listView || !taskView) return;
+
+        // Show Linear toolbar elements
+        if (searchInput) searchInput.style.display = '';
+        if (projectPicker) projectPicker.style.display = '';
+        if (stateFilter) stateFilter.style.display = '';
+        if (clickUpStatusFilter) clickUpStatusFilter.style.display = 'none';
+        if (refreshButton) refreshButton.style.display = '';
+
+        renderTicketsLinearStateFilterOptions();
+        renderTicketsLinearProjectPickerOptions();
+
+        const showTaskView = !!selectedLinearIssue;
+        listView.style.display = showTaskView ? 'none' : 'flex';
+        taskView.style.display = showTaskView ? 'flex' : 'none';
+
+        renderTicketsLinearList();
+        renderTicketsLinearTaskDetail();
+    }
+
+    function renderTicketsLinearStateFilterOptions() {
+        const { stateFilter } = getTicketsTabElements();
+        if (!stateFilter) return;
+
+        const states = Array.from(new Set(
+            linearProjectIssues
+                .map((issue) => String(issue?.state?.name || '').trim())
+                .filter(Boolean)
+        )).sort((left, right) => left.localeCompare(right));
+
+        const newHtml = `<option value="">All states</option>${states.map((state) =>
+            `<option value="${escapeAttr(state)}">${escapeHtml(state)}</option>`
+        ).join('')}`;
+
+        if (_lastTicketsStateFilterHtml !== newHtml) {
+            stateFilter.innerHTML = newHtml;
+            _lastTicketsStateFilterHtml = newHtml;
+        }
+
+        stateFilter.value = states.includes(linearProjectStateFilterValue) ? linearProjectStateFilterValue : '';
+        linearProjectStateFilterValue = stateFilter.value;
+    }
+
+    function renderTicketsLinearProjectPickerOptions() {
+        const { projectPicker } = getTicketsTabElements();
+        if (!projectPicker) return;
+
+        const projects = Array.from(new Set(
+            linearProjectIssues
+                .map((issue) => String(issue?.project?.name || '').trim())
+                .filter(Boolean)
+        )).sort();
+
+        const newHtml = `<option value="">All projects</option>${projects.map((project) =>
+            `<option value="${escapeAttr(project)}">${escapeHtml(project)}</option>`
+        ).join('')}`;
+
+        if (_lastTicketsProjectPickerHtml !== newHtml) {
+            projectPicker.innerHTML = newHtml;
+            _lastTicketsProjectPickerHtml = newHtml;
+        }
+
+        projectPicker.value = projects.includes(linearProjectPickerValue) ? linearProjectPickerValue : '';
+        linearProjectPickerValue = projectPicker.value;
+    }
+
+    function getFilteredLinearIssues() {
+        const search = String(linearProjectSearchValue || '').trim().toLowerCase();
+        const stateFilter = String(linearProjectStateFilterValue || '').trim();
+        const projectFilter = String(linearProjectPickerValue || '').trim();
+        return linearProjectIssues.filter((issue) => {
+            if (issue?.parentId) return false;
+            if (stateFilter && String(issue?.state?.name || '') !== stateFilter) return false;
+            if (projectFilter && String(issue?.project?.name || '') !== projectFilter) return false;
+            if (!search) return true;
+            const haystack = [
+                issue.identifier,
+                issue.title,
+                issue.description,
+                issue.assignee?.name,
+                issue.assignee?.email
+            ].join('\n').toLowerCase();
+            return haystack.includes(search);
+        });
+    }
+
+    function renderTicketsLinearList() {
+        if (!isTicketsTabActive()) return;
+
+        const { emptyState, issuesContainer, searchInput } = getTicketsTabElements();
+        if (!emptyState || !issuesContainer) return;
+
+        if (searchInput && searchInput.value !== linearProjectSearchValue) {
+            searchInput.value = linearProjectSearchValue;
+        }
+
+        if (linearProjectStatus === 'loading') {
+            emptyState.textContent = linearProjectMessage || 'Loading Linear project...';
+            emptyState.style.display = '';
+            issuesContainer.innerHTML = '';
+            _lastTicketsIssuesContainerHtml = '';
+            return;
+        }
+
+        if (linearProjectStatus !== 'loaded') {
+            emptyState.textContent = linearProjectMessage || 'Set up Linear in Setup first.';
+            emptyState.style.display = '';
+            issuesContainer.innerHTML = '';
+            _lastTicketsIssuesContainerHtml = '';
+            return;
+        }
+
+        const filteredIssues = getFilteredLinearIssues();
+        if (filteredIssues.length === 0) {
+            const emptyText = linearProjectIssues.length === 0
+                ? 'No Linear issues are currently available.'
+                : 'No Linear issues matched the current search/filter.';
+            if (emptyState.textContent !== emptyText) {
+                emptyState.textContent = emptyText;
+            }
+            emptyState.style.display = '';
+            if (_lastTicketsIssuesContainerHtml !== '') {
+                issuesContainer.innerHTML = '';
+                _lastTicketsIssuesContainerHtml = '';
+            }
+            return;
+        }
+
+        emptyState.style.display = 'none';
+
+        const newHtml = filteredIssues.map((issue) => {
+            return `
+            <div class="tickets-issue-card" data-linear-issue-id="${escapeAttr(issue.id)}">
+                <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
+                <div class="tickets-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
+                <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
+                <div class="tickets-issue-meta">${escapeHtml((issue.description || '').trim().slice(0, 180) || 'No description provided.')}</div>
+                <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                    <button type="button" class="tickets-issue-import-btn" data-refine-issue-id="${escapeAttr(issue.id)}" data-issue-title="${escapeAttr(issue.title || '')}" data-issue-description="${escapeAttr(issue.description || '')}">REFINE</button>
+                    <button type="button" class="tickets-issue-import-btn" data-import-issue-id="${escapeAttr(issue.id)}">IMPORT</button>
+                </div>
+            </div>
+            `;
+        }).join('');
+
+        if (_lastTicketsIssuesContainerHtml !== newHtml) {
+            issuesContainer.innerHTML = newHtml;
+            _lastTicketsIssuesContainerHtml = newHtml;
+        }
+    }
+
+    function renderTicketsLinearTaskDetail() {
+        if (!isTicketsTabActive()) return;
+
+        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
+        if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
+
+        if (!selectedLinearIssue) {
+            detailTitle.textContent = 'Select a task';
+            detailStatus.textContent = '';
+            detailAssignee.textContent = '';
+            const noSelectionHtml = '<div class="empty-state">Choose a task from the list to inspect details.</div>';
+            if (_lastTicketsDetailDescriptionHtml !== noSelectionHtml) {
+                detailDescription.innerHTML = noSelectionHtml;
+                _lastTicketsDetailDescriptionHtml = noSelectionHtml;
+            }
+            if (detailSubtasks && _lastTicketsDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsDetailSubtasksHtml = ''; }
+            if (detailComments && _lastTicketsDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsDetailCommentsHtml = ''; }
+            if (detailAttachments && _lastTicketsDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsDetailAttachmentsHtml = ''; }
+            if (detailImportButton) detailImportButton.disabled = true;
+            if (detailRefineButton) detailRefineButton.disabled = true;
+            if (detailAskAgentButton) detailAskAgentButton.disabled = true;
+            if (backToParentButton) {
+                backToParentButton.style.display = 'none';
+                delete backToParentButton.dataset.parentId;
+            }
+            return;
+        }
+
+        const issue = selectedLinearIssue.issue;
+        detailTitle.textContent = issue.title || issue.identifier || issue.id;
+        detailStatus.textContent = issue.state?.name || 'Unknown status';
+        detailAssignee.textContent = `Assignee: ${issue.assignee?.name || issue.assignee?.email || 'Unassigned'}`;
+
+        if (backToParentButton) {
+            const parentId = issue.parentId;
+            if (parentId) {
+                backToParentButton.style.display = '';
+                backToParentButton.dataset.parentId = parentId;
+            } else {
+                backToParentButton.style.display = 'none';
+                delete backToParentButton.dataset.parentId;
+            }
+        }
+
+        if (selectedLinearIssue.renderedDescriptionHtml) {
+            if (_lastTicketsDetailDescriptionHtml !== selectedLinearIssue.renderedDescriptionHtml) {
+                detailDescription.innerHTML = selectedLinearIssue.renderedDescriptionHtml;
+                _lastTicketsDetailDescriptionHtml = selectedLinearIssue.renderedDescriptionHtml;
+            }
+        } else {
+            const plainHtml = escapeHtml((issue.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
+            if (_lastTicketsDetailDescriptionHtml !== plainHtml) {
+                detailDescription.innerHTML = plainHtml;
+                _lastTicketsDetailDescriptionHtml = plainHtml;
+            }
+        }
+
+        if (detailSubtasks) {
+            const newSubtasksHtml = selectedLinearIssue.subtasks.length > 0
+                ? selectedLinearIssue.subtasks.map((subtask) => `
+                    <div class="planning-card" data-linear-subtask-id="${escapeAttr(subtask.id)}">
+                        <div class="planning-card-header">${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</div>
+                        <div class="planning-status">${escapeHtml(subtask.state?.name || 'Unknown state')}</div>
+                        <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                            <button type="button" class="planning-button" data-refine-issue-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
+                            <button type="button" class="planning-button" data-import-issue-id="${escapeAttr(subtask.id)}">IMPORT</button>
+                        </div>
+                    </div>
+                `).join('')
+                : '<div class="empty-state">No subtasks attached to this issue.</div>';
+            if (_lastTicketsDetailSubtasksHtml !== newSubtasksHtml) {
+                detailSubtasks.innerHTML = newSubtasksHtml;
+                _lastTicketsDetailSubtasksHtml = newSubtasksHtml;
+            }
+        }
+
+        if (detailComments) {
+            const newCommentsHtml = selectedLinearIssue.comments.length > 0
+                ? selectedLinearIssue.comments.map((comment) => `
+                    <div class="planning-card">
+                        <div class="planning-card-header">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</div>
+                        <div class="planning-card-description">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</div>
+                        <div class="planning-card-description">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                    </div>
+                `).join('')
+                : '<div class="empty-state">No comments attached to this issue.</div>';
+            if (_lastTicketsDetailCommentsHtml !== newCommentsHtml) {
+                detailComments.innerHTML = newCommentsHtml;
+                _lastTicketsDetailCommentsHtml = newCommentsHtml;
+            }
+        }
+
+        if (detailAttachments) {
+            const newAttachmentsHtml = selectedLinearIssue.attachments.length > 0
+                ? selectedLinearIssue.attachments.map((attachment) => `
+                    <button type="button" class="planning-button secondary" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
+                        ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
+                    </button>
+                `).join('')
+                : '<div class="empty-state">No attachments attached to this issue.</div>';
+            if (_lastTicketsDetailAttachmentsHtml !== newAttachmentsHtml) {
+                detailAttachments.innerHTML = newAttachmentsHtml;
+                _lastTicketsDetailAttachmentsHtml = newAttachmentsHtml;
+            }
+        }
+
+        if (detailAskAgentButton) detailAskAgentButton.disabled = false;
+        if (detailImportButton) detailImportButton.disabled = false;
+        if (detailRefineButton) detailRefineButton.disabled = false;
+    }
+
+    // ===== CLICKUP RENDERING FUNCTIONS =====
+
+    function renderTicketsClickUpPanel() {
+        if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
+
+        const { listView, taskView, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav } = getTicketsTabElements();
+        if (!listView || !taskView) return;
+
+        // Hide Linear toolbar elements, show ClickUp hierarchy
+        if (searchInput) searchInput.style.display = 'none';
+        if (projectPicker) projectPicker.style.display = 'none';
+        if (stateFilter) stateFilter.style.display = 'none';
+        if (clickUpStatusFilter) {
+            clickUpStatusFilter.style.display = clickUpSelectedListId ? '' : 'none';
+        }
+        if (refreshButton) refreshButton.style.display = '';
+        if (hierarchyNav) hierarchyNav.style.display = '';
+
+        if (emptyState) {
+            if (!clickUpSelectedListId) {
+                emptyState.textContent = 'No list selected. Please select a Space, Folder, and List to view tasks.';
+                emptyState.style.display = '';
+            } else if (clickUpProjectStatus !== 'loaded') {
+                emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
+                emptyState.style.display = '';
+            } else {
+                emptyState.style.display = 'none';
+            }
+        }
+
+        if (lastIntegrationProvider === 'clickup') {
+            renderTicketsClickUpHierarchyNav();
+        }
+
+        if (clickUpSelectedListId) {
+            renderTicketsClickUpStatusFilterOptions();
+            renderTicketsClickUpList();
+        } else {
+            if (issuesContainer) {
+                issuesContainer.innerHTML = '';
+            }
+        }
+
+        renderTicketsClickUpTaskDetail();
+
+        const showTaskView = !!selectedClickUpIssue;
+        listView.style.display = showTaskView ? 'none' : 'flex';
+        taskView.style.display = showTaskView ? 'flex' : 'none';
+    }
+
+    function renderTicketsClickUpHierarchyNav() {
+        const { hierarchyNav } = getTicketsTabElements();
+        if (!hierarchyNav) return;
+
+        const html = buildTicketsHierarchyHtml();
+        if (_lastTicketsHierarchyHtml !== html) {
+            hierarchyNav.innerHTML = html;
+            _lastTicketsHierarchyHtml = html;
+            attachTicketsHierarchyListeners();
+        }
+    }
+
+    function buildTicketsHierarchyHtml() {
+        const parts = [];
+
+        if (!clickUpSelectedSpaceId) {
+            parts.push(`
+                <select id="tickets-space-select" class="planning-select">
+                    <option value="">Select Space...</option>
+                    ${clickUpAvailableSpaces.map(s => `<option value="${escapeAttr(s.id)}">${escapeHtml(s.name)}</option>`).join('')}
+                </select>
+            `);
+        } else {
+            const space = clickUpAvailableSpaces.find(s => s.id === clickUpSelectedSpaceId);
+            parts.push(`
+                <div style="display:flex; align-items:center; gap:4px;">
+                    <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(space?.name || 'Unknown')}</span>
+                    <button class="planning-button secondary" data-level="space" style="padding:2px 6px; font-size:9px;">Change</button>
+                </div>
+            `);
+
+            if (clickUpAvailableFolders.length > 0 || clickUpSelectedFolderId) {
+                if (!clickUpSelectedFolderId) {
+                    parts.push(`
+                        <select id="tickets-folder-select" class="planning-select">
+                            <option value="">Select Folder...</option>
+                            <option value="_root_">(Root - Lists not in any Folder)</option>
+                            ${clickUpAvailableFolders.map(f => `<option value="${escapeAttr(f.id)}">${escapeHtml(f.name)}</option>`).join('')}
+                        </select>
+                    `);
+                } else {
+                    const folder = clickUpAvailableFolders.find(f => f.id === clickUpSelectedFolderId);
+                    parts.push(`
+                        <div style="display:flex; align-items:center; gap:4px;">
+                            <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(folder?.name || 'Unknown')}</span>
+                            <button class="planning-button secondary" data-level="folder" style="padding:2px 6px; font-size:9px;">Change</button>
+                        </div>
+                    `);
+                }
+            }
+
+            const availableLists = clickUpSelectedFolderId
+                ? clickUpAvailableListsInFolder
+                : clickUpAvailableDirectLists;
+
+            if (!clickUpSelectedListId) {
+                parts.push(`
+                    <select id="tickets-list-select" class="planning-select">
+                        <option value="">Select List (Sprint)...</option>
+                        ${availableLists.map(l => `<option value="${escapeAttr(l.id)}">${escapeHtml(l.name)} ${l.taskCount ? `(${l.taskCount})` : ''}</option>`).join('')}
+                    </select>
+                `);
+            } else {
+                const list = availableLists.find(l => l.id === clickUpSelectedListId);
+                parts.push(`
+                    <div style="display:flex; align-items:center; gap:4px;">
+                        <span style="font-size:11px; color:var(--text-secondary);">${escapeHtml(list?.name || 'Unknown')}</span>
+                        <button class="planning-button secondary" data-level="list" style="padding:2px 6px; font-size:9px;">Change</button>
+                    </div>
+                `);
+            }
+        }
+
+        return `<div class="tickets-hierarchy-nav">${parts.join('')}</div>`;
+    }
+
+    function attachTicketsHierarchyListeners() {
+        const spaceSelect = document.getElementById('tickets-space-select');
+        spaceSelect?.addEventListener('change', (e) => {
+            const spaceId = e.target.value;
+            if (spaceId) {
+                clickUpSelectedSpaceId = spaceId;
+                clickUpSelectedFolderId = '';
+                clickUpSelectedListId = '';
+                clickUpAvailableFolders = [];
+                clickUpAvailableListsInFolder = [];
+                clickUpAvailableDirectLists = [];
+                clickUpHierarchyLoading = true;
+                renderTicketsClickUpPanel();
+                vscode.postMessage({
+                    type: 'clickupSaveSpaceSelection',
+                    spaceId,
+                    workspaceRoot: currentWorkspaceRoot || undefined
+                });
+                vscode.postMessage({
+                    type: 'clickupLoadFolders',
+                    spaceId,
+                    workspaceRoot: currentWorkspaceRoot || undefined
+                });
+            }
+        });
+
+        const folderSelect = document.getElementById('tickets-folder-select');
+        folderSelect?.addEventListener('change', (e) => {
+            const folderId = e.target.value;
+            if (folderId) {
+                clickUpSelectedFolderId = folderId === '_root_' ? '' : folderId;
+                clickUpSelectedListId = '';
+                clickUpAvailableListsInFolder = [];
+                clickUpHierarchyLoading = true;
+                renderTicketsClickUpPanel();
+                vscode.postMessage({
+                    type: 'clickupSaveFolderSelection',
+                    folderId: clickUpSelectedFolderId,
+                    workspaceRoot: currentWorkspaceRoot || undefined
+                });
+                if (folderId === '_root_') {
+                    clickUpHierarchyLoading = false;
+                    renderTicketsClickUpPanel();
+                } else {
+                    vscode.postMessage({
+                        type: 'clickupLoadLists',
+                        spaceId: clickUpSelectedSpaceId,
+                        folderId: clickUpSelectedFolderId,
+                        workspaceRoot: currentWorkspaceRoot || undefined
+                    });
+                }
+            }
+        });
+
+        const listSelect = document.getElementById('tickets-list-select');
+        listSelect?.addEventListener('change', (e) => {
+            const listId = e.target.value;
+            if (listId) {
+                clickUpSelectedListId = listId;
+                clickUpProjectLoading = false;
+                clickUpProjectIssues = [];
+                vscode.postMessage({
+                    type: 'clickupSaveListSelection',
+                    spaceId: clickUpSelectedSpaceId,
+                    folderId: clickUpSelectedFolderId,
+                    listId,
+                    workspaceRoot: currentWorkspaceRoot || undefined
+                });
+                loadClickUpProject(false, listId);
+            }
+        });
+
+        document.querySelectorAll('[data-level]').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const level = e.target.dataset.level;
+                if (level === 'space') {
+                    clickUpSelectedSpaceId = '';
+                    clickUpSelectedFolderId = '';
+                    clickUpSelectedListId = '';
+                    clickUpProjectIssues = [];
+                    loadClickUpSpaces();
+                } else if (level === 'folder') {
+                    clickUpSelectedFolderId = '';
+                    clickUpSelectedListId = '';
+                    clickUpProjectIssues = [];
+                } else if (level === 'list') {
+                    clickUpSelectedListId = '';
+                    clickUpProjectIssues = [];
+                }
+                renderTicketsClickUpPanel();
+            });
+        });
+    }
+
+    function renderTicketsClickUpStatusFilterOptions() {
+        const { clickUpStatusFilter } = getTicketsTabElements();
+        if (!clickUpStatusFilter) return;
+
+        const statuses = Array.from(new Set(
+            clickUpProjectIssues.map(task => task.status || 'Unknown')
+        )).sort();
+
+        const html = `
+            <option value="">All statuses</option>
+            ${statuses.map(status => `<option value="${escapeAttr(status)}">${escapeHtml(status)}</option>`).join('')}
+        `;
+
+        if (_lastTicketsClickUpStateFilterHtml !== html) {
+            clickUpStatusFilter.innerHTML = html;
+            _lastTicketsClickUpStateFilterHtml = html;
+            clickUpStatusFilter.value = clickUpProjectStatusFilterValue || '';
+            clickUpStatusFilter.onchange = (e) => {
+                clickUpProjectStatusFilterValue = e.target.value;
+                renderTicketsClickUpList();
+            };
+        }
+    }
+
+    function getFilteredClickUpTasks() {
+        const search = String(clickUpProjectSearchValue || '').trim().toLowerCase();
+        const statusFilter = String(clickUpProjectStatusFilterValue || '').trim();
+        return clickUpProjectIssues.filter(task => {
+            if (statusFilter && task.status !== statusFilter) return false;
+            if (!search) return true;
+            const haystack = [
+                task.title,
+                task.description,
+                task.assignees?.map(a => a.username || a.email).join(' ')
+            ].join('\n').toLowerCase();
+            return haystack.includes(search);
+        });
+    }
+
+    function renderTicketsClickUpList() {
+        if (!isTicketsTabActive()) return;
+
+        const { issuesContainer, emptyState, loadMoreButton } = getTicketsTabElements();
+        if (!issuesContainer) return;
+
+        if (clickUpProjectStatus === 'loading') {
+            if (emptyState) {
+                emptyState.textContent = clickUpProjectMessage || 'Loading tasks...';
+                emptyState.style.display = '';
+            }
+            issuesContainer.innerHTML = '';
+            _lastTicketsClickUpIssuesContainerHtml = '';
+            return;
+        }
+
+        if (emptyState) emptyState.style.display = 'none';
+
+        const tasks = getFilteredClickUpTasks();
+        const html = tasks.length === 0
+            ? `<div class="empty-state">No tasks found.</div>`
+            : tasks.map(task => `
+                <div class="tickets-issue-card" data-clickup-task-id="${escapeAttr(task.id)}">
+                    <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
+                    <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
+                    <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
+                    <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                        <button type="button" class="tickets-issue-import-btn" data-refine-task-id="${escapeAttr(task.id)}" data-issue-title="${escapeAttr(task.title || '')}" data-issue-description="${escapeAttr(task.markdownDescription || task.description || '')}">REFINE</button>
+                        <button type="button" class="tickets-issue-import-btn" data-import-task-id="${escapeAttr(task.id)}">IMPORT</button>
+                    </div>
+                </div>
+            `).join('');
+
+        if (_lastTicketsClickUpIssuesContainerHtml !== html) {
+            issuesContainer.innerHTML = html;
+            _lastTicketsClickUpIssuesContainerHtml = html;
+        }
+
+        if (loadMoreButton) {
+            loadMoreButton.style.display = clickUpProjectHasMore ? '' : 'none';
+        }
+    }
+
+    function renderTicketsClickUpTaskDetail() {
+        if (!isTicketsTabActive()) return;
+
+        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton } = getTicketsTabElements();
+        if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
+
+        if (!selectedClickUpIssue) {
+            detailTitle.textContent = 'Select a task';
+            detailStatus.textContent = '';
+            detailAssignee.textContent = '';
+            const noSelectionHtml = '<div class="empty-state">Choose a task from the list to inspect details.</div>';
+            if (_lastTicketsClickUpDetailDescriptionHtml !== noSelectionHtml) {
+                detailDescription.innerHTML = noSelectionHtml;
+                _lastTicketsClickUpDetailDescriptionHtml = noSelectionHtml;
+            }
+            if (detailSubtasks && _lastTicketsClickUpDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsClickUpDetailSubtasksHtml = ''; }
+            if (detailComments && _lastTicketsClickUpDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsClickUpDetailCommentsHtml = ''; }
+            if (detailAttachments && _lastTicketsClickUpDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsClickUpDetailAttachmentsHtml = ''; }
+            if (detailImportButton) detailImportButton.disabled = true;
+            if (detailRefineButton) detailRefineButton.disabled = true;
+            if (detailAskAgentButton) detailAskAgentButton.disabled = true;
+            return;
+        }
+
+        const task = selectedClickUpIssue.task;
+        detailTitle.textContent = task.title || task.identifier || task.id;
+        detailStatus.textContent = task.status || 'Unknown status';
+        detailAssignee.textContent = `Assignee: ${task.assignees?.length ? task.assignees.map(a => a.username || a.email).join(', ') : 'Unassigned'}`;
+
+        const plainHtml = escapeHtml((task.markdownDescription || task.description || '').trim() || 'No description provided.').replace(/\n/g, '<br>');
+        if (_lastTicketsClickUpDetailDescriptionHtml !== plainHtml) {
+            detailDescription.innerHTML = plainHtml;
+            _lastTicketsClickUpDetailDescriptionHtml = plainHtml;
+        }
+
+        if (detailSubtasks) {
+            const newSubtasksHtml = selectedClickUpIssue.subtasks.length > 0
+                ? selectedClickUpIssue.subtasks.map((subtask) => `
+                    <div class="planning-card">
+                        <div class="planning-card-header">${escapeHtml(subtask.title || subtask.name || subtask.id)}</div>
+                        <div class="planning-status">${escapeHtml(subtask.status || 'Unknown')}</div>
+                        <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
+                            <button type="button" class="planning-button" data-refine-task-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
+                            <button type="button" class="planning-button" data-import-task-id="${escapeAttr(subtask.id)}">IMPORT</button>
+                        </div>
+                    </div>
+                `).join('')
+                : '<div class="empty-state">No subtasks attached to this task.</div>';
+            if (_lastTicketsClickUpDetailSubtasksHtml !== newSubtasksHtml) {
+                detailSubtasks.innerHTML = newSubtasksHtml;
+                _lastTicketsClickUpDetailSubtasksHtml = newSubtasksHtml;
+            }
+        }
+
+        if (detailComments) {
+            const newCommentsHtml = selectedClickUpIssue.comments.length > 0
+                ? selectedClickUpIssue.comments.map((comment) => `
+                    <div class="planning-card">
+                        <div class="planning-card-header">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</div>
+                        <div class="planning-card-description">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</div>
+                        <div class="planning-card-description">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                    </div>
+                `).join('')
+                : '<div class="empty-state">No comments attached to this task.</div>';
+            if (_lastTicketsClickUpDetailCommentsHtml !== newCommentsHtml) {
+                detailComments.innerHTML = newCommentsHtml;
+                _lastTicketsClickUpDetailCommentsHtml = newCommentsHtml;
+            }
+        }
+
+        if (detailAttachments) {
+            const newAttachmentsHtml = selectedClickUpIssue.attachments.length > 0
+                ? selectedClickUpIssue.attachments.map((attachment) => `
+                    <button type="button" class="planning-button secondary" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
+                        ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
+                    </button>
+                `).join('')
+                : '<div class="empty-state">No attachments attached to this task.</div>';
+            if (_lastTicketsClickUpDetailAttachmentsHtml !== newAttachmentsHtml) {
+                detailAttachments.innerHTML = newAttachmentsHtml;
+                _lastTicketsClickUpDetailAttachmentsHtml = newAttachmentsHtml;
+            }
+        }
+
+        if (detailAskAgentButton) detailAskAgentButton.disabled = false;
+        if (detailImportButton) detailImportButton.disabled = false;
+        if (detailRefineButton) detailRefineButton.disabled = false;
+    }
+
+    // ===== LOAD FUNCTIONS =====
+
+    function loadLinearProject(force = false) {
+        if (linearProjectLoading && !force) return;
+        linearProjectLoading = true;
+        linearProjectStatus = 'loading';
+        linearProjectMessage = 'Loading Linear project...';
+        renderTicketsLinearPanel();
+        vscode.postMessage({ type: 'linearLoadProject', workspaceRoot: currentWorkspaceRoot || undefined });
+    }
+
+    function loadLinearTaskDetails(issueId) {
+        if (!issueId) return;
+        selectedLinearIssue = null;
+        renderTicketsLinearPanel();
+        vscode.postMessage({ type: 'linearLoadTaskDetails', issueId, workspaceRoot: currentWorkspaceRoot || undefined });
+    }
+
+    function loadClickUpProject(force = false, listIdOverride = undefined) {
+        if (clickUpProjectLoading && !force) return;
+        clickUpCurrentPage = 0;
+        clickUpProjectHasMore = false;
+        clickUpProjectLoading = true;
+        clickUpProjectStatus = 'loading';
+        clickUpProjectMessage = 'Loading ClickUp project...';
+        renderTicketsClickUpPanel();
+        vscode.postMessage({
+            type: 'clickupLoadProject',
+            workspaceRoot: currentWorkspaceRoot || undefined,
+            page: 0,
+            statusFilter: clickUpProjectStatusFilterValue || undefined,
+            searchQuery: clickUpProjectSearchValue || undefined,
+            listId: listIdOverride || clickUpSelectedListId || undefined
+        });
+    }
+
+    function loadMoreClickUpTasks() {
+        if (!clickUpProjectHasMore) return;
+        vscode.postMessage({
+            type: 'clickupLoadProject',
+            workspaceRoot: currentWorkspaceRoot || undefined,
+            page: clickUpCurrentPage + 1,
+            statusFilter: clickUpProjectStatusFilterValue || undefined,
+            searchQuery: clickUpProjectSearchValue || undefined,
+            isLoadMore: true,
+            listId: clickUpSelectedListId || undefined
+        });
+    }
+
+    function loadClickUpTaskDetails(taskId) {
+        if (!taskId) return;
+        selectedClickUpIssue = null;
+        renderTicketsClickUpPanel();
+        vscode.postMessage({
+            type: 'clickupLoadTaskDetails',
+            taskId,
+            workspaceRoot: currentWorkspaceRoot || undefined
+        });
+    }
+
+    function loadClickUpSpaces() {
+        clickUpHierarchyLoading = true;
+        renderTicketsClickUpPanel();
+        vscode.postMessage({
+            type: 'clickupLoadSpaces',
+            workspaceRoot: currentWorkspaceRoot || undefined
+        });
+    }
+
+    // ===== IMPORT/REFINE DELEGATION =====
+
+    function handleTicketsImport(provider, id, includeSubtasks) {
+        const { detailImportButton } = getTicketsTabElements();
+        if (detailImportButton) detailImportButton.disabled = true;
+
+        vscode.postMessage({
+            type: provider === 'clickup' ? 'clickupImportTask' : 'linearImportTask',
+            workspaceRoot: currentWorkspaceRoot,
+            [provider === 'clickup' ? 'taskId' : 'issueId']: id,
+            includeSubtasks
+        });
+    }
+
+    function handleTicketsRefine(provider, id, title, description) {
+        vscode.postMessage({
+            type: provider === 'clickup' ? 'clickupRefineTask' : 'linearRefineTask',
+            workspaceRoot: currentWorkspaceRoot,
+            [provider === 'clickup' ? 'taskId' : 'issueId']: id,
+            title,
+            description
+        });
+    }
+
+    // ===== STATE PERSISTENCE =====
+
+    function saveTicketsState() {
+        const currentPersisted = vscode.getState() || {};
+        vscode.setState({
+            ...currentPersisted,
+            tickets: {
+                lastIntegrationProvider,
+                linearProjectSearchValue,
+                linearProjectStateFilterValue,
+                linearProjectPickerValue,
+                clickUpSelectedSpaceId,
+                clickUpSelectedFolderId,
+                clickUpSelectedListId,
+                clickUpProjectSearchValue,
+                clickUpProjectStatusFilterValue
+            }
+        });
+    }
+
+    function restoreTicketsState() {
+        const state = vscode.getState()?.tickets;
+        if (!state) return;
+        lastIntegrationProvider = state.lastIntegrationProvider || null;
+        linearProjectSearchValue = state.linearProjectSearchValue || '';
+        linearProjectStateFilterValue = state.linearProjectStateFilterValue || '';
+        linearProjectPickerValue = state.linearProjectPickerValue || '';
+        clickUpSelectedSpaceId = state.clickUpSelectedSpaceId || '';
+        clickUpSelectedFolderId = state.clickUpSelectedFolderId || '';
+        clickUpSelectedListId = state.clickUpSelectedListId || '';
+        clickUpProjectSearchValue = state.clickUpProjectSearchValue || '';
+        clickUpProjectStatusFilterValue = state.clickUpProjectStatusFilterValue || '';
     }
 
     // Design Folder modal close (X button)

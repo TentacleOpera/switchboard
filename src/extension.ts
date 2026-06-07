@@ -756,7 +756,9 @@ export async function activate(context: vscode.ExtensionContext) {
             getNotionBrowseService: (root) => new NotionBrowseService(root, (kanbanProvider as any)._getNotionService(root)),
             getLinearDocsAdapter: (root) => (kanbanProvider as any)._getLinearDocsAdapter(root),
             getClickUpDocsAdapter: (root) => (kanbanProvider as any)._getClickUpDocsAdapter(root),
-            getCacheService
+            getCacheService,
+            getLinearSyncService: (root) => (kanbanProvider as any)._getLinearService(root),
+            getClickUpSyncService: (root) => (kanbanProvider as any)._getClickUpService(root)
         },
         context
     );
@@ -1070,6 +1072,14 @@ export async function activate(context: vscode.ExtensionContext) {
         return await taskViewerProvider.handleKanbanCopyPlan(sessionId, column, workspaceRoot);
     });
     context.subscriptions.push(copyPlanFromKanbanDisposable);
+
+    const moveKanbanCardByPlanFileDisposable = vscode.commands.registerCommand(
+        'switchboard.moveKanbanCardByPlanFile',
+        async (workspaceRoot: string, planFile: string, targetColumn: string) => {
+            return await kanbanProvider!.moveCardToColumnByPlanFile(workspaceRoot, planFile, targetColumn);
+        }
+    );
+    context.subscriptions.push(moveKanbanCardByPlanFileDisposable);
 
     const reviewPlanFromKanbanDisposable = vscode.commands.registerCommand('switchboard.reviewPlanFromKanban', async (sessionId: string, workspaceRoot?: string) => {
         taskViewerProvider.handleKanbanReviewPlan(sessionId, workspaceRoot);
@@ -1406,6 +1416,22 @@ export async function activate(context: vscode.ExtensionContext) {
         return taskViewerProvider.handleLinearUpdateDescription(issueId, description);
     });
     context.subscriptions.push(linearUpdateDescriptionDisposable);
+
+    // Tickets tab import/refine commands
+    const importLinearTaskDisposable = vscode.commands.registerCommand('switchboard.importLinearTask', async (data: { workspaceRoot: string; issueId: string; includeSubtasks: boolean }) => {
+        return taskViewerProvider.importLinearTask(data.workspaceRoot, data.issueId, data.includeSubtasks);
+    });
+    context.subscriptions.push(importLinearTaskDisposable);
+
+    const importClickUpTaskDisposable = vscode.commands.registerCommand('switchboard.importClickUpTask', async (data: { workspaceRoot: string; taskId: string; includeSubtasks: boolean }) => {
+        return taskViewerProvider.importClickUpTask(data.workspaceRoot, data.taskId, data.includeSubtasks);
+    });
+    context.subscriptions.push(importClickUpTaskDisposable);
+
+    const refineTaskDisposable = vscode.commands.registerCommand('switchboard.refineTask', async (data: { workspaceRoot: string; id: string; title: string; description: string; provider: 'linear' | 'clickup' }) => {
+        return taskViewerProvider.refineTask(data.workspaceRoot, { id: data.id, title: data.title, description: data.description, provider: data.provider });
+    });
+    context.subscriptions.push(refineTaskDisposable);
 
     // Terminal sync serialization state — MUST be declared before first call
     // (Control Plane Runtime init at line ~1395 calls syncTerminalRegistryWithState).

@@ -694,7 +694,7 @@
         .folder-subheader {
             font-size: 10px;
             font-weight: 600;
-            color: var(--accent-teal);
+            color: var(--text-secondary);
             text-transform: uppercase;
             letter-spacing: 0.5px;
             padding: 12px 8px 4px 8px;
@@ -712,14 +712,10 @@
             align-items: center;
             font-size: 11px;
             font-weight: 700;
-            color: var(--text-primary);
+            color: var(--accent-teal);
             text-transform: uppercase;
             letter-spacing: 0.5px;
-            padding: 8px 10px;
             margin: 8px 0 4px 0;
-            border-left: 3px solid var(--accent-teal-dim);
-            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
-            border-radius: 3px;
         }
 
         .folder-import-btn {
@@ -2088,6 +2084,39 @@
             color: var(--panel-bg);
             border-color: var(--accent-teal);
         }
+        .kanban-plan-copy-prompt {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            padding: 2px 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-prompt:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-column-badge.clickable {
+            cursor: pointer;
+        }
+        .kanban-column-badge.clickable:hover {
+            opacity: 0.8;
+        }
+        .kanban-column-dropdown {
+            position: absolute;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px;
+            z-index: 100;
+            font-size: 11px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
         .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
 
         .markdown-editor {
@@ -2105,12 +2134,27 @@
             tab-size: 4;
             box-sizing: border-box;
         }
+        #json-preview-container-design {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .json-node { margin-left: 16px; }
+        .json-row { display: flex; gap: 4px; padding: 1px 0; }
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+        .json-null { color: #569cd6; font-style: italic; }
+        .json-bracket { color: #d4d4d4; cursor: pointer; }
+        .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
+        .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
         .edit-mode #markdown-preview,
         .edit-mode #markdown-preview-design,
         .edit-mode #kanban-preview-content {
             display: none !important;
         }
-        .edit-mode #image-preview-container-design {
+        .edit-mode #image-preview-container-design,
+        .edit-mode #json-preview-container-design {
             display: none !important;
         }
         .edit-mode .markdown-editor {
@@ -2265,6 +2309,201 @@
         .folder-modal .folder-list {
             max-height: none;
         }
+
+        /* Tickets Tab Styles */
+        .tickets-panel {
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            padding: 12px;
+            gap: 12px;
+            overflow: hidden;
+        }
+
+        .tickets-toolbar {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .tickets-toolbar input {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .tickets-toolbar input:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+        }
+
+        .tickets-toolbar select {
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .tickets-list-view {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+        }
+
+        .tickets-task-view {
+            flex: 1;
+            overflow-y: auto;
+            display: flex;
+            flex-direction: column;
+            gap: 12px;
+        }
+
+        .tickets-back-btn-group {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tickets-task-header {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .tickets-task-header h3 {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .tickets-task-header span {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .tickets-detail-actions {
+            display: flex;
+            gap: 8px;
+            flex-wrap: wrap;
+        }
+
+        .tickets-detail-description,
+        .tickets-detail-subtasks,
+        .tickets-detail-comments,
+        .tickets-detail-attachments {
+            font-size: 12px;
+            color: var(--text-primary);
+            line-height: 1.5;
+        }
+
+        .tickets-detail-description pre {
+            white-space: pre-wrap;
+            word-break: break-word;
+        }
+
+        /* Ticket card styles - adapted from implementation.html */
+        .tickets-issue-card {
+            width: 100%;
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border: 1px solid var(--border-color);
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 10px 12px;
+            text-align: left;
+            transition: all 0.15s;
+            position: relative;
+        }
+
+        .tickets-issue-card:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+            cursor: pointer;
+        }
+
+        .tickets-issue-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .tickets-issue-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .tickets-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            padding: 2px 8px;
+            font-size: 9px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            letter-spacing: 0.5px;
+        }
+
+        .tickets-issue-import-btn:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .tickets-issue-import-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* Hierarchy nav styles */
+        .tickets-hierarchy-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .tickets-hierarchy-nav select {
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+        }
+
+        .tickets-hierarchy-nav button {
+            padding: 4px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 9px;
+            font-family: var(--font-mono);
+        }
+
+        .tickets-hierarchy-nav button:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
     </style>
 </head>
 <body class="cyber-theme-enabled">
@@ -2276,6 +2515,7 @@
         <button class="research-tab-btn" data-tab="notebook">NotebookLM</button>
         <button class="research-tab-btn" data-tab="design">DESIGN SYSTEM</button>
         <button class="research-tab-btn" data-tab="html-preview">HTML PREVIEWS</button>
+        <button class="research-tab-btn" data-tab="tickets">TICKETS</button>
     </div>
     <div class="container">
         <!-- Local Docs Tab: breadcrumb on top, then sidebar + content -->
@@ -2291,6 +2531,7 @@
                 <select id="local-workspace-filter" class="workspace-filter-select">
                     <option value="">All Workspaces</option>
                 </select>
+                <button id="btn-set-active-context-local" class="strip-btn" disabled>Set as Active Planning Context</button>
                 <button id="btn-import-full-doc" class="strip-btn" disabled style="display: none;">Import</button>
                 <button id="btn-export-to-source" class="strip-btn" disabled style="display: none;">Export to Source</button>
                 <button id="btn-edit-local" class="strip-btn" disabled>Edit</button>
@@ -2520,11 +2761,14 @@
                     <div id="preview-pane-design" style="flex: 1; width: 100%; box-sizing: border-box; overflow: auto; height: 100%;">
                         <div class="preview-content-wrapper" style="height: 100%; display: flex; flex-direction: column;">
                             <div id="markdown-preview-design">
-                                <div class="empty-state">Select a design document or image from the sidebar to preview</div>
+                                <div class="empty-state">Select a design document, image, JSON, or YAML file from the sidebar to preview</div>
                             </div>
                             <textarea id="markdown-editor-design" class="markdown-editor" style="display:none; width: 100%; height: 100%; box-sizing: border-box; resize: none;"></textarea>
                             <div id="image-preview-container-design" style="display: none; flex: 1; overflow: auto; padding: 16px; text-align: center; justify-content: center; align-items: center;">
                                 <img id="image-preview-img-design" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Image preview" />
+                            </div>
+                            <div id="json-preview-container-design"
+                                 style="display: none; flex: 1; overflow: auto; padding: 16px; font-family: var(--font-mono);">
                             </div>
                         </div>
                     </div>
@@ -2562,6 +2806,43 @@
                     <div id="image-preview-container" style="display: none; flex: 1; overflow: auto; background: var(--panel-bg); padding: 16px; text-align: center;">
                         <img id="image-preview-img" style="max-width: 100%; max-height: 100%; object-fit: contain;" alt="Image preview" />
                     </div>
+                </div>
+            </div>
+        </div>
+        <div id="tickets-content" class="research-tab-content">
+            <div class="tickets-panel">
+                <div class="tickets-toolbar">
+                    <input id="tickets-search" type="text" placeholder="Search tickets..." />
+                    <select id="tickets-project-picker" style="display:none"></select>
+                    <select id="tickets-state-filter" style="display:none"></select>
+                    <select id="tickets-status-filter" style="display:none"></select>
+                    <button id="tickets-refresh" class="planning-button">Refresh</button>
+                    <div id="tickets-hierarchy-nav" style="display:none"></div>
+                </div>
+                <div class="tickets-list-view">
+                    <div id="tickets-empty-state">No tickets loaded.</div>
+                    <div id="tickets-issues-container"></div>
+                    <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
+                </div>
+                <div class="tickets-task-view" style="display:none">
+                    <div class="tickets-back-btn-group">
+                        <button id="tickets-back-to-list" class="planning-button">BACK TO LIST</button>
+                        <button id="tickets-back-to-parent" class="planning-button" style="display:none">BACK TO PARENT</button>
+                    </div>
+                    <div class="tickets-task-header">
+                        <h3 id="tickets-detail-title"></h3>
+                        <span id="tickets-detail-status"></span>
+                        <span id="tickets-detail-assignee"></span>
+                    </div>
+                    <div class="tickets-detail-actions">
+                        <button id="tickets-detail-import" class="planning-button">Import</button>
+                        <button id="tickets-detail-refine" class="planning-button">Refine</button>
+                        <button id="tickets-detail-ask-agent" class="planning-button">Ask Agent</button>
+                    </div>
+                    <div id="tickets-detail-description"></div>
+                    <div id="tickets-detail-subtasks"></div>
+                    <div id="tickets-detail-comments"></div>
+                    <div id="tickets-detail-attachments"></div>
                 </div>
             </div>
         </div>
