@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: about:srcdoc blob: data:;">
     <title>Switchboard Research</title>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         @keyframes spin {
             from { transform: rotate(0deg); }
@@ -129,6 +130,25 @@
         body.theme-slightly-darker-black .db-radio-option:hover,
         body.theme-slightly-darker-black .db-action-btn:hover {
             background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Afterburner Updated — brighter cyan, Hanken Grotesk, refined surfaces */
+        body.theme-afterburner-updated {
+            --panel-bg: #101414;
+            --panel-bg2: #0b0f0f;
+            --border-color: #1d2323;
+            --border-bright: #363a3a;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: rgba(0, 229, 255, 0.4);
+            --accent-teal-bright: #00e5ff;
+            --glow-teal: 0 0 10px rgba(0, 229, 255, 0.4);
+            --accent-orange: #d18616;
+            --card-bg: #0b0f0f;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #1d2323;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a6a6;
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
         * {
@@ -957,9 +977,10 @@
             margin-bottom: 8px;
         }
 
-        /* Unified Markdown Preview Styling (Local & Online) */
+        /* Unified Markdown Preview Styling (Local, Online & Design) */
         #markdown-preview,
-        #markdown-preview-online {
+        #markdown-preview-online,
+        #markdown-preview-design {
             flex: 1;
             overflow-y: auto;
             padding: 0 26px; /* Match VS Code's markdown.css default */
@@ -984,6 +1005,7 @@
 
         #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
         #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #markdown-preview-design h1, #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
         #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
             margin-top: 24px;
             margin-bottom: 12px;
@@ -994,6 +1016,7 @@
 
         #markdown-preview h1,
         #markdown-preview-online h1,
+        #markdown-preview-design h1,
         #kanban-preview-pane h1 {
             font-size: 2em; /* 2em relative to 13px base = 26px */
             margin-top: 0;
@@ -1005,6 +1028,7 @@
 
         #markdown-preview h2,
         #markdown-preview-online h2,
+        #markdown-preview-design h2,
         #kanban-preview-pane h2 {
             font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
             padding-bottom: 0.3em;
@@ -1015,30 +1039,35 @@
 
         #markdown-preview h3,
         #markdown-preview-online h3,
+        #markdown-preview-design h3,
         #kanban-preview-pane h3 {
             font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
         }
 
         #markdown-preview h4,
         #markdown-preview-online h4,
+        #markdown-preview-design h4,
         #kanban-preview-pane h4 {
             font-size: 1em;
         }
 
         #markdown-preview h5,
         #markdown-preview-online h5,
+        #markdown-preview-design h5,
         #kanban-preview-pane h5 {
             font-size: 0.875em;
         }
 
         #markdown-preview h6,
         #markdown-preview-online h6,
+        #markdown-preview-design h6,
         #kanban-preview-pane h6 {
             font-size: 0.85em;
         }
 
         #markdown-preview p,
         #markdown-preview-online p,
+        #markdown-preview-design p,
         #kanban-preview-pane p {
             margin-bottom: 16px;
             line-height: inherit; /* Inherits from container's 1.5 */
@@ -1048,6 +1077,7 @@
 
         #markdown-preview li,
         #markdown-preview-online li,
+        #markdown-preview-design li,
         #kanban-preview-pane li {
             margin-bottom: 6px; /* Tighter list item spacing */
             line-height: inherit;
@@ -1057,12 +1087,14 @@
 
         #markdown-preview li p,
         #markdown-preview-online li p,
+        #markdown-preview-design li p,
         #kanban-preview-pane li p {
             margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
         }
 
         #markdown-preview pre,
         #markdown-preview-online pre,
+        #markdown-preview-design pre,
         #kanban-preview-pane pre {
             background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
             border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
@@ -1074,6 +1106,7 @@
 
         #markdown-preview pre code,
         #markdown-preview-online pre code,
+        #markdown-preview-design pre code,
         #kanban-preview-pane pre code {
             background: none;
             padding: 0;
@@ -1085,6 +1118,7 @@
 
         #markdown-preview code,
         #markdown-preview-online code,
+        #markdown-preview-design code,
         #kanban-preview-pane code {
             font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
             font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
@@ -1098,6 +1132,7 @@
 
         #markdown-preview blockquote,
         #markdown-preview-online blockquote,
+        #markdown-preview-design blockquote,
         #kanban-preview-pane blockquote {
             margin: 0;
             padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
@@ -1109,6 +1144,7 @@
 
         #markdown-preview ul, #markdown-preview ol,
         #markdown-preview-online ul, #markdown-preview-online ol,
+        #markdown-preview-design ul, #markdown-preview-design ol,
         #kanban-preview-pane ul, #kanban-preview-pane ol {
             margin-bottom: 16px; /* Match VS Code's tighter list spacing */
             padding-left: 2em;
@@ -1117,6 +1153,7 @@
         /* Table Styling */
         #markdown-preview table,
         #markdown-preview-online table,
+        #markdown-preview-design table,
         #kanban-preview-pane table {
             border-collapse: collapse;
             margin-bottom: 0.7em;
@@ -1125,6 +1162,7 @@
 
         #markdown-preview th,
         #markdown-preview-online th,
+        #markdown-preview-design th,
         #kanban-preview-pane th {
             text-align: left;
             border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
@@ -1134,6 +1172,7 @@
 
         #markdown-preview td,
         #markdown-preview-online td,
+        #markdown-preview-design td,
         #kanban-preview-pane td {
             padding: 5px 10px;
             border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
@@ -1142,6 +1181,7 @@
 
         #markdown-preview tr:hover td,
         #markdown-preview-online tr:hover td,
+        #markdown-preview-design tr:hover td,
         #kanban-preview-pane tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
         }
@@ -1149,6 +1189,7 @@
         /* Subtle, Interactive Links */
         #markdown-preview a,
         #markdown-preview-online a,
+        #markdown-preview-design a,
         #kanban-preview-pane a {
             color: var(--vscode-textLink-foreground, var(--accent-teal));
             text-decoration: none;
@@ -1156,6 +1197,7 @@
 
         #markdown-preview a:hover,
         #markdown-preview-online a:hover,
+        #markdown-preview-design a:hover,
         #kanban-preview-pane a:hover {
             color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
             text-decoration: underline;
@@ -1163,6 +1205,7 @@
 
         #markdown-preview hr,
         #markdown-preview-online hr,
+        #markdown-preview-design hr,
         #kanban-preview-pane hr {
             border: 0;
             height: 1px;
@@ -1171,6 +1214,7 @@
 
         #markdown-preview img,
         #markdown-preview-online img,
+        #markdown-preview-design img,
         #kanban-preview-pane img {
             max-width: 100%;
             max-height: 100%;
@@ -1178,6 +1222,7 @@
 
         #markdown-preview .empty-state,
         #markdown-preview-online .empty-state,
+        #markdown-preview-design .empty-state,
         #kanban-preview-pane .empty-state {
             display: flex;
             align-items: center;
@@ -1827,6 +1872,7 @@
         /* Inline code: neon glow */
         .cyber-theme-enabled #markdown-preview code,
         .cyber-theme-enabled #markdown-preview-online code,
+        .cyber-theme-enabled #markdown-preview-design code,
         .cyber-theme-enabled #kanban-preview-pane code {
             box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
         }
@@ -1834,6 +1880,7 @@
         /* Code blocks: subtle glow border */
         .cyber-theme-enabled #markdown-preview pre,
         .cyber-theme-enabled #markdown-preview-online pre,
+        .cyber-theme-enabled #markdown-preview-design pre,
         .cyber-theme-enabled #kanban-preview-pane pre {
             box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
                         inset 0 0 12px rgba(0, 0, 0, 0.3);
@@ -1842,6 +1889,7 @@
         /* Blockquotes: glowing left border */
         .cyber-theme-enabled #markdown-preview blockquote,
         .cyber-theme-enabled #markdown-preview-online blockquote,
+        .cyber-theme-enabled #markdown-preview-design blockquote,
         .cyber-theme-enabled #kanban-preview-pane blockquote {
             border-left-color: var(--accent-teal);
             box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
@@ -2992,6 +3040,7 @@
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>
+                <button id="tickets-create" class="strip-btn">+ New Ticket</button>
                 <button id="tickets-refresh" class="strip-btn">Refresh</button>
                 <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
             </div>
@@ -3123,6 +3172,28 @@
                     <div id="design-folder-list-modal" class="folder-list">
                         <!-- Folder items rendered by JS -->
                     </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    <div class="folder-modal" id="create-ticket-modal" style="display: none;" role="dialog" aria-modal="true" aria-labelledby="create-ticket-modal-title">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3 id="create-ticket-modal-title">Create New Ticket</h3>
+                <button class="modal-close-btn" id="btn-close-create-ticket-modal" aria-label="Close">&times;</button>
+            </div>
+            <div class="modal-body" style="display: flex; flex-direction: column; gap: 12px; margin-top: 10px;">
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-title" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Title *</label>
+                    <input type="text" id="create-ticket-title" class="planning-input" placeholder="Enter ticket title" required style="width: 100%; box-sizing: border-box;" />
+                </div>
+                <div style="display: flex; flex-direction: column; gap: 4px;">
+                    <label for="create-ticket-description" style="font-size: 11px; text-transform: uppercase; color: var(--text-secondary); text-align: left;">Description</label>
+                    <textarea id="create-ticket-description" class="planning-input" placeholder="Enter ticket description (optional)" style="width: 100%; height: 100px; resize: vertical; box-sizing: border-box; font-family: inherit;"></textarea>
+                </div>
+                <div style="display: flex; justify-content: flex-end; gap: 8px; margin-top: 10px;">
+                    <button id="btn-cancel-create-ticket" class="strip-btn">Cancel</button>
+                    <button id="btn-submit-create-ticket" class="planning-button" style="margin: 0; padding: 4px 12px;">Create</button>
                 </div>
             </div>
         </div>

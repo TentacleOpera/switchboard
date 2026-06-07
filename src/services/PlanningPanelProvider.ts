@@ -2347,6 +2347,85 @@ export class PlanningPanelProvider {
                 }
                 break;
             }
+            case 'clickupCreateTask': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskCreated',
+                        success: false,
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const clickUp = this._adapterFactories.getClickUpSyncService(workspaceRoot);
+                try {
+                    const task = await clickUp.createTask({
+                        name: msg.title,
+                        listId: msg.listId,
+                        description: msg.description
+                    });
+                    if (task) {
+                        this._panel?.webview.postMessage({
+                            type: 'clickupTaskCreated',
+                            success: true
+                        });
+                    } else {
+                        this._panel?.webview.postMessage({
+                            type: 'clickupTaskCreated',
+                            success: false,
+                            error: 'Failed to create ClickUp task (empty result).'
+                        });
+                    }
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'clickupTaskCreated',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
+            case 'linearCreateIssue': {
+                const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
+                if (!workspaceRoot) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearIssueCreated',
+                        success: false,
+                        error: 'No workspace folder found'
+                    });
+                    break;
+                }
+                const linear = this._adapterFactories.getLinearSyncService(workspaceRoot);
+                try {
+                    let projectId: string | undefined;
+                    if (msg.projectName) {
+                        const projects = await linear.getAvailableProjects();
+                        const matching = projects.find(p => p.name === msg.projectName || p.id === msg.projectName);
+                        if (matching) {
+                            projectId = matching.id;
+                        } else {
+                            projectId = msg.projectName;
+                        }
+                    }
+                    const result = await linear.createIssueSimple({
+                        title: msg.title,
+                        description: msg.description,
+                        projectId
+                    });
+                    this._panel?.webview.postMessage({
+                        type: 'linearIssueCreated',
+                        success: true,
+                        result
+                    });
+                } catch (error) {
+                    this._panel?.webview.postMessage({
+                        type: 'linearIssueCreated',
+                        success: false,
+                        error: error instanceof Error ? error.message : String(error)
+                    });
+                }
+                break;
+            }
             case 'linearRefineTask': {
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 const issueId = String(msg.issueId || '').trim();

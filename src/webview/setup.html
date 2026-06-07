@@ -5,6 +5,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Switchboard Setup</title>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-color: #0d0d0d;
@@ -126,6 +127,27 @@
         body.theme-slightly-darker-black .db-radio-option:hover,
         body.theme-slightly-darker-black .db-action-btn:hover {
             background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Afterburner Updated — brighter cyan, Hanken Grotesk, refined surfaces */
+        body.theme-afterburner-updated {
+            --bg-color: #101414;
+            --panel-bg: #101414;
+            --panel-bg2: #0b0f0f;
+            --bg-dim: #0b0f0f;
+            --border-color: #1d2323;
+            --border-bright: #363a3a;
+            --border-dim: #1d2323;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: rgba(0, 229, 255, 0.4);
+            --accent-teal-bright: #00e5ff;
+            --glow-teal: 0 0 10px rgba(0, 229, 255, 0.4);
+            --accent-green: #3ef06d;
+            --accent-red: #ff4747;
+            --accent-orange: #d18616;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a6a6;
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), 'Segoe UI', 'Roboto', sans-serif;
         }
 
         * {
@@ -1164,6 +1186,10 @@
                     <span>Afterburner</span>
                 </label>
                 <label class="db-radio-option">
+                    <input type="radio" name="theme-selection" value="afterburner_updated">
+                    <span>Afterburner Updated</span>
+                </label>
+                <label class="db-radio-option">
                     <input type="radio" name="theme-selection" value="claude-terracotta">
                     <span>Claude Terracotta</span>
                 </label>
@@ -1655,7 +1681,7 @@
                     if (themeRadio) themeRadio.checked = true;
                     const animationSettings = document.getElementById('theme-animation-settings');
                     if (animationSettings) {
-                        animationSettings.style.display = savedTheme === 'afterburner' ? '' : 'none';
+                        animationSettings.style.display = (savedTheme === 'afterburner' || savedTheme === 'afterburner_updated') ? '' : 'none';
                     }
                 }
             };
@@ -3554,7 +3580,7 @@
             radio.addEventListener('change', (e) => {
                 const animationSettings = document.getElementById('theme-animation-settings');
                 if (animationSettings) {
-                    animationSettings.style.display = e.target.value === 'afterburner' ? '' : 'none';
+                    animationSettings.style.display = (e.target.value === 'afterburner' || e.target.value === 'afterburner_updated') ? '' : 'none';
                 }
                 currentSwitchboardTheme = e.target.value;
                 vscode.postMessage({ type: 'setThemeSetting', theme: e.target.value });
@@ -3796,10 +3822,10 @@
                     if (themeRadio) themeRadio.checked = true;
                     const animationSettings = document.getElementById('theme-animation-settings');
                     if (animationSettings) {
-                        animationSettings.style.display = theme === 'afterburner' ? '' : 'none';
+                        animationSettings.style.display = (theme === 'afterburner' || theme === 'afterburner_updated') ? '' : 'none';
                     }
                     // Only remove Switchboard visual theme classes — preserve other body classes
-                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
+                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black', 'theme-afterburner-updated');
                     if (theme !== 'afterburner') {
                         document.body.classList.add(`theme-${theme}`);
                     }

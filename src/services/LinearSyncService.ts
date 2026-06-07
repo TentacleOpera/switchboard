@@ -1674,6 +1674,47 @@ export class LinearSyncService {
     }
   }
 
+  public async createIssueSimple(params: {
+    title: string;
+    description?: string;
+    projectId?: string;
+    stateId?: string;
+  }): Promise<{ id: string; identifier: string }> {
+    const config = await this.loadConfig();
+    if (!config || !config.teamId) {
+      throw new Error("Linear integration not configured or missing teamId.");
+    }
+    const result = await this.retry(() => this.graphqlRequest(`
+      mutation($input: IssueCreateInput!) {
+        issueCreate(input: $input) {
+          success
+          issue {
+            id
+            identifier
+          }
+        }
+      }
+    `, {
+      input: {
+        teamId: config.teamId,
+        title: params.title,
+        description: params.description || '',
+        labelIds: config.switchboardLabelId ? [config.switchboardLabelId] : [],
+        ...(params.projectId ? { projectId: params.projectId } : {}),
+        ...(params.stateId ? { stateId: params.stateId } : {})
+      }
+    }));
+
+    if (result.data?.issueCreate?.success) {
+      return {
+        id: result.data.issueCreate.issue.id,
+        identifier: result.data.issueCreate.issue.identifier
+      };
+    } else {
+      throw new Error(result.errors?.[0]?.message || "Failed to create Linear issue.");
+    }
+  }
+
   // ── Debounced Sync ───────────────────────────────────────────
 
   debouncedSync(planFile: string, plan: any, column: string): void {

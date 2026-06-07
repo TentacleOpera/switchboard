@@ -143,7 +143,8 @@
             detailRefineButton: document.getElementById('tickets-detail-refine'),
             detailAskAgentButton: document.getElementById('tickets-detail-ask-agent'),
             backToParentButton: document.getElementById('tickets-back-to-parent'),
-            hierarchyNav: document.getElementById('tickets-hierarchy-nav')
+            hierarchyNav: document.getElementById('tickets-hierarchy-nav'),
+            createButton: document.getElementById('tickets-create')
         };
     }
 
@@ -1042,6 +1043,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             state.activeDocId = docId;
             state.activeDocName = docName;
             state.previewRequestId++;
+            state.activeDocContent = null; // Force re-render; prevent stale-content short-circuit
             updateLocalActiveContextButtonState();
 
             const statusDesign = document.getElementById('status-design');
@@ -1303,6 +1305,39 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             folderListModal.appendChild(row);
         });
     }
+    
+    const TYPE_ORDER = ['markdown', 'yaml', 'json', 'image'];
+    const TYPE_LABELS = {
+        markdown: 'Markdown',
+        yaml: 'YAML',
+        json: 'JSON',
+        image: 'Images'
+    };
+
+    function getDocType(doc) {
+        const name = doc.name || doc.id || '';
+        const ext = name.substring(name.lastIndexOf('.')).toLowerCase();
+        if (['.md', '.markdown'].includes(ext)) return 'markdown';
+        if (['.yaml', '.yml'].includes(ext)) return 'yaml';
+        if (ext === '.json') return 'json';
+        if (['.png', '.jpg', '.jpeg', '.gif', '.svg', '.webp', '.bmp'].includes(ext)) return 'image';
+        return 'other';
+    }
+
+    function groupDocsByType(docs) {
+        const groups = {
+            markdown: [],
+            yaml: [],
+            json: [],
+            image: [],
+            other: []
+        };
+        docs.forEach(doc => {
+            const type = getDocType(doc);
+            groups[type].push(doc);
+        });
+        return groups;
+    }
 
     function renderHtmlDocs(rootEntry) {
         const { sourceId, nodes, folderPaths } = rootEntry;
@@ -1420,13 +1455,45 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 subheader.textContent = folder.name;
                 docList.appendChild(subheader);
 
-                folderDocsInSource.forEach(doc => {
+                const groups = groupDocsByType(folderDocsInSource);
+                TYPE_ORDER.forEach(type => {
+                    const typeDocs = groups[type] || [];
+                    if (typeDocs.length === 0) return;
+
+                    const typeSubheader = document.createElement('div');
+                    typeSubheader.className = 'folder-subheader';
+                    typeSubheader.textContent = TYPE_LABELS[type];
+                    docList.appendChild(typeSubheader);
+
+                    typeDocs.forEach(doc => {
+                        const { wrapper } = renderNode(doc, sourceId);
+                        docList.appendChild(wrapper);
+                    });
+                });
+                const otherDocs = groups['other'] || [];
+                otherDocs.forEach(doc => {
                     const { wrapper } = renderNode(doc, sourceId);
                     docList.appendChild(wrapper);
                 });
             });
 
-            rootDocs.forEach(doc => {
+            const rootGroups = groupDocsByType(rootDocs);
+            TYPE_ORDER.forEach(type => {
+                const typeDocs = rootGroups[type] || [];
+                if (typeDocs.length === 0) return;
+
+                const typeSubheader = document.createElement('div');
+                typeSubheader.className = 'folder-subheader';
+                typeSubheader.textContent = TYPE_LABELS[type];
+                docList.appendChild(typeSubheader);
+
+                typeDocs.forEach(doc => {
+                    const { wrapper } = renderNode(doc, sourceId);
+                    docList.appendChild(wrapper);
+                });
+            });
+            const otherRootDocs = rootGroups['other'] || [];
+            otherRootDocs.forEach(doc => {
                 const { wrapper } = renderNode(doc, sourceId);
                 docList.appendChild(wrapper);
             });
@@ -1587,13 +1654,45 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 subheader.textContent = folder.name;
                 docList.appendChild(subheader);
 
-                folderDocsInSource.forEach(doc => {
+                const groups = groupDocsByType(folderDocsInSource);
+                TYPE_ORDER.forEach(type => {
+                    const typeDocs = groups[type] || [];
+                    if (typeDocs.length === 0) return;
+
+                    const typeSubheader = document.createElement('div');
+                    typeSubheader.className = 'folder-subheader';
+                    typeSubheader.textContent = TYPE_LABELS[type];
+                    docList.appendChild(typeSubheader);
+
+                    typeDocs.forEach(doc => {
+                        const { wrapper } = renderNode(doc, sourceId);
+                        docList.appendChild(wrapper);
+                    });
+                });
+                const otherDocs = groups['other'] || [];
+                otherDocs.forEach(doc => {
                     const { wrapper } = renderNode(doc, sourceId);
                     docList.appendChild(wrapper);
                 });
             });
 
-            rootDocs.forEach(doc => {
+            const rootGroups = groupDocsByType(rootDocs);
+            TYPE_ORDER.forEach(type => {
+                const typeDocs = rootGroups[type] || [];
+                if (typeDocs.length === 0) return;
+
+                const typeSubheader = document.createElement('div');
+                typeSubheader.className = 'folder-subheader';
+                typeSubheader.textContent = TYPE_LABELS[type];
+                docList.appendChild(typeSubheader);
+
+                typeDocs.forEach(doc => {
+                    const { wrapper } = renderNode(doc, sourceId);
+                    docList.appendChild(wrapper);
+                });
+            });
+            const otherRootDocs = rootGroups['other'] || [];
+            otherRootDocs.forEach(doc => {
                 const { wrapper } = renderNode(doc, sourceId);
                 docList.appendChild(wrapper);
             });
@@ -2150,6 +2249,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     const langClass = msg.fileType === 'css' ? 'language-css' : (msg.fileType === 'xml' ? 'language-xml' : '');
                     mdPrev.innerHTML = `<pre><code class="${langClass}">${escapeHtml(content)}</code></pre>`;
                 }
+                state.activeDocContent = content || '';
                 if (btnEditDesign) btnEditDesign.disabled = false;
             } else {
                 // Markdown (default) — existing path
@@ -2430,14 +2530,18 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         // Track the active Switchboard visual theme
         if (theme) { state.switchboardTheme = theme; }
         // Remove Switchboard visual theme classes
-        document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black');
+        document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black', 'theme-afterburner-updated');
         // Cyberpunk CRT effects (scanlines, grid, glow, sweep) are part of the Afterburner aesthetic only.
-        // Toggle cyber-theme-enabled: on for afterburner, off for any other Switchboard visual theme.
-        if (state.switchboardTheme === 'afterburner') {
+        // Toggle cyber-theme-enabled: on for afterburner or afterburner_updated, off for any other Switchboard visual theme.
+        if (state.switchboardTheme === 'afterburner' || state.switchboardTheme === 'afterburner_updated') {
             document.body.classList.add('cyber-theme-enabled');
         } else {
             document.body.classList.remove('cyber-theme-enabled');
             document.body.classList.add(`theme-${state.switchboardTheme}`);
+        }
+        // Apply the updated palette override when afterburner_updated is active
+        if (state.switchboardTheme === 'afterburner_updated') {
+            document.body.classList.add('theme-afterburner-updated');
         }
     }
 
@@ -3406,6 +3510,46 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     }
                 }
                 break;
+            case 'clickupTaskCreated': {
+                const submitBtn = document.getElementById('btn-submit-create-ticket');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Create';
+                }
+                if (msg.success) {
+                    alert('Ticket created successfully!');
+                    const modal = document.getElementById('create-ticket-modal');
+                    if (modal) modal.style.display = 'none';
+                    const titleInput = document.getElementById('create-ticket-title');
+                    const descInput = document.getElementById('create-ticket-description');
+                    if (titleInput) titleInput.value = '';
+                    if (descInput) descInput.value = '';
+                    loadClickUpProject(true);
+                } else {
+                    alert('Failed to create ticket: ' + (msg.error || 'Unknown error'));
+                }
+                break;
+            }
+            case 'linearIssueCreated': {
+                const submitBtn = document.getElementById('btn-submit-create-ticket');
+                if (submitBtn) {
+                    submitBtn.disabled = false;
+                    submitBtn.textContent = 'Create';
+                }
+                if (msg.success) {
+                    alert('Ticket created successfully!');
+                    const modal = document.getElementById('create-ticket-modal');
+                    if (modal) modal.style.display = 'none';
+                    const titleInput = document.getElementById('create-ticket-title');
+                    const descInput = document.getElementById('create-ticket-description');
+                    if (titleInput) titleInput.value = '';
+                    if (descInput) descInput.value = '';
+                    loadLinearProject(true);
+                } else {
+                    alert('Failed to create ticket: ' + (msg.error || 'Unknown error'));
+                }
+                break;
+            }
             case 'linearTaskImported':
             case 'clickupTaskImported':
                 const { detailImportButton } = getTicketsTabElements();
@@ -4752,6 +4896,65 @@ DEPTH: Deep (50-100+ sources)`;
                 }
             }
         });
+
+        // Create ticket button click
+        document.getElementById('tickets-create')?.addEventListener('click', () => {
+            const modal = document.getElementById('create-ticket-modal');
+            if (modal) {
+                modal.style.display = 'block';
+                // Reset form fields
+                const titleInput = document.getElementById('create-ticket-title');
+                const descInput = document.getElementById('create-ticket-description');
+                if (titleInput) {
+                    titleInput.value = '';
+                    titleInput.focus();
+                }
+                if (descInput) descInput.value = '';
+            }
+        });
+
+        // Close modal
+        document.getElementById('btn-close-create-ticket-modal')?.addEventListener('click', () => {
+            const modal = document.getElementById('create-ticket-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('btn-cancel-create-ticket')?.addEventListener('click', () => {
+            const modal = document.getElementById('create-ticket-modal');
+            if (modal) modal.style.display = 'none';
+        });
+        document.getElementById('create-ticket-modal')?.addEventListener('click', (e) => {
+            if (e.target === e.currentTarget) {
+                e.currentTarget.style.display = 'none';
+            }
+        });
+
+        // Submit form
+        document.getElementById('btn-submit-create-ticket')?.addEventListener('click', () => {
+            const titleInput = document.getElementById('create-ticket-title');
+            const descInput = document.getElementById('create-ticket-description');
+            const title = titleInput ? titleInput.value.trim() : '';
+            const description = descInput ? descInput.value.trim() : '';
+
+            if (!title) {
+                alert('Please enter a ticket title.');
+                return;
+            }
+
+            const submitBtn = document.getElementById('btn-submit-create-ticket');
+            if (submitBtn) {
+                submitBtn.disabled = true;
+                submitBtn.textContent = 'Creating...';
+            }
+
+            vscode.postMessage({
+                type: lastIntegrationProvider === 'clickup' ? 'clickupCreateTask' : 'linearCreateIssue',
+                workspaceRoot: currentWorkspaceRoot || undefined,
+                title,
+                description: description || undefined,
+                listId: clickUpSelectedListId || undefined,
+                projectName: linearProjectPickerValue || undefined
+            });
+        });
     }
 
     // ===== RENDERING FUNCTIONS =====
@@ -4769,7 +4972,7 @@ DEPTH: Deep (50-100+ sources)`;
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, detailBanner, emptyPreview } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, detailBanner, emptyPreview, createButton } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -4777,6 +4980,11 @@ DEPTH: Deep (50-100+ sources)`;
         if (stateFilter) stateFilter.style.display = '';
         if (clickUpStatusFilter) clickUpStatusFilter.style.display = 'none';
         if (refreshButton) refreshButton.style.display = '';
+
+        if (createButton) {
+            createButton.disabled = false;
+            createButton.title = 'Create New Ticket';
+        }
 
         renderTicketsLinearStateFilterOptions();
         renderTicketsLinearProjectPickerOptions();
@@ -5059,7 +5267,7 @@ DEPTH: Deep (50-100+ sources)`;
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, detailBanner, emptyPreview } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, detailBanner, emptyPreview, createButton } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = 'none';
@@ -5070,6 +5278,16 @@ DEPTH: Deep (50-100+ sources)`;
         }
         if (refreshButton) refreshButton.style.display = '';
         if (hierarchyNav) hierarchyNav.style.display = '';
+
+        if (createButton) {
+            if (clickUpSelectedListId) {
+                createButton.disabled = false;
+                createButton.title = 'Create New Ticket';
+            } else {
+                createButton.disabled = true;
+                createButton.title = 'Select a list first';
+            }
+        }
 
         if (emptyState) {
             if (!clickUpSelectedListId) {
