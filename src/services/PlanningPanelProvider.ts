@@ -4274,9 +4274,9 @@ export class PlanningPanelProvider {
 
             // For now, return a success message. The actual bundling logic
             // can be implemented later by calling the appropriate service.
-            return { success: true, message: 'Integration folder ready. Export functionality coming soon.' };
+            return { success: true, message: 'NotebookLM folder ready. Export functionality coming soon.' };
         } catch (err) {
-            return { success: false, message: `Failed to prepare integration: ${String(err)}` };
+            return { success: false, message: `Failed to prepare NotebookLM folder: ${String(err)}` };
         }
     }
 

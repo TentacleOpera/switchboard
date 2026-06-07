@@ -4992,17 +4992,17 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailSubtasks) {
             const newSubtasksHtml = selectedLinearIssue.subtasks.length > 0
-                ? selectedLinearIssue.subtasks.map((subtask) => `
-                    <div class="planning-card" data-linear-subtask-id="${escapeAttr(subtask.id)}">
-                        <div class="planning-card-header">${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</div>
-                        <div class="planning-status">${escapeHtml(subtask.state?.name || 'Unknown state')}</div>
-                        <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                            <button type="button" class="planning-button" data-refine-issue-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
-                            <button type="button" class="planning-button" data-import-issue-id="${escapeAttr(subtask.id)}">IMPORT</button>
+                ? '<h4 class="tickets-section-header">Subtasks</h4>' + selectedLinearIssue.subtasks.map((subtask) => `
+                    <div class="tickets-subtask-item" data-linear-subtask-id="${escapeAttr(subtask.id)}">
+                        <div class="tickets-subtask-title">${escapeHtml(subtask.title || subtask.identifier || subtask.id)}</div>
+                        <div class="tickets-subtask-status">${escapeHtml(subtask.state?.name || 'Unknown state')}</div>
+                        <div class="tickets-subtask-actions">
+                            <button type="button" class="tickets-issue-import-btn" data-refine-issue-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
+                            <button type="button" class="tickets-issue-import-btn" data-import-issue-id="${escapeAttr(subtask.id)}">IMPORT</button>
                         </div>
                     </div>
                 `).join('')
-                : '<div class="empty-state">No subtasks attached to this issue.</div>';
+                : '';
             if (_lastTicketsDetailSubtasksHtml !== newSubtasksHtml) {
                 detailSubtasks.innerHTML = newSubtasksHtml;
                 _lastTicketsDetailSubtasksHtml = newSubtasksHtml;
@@ -5011,14 +5011,14 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailComments) {
             const newCommentsHtml = selectedLinearIssue.comments.length > 0
-                ? selectedLinearIssue.comments.map((comment) => `
-                    <div class="planning-card">
-                        <div class="planning-card-header">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</div>
-                        <div class="planning-card-description">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</div>
-                        <div class="planning-card-description">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                ? '<h4 class="tickets-section-header">Comments</h4>' + selectedLinearIssue.comments.map((comment) => `
+                    <div class="tickets-comment-item">
+                        <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
+                        <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
+                        <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
                     </div>
                 `).join('')
-                : '<div class="empty-state">No comments attached to this issue.</div>';
+                : '';
             if (_lastTicketsDetailCommentsHtml !== newCommentsHtml) {
                 detailComments.innerHTML = newCommentsHtml;
                 _lastTicketsDetailCommentsHtml = newCommentsHtml;
@@ -5027,12 +5027,12 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailAttachments) {
             const newAttachmentsHtml = selectedLinearIssue.attachments.length > 0
-                ? selectedLinearIssue.attachments.map((attachment) => `
-                    <button type="button" class="planning-button secondary" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
+                ? '<h4 class="tickets-section-header">Attachments</h4>' + selectedLinearIssue.attachments.map((attachment) => `
+                    <button type="button" class="tickets-attachment-item" data-linear-attachment-url="${escapeAttr(attachment.url || '')}">
                         ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
                     </button>
                 `).join('')
-                : '<div class="empty-state">No attachments attached to this issue.</div>';
+                : '';
             if (_lastTicketsDetailAttachmentsHtml !== newAttachmentsHtml) {
                 detailAttachments.innerHTML = newAttachmentsHtml;
                 _lastTicketsDetailAttachmentsHtml = newAttachmentsHtml;
@@ -5416,17 +5416,17 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailSubtasks) {
             const newSubtasksHtml = selectedClickUpIssue.subtasks.length > 0
-                ? selectedClickUpIssue.subtasks.map((subtask) => `
-                    <div class="planning-card">
-                        <div class="planning-card-header">${escapeHtml(subtask.title || subtask.name || subtask.id)}</div>
-                        <div class="planning-status">${escapeHtml(subtask.status || 'Unknown')}</div>
-                        <div style="display:flex; justify-content:flex-end; margin-top:8px; gap:4px;">
-                            <button type="button" class="planning-button" data-refine-task-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
-                            <button type="button" class="planning-button" data-import-task-id="${escapeAttr(subtask.id)}">IMPORT</button>
+                ? '<h4 class="tickets-section-header">Subtasks</h4>' + selectedClickUpIssue.subtasks.map((subtask) => `
+                    <div class="tickets-subtask-item">
+                        <div class="tickets-subtask-title">${escapeHtml(subtask.title || subtask.name || subtask.id)}</div>
+                        <div class="tickets-subtask-status">${escapeHtml(subtask.status || 'Unknown')}</div>
+                        <div class="tickets-subtask-actions">
+                            <button type="button" class="tickets-issue-import-btn" data-refine-task-id="${escapeAttr(subtask.id)}" data-issue-title="${escapeAttr(subtask.title || '')}" data-issue-description="${escapeAttr(subtask.description || '')}">REFINE</button>
+                            <button type="button" class="tickets-issue-import-btn" data-import-task-id="${escapeAttr(subtask.id)}">IMPORT</button>
                         </div>
                     </div>
                 `).join('')
-                : '<div class="empty-state">No subtasks attached to this task.</div>';
+                : '';
             if (_lastTicketsClickUpDetailSubtasksHtml !== newSubtasksHtml) {
                 detailSubtasks.innerHTML = newSubtasksHtml;
                 _lastTicketsClickUpDetailSubtasksHtml = newSubtasksHtml;
@@ -5435,14 +5435,14 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailComments) {
             const newCommentsHtml = selectedClickUpIssue.comments.length > 0
-                ? selectedClickUpIssue.comments.map((comment) => `
-                    <div class="planning-card">
-                        <div class="planning-card-header">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</div>
-                        <div class="planning-card-description">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</div>
-                        <div class="planning-card-description">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
+                ? '<h4 class="tickets-section-header">Comments</h4>' + selectedClickUpIssue.comments.map((comment) => `
+                    <div class="tickets-comment-item">
+                        <span class="tickets-comment-author">${escapeHtml(comment.user?.name || comment.user?.email || 'Unknown')}</span>
+                        <span class="tickets-comment-date">${escapeHtml(comment.createdAt ? comment.createdAt.slice(0, 10) : '')}</span>
+                        <div class="tickets-comment-body">${escapeHtml(comment.body || '').replace(/\n/g, '<br>')}</div>
                     </div>
                 `).join('')
-                : '<div class="empty-state">No comments attached to this task.</div>';
+                : '';
             if (_lastTicketsClickUpDetailCommentsHtml !== newCommentsHtml) {
                 detailComments.innerHTML = newCommentsHtml;
                 _lastTicketsClickUpDetailCommentsHtml = newCommentsHtml;
@@ -5451,12 +5451,12 @@ DEPTH: Deep (50-100+ sources)`;
 
         if (detailAttachments) {
             const newAttachmentsHtml = selectedClickUpIssue.attachments.length > 0
-                ? selectedClickUpIssue.attachments.map((attachment) => `
-                    <button type="button" class="planning-button secondary" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
+                ? '<h4 class="tickets-section-header">Attachments</h4>' + selectedClickUpIssue.attachments.map((attachment) => `
+                    <button type="button" class="tickets-attachment-item" data-clickup-attachment-url="${escapeAttr(attachment.url || '')}">
                         ${escapeHtml(attachment.title || attachment.filename || attachment.url || 'Attachment')}
                     </button>
                 `).join('')
-                : '<div class="empty-state">No attachments attached to this task.</div>';
+                : '';
             if (_lastTicketsClickUpDetailAttachmentsHtml !== newAttachmentsHtml) {
                 detailAttachments.innerHTML = newAttachmentsHtml;
                 _lastTicketsClickUpDetailAttachmentsHtml = newAttachmentsHtml;

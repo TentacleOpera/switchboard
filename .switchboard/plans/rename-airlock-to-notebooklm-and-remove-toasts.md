@@ -85,3 +85,6 @@ Key risks: (1) `PlanningPanelProvider.ts` was missing from the original plan —
 
 ## Recommendation
 **Send to Intern** — Complexity 3: all changes are localized string replacements and line deletions. No architectural changes, no new patterns, no state mutations beyond path strings.
+
+## Review Findings
+All plan-specified changes verified correct in code. Review found 5 additional user-facing messages still referencing "Airlock" or "Integration" that the plan did not explicitly cover: 3 `showErrorMessage` calls in TaskViewerProvider.ts (lines 17449, 17524, 17535) and 2 return messages in PlanningPanelProvider.ts (lines 4277, 4279). All 5 were fixed to say "NotebookLM". Grep verification confirms zero remaining `.switchboard/airlock`, `.switchboard/integration`, or "Airlock:" user-facing message references in src/. Internal variable names (`airlockDir`, `integrationDir`) and agent payload strings retain old names per plan scope. No remaining risks beyond deferred internal identifier renames.

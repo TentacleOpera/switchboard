@@ -2421,6 +2421,233 @@
             cursor: not-allowed;
         }
 
+        /* ── Ticket Detail Preview Pane ── */
+        /* Matches #markdown-preview typography and spacing */
+        #preview-pane-tickets {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            padding: 0;
+        }
+
+        .tickets-detail-banner-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--accent-teal-dim);
+            border-bottom: 1px solid var(--accent-teal);
+            flex-shrink: 0;
+        }
+
+        .tickets-detail-banner-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tickets-detail-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .tickets-detail-meta {
+            display: flex;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .tickets-detail-banner-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tickets-detail-section {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 0 26px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        #tickets-detail-description.tickets-detail-section {
+            padding-top: 16px;
+        }
+
+        /* Section headers inside ticket preview — match markdown h2/h3 */
+        .tickets-section-header {
+            font-size: 1.25em;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 24px;
+            margin-bottom: 12px;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            letter-spacing: 0.3px;
+        }
+
+        /* Ticket detail description inherits markdown preview text styles */
+        #tickets-detail-description p,
+        #tickets-detail-description li {
+            margin-bottom: 16px;
+            line-height: inherit;
+        }
+
+        #tickets-detail-description pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 4px;
+            padding: 8px 12px;
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+
+        #tickets-detail-description code {
+            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-size: 1em;
+            background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+
+        #tickets-detail-description pre code {
+            background: none;
+            padding: 0;
+        }
+
+        /* Subtask items — clean list style matching markdown, not .planning-card */
+        .tickets-subtask-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tickets-subtask-item:hover {
+            border-left-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, var(--panel-bg));
+        }
+
+        .tickets-subtask-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .tickets-subtask-status {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .tickets-subtask-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .tickets-subtask-actions .tickets-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            padding: 2px 8px;
+            font-size: 9px;
+            border-radius: 3px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tickets-subtask-actions .tickets-issue-import-btn:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        /* Comment items — clean list style */
+        .tickets-comment-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+        }
+
+        .tickets-comment-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+
+        .tickets-comment-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-left: 8px;
+        }
+
+        .tickets-comment-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin-top: 4px;
+        }
+
+        /* Attachment items — inline link style */
+        .tickets-attachment-item {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 0 4px 4px 0;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            background: transparent;
+            color: var(--accent-teal);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .tickets-attachment-item:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+
+        /* Cyber theme overrides for ticket detail preview */
+        .cyber-theme-enabled .tickets-detail-banner-inner {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-subtask-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-subtask-item:hover {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-comment-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-attachment-item {
+            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
         /* Hierarchy nav styles */
         .tickets-hierarchy-nav {
             display: flex;
@@ -2781,15 +3008,15 @@
                     <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
                         <div class="preview-content-wrapper">
                             <div class="tickets-detail-banner" id="tickets-detail-banner" style="display:none">
-                                <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--accent-teal-dim); border-bottom:1px solid var(--accent-teal); flex-shrink:0;">
-                                    <div style="display:flex; flex-direction:column; gap:4px;">
-                                        <h3 id="tickets-detail-title" style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0;"></h3>
-                                        <div style="display:flex; gap:8px; font-size:11px; color:var(--text-secondary); font-family:var(--font-mono);">
+                                <div class="tickets-detail-banner-inner">
+                                    <div class="tickets-detail-banner-info">
+                                        <h3 id="tickets-detail-title" class="tickets-detail-title"></h3>
+                                        <div class="tickets-detail-meta">
                                             <span id="tickets-detail-status"></span>
                                             <span id="tickets-detail-assignee"></span>
                                         </div>
                                     </div>
-                                    <div style="display:flex; gap:8px;">
+                                    <div class="tickets-detail-banner-actions">
                                         <button id="tickets-detail-import" class="strip-btn" disabled>Import</button>
                                         <button id="tickets-detail-refine" class="strip-btn" disabled>Refine</button>
                                         <button id="tickets-detail-ask-agent" class="strip-btn" disabled>Ask Agent</button>
@@ -2797,10 +3024,10 @@
                                     </div>
                                 </div>
                             </div>
-                            <div id="tickets-detail-description" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
-                            <div id="tickets-detail-subtasks" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
-                            <div id="tickets-detail-comments" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
-                            <div id="tickets-detail-attachments" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
+                            <div id="tickets-detail-description" class="tickets-detail-section"></div>
+                            <div id="tickets-detail-subtasks" class="tickets-detail-section"></div>
+                            <div id="tickets-detail-comments" class="tickets-detail-section"></div>
+                            <div id="tickets-detail-attachments" class="tickets-detail-section"></div>
                             <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
                         </div>
                     </div>

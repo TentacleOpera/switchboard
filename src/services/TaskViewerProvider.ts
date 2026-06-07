@@ -17446,7 +17446,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_exportError', message: msg });
-            vscode.window.showErrorMessage(`Airlock export failed: ${msg}`);
+            vscode.window.showErrorMessage(`NotebookLM export failed: ${msg}`);
         }
     }
 
@@ -17521,7 +17521,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_coderError', message: msg });
-            vscode.window.showErrorMessage(`Airlock send to coder failed: ${msg}`);
+            vscode.window.showErrorMessage(`NotebookLM send to coder failed: ${msg}`);
         }
     }
 
@@ -17532,7 +17532,7 @@ What would you like to find?`;
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
-            vscode.window.showErrorMessage(`Airlock sync failed: ${msg}`);
+            vscode.window.showErrorMessage(`NotebookLM sync failed: ${msg}`);
         }
     }
 
