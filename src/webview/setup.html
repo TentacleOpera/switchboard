@@ -1113,6 +1113,18 @@
             </div>
 
             <div class="db-subsection" style="margin-top:12px;">
+                <div class="subsection-header"><span>Chat Plan Destination(s)</span></div>
+                <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
+                    Where the chat / consultation agent is told to write its plans. Leave empty to use the
+                    workspace's <code>.switchboard/plans</code> folder. Add more than one to let the agent choose
+                    between them. Each destination is also scanned for ingestion, so plans written here always
+                    reach the board. Use <code>~</code> for your home directory and <code>&lt;repo&gt;</code> for each workspace root.
+                </div>
+                <div id="plan-scanner-chat-dest-list" style="display:flex; flex-direction:column; gap:8px;"></div>
+                <button id="plan-scanner-add-chat-dest" class="secondary-btn" style="margin-top:8px;">+ Add destination</button>
+            </div>
+
+            <div class="db-subsection" style="margin-top:12px;">
                 <div class="subsection-header"><span>Custom Sources</span></div>
                 <div class="setup-section-description" style="font-size:11px; color:var(--text-secondary); margin:4px 0 8px;">
                     Point the scanner at any other tool's plan folder. Use <code>~</code> for your home directory and
@@ -3663,6 +3675,30 @@
                 customEl.innerHTML = '';
                 (config.customSources || []).forEach((src) => addPlanScannerCustomRow(src));
             }
+
+            const chatDestEl = document.getElementById('plan-scanner-chat-dest-list');
+            if (chatDestEl) {
+                chatDestEl.innerHTML = '';
+                (config.chatPlanDestinations || []).forEach((dir) => addPlanScannerChatDestRow(dir));
+            }
+        }
+
+        function addPlanScannerChatDestRow(dir) {
+            const listEl = document.getElementById('plan-scanner-chat-dest-list');
+            if (!listEl) return;
+            const row = document.createElement('div');
+            row.className = 'plan-scanner-chat-dest-row';
+            row.style.cssText = 'display:flex; gap:6px; align-items:center;';
+            const pathInput = document.createElement('input');
+            pathInput.type = 'text';
+            pathInput.placeholder = '.switchboard/plans  (or ~/plans, <repo>/docs/plans)';
+            pathInput.value = typeof dir === 'string' ? dir : '';
+            pathInput.className = 'ps-chat-dest-path'; pathInput.style.cssText = 'flex:1; min-width:0;';
+            const remove = document.createElement('button');
+            remove.textContent = '✕'; remove.className = 'secondary-btn'; remove.style.cssText = 'padding:2px 8px;';
+            remove.addEventListener('click', () => row.remove());
+            row.appendChild(pathInput); row.appendChild(remove);
+            listEl.appendChild(row);
         }
 
         function addPlanScannerCustomRow(src) {
@@ -3705,15 +3741,22 @@
                 const globs = (row.querySelector('.ps-custom-globs')?.value || '').split(',').map((s) => s.trim()).filter(Boolean);
                 if (globs.length) customSources.push({ label, scope, globs });
             });
+            const chatPlanDestinations = [];
+            document.querySelectorAll('.plan-scanner-chat-dest-row').forEach((row) => {
+                const dir = (row.querySelector('.ps-chat-dest-path')?.value || '').trim();
+                if (dir) chatPlanDestinations.push(dir);
+            });
             return {
                 enabled: !!document.getElementById('plan-scanner-enabled')?.checked,
                 intervalSeconds: parseInt(document.getElementById('plan-scanner-interval')?.value || '10', 10),
                 scanSwitchboardPlans: !!document.getElementById('plan-scanner-switchboard')?.checked,
                 presets,
                 customSources,
+                chatPlanDestinations,
             };
         }
 
+        document.getElementById('plan-scanner-add-chat-dest')?.addEventListener('click', () => addPlanScannerChatDestRow(''));
         document.getElementById('plan-scanner-add-custom')?.addEventListener('click', () => addPlanScannerCustomRow({}));
         document.getElementById('plan-scanner-save')?.addEventListener('click', () => {
             vscode.postMessage({ type: 'setPlanScannerConfig', config: gatherPlanScannerConfig() });

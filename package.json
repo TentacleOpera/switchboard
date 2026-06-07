@@ -537,6 +537,13 @@
             }
           }
         },
+        "switchboard.planScanner.chatPlanDestinations": {
+          "type": "array",
+          "default": [],
+          "description": "Directories the chat/consultation agent is told to write plans to. Empty = the workspace's .switchboard/plans folder. Add more than one to let the agent choose. Each path is also scanned for ingestion. Tokens: ~ expands to home, <repo> expands to each workspace root.",
+          "scope": "resource",
+          "items": { "type": "string" }
+        },
         "switchboard.notionBackup": {
           "type": "object",
           "default": {},

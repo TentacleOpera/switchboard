@@ -1193,6 +1193,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         presets: Record<string, boolean>;
         scanSwitchboardPlans: boolean;
         customSources: Array<{ label?: string; scope?: string; globs?: string[] }>;
+        chatPlanDestinations: string[];
     } {
         const cfg = vscode.workspace.getConfiguration('switchboard.planScanner');
         const presets: Record<string, boolean> = {};
@@ -1200,12 +1201,16 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             presets[preset.id] = cfg.get<boolean>(preset.configKey, true);
         }
         const rawCustom = cfg.get<any[]>('customSources', []);
+        const rawChatDest = cfg.get<any[]>('chatPlanDestinations', []);
         return {
             enabled: cfg.get<boolean>('enabled', true),
             intervalSeconds: Math.min(300, Math.max(3, cfg.get<number>('intervalSeconds', 10))),
             presets,
             scanSwitchboardPlans: cfg.get<boolean>('scanSwitchboardPlans', true),
             customSources: Array.isArray(rawCustom) ? rawCustom : [],
+            chatPlanDestinations: Array.isArray(rawChatDest)
+                ? rawChatDest.filter((d): d is string => typeof d === 'string' && d.trim().length > 0).map((d) => d.trim())
+                : [],
         };
     }
 
@@ -1215,6 +1220,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         intervalSeconds: number;
         scanSwitchboardPlans: boolean;
         customSources: Array<{ label?: string; scope?: string; globs?: string[] }>;
+        chatPlanDestinations: string[];
         presets: Array<{ id: string; label: string; shape: string; enabled: boolean; detected: boolean }>;
     } {
         const config = this._getPlanScannerConfig();
@@ -1230,6 +1236,7 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             intervalSeconds: config.intervalSeconds,
             scanSwitchboardPlans: config.scanSwitchboardPlans,
             customSources: config.customSources,
+            chatPlanDestinations: config.chatPlanDestinations,
             presets,
         };
     }
@@ -1265,6 +1272,12 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 .filter((s: any) => s.globs.length > 0);
             await cfg.update('customSources', clean, target);
         }
+        if (Array.isArray(payload?.chatPlanDestinations)) {
+            const cleanDest = payload.chatPlanDestinations
+                .filter((d: any) => typeof d === 'string' && d.trim())
+                .map((d: string) => d.trim().slice(0, 500));
+            await cfg.update('chatPlanDestinations', cleanDest, target);
+        }
 
         // NOTE: deliberately does NOT touch switchboard.planWatcher.* — GlobalPlanWatcher
         // independently owns .switchboard/plans detection. The Plan Scanner only governs
@@ -1298,6 +1311,11 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 }
             }
         }
+        // Chat plan destinations are write targets, but must also be scanned so plans
+        // written there reach the board. Treat each as "just another custom directory".
+        for (const dest of config.chatPlanDestinations) {
+            targets.push(...expandFlatGlob(this._chatPlanDestinationToGlob(dest), repoRoots));
+        }
 
         const seen = new Set<string>();
         return targets.filter(t => {
@@ -1306,6 +1324,40 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             seen.add(key);
             return fs.existsSync(t.dir);
         });
+    }
+
+    /**
+     * Convert a chat-plan destination (a directory) into a recursive markdown glob
+     * for expandFlatGlob. Absolute, ~ and <repo> paths pass through; bare relative
+     * paths are anchored to each workspace root via <repo>.
+     */
+    private _chatPlanDestinationToGlob(dest: string): string {
+        const d = dest.trim().replace(/[\\/]+$/, '');
+        if (!d) { return ''; }
+        const anchored = (d.startsWith('~') || d.includes('<repo>') || path.isAbsolute(d))
+            ? d
+            : `<repo>/${d}`;
+        return `${anchored}/**/*.md`;
+    }
+
+    /**
+     * Resolve the chat/consultation agent's plan write destination(s) for prompt
+     * injection. Returns the user's configured destinations (tokens expanded), or
+     * the workspace's .switchboard/plans folder when none are configured.
+     */
+    public resolveChatPlanDestinations(workspaceRoot?: string): string[] {
+        const root = workspaceRoot || this._getWorkspaceRoots()[0] || '';
+        const configured = this._getPlanScannerConfig().chatPlanDestinations;
+        const expand = (d: string): string => {
+            let p = d.trim().replace(/[\\/]+$/, '');
+            if (p.startsWith('~')) { p = path.join(os.homedir(), p.slice(1)); }
+            if (p.includes('<repo>')) { p = root ? p.replace(/<repo>/g, root) : p; }
+            else if (!path.isAbsolute(p) && root) { p = path.join(root, p); }
+            return p;
+        };
+        const resolved = configured.map(expand).filter(Boolean);
+        if (resolved.length > 0) { return resolved; }
+        return [root ? path.join(root, '.switchboard', 'plans') : '.switchboard/plans'];
     }
 
     /**

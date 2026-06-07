@@ -2529,6 +2529,8 @@ export class KanbanProvider implements vscode.Disposable {
             resolvedOptions.ticketUpdateMode = promptsConfig.ticketUpdateMode;
         } else if (role === 'splitter') {
             resolvedOptions.complexityScoringSkill = promptsConfig.complexityScoringSkill;
+        } else if (role === 'chat') {
+            resolvedOptions.chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
         }
 
         const mergedOptions = {
@@ -4352,26 +4354,18 @@ This step is what moves the plan forward in the Switchboard pipeline.
                         this.setProjectFilter(msg.project); // Preserve selected project
                     }
 
-                    // Reset control plane action: always clear the filter to show all cards,
-                    // regardless of which workspace root is currently active.
-                    // The frontend sends controlPlaneAction: 'reset-auto-detect' when the
-                    // reset button is clicked — the filter must not persist after reset.
-                    if (msg.controlPlaneAction === 'reset-auto-detect') {
-                        this._repoScopeFilter = null;
-                    } else {
-                        // Determine if the selected workspace is a child workspace
-                        // or the parent workspace. Only child workspaces should trigger filtering.
-                        const effectiveRoot = this.resolveEffectiveWorkspaceRoot(msg.workspaceRoot);
-                        const isChildWorkspace = path.resolve(msg.workspaceRoot) !== effectiveRoot;
+                    // Determine if the selected workspace is a child workspace
+                    // or the parent workspace. Only child workspaces should trigger filtering.
+                    const effectiveRoot = this.resolveEffectiveWorkspaceRoot(msg.workspaceRoot);
+                    const isChildWorkspace = path.resolve(msg.workspaceRoot) !== effectiveRoot;
 
-                        if (isChildWorkspace) {
-                            // Child workspace: set repo scope filter to the folder name
-                            const repoScope = path.basename(path.resolve(msg.workspaceRoot));
-                            this._repoScopeFilter = repoScope;
-                        } else {
-                            // Parent workspace: clear the filter to show all cards
-                            this._repoScopeFilter = null;
-                        }
+                    if (isChildWorkspace) {
+                        // Child workspace: set repo scope filter to the folder name
+                        const repoScope = path.basename(path.resolve(msg.workspaceRoot));
+                        this._repoScopeFilter = repoScope;
+                    } else {
+                        // Parent workspace: clear the filter to show all cards
+                        this._repoScopeFilter = null;
                     }
 
                     this._setupSessionWatcher();
@@ -5261,7 +5255,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                     }));
                 }
 
-                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot });
+                const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+                const prompt = buildKanbanBatchPrompt('chat', chatPlans, { workspaceRoot, chatPlanDestinations });
                 await vscode.env.clipboard.writeText(prompt);
                 const count = chatPlans.length;
                 const planWord = count > 0 ? ` for ${count} plan(s)` : '';
@@ -5272,7 +5267,8 @@ This step is what moves the plan forward in the Switchboard pipeline.
                 const workspaceRoot = this._resolveWorkspaceRoot(msg.workspaceRoot);
                 if (!workspaceRoot) { break; }
 
-                const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot });
+                const chatPlanDestinations = this._taskViewerProvider?.resolveChatPlanDestinations(workspaceRoot);
+                const prompt = buildKanbanBatchPrompt('chat', [], { workspaceRoot, chatPlanDestinations });
                 await vscode.env.clipboard.writeText(prompt);
                 this._panel?.webview.postMessage({ type: 'showStatusMessage', message: 'Copied planning chat prompt to clipboard.', isError: false });
                 break;

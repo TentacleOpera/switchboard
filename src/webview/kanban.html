@@ -2357,7 +2357,6 @@
             <!-- Hidden elements (unchanged) -->
             <span id="workspace-filter-badge" class="workspace-filter-badge" hidden></span>
             <span id="workspace-control-plane-badge" class="workspace-filter-badge" hidden></span>
-            <button id="workspace-reset-control-plane" class="strip-btn" hidden>RESET AUTO-DETECT</button>
         </div>
         <div id="db-warning-banner" style="display:none; background:#3a2a00; color:#ffcc00; padding:6px 12px; font-size:12px; text-align:center; border-bottom:1px solid #554400;">
             ⚠️ Database unavailable — card positions may not reflect manual moves
@@ -3891,9 +3890,6 @@
                 baseOpt.textContent = wsLabel;
                 baseOpt.dataset.workspaceRoot = wsRoot;
                 baseOpt.dataset.project = '__unassigned__';
-                if (item.controlPlaneAction || item.selectionMode) {
-                    baseOpt.dataset.controlPlaneAction = item.controlPlaneAction || item.selectionMode;
-                }
                 select.appendChild(baseOpt);
 
                 // Per-project options
@@ -3962,7 +3958,6 @@
         function updateWorkspaceFilterBadge() {
             const badge = document.getElementById('workspace-filter-badge');
             const controlPlaneBadge = document.getElementById('workspace-control-plane-badge');
-            const resetButton = document.getElementById('workspace-reset-control-plane');
             if (!badge) return;
             if (activeWorkspaceFilter) {
                 badge.hidden = false;
@@ -3981,9 +3976,6 @@
                     controlPlaneBadge.textContent = '';
                     controlPlaneBadge.title = '';
                 }
-            }
-            if (resetButton) {
-                resetButton.hidden = !(currentControlPlaneMode === 'explicit' || currentControlPlaneMode === 'manual');
             }
         }
 
@@ -6663,7 +6655,6 @@
 
             const selectedWorkspaceRoot = selectedOption.dataset.workspaceRoot || '';
             const selectedProject = selectedOption.dataset.project || '';
-            const controlPlaneAction = selectedOption.dataset.controlPlaneAction || undefined;
 
             const isDifferentWorkspace = selectedWorkspaceRoot !== currentWorkspaceRoot;
 
@@ -6673,7 +6664,6 @@
                 postKanbanMessage({
                     type: 'selectWorkspace',
                     workspaceRoot: selectedWorkspaceRoot,
-                    controlPlaneAction: controlPlaneAction,
                     project: selectedProject
                 });
             } else if (selectedProject !== (activeProjectFilter ?? '')) {
@@ -6691,14 +6681,6 @@
                 btnDeleteProject.disabled = disabled;
                 btnDeleteProject.setAttribute('data-tooltip', !disabled ? 'Delete selected project' : 'Select a project to delete');
             }
-        });
-        document.getElementById('workspace-reset-control-plane')?.addEventListener('click', () => {
-            lastBoardSignature = '';
-            postKanbanMessage({
-                type: 'selectWorkspace',
-                workspaceRoot: currentWorkspaceRoot || '',
-                controlPlaneAction: 'reset-auto-detect'
-            });
         });
         document.getElementById('btn-autoban')?.addEventListener('click', () => {
             const currentlyEnabled = !!(autobanConfig && autobanConfig.enabled);

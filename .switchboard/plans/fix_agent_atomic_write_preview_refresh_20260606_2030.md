@@ -118,3 +118,41 @@ this._activeDocWatcher.onDidCreate(() => {
 - The `FileSystemWatcher` API is already configured to emit create events (`ignoreCreateEvents: false`), so no additional system-level watcher overhead is introduced.
 
 **Recommendation:** Send to Intern
+
+---
+
+## Reviewer Pass — Completed
+
+### Stage 1: Grumpy Adversarial Findings
+
+- **[MAJOR]** *Copy-paste engineering.* You duplicated ~30 lines of refresh logic instead of extracting a `_triggerActiveDocRefresh` helper. The plan itself flagged this as a risk: "Maintenance drift from duplicated refresh logic." Your mitigation? A TODO comment. A. TODO. Comment. That is not a mitigation; that is a confession. The next engineer who needs to tweak debounce timing or add a new `sourceId` branch will update one handler and forget the other. I guarantee it.
+- **[NIT]** *The `watchCreate: false` lie.* The plan claims `createFileSystemWatcher` has `watchCreate: false`. The actual API parameter is `ignoreCreateEvents`, and the code passes `false` — meaning it DOES watch create events. The comment at line 616 says `// watch create` which is behaviorally right but semantically confused. Read the API docs before you annotate parameters.
+- **[NIT]** *No guard against double-fire.* On some platforms, an atomic rename can trigger BOTH `onDidCreate` and `onDidChange`. The debounce coalesces them into one refresh, which is fine, but the log message will only say `(create)`. If I'm debugging a race, I want to know both events fired, not just the one that won the debounce.
+
+### Stage 2: Balanced Synthesis
+
+- **What to keep:** The `onDidCreate` handler is functionally correct. The generation guard, panel-write guard, debounce, source-id branching, and auto-refresh flag are all faithfully reproduced. The preview pane will now refresh on atomic writes. This is the right fix.
+- **What to fix now:** Nothing blocking. The duplicated logic works today.
+- **What to defer:** Extract `_triggerActiveDocRefresh(gen, filePath)` and call it from both handlers. Add distinct log prefixes for `onDidChange` vs `onDidCreate` to aid future debugging.
+
+### Code Fixes Applied
+
+None. No CRITICAL findings. The MAJOR finding (duplication) is a maintainability debt that does not affect runtime correctness and is pre-acknowledged by the plan. Deferring extraction to a follow-up refactor.
+
+### Verification Results
+
+- **Code read:** `@/Users/patrickvuleta/Documents/GitHub/switchboard/src/services/PlanningPanelProvider.ts:621-691` confirms both `onDidChange` and `onDidCreate` handlers are present with matching guard/debounce/refresh logic.
+- **TODO comments:** Present at lines 621 (`TODO: Keep onDidChange and onDidCreate refresh logic in sync`) and 657 (`TODO: Keep onDidCreate and onDidChange refresh logic in sync`).
+- **Compilation:** Skipped per session directive.
+- **Tests:** Skipped per session directive.
+
+### Files Changed
+
+- `src/services/PlanningPanelProvider.ts` (lines 657–691 added)
+
+### Remaining Risks
+
+- **Minimal.** The change is purely additive. No existing behavior is modified.
+- **Maintenance drift:** If the `onDidChange` refresh logic evolves, the `onDidCreate` copy must be kept in sync. Mitigated by TODO comments; permanent fix is helper extraction.
+
+**Reviewer Verdict:** Approved with technical debt noted. Ship it, then schedule the refactor.
