@@ -270,3 +270,49 @@ Key risks: (1) Replacing import with set-active is a behavior change that must b
 **Remaining Risks:**
 - Transient state loss on extension host reload (IDs are in-memory only; acceptable per plan analysis)
 - "Turn off" in Local Docs tab disables design doc even if set from Design Docs tab (by design - single global design doc)
+
+---
+
+## Reviewer Pass (2026-06-07)
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | **CRITICAL** | "Import" card action for `local-folder` sends `importFullDoc` without `sourceFolder`. Backend `_handleImportFullDoc` doesn't accept `sourceFolder`, so `LocalFolderService.fetchDocContent(docId)` is called without it — which immediately returns `{ success: false, error: 'sourceFolder is required' }`. Every "Import" click on a local-folder document fails. Functional regression vs. old "Set Context" which used `appendToPlannerPrompt` (included `sourceFolder`). |
+| 2 | **MAJOR** | Stale comment at `planning.js:3139`: `// No local strip button to re-enable (card action used instead)`. This predates the strip button and is now misleading. |
+
+### Stage 2: Balanced Synthesis
+
+- **CRITICAL #1: Fixed.** Added `sourceFolder` to the `importFullDoc` message in the "Import" card action handler, threaded it through the `_handleMessage` switch, added `sourceFolder` parameter to `_handleImportFullDoc`, and updated the local-folder branch to validate `sourceFolder`, use `_getLocalFolderServiceForFolder` for correct folder resolution, and clean `docId` (matching the pattern in `_handleAppendToPlannerPrompt` and `_handleSetActivePlanningContext`).
+- **MAJOR #2: Fixed.** Updated comment to `// Strip button state is updated via activeDesignDocUpdated message path`.
+
+### Files Changed (Review Fixes)
+
+1. `src/webview/planning.js` — Added `sourceFolder` to "Import" card action message; updated stale comment
+2. `src/services/PlanningPanelProvider.ts` — Added `sourceFolder` parameter to `_handleImportFullDoc`; added validation and correct folder resolution in local-folder branch; threaded `msg.sourceFolder` through message handler
+
+### Validation Results
+
+- Compilation: Skipped per instructions
+- Tests: Skipped per instructions
+- Code review: All plan requirements verified against implementation:
+  - ✅ Strip button `btn-set-active-context-local` added in `controls-strip-local`
+  - ✅ `design-folder` actions still include "Set Context" (not removed)
+  - ✅ `local-folder` actions changed from `['Set Context', 'Link Doc', 'Delete']` to `['Import', 'Link Doc', 'Delete']`
+  - ✅ State fields `activeDesignDocEnabled`, `activeDesignDocSourceId`, `activeDesignDocId` added
+  - ✅ `updateLocalActiveContextButtonState()` function matches plan spec
+  - ✅ Click handler sends `setActivePlanningContext` / `disableDesignDoc` correctly
+  - ✅ `updateActiveDocBanner` syncs state and calls `updateLocalActiveContextButtonState()`
+  - ✅ All 7 selection change locations call `updateLocalActiveContextButtonState()`
+  - ✅ Backend tracks `_activeDesignDocSourceId` and `_activeDesignDocId`
+  - ✅ `_handleSetActivePlanningContext` stores IDs and broadcasts
+  - ✅ `_handleDisableDesignDoc` clears IDs and broadcasts
+  - ✅ `_sendActiveDesignDocState` includes `sourceId` and `docId`
+  - ✅ **FIXED** "Import" action now threads `sourceFolder` correctly
+
+### Remaining Risks (Updated)
+
+- Transient state loss on extension host reload (IDs are in-memory only; acceptable per plan analysis)
+- "Turn off" in Local Docs tab disables design doc even if set from Design Docs tab (by design - single global design doc)
+- No automated test coverage for the new strip button or Import action (manual verification required)

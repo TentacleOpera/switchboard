@@ -856,7 +856,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             type: 'importFullDoc',
                             sourceId: sourceId,
                             docId: nodeId,
-                            docName: title
+                            docName: title,
+                            sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
                         });
                     }
                 });
@@ -3136,7 +3137,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 } else {
                     statusEl.textContent = `Error: ${msg.error || 'Failed to set active context'}`;
                 }
-                // No local strip button to re-enable (card action used instead)
+                // Strip button state is updated via activeDesignDocUpdated message path
                 break;
             case 'localDocDeleted':
                 if (msg.success) {

@@ -1129,7 +1129,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'importFullDoc': {
-                await this._handleImportFullDoc(workspaceRoot, msg.sourceId, msg.docId, msg.docName);
+                await this._handleImportFullDoc(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
                 break;
             }
             case 'fetchPageContent': {
@@ -3921,7 +3921,7 @@ export class PlanningPanelProvider {
         }
     }
 
-    private async _handleImportFullDoc(workspaceRoot: string, sourceId: string, docId: string, docName: string): Promise<void> {
+    private async _handleImportFullDoc(workspaceRoot: string, sourceId: string, docId: string, docName: string, sourceFolder?: string): Promise<void> {
         // Concurrency guard: prevent double-import
         if (this._importInProgress) {
             this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'Import already in progress' });
@@ -3955,8 +3955,14 @@ export class PlanningPanelProvider {
 
             // Handle local-folder directly without adapter
             if (sourceId === 'local-folder') {
-                const localFolderService = this._getLocalFolderService(workspaceRoot);
-                const result = await localFolderService.fetchDocContent(docId);
+                if (!sourceFolder) {
+                    this._panel?.webview.postMessage({ type: 'importFullDocResult', error: 'sourceFolder is required' });
+                    return;
+                }
+                const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, 'local-folder')
+                    || this._getLocalFolderService(workspaceRoot);
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                const result = await localFolderService.fetchDocContent(cleanDocId, sourceFolder);
                 if (!result.success) {
                     this._panel?.webview.postMessage({ type: 'importFullDocResult', error: result.error || 'Failed to fetch document' });
                     return;
