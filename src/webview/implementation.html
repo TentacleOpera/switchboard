@@ -1746,6 +1746,58 @@
             </div>
         </div>
 
+        <!-- Step 2a: Control Plane Question -->
+        <div id="onboard-step-control-plane" class="onboard-step hidden">
+            <div style="padding: 16px;">
+                <div class="section-label" style="margin-bottom: 12px;">WORKSPACE CONFIGURATION</div>
+                <div style="font-size: 11px; color: var(--text-secondary); margin-bottom: 14px; line-height: 1.5;">
+                    Switchboard scaffolds configuration files inside your repository
+                    (<code style="font-size:10px;">AGENTS.md</code>,
+                    <code style="font-size:10px;">.agent/</code>,
+                    <code style="font-size:10px;">.switchboard/</code>).
+                    If you do not want this extension to write to
+                    <code style="font-size:10px;">AGENTS.md</code> or perform other scaffolding
+                    steps inside your repo, you can create a <strong>Control Plane folder</strong>
+                    that contains all Switchboard scaffolding externally.
+                </div>
+
+                <!-- Control Plane setup form (initially hidden, shown when user clicks "SET UP CONTROL PLANE") -->
+                <div id="onboard-cp-form" class="hidden" style="margin-top: 10px;">
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size: 10px;">Control Plane parent directory</span>
+                        <input id="onboard-cp-parent-dir" type="text" placeholder="e.g. /Users/you/Documents/GitHub" style="width:100%;">
+                    </label>
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size: 10px;">Workspace file name</span>
+                        <input id="onboard-cp-workspace-name" type="text" placeholder="e.g. switchboard-control-plane" style="width:100%;">
+                    </label>
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size: 10px;">Repository clone URLs (one HTTPS URL per line)</span>
+                        <textarea id="onboard-cp-repo-urls" rows="4" placeholder="https://github.com/org/service-a.git&#10;https://github.com/org/service-b.git" style="width:100%; resize:vertical;"></textarea>
+                    </label>
+                    <label class="startup-row" style="display:block; margin-bottom:6px;">
+                        <span style="display:block; margin-bottom:4px; font-size: 10px;">Personal Access Token</span>
+                        <input id="onboard-cp-pat" type="password" placeholder="Transient PAT used only while cloning" style="width:100%;">
+                    </label>
+                    <button id="btn-onboard-cp-scaffold" class="secondary-btn w-full"
+                        style="margin-top: 8px; padding: 10px; font-size: 11px; color: var(--accent-teal); border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);">
+                        SCAFFOLD CONTROL PLANE</button>
+                </div>
+
+                <div style="display: flex; flex-direction: column; gap: 8px; margin-top: 12px;">
+                    <button id="btn-onboard-cp-toggle" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px; color: var(--accent-teal); border-color: color-mix(in srgb, var(--accent-teal) 40%, transparent);">
+                        SET UP CONTROL PLANE</button>
+                    <button id="btn-onboard-cp-inrepo" class="secondary-btn w-full"
+                        style="padding: 10px; font-size: 11px;">
+                        CONTINUE WITH IN-REPO SETUP</button>
+                </div>
+                <div id="onboard-cp-status"
+                    style="text-align: center; margin-top: 10px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);">
+                </div>
+            </div>
+        </div>
+
         <!-- Step 2: CLI Config -->
         <div id="onboard-step-cli" class="onboard-step hidden">
             <div style="padding: 16px;">
@@ -2579,6 +2631,20 @@
                     break;
                 case 'onboardingProgress':
                     handleOnboardingProgress(message);
+                    break;
+                case 'multiRepoScaffoldResult':
+                    const cpStatus = document.getElementById('onboard-cp-status');
+                    const cpScaffoldBtn = document.getElementById('btn-onboard-cp-scaffold');
+                    if (cpScaffoldBtn) cpScaffoldBtn.disabled = false;
+                    if (message.result?.success) {
+                        if (cpStatus) { cpStatus.textContent = '✅ Control Plane scaffolded'; cpStatus.style.color = 'var(--accent-green)'; }
+                        // Finish onboarding — sidebar switches to main UI
+                        setTimeout(() => {
+                            vscode.postMessage({ type: 'finishOnboarding' });
+                        }, 600);
+                    } else {
+                        if (cpStatus) { cpStatus.textContent = '❌ ' + (message.result?.error || 'Scaffolding failed'); cpStatus.style.color = 'var(--accent-red)'; }
+                    }
                     break;
                 case 'terminalStatuses':
                     lastTerminals = message.terminals || {};
@@ -5637,6 +5703,7 @@ Work through all plans in the list, using the marker format above.`;
         const onboardingContainer = document.getElementById('onboarding-container');
         const mainContainer = document.getElementById('main-container');
         const onboardStepWelcome = document.getElementById('onboard-step-welcome');
+        const onboardStepControlPlane = document.getElementById('onboard-step-control-plane');
         const onboardStepCli = document.getElementById('onboard-step-cli');
 
         function toggleOnboarding(needsSetup) {
@@ -5663,9 +5730,9 @@ Work through all plans in the list, using the marker format above.`;
                     break;
                 case 'initialized':
                     if (initStatus) initStatus.textContent = '✅ Protocols initialized';
-                    // Advance to CLI config step
+                    // Advance to CLI config step (Control Plane question was already answered)
                     setTimeout(() => {
-                        onboardStepWelcome.classList.add('hidden');
+                        onboardStepControlPlane.classList.add('hidden');
                         onboardStepCli.classList.remove('hidden');
                     }, 600);
                     break;
@@ -5675,15 +5742,58 @@ Work through all plans in the list, using the marker format above.`;
                         vscode.postMessage({ type: 'finishOnboarding' });
                     }, 400);
                     break;
-                case 'error':
-                    const errTarget = onboardStepCli.classList.contains('hidden') ? initStatus : cliStatus;
+                case 'error': {
+                    let errTarget;
+                    if (!onboardStepCli.classList.contains('hidden')) {
+                        errTarget = cliStatus;
+                    } else if (!onboardStepControlPlane.classList.contains('hidden')) {
+                        errTarget = document.getElementById('onboard-cp-status');
+                    } else {
+                        errTarget = initStatus;
+                    }
                     if (errTarget) errTarget.textContent = '❌ ' + (msg.message || 'Unknown error');
                     break;
+                }
             }
         }
 
         document.getElementById('btn-onboard-init').addEventListener('click', () => {
+            // Advance to Control Plane question BEFORE running initializeProtocols
+            // (initializeProtocols writes inside the repo, which may fail in locked-down environments)
+            onboardStepWelcome.classList.add('hidden');
+            onboardStepControlPlane.classList.remove('hidden');
+        });
+
+        // "SET UP CONTROL PLANE" — reveal inline form, hide choice buttons
+        document.getElementById('btn-onboard-cp-toggle').addEventListener('click', () => {
+            document.getElementById('onboard-cp-form').classList.remove('hidden');
+            document.getElementById('btn-onboard-cp-toggle').classList.add('hidden');
+            document.getElementById('btn-onboard-cp-inrepo').classList.add('hidden');
+        });
+
+        // "CONTINUE WITH IN-REPO SETUP" — run initializeProtocols (writes inside repo)
+        document.getElementById('btn-onboard-cp-inrepo').addEventListener('click', () => {
+            // Keep Control Plane step visible so errors are displayed in onboard-cp-status
+            const cpStatus = document.getElementById('onboard-cp-status');
+            if (cpStatus) { cpStatus.textContent = 'Initializing protocols...'; cpStatus.style.color = 'var(--text-secondary)'; }
             vscode.postMessage({ type: 'initializeProtocols' });
+        });
+
+        // "SCAFFOLD CONTROL PLANE" — send scaffoldMultiRepo to backend
+        document.getElementById('btn-onboard-cp-scaffold').addEventListener('click', () => {
+            const cpStatus = document.getElementById('onboard-cp-status');
+            if (cpStatus) cpStatus.textContent = 'Scaffolding Control Plane...';
+            document.getElementById('btn-onboard-cp-scaffold').disabled = true;
+            vscode.postMessage({
+                type: 'scaffoldMultiRepo',
+                parentDir: document.getElementById('onboard-cp-parent-dir')?.value.trim() || '',
+                workspaceName: document.getElementById('onboard-cp-workspace-name')?.value.trim() || '',
+                repoUrls: (document.getElementById('onboard-cp-repo-urls')?.value || '')
+                    .split('\n')
+                    .map(v => v.trim())
+                    .filter(Boolean),
+                pat: document.getElementById('onboard-cp-pat')?.value || ''
+            });
         });
 
         document.getElementById('btn-onboard-save').addEventListener('click', () => {

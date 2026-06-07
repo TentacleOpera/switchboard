@@ -49,6 +49,7 @@ import {
 import { LinearDocsAdapter } from './LinearDocsAdapter';
 import { LocalFolderService } from './LocalFolderService';
 import { LocalApiServer } from './LocalApiServer';
+import { MultiRepoScaffoldingService } from './MultiRepoScaffoldingService';
 import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './KanbanDatabase';
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
@@ -8315,6 +8316,37 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     case 'finishOnboarding':
                         await this._handleFinishOnboarding();
                         break;
+                    case 'scaffoldMultiRepo': {
+                        try {
+                            const result = await vscode.window.withProgress(
+                                {
+                                    location: vscode.ProgressLocation.Notification,
+                                    cancellable: false,
+                                    title: 'Scaffolding Multi-Repo Control Plane...'
+                                },
+                                () => MultiRepoScaffoldingService.scaffold(
+                                    {
+                                        parentDir: typeof data.parentDir === 'string' ? data.parentDir : '',
+                                        workspaceName: typeof data.workspaceName === 'string' ? data.workspaceName : '',
+                                        repoUrls: Array.isArray(data.repoUrls) ? data.repoUrls.map((value: unknown) => String(value)) : [],
+                                        pat: typeof data.pat === 'string' ? data.pat : ''
+                                    },
+                                    this._extensionUri.fsPath
+                                )
+                            );
+                            this._view?.webview.postMessage({ type: 'multiRepoScaffoldResult', result });
+                        } catch (error) {
+                            this._view?.webview.postMessage({
+                                type: 'multiRepoScaffoldResult',
+                                result: {
+                                    success: false,
+                                    repos: [],
+                                    error: error instanceof Error ? error.message : String(error)
+                                }
+                            });
+                        }
+                        break;
+                    }
                     case 'openExternalUrl':
                         if (data.url && typeof data.url === 'string' && data.url.startsWith('https://')) {
                             vscode.env.openExternal(vscode.Uri.parse(data.url));

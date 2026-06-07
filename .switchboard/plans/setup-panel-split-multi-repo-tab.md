@@ -99,7 +99,7 @@ All six edits have been applied and verified against the current source:
 | `multi-repo-scaffold-status` | Line 1338 | Yes — only referenced in JS status updates |
 | `message.section === 'multi-repo-control-plane'` | Line 4369 | **No** — backend contract, requires coordinated change in `SetupPanelProvider.ts` |
 
-### Phase 2: Onboarding wizard — add Control Plane question step
+### Phase 2: Onboarding wizard — add Control Plane question step (COMPLETED — verified in code)
 
 The onboarding wizard lives in **`src/webview/implementation.html`** (the sidebar webview), NOT in `setup.html`. It is currently a 2-step flow:
 
@@ -385,6 +385,48 @@ This is the same logic as `SetupPanelProvider.ts` lines 300-329, but posting bac
 - The modal still contains `multi-repo-*` internal IDs which is fine for functionality but may be confusing for future maintenance. A follow-up plan should rename these to `control-plane-*` (except `message.section === 'multi-repo-control-plane'` which requires a coordinated backend change).
 - The inline Control Plane form in `implementation.html` duplicates the form fields from `setup.html`'s Control Plane modal. If the modal's fields change (e.g., new options added), the onboarding form must be updated to match. Consider extracting the form into a shared template in a future refactor.
 
+## Review Results (2026-06-07)
+
+### Stage 1: Adversarial Findings
+
+| ID | Severity | Description |
+|---|---|---|
+| MAJOR-1 | MAJOR | **Invisible error on `initializeProtocols` failure.** When user clicks "CONTINUE WITH IN-REPO SETUP", the Control Plane step was hidden before `initializeProtocols` completed. On failure, the `error` case in `handleOnboardingProgress` targeted `initStatus` (inside the hidden Welcome step) — user sees nothing, is stuck. |
+| NIT-1 | NIT | Stale `multi-repo-*` IDs in Control Plane modal — deferred, no functional impact. |
+| NIT-2 | NIT | "Initializing protocols..." status written to hidden `initStatus` element — bundled with MAJOR-1 fix. |
+
+### Stage 2: Fixes Applied
+
+**MAJOR-1 fix** — `src/webview/implementation.html`:
+
+1. **`btn-onboard-cp-inrepo` handler**: Removed `onboardStepControlPlane.classList.add('hidden')` — the Control Plane step now stays visible until `initializeProtocols` succeeds. Status text now targets `onboard-cp-status` instead of the hidden `initStatus`.
+
+2. **`handleOnboardingProgress` `error` case**: Added three-tier visibility check:
+   - If CLI step is visible → target `cliStatus`
+   - If Control Plane step is visible → target `onboard-cp-status`
+   - Otherwise → target `initStatus` (fallback)
+
+### Files Changed
+
+| File | Change |
+|---|---|
+| `src/webview/implementation.html` (lines 5774-5780) | `btn-onboard-cp-inrepo` handler: keep Control Plane step visible, show status in `onboard-cp-status` |
+| `src/webview/implementation.html` (lines 5745-5756) | `error` case: three-tier visibility check for error target |
+
+### Validation
+
+- Phase 1: All 6 edits verified in `setup.html` — tab navigation, content split, `tabIdMap`, `tabLoadCallbacks`, persisted state migration, `openControlPlaneSetup` redirect.
+- Phase 2 HTML: `onboard-step-control-plane` div at line 1750, form fields, buttons, status div — all match plan spec.
+- Phase 2 JS: DOM reference (`onboardStepControlPlane`), Welcome button redirect, three button listeners, `multiRepoScaffoldResult` handler — all present.
+- Phase 2 Backend: `scaffoldMultiRepo` case in `TaskViewerProvider.ts` (line 8319), `MultiRepoScaffoldingService` import (line 52) — present and matching `SetupPanelProvider.ts` pattern.
+- MAJOR-1 fix applied and verified: `initializeProtocols` errors now visible to user.
+
+### Remaining Risks (post-review)
+
+- Same as pre-review (no new risks introduced by the fix).
+- The `initialized` case still sets `initStatus.textContent` on line 5732 (inside the hidden Welcome step). This is harmless — the text is never visible and the real status is shown in `onboard-cp-status`. A future cleanup could remove this dead write.
+
 ## Recommendation
 
 **Complexity: 5** → Send to Coder
+
