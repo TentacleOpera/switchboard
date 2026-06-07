@@ -208,7 +208,8 @@
         #online-content,
         #kanban-content,
         #design-content,
-        #html-preview-content {
+        #html-preview-content,
+        #tickets-content {
             display: none;
             flex-direction: column;
             height: calc(100vh - 40px);
@@ -219,7 +220,8 @@
         #online-content.active,
         #kanban-content.active,
         #design-content.active,
-        #html-preview-content.active {
+        #html-preview-content.active,
+        #tickets-content.active {
             display: flex;
         }
 
@@ -308,7 +310,8 @@
         .content-row.collapsed #tree-pane,
         .content-row.collapsed #tree-pane-online,
         .content-row.collapsed #tree-pane-design,
-        .content-row.collapsed #tree-pane-html {
+        .content-row.collapsed #tree-pane-html,
+        .content-row.collapsed #tree-pane-tickets {
             padding: 4px;
             overflow: hidden;
         }
@@ -666,7 +669,8 @@
 
         #tree-pane,
         #tree-pane-online,
-        #tree-pane-html {
+        #tree-pane-html,
+        #tree-pane-tickets {
             position: relative;
             background: var(--panel-bg2);
             border-right: 1px solid var(--border-color);
@@ -896,7 +900,8 @@
         }
 
         #preview-pane,
-        #preview-pane-online {
+        #preview-pane-online,
+        #preview-pane-tickets {
             display: flex;
             flex-direction: column;
             background: var(--panel-bg, #000000);
@@ -1916,7 +1921,8 @@
         .cyber-theme-enabled #tree-pane,
         .cyber-theme-enabled #tree-pane-online,
         .cyber-theme-enabled #tree-pane-design,
-        .cyber-theme-enabled #tree-pane-html {
+        .cyber-theme-enabled #tree-pane-html,
+        .cyber-theme-enabled #tree-pane-tickets {
             background: rgba(10, 10, 10, 0.70);
             backdrop-filter: blur(8px);
             -webkit-backdrop-filter: blur(8px);
@@ -1942,7 +1948,8 @@
         .cyber-theme-enabled #preview-pane,
         .cyber-theme-enabled #preview-pane-online,
         .cyber-theme-enabled #preview-pane-design,
-        .cyber-theme-enabled #preview-pane-html {
+        .cyber-theme-enabled #preview-pane-html,
+        .cyber-theme-enabled #preview-pane-tickets {
             background-color: rgba(255, 255, 255, 0.015);
             background-image:
                 linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
@@ -2094,7 +2101,6 @@
             border-radius: 10px;
             cursor: pointer;
             transition: all 0.15s;
-            margin-left: auto;
             white-space: nowrap;
         }
         .kanban-plan-copy-prompt:hover {
@@ -2313,23 +2319,7 @@
         }
 
         /* Tickets Tab Styles */
-        .tickets-panel {
-            display: flex;
-            flex-direction: column;
-            height: 100%;
-            padding: 12px;
-            gap: 12px;
-            overflow: hidden;
-        }
-
-        .tickets-toolbar {
-            display: flex;
-            gap: 8px;
-            align-items: center;
-            flex-wrap: wrap;
-        }
-
-        .tickets-toolbar input {
+        #controls-strip-tickets input {
             flex: 1;
             min-width: 200px;
             padding: 6px 10px;
@@ -2341,12 +2331,12 @@
             font-size: 11px;
         }
 
-        .tickets-toolbar input:focus {
+        #controls-strip-tickets input:focus {
             outline: none;
             border-color: var(--accent-teal);
         }
 
-        .tickets-toolbar select {
+        #controls-strip-tickets select {
             padding: 6px 10px;
             background: var(--panel-bg2);
             color: var(--text-primary);
@@ -2356,102 +2346,60 @@
             font-size: 11px;
         }
 
-        .tickets-list-view {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 8px;
-        }
-
-        .tickets-task-view {
-            flex: 1;
-            overflow-y: auto;
-            display: flex;
-            flex-direction: column;
-            gap: 12px;
-        }
-
-        .tickets-back-btn-group {
-            display: flex;
-            gap: 8px;
-        }
-
-        .tickets-task-header {
+        .ticket-node {
+            position: relative;
             display: flex;
             flex-direction: column;
             gap: 4px;
-            padding-bottom: 8px;
-            border-bottom: 1px solid var(--border-color);
-        }
-
-        .tickets-task-header h3 {
-            font-size: 14px;
-            font-weight: 600;
-            color: var(--text-primary);
-            margin: 0;
-        }
-
-        .tickets-task-header span {
-            font-size: 11px;
-            color: var(--text-secondary);
-            font-family: var(--font-mono);
-        }
-
-        .tickets-detail-actions {
-            display: flex;
-            gap: 8px;
-            flex-wrap: wrap;
-        }
-
-        .tickets-detail-description,
-        .tickets-detail-subtasks,
-        .tickets-detail-comments,
-        .tickets-detail-attachments {
-            font-size: 12px;
-            color: var(--text-primary);
-            line-height: 1.5;
-        }
-
-        .tickets-detail-description pre {
-            white-space: pre-wrap;
-            word-break: break-word;
-        }
-
-        /* Ticket card styles - adapted from implementation.html */
-        .tickets-issue-card {
-            width: 100%;
-            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
-            border: 1px solid var(--border-color);
-            border-left: 3px solid var(--accent-teal-dim);
-            border-radius: 3px;
             padding: 10px 12px;
-            text-align: left;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
             transition: all 0.15s;
-            position: relative;
         }
 
-        .tickets-issue-card:hover {
+        .ticket-node:hover {
             border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
             border-left-color: var(--accent-teal);
             box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
-            cursor: pointer;
         }
 
-        .tickets-issue-title {
+        .ticket-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .ticket-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .ticket-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .ticket-node .tickets-issue-title {
             font-size: 12px;
             font-weight: 700;
             color: var(--text-primary);
         }
 
-        .tickets-issue-meta {
+        .ticket-node .tickets-issue-meta {
             font-size: 11px;
             color: var(--text-secondary);
             line-height: 1.5;
             font-family: var(--font-mono);
         }
 
-        .tickets-issue-import-btn {
+        .ticket-node .tickets-issue-import-btn {
             display: inline-block;
             background: transparent;
             color: var(--accent-teal);
@@ -2463,12 +2411,12 @@
             letter-spacing: 0.5px;
         }
 
-        .tickets-issue-import-btn:hover {
+        .ticket-node .tickets-issue-import-btn:hover {
             background: var(--accent-teal);
             color: var(--panel-bg);
         }
 
-        .tickets-issue-import-btn:disabled {
+        .ticket-node .tickets-issue-import-btn:disabled {
             opacity: 0.4;
             cursor: not-allowed;
         }
@@ -2812,39 +2760,51 @@
             </div>
         </div>
         <div id="tickets-content" class="research-tab-content">
-            <div class="tickets-panel">
-                <div class="tickets-toolbar">
-                    <input id="tickets-search" type="text" placeholder="Search tickets..." />
-                    <select id="tickets-project-picker" style="display:none"></select>
-                    <select id="tickets-state-filter" style="display:none"></select>
-                    <select id="tickets-status-filter" style="display:none"></select>
-                    <button id="tickets-refresh" class="planning-button">Refresh</button>
-                    <div id="tickets-hierarchy-nav" style="display:none"></div>
-                </div>
-                <div class="tickets-list-view">
-                    <div id="tickets-empty-state">No tickets loaded.</div>
+            <div class="controls-strip" id="controls-strip-tickets">
+                <input id="tickets-search" type="text" placeholder="Search tickets..." />
+                <select id="tickets-project-picker" style="display:none"></select>
+                <select id="tickets-state-filter" style="display:none"></select>
+                <select id="tickets-status-filter" style="display:none"></select>
+                <button id="tickets-refresh" class="strip-btn">Refresh</button>
+                <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
+            </div>
+            <div class="content-row">
+                <div id="tree-pane-tickets">
+                    <div class="sidebar-toggle-row">
+                        <button class="sidebar-toggle-btn" title="Toggle sidebar">«</button>
+                    </div>
+                    <div id="tickets-empty-state" class="empty-state">No tickets loaded.</div>
                     <div id="tickets-issues-container"></div>
                     <button id="tickets-load-more" class="planning-button" style="display:none">Load More</button>
                 </div>
-                <div class="tickets-task-view" style="display:none">
-                    <div class="tickets-back-btn-group">
-                        <button id="tickets-back-to-list" class="planning-button">BACK TO LIST</button>
-                        <button id="tickets-back-to-parent" class="planning-button" style="display:none">BACK TO PARENT</button>
+                <div class="preview-panel-wrapper">
+                    <div id="preview-pane-tickets" style="flex: 1; width: 100%; box-sizing: border-box;">
+                        <div class="preview-content-wrapper">
+                            <div class="tickets-detail-banner" id="tickets-detail-banner" style="display:none">
+                                <div style="display:flex; align-items:center; justify-content:space-between; padding:8px 12px; background:var(--accent-teal-dim); border-bottom:1px solid var(--accent-teal); flex-shrink:0;">
+                                    <div style="display:flex; flex-direction:column; gap:4px;">
+                                        <h3 id="tickets-detail-title" style="font-size:14px; font-weight:600; color:var(--text-primary); margin:0;"></h3>
+                                        <div style="display:flex; gap:8px; font-size:11px; color:var(--text-secondary); font-family:var(--font-mono);">
+                                            <span id="tickets-detail-status"></span>
+                                            <span id="tickets-detail-assignee"></span>
+                                        </div>
+                                    </div>
+                                    <div style="display:flex; gap:8px;">
+                                        <button id="tickets-detail-import" class="strip-btn" disabled>Import</button>
+                                        <button id="tickets-detail-refine" class="strip-btn" disabled>Refine</button>
+                                        <button id="tickets-detail-ask-agent" class="strip-btn" disabled>Ask Agent</button>
+                                        <button id="tickets-back-to-parent" class="strip-btn" style="display:none">Back to Parent</button>
+                                    </div>
+                                </div>
+                            </div>
+                            <div id="tickets-detail-description" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
+                            <div id="tickets-detail-subtasks" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
+                            <div id="tickets-detail-comments" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
+                            <div id="tickets-detail-attachments" style="font-size: 12px; color: var(--text-primary); line-height: 1.5; padding: 12px 0;"></div>
+                            <div id="tickets-empty-preview" class="empty-state">Select a ticket to preview</div>
+                        </div>
                     </div>
-                    <div class="tickets-task-header">
-                        <h3 id="tickets-detail-title"></h3>
-                        <span id="tickets-detail-status"></span>
-                        <span id="tickets-detail-assignee"></span>
-                    </div>
-                    <div class="tickets-detail-actions">
-                        <button id="tickets-detail-import" class="planning-button">Import</button>
-                        <button id="tickets-detail-refine" class="planning-button">Refine</button>
-                        <button id="tickets-detail-ask-agent" class="planning-button">Ask Agent</button>
-                    </div>
-                    <div id="tickets-detail-description"></div>
-                    <div id="tickets-detail-subtasks"></div>
-                    <div id="tickets-detail-comments"></div>
-                    <div id="tickets-detail-attachments"></div>
+                    <div class="cyber-scanlines"></div>
                 </div>
             </div>
         </div>

@@ -26,6 +26,7 @@
         designFolderPaths: persistedState.designFolderPaths || [],
         htmlPreviewCollapsed: persistedState.htmlPreviewCollapsed || false,
         designPreviewCollapsed: persistedState.designPreviewCollapsed || false,
+        ticketsPreviewCollapsed: persistedState.ticketsPreviewCollapsed || false,
         analystAvailable: false,
         docsListCollapsed: persistedState.docsListCollapsed || false,
         editMode: { local: false, kanban: false, design: false },
@@ -119,8 +120,10 @@
 
     function getTicketsTabElements() {
         return {
-            listView: document.getElementById('tickets-issues-container')?.parentElement,
-            taskView: document.querySelector('.tickets-task-view'),
+            listView: document.getElementById('tree-pane-tickets'),
+            previewPane: document.getElementById('preview-pane-tickets'),
+            detailBanner: document.getElementById('tickets-detail-banner'),
+            emptyPreview: document.getElementById('tickets-empty-preview'),
             searchInput: document.getElementById('tickets-search'),
             projectPicker: document.getElementById('tickets-project-picker'),
             stateFilter: document.getElementById('tickets-state-filter'),
@@ -139,7 +142,6 @@
             detailImportButton: document.getElementById('tickets-detail-import'),
             detailRefineButton: document.getElementById('tickets-detail-refine'),
             detailAskAgentButton: document.getElementById('tickets-detail-ask-agent'),
-            backToListButton: document.getElementById('tickets-back-to-list'),
             backToParentButton: document.getElementById('tickets-back-to-parent'),
             hierarchyNav: document.getElementById('tickets-hierarchy-nav')
         };
@@ -211,6 +213,9 @@
         } else if (activeTab === 'design') {
             state.designPreviewCollapsed = !state.designPreviewCollapsed;
             applySidebarState('design', state.designPreviewCollapsed);
+        } else if (activeTab === 'tickets') {
+            state.ticketsPreviewCollapsed = !state.ticketsPreviewCollapsed;
+            applySidebarState('tickets', state.ticketsPreviewCollapsed);
         } else {
             state.docsListCollapsed = !state.docsListCollapsed;
             // Apply to local and research tabs (they share the same collapsed state)
@@ -225,7 +230,8 @@
             ...currentPersisted,
             docsListCollapsed: state.docsListCollapsed,
             htmlPreviewCollapsed: state.htmlPreviewCollapsed,
-            designPreviewCollapsed: state.designPreviewCollapsed
+            designPreviewCollapsed: state.designPreviewCollapsed,
+            ticketsPreviewCollapsed: state.ticketsPreviewCollapsed
         });
     }
 
@@ -235,6 +241,7 @@
     applySidebarState('online', state.docsListCollapsed);
     applySidebarState('design', state.designPreviewCollapsed);
     applySidebarState('html-preview', state.htmlPreviewCollapsed);
+    applySidebarState('tickets', state.ticketsPreviewCollapsed);
 
     // Bind sidebar toggle listeners
     document.querySelectorAll('.sidebar-toggle-btn').forEach(btn => {
@@ -294,6 +301,8 @@
                 applySidebarState('html-preview', state.htmlPreviewCollapsed);
             } else if (tabName === 'design') {
                 applySidebarState('design', state.designPreviewCollapsed);
+            } else if (tabName === 'tickets') {
+                applySidebarState('tickets', state.ticketsPreviewCollapsed);
             } else if (tabName === 'local' || tabName === 'research' || tabName === 'online') {
                 applySidebarState(tabName, state.docsListCollapsed);
             }
@@ -4640,7 +4649,7 @@ DEPTH: Deep (50-100+ sources)`;
     // ===== TICKETS TAB IMPLEMENTATION =====
 
     function initTicketsTab() {
-        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton, backToListButton, backToParentButton } = getTicketsTabElements();
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, loadMoreButton, backToParentButton } = getTicketsTabElements();
 
         // Search input with debounce
         let searchDebounceTimer = null;
@@ -4692,12 +4701,6 @@ DEPTH: Deep (50-100+ sources)`;
         loadMoreButton?.addEventListener('click', loadMoreClickUpTasks);
 
         // Back buttons
-        backToListButton?.addEventListener('click', () => {
-            selectedLinearIssue = null;
-            selectedClickUpIssue = null;
-            renderTicketsTab();
-        });
-
         backToParentButton?.addEventListener('click', () => {
             const parentId = backToParentButton.dataset.parentId;
             if (parentId) {
@@ -4706,7 +4709,7 @@ DEPTH: Deep (50-100+ sources)`;
         });
 
         // Detail action buttons (delegated)
-        document.querySelector('.tickets-task-view')?.addEventListener('click', (e) => {
+        document.getElementById('preview-pane-tickets')?.addEventListener('click', (e) => {
             const importBtn = e.target.closest('[data-import-issue-id], [data-import-task-id]');
             const refineBtn = e.target.closest('[data-refine-issue-id], [data-refine-task-id]');
             const askAgentBtn = e.target.closest('#tickets-detail-ask-agent');
@@ -4761,8 +4764,7 @@ DEPTH: Deep (50-100+ sources)`;
     function renderTicketsLinearPanel() {
         if (lastIntegrationProvider !== 'linear' || !isTicketsTabActive()) return;
 
-        const { listView, taskView, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState } = getTicketsTabElements();
-        if (!listView || !taskView) return;
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, detailBanner, emptyPreview } = getTicketsTabElements();
 
         // Show Linear toolbar elements
         if (searchInput) searchInput.style.display = '';
@@ -4774,9 +4776,9 @@ DEPTH: Deep (50-100+ sources)`;
         renderTicketsLinearStateFilterOptions();
         renderTicketsLinearProjectPickerOptions();
 
-        const showTaskView = !!selectedLinearIssue;
-        listView.style.display = showTaskView ? 'none' : 'flex';
-        taskView.style.display = showTaskView ? 'flex' : 'none';
+        const hasSelected = !!selectedLinearIssue;
+        if (detailBanner) detailBanner.style.display = hasSelected ? '' : 'none';
+        if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
 
         renderTicketsLinearList();
         renderTicketsLinearTaskDetail();
@@ -4893,8 +4895,9 @@ DEPTH: Deep (50-100+ sources)`;
         emptyState.style.display = 'none';
 
         const newHtml = filteredIssues.map((issue) => {
+            const isSelected = selectedLinearIssue && selectedLinearIssue.issue.id === issue.id;
             return `
-            <div class="tickets-issue-card" data-linear-issue-id="${escapeAttr(issue.id)}">
+            <div class="ticket-node${isSelected ? ' selected' : ''}" data-linear-issue-id="${escapeAttr(issue.id)}">
                 <div class="tickets-issue-title">${escapeHtml(issue.title || issue.identifier || issue.id)}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.state?.name || 'Unknown state')}</div>
                 <div class="tickets-issue-meta">${escapeHtml(issue.assignee?.name || issue.assignee?.email || 'Unassigned')}</div>
@@ -4920,20 +4923,29 @@ DEPTH: Deep (50-100+ sources)`;
         if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
 
         if (!selectedLinearIssue) {
-            detailTitle.textContent = 'Select a task';
+            detailTitle.textContent = '';
             detailStatus.textContent = '';
             detailAssignee.textContent = '';
-            const noSelectionHtml = '<div class="empty-state">Choose a task from the list to inspect details.</div>';
-            if (_lastTicketsDetailDescriptionHtml !== noSelectionHtml) {
-                detailDescription.innerHTML = noSelectionHtml;
-                _lastTicketsDetailDescriptionHtml = noSelectionHtml;
+            if (_lastTicketsDetailDescriptionHtml !== '') {
+                detailDescription.innerHTML = '';
+                _lastTicketsDetailDescriptionHtml = '';
             }
             if (detailSubtasks && _lastTicketsDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsDetailSubtasksHtml = ''; }
             if (detailComments && _lastTicketsDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsDetailCommentsHtml = ''; }
             if (detailAttachments && _lastTicketsDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsDetailAttachmentsHtml = ''; }
-            if (detailImportButton) detailImportButton.disabled = true;
-            if (detailRefineButton) detailRefineButton.disabled = true;
-            if (detailAskAgentButton) detailAskAgentButton.disabled = true;
+            if (detailImportButton) {
+                detailImportButton.disabled = true;
+                delete detailImportButton.dataset.importIssueId;
+            }
+            if (detailRefineButton) {
+                detailRefineButton.disabled = true;
+                delete detailRefineButton.dataset.refineIssueId;
+                delete detailRefineButton.dataset.issueTitle;
+                delete detailRefineButton.dataset.issueDescription;
+            }
+            if (detailAskAgentButton) {
+                detailAskAgentButton.disabled = true;
+            }
             if (backToParentButton) {
                 backToParentButton.style.display = 'none';
                 delete backToParentButton.dataset.parentId;
@@ -5019,9 +5031,19 @@ DEPTH: Deep (50-100+ sources)`;
             }
         }
 
-        if (detailAskAgentButton) detailAskAgentButton.disabled = false;
-        if (detailImportButton) detailImportButton.disabled = false;
-        if (detailRefineButton) detailRefineButton.disabled = false;
+        if (detailImportButton) {
+            detailImportButton.dataset.importIssueId = issue.id;
+            detailImportButton.disabled = false;
+        }
+        if (detailRefineButton) {
+            detailRefineButton.dataset.refineIssueId = issue.id;
+            detailRefineButton.dataset.issueTitle = issue.title || '';
+            detailRefineButton.dataset.issueDescription = issue.description || '';
+            detailRefineButton.disabled = false;
+        }
+        if (detailAskAgentButton) {
+            detailAskAgentButton.disabled = false;
+        }
     }
 
     // ===== CLICKUP RENDERING FUNCTIONS =====
@@ -5029,8 +5051,7 @@ DEPTH: Deep (50-100+ sources)`;
     function renderTicketsClickUpPanel() {
         if (lastIntegrationProvider !== 'clickup' || !isTicketsTabActive()) return;
 
-        const { listView, taskView, searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav } = getTicketsTabElements();
-        if (!listView || !taskView) return;
+        const { searchInput, projectPicker, stateFilter, clickUpStatusFilter, refreshButton, emptyState, issuesContainer, hierarchyNav, detailBanner, emptyPreview } = getTicketsTabElements();
 
         // Hide Linear toolbar elements, show ClickUp hierarchy
         if (searchInput) searchInput.style.display = 'none';
@@ -5069,9 +5090,9 @@ DEPTH: Deep (50-100+ sources)`;
 
         renderTicketsClickUpTaskDetail();
 
-        const showTaskView = !!selectedClickUpIssue;
-        listView.style.display = showTaskView ? 'none' : 'flex';
-        taskView.style.display = showTaskView ? 'flex' : 'none';
+        const hasSelected = !!selectedClickUpIssue;
+        if (detailBanner) detailBanner.style.display = hasSelected ? '' : 'none';
+        if (emptyPreview) emptyPreview.style.display = hasSelected ? 'none' : '';
     }
 
     function renderTicketsClickUpHierarchyNav() {
@@ -5304,8 +5325,10 @@ DEPTH: Deep (50-100+ sources)`;
         const tasks = getFilteredClickUpTasks();
         const html = tasks.length === 0
             ? `<div class="empty-state">No tasks found.</div>`
-            : tasks.map(task => `
-                <div class="tickets-issue-card" data-clickup-task-id="${escapeAttr(task.id)}">
+            : tasks.map(task => {
+                const isSelected = selectedClickUpIssue && selectedClickUpIssue.task.id === task.id;
+                return `
+                <div class="ticket-node${isSelected ? ' selected' : ''}" data-clickup-task-id="${escapeAttr(task.id)}">
                     <div class="tickets-issue-title">${escapeHtml(task.title || task.identifier)}</div>
                     <div class="tickets-issue-meta">${escapeHtml(task.status || 'Unknown')}</div>
                     <div class="tickets-issue-meta">${task.assignees?.length ? escapeHtml(task.assignees.map(a => a.username || a.email).join(', ')) : 'Unassigned'}</div>
@@ -5314,7 +5337,8 @@ DEPTH: Deep (50-100+ sources)`;
                         <button type="button" class="tickets-issue-import-btn" data-import-task-id="${escapeAttr(task.id)}">IMPORT</button>
                     </div>
                 </div>
-            `).join('');
+                `;
+            }).join('');
 
         if (_lastTicketsClickUpIssuesContainerHtml !== html) {
             issuesContainer.innerHTML = html;
@@ -5333,20 +5357,29 @@ DEPTH: Deep (50-100+ sources)`;
         if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
 
         if (!selectedClickUpIssue) {
-            detailTitle.textContent = 'Select a task';
+            detailTitle.textContent = '';
             detailStatus.textContent = '';
             detailAssignee.textContent = '';
-            const noSelectionHtml = '<div class="empty-state">Choose a task from the list to inspect details.</div>';
-            if (_lastTicketsClickUpDetailDescriptionHtml !== noSelectionHtml) {
-                detailDescription.innerHTML = noSelectionHtml;
-                _lastTicketsClickUpDetailDescriptionHtml = noSelectionHtml;
+            if (_lastTicketsClickUpDetailDescriptionHtml !== '') {
+                detailDescription.innerHTML = '';
+                _lastTicketsClickUpDetailDescriptionHtml = '';
             }
             if (detailSubtasks && _lastTicketsClickUpDetailSubtasksHtml !== '') { detailSubtasks.innerHTML = ''; _lastTicketsClickUpDetailSubtasksHtml = ''; }
             if (detailComments && _lastTicketsClickUpDetailCommentsHtml !== '') { detailComments.innerHTML = ''; _lastTicketsClickUpDetailCommentsHtml = ''; }
             if (detailAttachments && _lastTicketsClickUpDetailAttachmentsHtml !== '') { detailAttachments.innerHTML = ''; _lastTicketsClickUpDetailAttachmentsHtml = ''; }
-            if (detailImportButton) detailImportButton.disabled = true;
-            if (detailRefineButton) detailRefineButton.disabled = true;
-            if (detailAskAgentButton) detailAskAgentButton.disabled = true;
+            if (detailImportButton) {
+                detailImportButton.disabled = true;
+                delete detailImportButton.dataset.importTaskId;
+            }
+            if (detailRefineButton) {
+                detailRefineButton.disabled = true;
+                delete detailRefineButton.dataset.refineTaskId;
+                delete detailRefineButton.dataset.issueTitle;
+                delete detailRefineButton.dataset.issueDescription;
+            }
+            if (detailAskAgentButton) {
+                detailAskAgentButton.disabled = true;
+            }
             return;
         }
 
@@ -5417,9 +5450,19 @@ DEPTH: Deep (50-100+ sources)`;
             }
         }
 
-        if (detailAskAgentButton) detailAskAgentButton.disabled = false;
-        if (detailImportButton) detailImportButton.disabled = false;
-        if (detailRefineButton) detailRefineButton.disabled = false;
+        if (detailImportButton) {
+            detailImportButton.dataset.importTaskId = task.id;
+            detailImportButton.disabled = false;
+        }
+        if (detailRefineButton) {
+            detailRefineButton.dataset.refineTaskId = task.id;
+            detailRefineButton.dataset.issueTitle = task.title || '';
+            detailRefineButton.dataset.issueDescription = task.markdownDescription || task.description || '';
+            detailRefineButton.disabled = false;
+        }
+        if (detailAskAgentButton) {
+            detailAskAgentButton.disabled = false;
+        }
     }
 
     // ===== LOAD FUNCTIONS =====

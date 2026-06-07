@@ -2490,6 +2490,8 @@ export class KanbanProvider implements vscode.Disposable {
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
+            reviewerConciseModeEnabled: promptsConfig.reviewerConciseModeEnabled ?? false,
+            reviewerCompactPlanUpdateEnabled: promptsConfig.reviewerCompactPlanUpdateEnabled ?? false,
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,
@@ -2514,6 +2516,8 @@ export class KanbanProvider implements vscode.Disposable {
             }
         } else if (role === 'reviewer') {
             resolvedOptions.advancedReviewerEnabled = promptsConfig.advancedReviewerEnabled;
+            resolvedOptions.reviewerConciseModeEnabled = promptsConfig.reviewerConciseModeEnabled;
+            resolvedOptions.reviewerCompactPlanUpdateEnabled = promptsConfig.reviewerCompactPlanUpdateEnabled;
         } else if (role === 'tester') {
             const { designDocLink, designDocContent } = await this._resolveGlobalDesignDoc(workspaceRoot);
             if (!designDocLink) {
@@ -2599,6 +2603,8 @@ export class KanbanProvider implements vscode.Disposable {
                 intern: internConfig?.addons?.pairProgramming ?? false,
             },
             advancedReviewerEnabled: reviewerConfig?.addons?.advancedRegression ?? config.get<boolean>('reviewer.advancedMode', false),
+            reviewerConciseModeEnabled: reviewerConfig?.addons?.reviewerConciseMode ?? false,
+            reviewerCompactPlanUpdateEnabled: reviewerConfig?.addons?.reviewerCompactPlanUpdate ?? false,
             leadChallengeEnabled: leadConfig?.addons?.leadChallenge ?? config.get<boolean>('leadCoder.inlineChallenge', false),
             aggressivePairProgramming: plannerConfig?.addons?.aggressivePairProgramming ?? config.get<boolean>('aggressivePairProgramming.enabled', false),
             dependencyCheckEnabled: plannerConfig?.addons?.dependencyCheck ?? config.get<boolean>('planner.dependencyCheckEnabled', false),
@@ -2724,7 +2730,7 @@ export class KanbanProvider implements vscode.Disposable {
                 planner: plannerConfig?.addons?.cavemanOutput ?? false,
                 lead: leadConfig?.addons?.cavemanOutput ?? true,
                 coder: coderConfig?.addons?.cavemanOutput ?? true,
-                reviewer: reviewerConfig?.addons?.cavemanOutput ?? false,
+                reviewer: reviewerConfig?.addons?.cavemanOutput ?? true,
                 tester: testerConfig?.addons?.cavemanOutput ?? false,
                 intern: internConfig?.addons?.cavemanOutput ?? true,
                 analyst: analystConfig?.addons?.cavemanOutput ?? false,

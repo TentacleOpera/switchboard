@@ -85,6 +85,10 @@ export interface PromptBuilderOptions {
     aggressivePairProgramming?: boolean;
     /** Whether advanced regression analysis block is appended (reviewer role). */
     advancedReviewerEnabled?: boolean;
+    /** When true, replaces theatrical reviewer voice with terse bullet-point findings. */
+    reviewerConciseModeEnabled?: boolean;
+    /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
+    reviewerCompactPlanUpdateEnabled?: boolean;
     /** Whether dependency check instructions are injected (planner role). */
     dependencyCheckEnabled?: boolean;
     /** Path to the workflow file for the planner role. Defaults to .agent/workflows/improve-plan.md */
@@ -360,6 +364,8 @@ export function buildKanbanBatchPrompt(
     const pairProgrammingEnabled = options?.pairProgrammingEnabled ?? false;
     const aggressivePairProgramming = options?.aggressivePairProgramming ?? false;
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
+    const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
+    const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
     const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? false;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
@@ -521,9 +527,33 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? `${batchExecutionRules}`
             : '';
 
-        let baseInstructions = resolveBaseInstructions('reviewer', DEFAULT_REVIEWER_BASE_INSTRUCTIONS, options);
+        let reviewerBaseInstructions = DEFAULT_REVIEWER_BASE_INSTRUCTIONS;
+        if (reviewerConciseModeEnabled) {
+            reviewerBaseInstructions = reviewerBaseInstructions
+                .replace('in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical)', 'terse bullet-point findings, severity-tagged (CRITICAL/MAJOR/NIT). One line per issue. No preamble or concluding flourish');
+        }
+        if (reviewerCompactPlanUpdateEnabled) {
+            reviewerBaseInstructions = reviewerBaseInstructions
+                .replace(
+                    /Update the original plan file with fixed items, files changed, validation results, and remaining risks\. Do NOT truncate, summarize, or delete existing implementation steps\./,
+                    'Update the original plan file by appending a brief summary (≤ 5 sentences) under `## Review Findings` — list files changed, validation results, and remaining risks. Do NOT reproduce the full implementation steps or copy large blocks of the original plan.'
+                );
+        } else if (reviewerConciseModeEnabled) {
+            reviewerBaseInstructions = reviewerBaseInstructions
+                .replace('Do NOT truncate, summarize, or delete existing implementation steps.', 'You may keep both review stages internally but compress the final output: Stage 2 should be a single tight paragraph, not a lengthy essay.');
+        }
+
+        if (reviewerConciseModeEnabled) {
+            reviewerBaseInstructions += '\n\nOVERRIDE: When Concise Review Mode is active, the persona rule "Explain why something is a problem" is suspended for this session. Use terse severity-tagged bullets instead of explanatory prose.';
+        }
+
+        let baseInstructions = resolveBaseInstructions('reviewer', reviewerBaseInstructions, options);
         if (cavemanOutputEnabled) {
-            baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+            if (reviewerConciseModeEnabled) {
+                baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to code-fix and verification steps only; review stages use Concise Mode.';
+            } else {
+                baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+            }
         }
 
         // Inject worktree path instructions for reviewer

@@ -241,6 +241,12 @@ export class PlanningPanelProvider {
         // freshly revealed/created panel).
         this._lastLocalDocsSignature = '';
         this._lastPreviewContentByPath.clear();
+        // CRITICAL: reset the webview-roots dedup guard so the first _updateWebviewRoots()
+        // on a freshly created panel ALWAYS reassigns webview.options. If a prior panel was
+        // disposed with the same workspace-roots signature still cached, the guard would
+        // skip the assignment on the new panel — leaving enableScripts unset, blocking all
+        // scripts, and freezing the panel on an infinite "Loading…" (stuck on Local Docs).
+        this._lastWebviewRootsSignature = '';
         if (this._panel) {
             this._panel.reveal(vscode.ViewColumn.One);
             return;
@@ -251,6 +257,10 @@ export class PlanningPanelProvider {
             'ARTIFACTS',
             vscode.ViewColumn.One,
             {
+                // enableScripts MUST be set at creation time, not left to depend solely on
+                // _updateWebviewRoots() — otherwise a stale dedup guard can leave a new panel
+                // with scripts disabled (see _lastWebviewRootsSignature reset above).
+                enableScripts: true,
                 retainContextWhenHidden: true
             }
         );
@@ -2153,7 +2163,7 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupProjectLoaded',
                         status: 'loaded',
-                        tasks: tasks.map(t => this._mapClickUpTaskToSidebar(t)),
+                        tasks: tasks.map((t: any) => this._mapClickUpTaskToSidebar(t)),
                         listName: config.selectedListName || 'Unknown List',
                         loadSeq
                     });
@@ -2193,9 +2203,9 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'clickupTaskDetailsLoaded',
                         task: this._mapClickUpTaskToSidebar(details.task),
-                        subtasks: details.subtasks.map(s => this._mapClickUpTaskToSidebar(s)),
-                        comments: details.comments.map(c => this._mapClickUpComment(c)),
-                        attachments: details.attachments.map(a => this._mapClickUpAttachment(a)),
+                        subtasks: details.subtasks.map((s: any) => this._mapClickUpTaskToSidebar(s)),
+                        comments: details.comments.map((c: any) => this._mapClickUpComment(c)),
+                        attachments: details.attachments.map((a: any) => this._mapClickUpAttachment(a)),
                         renderedDescriptionHtml
                     });
                 } catch (error) {
@@ -4475,6 +4485,10 @@ export class PlanningPanelProvider {
             this._panel.dispose();
             this._panel = undefined;
         }
+        // Reset the webview-roots dedup guard so a subsequent open() on a brand-new panel
+        // reassigns webview.options (incl. enableScripts) instead of short-circuiting on a
+        // stale signature left over from the disposed panel.
+        this._lastWebviewRootsSignature = '';
     }
 
     private async _getKanbanPlans(workspaceRoot: string): Promise<KanbanPlanSummary[]> {

@@ -12,6 +12,8 @@ export interface CustomAgentAddons {
     pairProgrammingEnabled?: boolean;
     aggressivePairProgramming?: boolean;
     advancedReviewerEnabled?: boolean;
+    reviewerConciseModeEnabled?: boolean;
+    reviewerCompactPlanUpdateEnabled?: boolean;
     dependencyCheckEnabled?: boolean;
     researchEnabled?: boolean; // NEW: enable deep research mode
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
@@ -157,6 +159,8 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.pairProgrammingEnabled === true) a.pairProgrammingEnabled = true;
     if (s.aggressivePairProgramming === true) a.aggressivePairProgramming = true;
     if (s.advancedReviewerEnabled === true) a.advancedReviewerEnabled = true;
+    if (s.reviewerConciseModeEnabled === true) a.reviewerConciseModeEnabled = true;
+    if (s.reviewerCompactPlanUpdateEnabled === true) a.reviewerCompactPlanUpdateEnabled = true;
     if (s.dependencyCheckEnabled === true) a.dependencyCheckEnabled = true;
     if (s.researchEnabled === true) a.researchEnabled = true;
     if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;

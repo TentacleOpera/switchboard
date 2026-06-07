@@ -2330,12 +2330,6 @@
             <button class="strip-icon-btn" id="btn-chat-copy-prompt" data-tooltip="Copy chat prompt. If plans are selected, copies a multi-plan prompt and clears selection. Otherwise starts a general chat consultation.">
                 <img src="{{ICON_41}}" alt="Chat Copy Prompt">
             </button>
-            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
-                <img src="{{ICON_CLI}}" alt="CLI Triggers">
-            </button>
-            <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
-                <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
-            </button>
             <button class="strip-icon-btn" id="btn-autoban" data-tooltip="Start or stop the automation engine">
                 <img src="{{ICON_22}}" alt="Start Automation">
             </button>
@@ -2344,6 +2338,12 @@
             <div style="flex: 1;"></div>
 
             <!-- Right Side: Automation and view controls -->
+            <button class="strip-icon-btn" id="btn-cli-triggers" data-tooltip="Toggle CLI triggers on/off">
+                <img src="{{ICON_CLI}}" alt="CLI Triggers">
+            </button>
+            <button class="strip-icon-btn is-off" id="btn-collapse-coders" data-tooltip="Toggle collapsed coder columns view">
+                <img src="{{ICON_COLLAPSE_CODERS}}" alt="Collapse Coders">
+            </button>
             <select id="pairProgrammingModeSelect" class="kanban-mode-dropdown" data-tooltip="Pair Programming mode: controls how Lead and Coder prompts are dispatched">
                 <option value="off">Pair Programming: Off</option>
                 <option value="cli-cli">CLI Lead + CLI Coder</option>
