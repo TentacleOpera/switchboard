@@ -226,3 +226,42 @@ Key risks: (1) Direct DB call for column change would bypass worktree/integratio
 **Remaining Risks:**
 - None identified - implementation follows plan exactly with proper architectural decisions (using KanbanProvider method instead of direct DB call)
 
+---
+
+## Reviewer Pass (In-Place)
+
+**Reviewer:** Grumpy Principal Engineer
+**Date:** 2026-06-07
+
+### Stage 1: Adversarial Findings
+
+| # | Severity | Finding | Location |
+|---|----------|---------|----------|
+| 1 | NIT | `.kanban-plan-copy-prompt` CSS missing `margin-left: auto` and `font-family: var(--font-family)` — when Copy Link is absent (plan has sessionId but no planFile), Copy Prompt stays left-aligned instead of right-aligned, creating layout inconsistency vs Copy Link | `planning.html:2087-2097` |
+| 2 | NIT | `kanbanPlanColumnChanged` response lacks `planFile` field for traceability (frontend doesn't use it, so no functional impact) | `PlanningPanelProvider.ts:1771` |
+
+**No CRITICAL or MAJOR findings.** Both key architectural decisions from the plan are correctly implemented:
+1. `moveKanbanPlanColumn` delegates to `switchboard.moveKanbanCardByPlanFile` → `KanbanProvider.moveCardToColumnByPlanFile` (not direct DB call) ✅
+2. `copyKanbanPlanPrompt` posts its own `kanbanPlanPromptCopied` to `this._panel.webview` (not relying on `_handleCopyPlanLink`'s internal postMessage to `this._view`) ✅
+
+### Stage 2: Balanced Synthesis
+
+- **Keep**: All backend handler logic, command registration, frontend event wiring, message handlers — architecturally sound and consistent with existing patterns.
+- **Fix now**: Finding #1 — CSS `margin-left: auto` and `font-family` gap on `.kanban-plan-copy-prompt`. One-line fix preventing visible layout inconsistency.
+- **Defer**: Finding #2 — `planFile` in `kanbanPlanColumnChanged` response. No functional impact.
+
+### Fixes Applied
+
+1. **`src/webview/planning.html:2087-2099`** — Added `font-family: var(--font-family)` and `margin-left: auto` to `.kanban-plan-copy-prompt` CSS rule, matching `.kanban-plan-copy-link` at line 2069-2081. This ensures Copy Prompt is right-aligned when Copy Link is absent.
+
+### Validation
+
+- Skip compilation per instructions
+- Skip automated tests per instructions
+- Manual verification still required per original plan (open Planning Panel → Kanban Plans tab, test Copy Prompt and column dropdown)
+
+### Updated Remaining Risks
+
+- **Low**: When both Copy Link and Copy Prompt are present, both have `margin-left: auto`. In a flex row, the first auto-margined element (Copy Link) consumes available space, pushing both buttons right. Copy Prompt's auto margin has no visible effect in this case. No layout regression expected.
+- **Low**: `kanbanPlanColumnChanged` response doesn't include `planFile` — could be added later if frontend needs it for targeted DOM updates instead of full re-fetch.
+
