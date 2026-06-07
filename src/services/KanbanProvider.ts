@@ -2490,8 +2490,6 @@ export class KanbanProvider implements vscode.Disposable {
             gitProhibitionEnabled: promptsConfig.gitProhibitionByRole?.[role] ?? true,
             workflowFilePathEnabled: promptsConfig.workflowFilePathEnabledByRole?.[role] ?? false,
             workflowFilePath: promptsConfig.workflowFilePathByRole?.[role] || '',
-            reviewerConciseModeEnabled: promptsConfig.reviewerConciseModeEnabled ?? false,
-            reviewerCompactPlanUpdateEnabled: promptsConfig.reviewerCompactPlanUpdateEnabled ?? false,
             defaultPromptOverrides,
             workspaceRoot,
             routingMapConfig: this._routingMapConfig,

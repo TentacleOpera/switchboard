@@ -253,4 +253,46 @@ This replaces the typical multi-paragraph plan-file rewrite with a tight summary
 
 ---
 
+## Review Findings
+
+**Reviewer:** In-place review pass (2026-06-07)
+
+### Stage 1 Findings (Grumpy)
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 5 | NIT | `else if` structure for Concise/Compact interaction is confusing but functionally correct |
+| 6 | NIT | Caveman↔Concise interaction deviates from plan (injects CAVEMAN_OUTPUT_DIRECTIVE + scoping note instead of omitting it) — implementation is arguably better |
+| 13 | NIT | Missing coupling warning comment for string replacements coupled to DEFAULT_REVIEWER_BASE_INSTRUCTIONS |
+| 14 | MAJOR | Reviewer-specific options (`reviewerConciseModeEnabled`, `reviewerCompactPlanUpdateEnabled`) set unconditionally in `resolvedOptions` (KanbanProvider.ts:2493-2494), violating the pattern used by `advancedReviewerEnabled` which is only set inside the reviewer block |
+| 16 | MAJOR | Concise Mode `.replace()` target too narrow — only replaces "in a dramatic..." phrase, leaving "adversarial findings, severity-tagged (CRITICAL/MAJOR/NIT)," prefix intact, producing redundant severity tags in output |
+| 17 | MAJOR | Design flaw: Concise Mode strips the Grumpy Principal Engineer voice entirely, but the theatrical voice is high-value (fun, distinctive) and low-token-cost. The real waste is output structure (essays, reproduced plan sections), not voice tone. Voice and verbosity are orthogonal — a Grumpy one-liner is both theatrical AND concise |
+
+### Stage 2 Synthesis
+
+- Finding 5 (NIT): Keep as-is. Correct behavior, comment not worth churn.
+- Finding 6 (NIT): Keep as-is. Implementation is stronger than plan's suggestion.
+- Finding 13 (NIT): **Fixed.** Added coupling warning comment above the string replacements.
+- Finding 14 (MAJOR): **Fixed.** Removed unconditional assignments at KanbanProvider.ts:2493-2494. Reviewer block at lines 2518-2520 already sets these correctly.
+- Finding 16 (MAJOR): **Fixed.** Reverted to narrower replacement target (just the voice clause ending) since Finding 17 changed the design intent — we now keep the Grumpy voice, so the "adversarial findings, severity-tagged" prefix naturally stays.
+- Finding 17 (MAJOR): **Fixed.** Redesigned Concise Mode to preserve the Grumpy Principal Engineer voice while adding compression constraints. Changes: (1) replacement now keeps "in a dramatic 'Grumpy Principal Engineer' voice" and appends "— but keep each finding to one terse bullet. No preamble or concluding flourish"; (2) persona override changed from "suspend Explain Why" to "one-sentence reason per finding. Theatrical tone welcome; verbosity is not"; (3) tooltip updated from "Replace theatrical voice" to "Keep theatrical voice but compress findings to terse bullets".
+
+### Files Changed
+
+1. `src/services/agentPromptBuilder.ts` — Concise Mode now preserves Grumpy voice + adds compression constraint (line ~536); persona override changed from "suspend Explain Why" to "one-sentence Why, theatrical tone welcome" (line ~550); added coupling warning comment (lines 530-532)
+2. `src/services/KanbanProvider.ts` — Removed unconditional `reviewerConciseModeEnabled` and `reviewerCompactPlanUpdateEnabled` from `resolvedOptions` (was lines 2493-2494)
+3. `src/webview/sharedDefaults.js` — Updated Concise Review Mode tooltip from "Replace theatrical voice with terse bullet-point findings" to "Keep theatrical voice but compress findings to terse bullets" (line 120)
+
+### Validation Results
+
+- TypeScript check: 2 pre-existing errors (unrelated import extension issues in `ClickUpSyncService.ts` and `KanbanProvider.ts`). No new errors from review fixes.
+- No automated tests run (per SKIP TESTS directive).
+
+### Remaining Risks
+
+1. **Silent replacement failure:** If `DEFAULT_REVIEWER_BASE_INSTRUCTIONS` text changes, the `.replace()` calls will silently no-op. The coupling warning comment mitigates this but doesn't prevent it. A future improvement could use assertion checks or template literals with named slots.
+2. **Caveman↔Concise scoping:** The scoping note ("Caveman style applies to code-fix and verification steps only; review stages use Concise Mode") relies on the LLM correctly partitioning its output by stage. If the LLM ignores the scoping note, output may be inconsistent. No programmatic enforcement exists.
+
+---
+
 **Recommendation:** Complexity 5 → Send to Coder

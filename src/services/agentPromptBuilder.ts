@@ -516,6 +516,7 @@ export function buildKanbanBatchPrompt(
 4. Apply code fixes for valid CRITICAL/MAJOR findings.
 5. Run verification checks (typecheck/tests as applicable) and include results, unless specified otherwise in this prompt.
 6. Update the original plan file with fixed items, files changed, validation results, and remaining risks. Do NOT truncate, summarize, or delete existing implementation steps.
+7. End with a brief structured summary: list findings by severity with file:line references, fixes applied, and remaining risks. No prose re-encapsulation of what Stage 2 already covered.
 
 CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced synthesis, the code fixes, and the plan update all in one continuous response.`;
 
@@ -527,10 +528,13 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             ? `${batchExecutionRules}`
             : '';
 
+        // WARNING: The string replacements below are coupled to the exact text of
+        // DEFAULT_REVIEWER_BASE_INSTRUCTIONS. If that text changes, these replacements
+        // will silently fail. Update them in tandem.
         let reviewerBaseInstructions = DEFAULT_REVIEWER_BASE_INSTRUCTIONS;
         if (reviewerConciseModeEnabled) {
             reviewerBaseInstructions = reviewerBaseInstructions
-                .replace('in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical)', 'terse bullet-point findings, severity-tagged (CRITICAL/MAJOR/NIT). One line per issue. No preamble or concluding flourish');
+                .replace('in a dramatic "Grumpy Principal Engineer" voice (incisive, specific, theatrical)', 'in a dramatic "Grumpy Principal Engineer" voice — brief theatrical intro welcome, then keep each finding to one terse bullet');
         }
         if (reviewerCompactPlanUpdateEnabled) {
             reviewerBaseInstructions = reviewerBaseInstructions
@@ -544,7 +548,7 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
         }
 
         if (reviewerConciseModeEnabled) {
-            reviewerBaseInstructions += '\n\nOVERRIDE: When Concise Review Mode is active, the persona rule "Explain why something is a problem" is suspended for this session. Use terse severity-tagged bullets instead of explanatory prose.';
+            reviewerBaseInstructions += '\n\nOVERRIDE: When Concise Review Mode is active, the persona rule "Explain why something is a problem" is modified: give a one-sentence reason per finding instead of explanatory prose. Theatrical tone is welcome; verbosity is not.';
         }
 
         let baseInstructions = resolveBaseInstructions('reviewer', reviewerBaseInstructions, options);

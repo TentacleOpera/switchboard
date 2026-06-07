@@ -117,7 +117,7 @@ const ROLE_ADDONS = {
     reviewer: [
         { id: 'switchboardSafeguards', label: 'Switchboard Safeguards', tooltip: 'Include batch execution rules and focus directive', default: true },
         { id: 'advancedRegression', label: 'Advanced Regression Analysis', tooltip: 'Trace all callers of modified functions', default: false },
-        { id: 'reviewerConciseMode', label: 'Concise Review Mode', tooltip: 'Replace theatrical voice with terse bullet-point findings; allow the agent to summarise trivial fixes', default: false },
+        { id: 'reviewerConciseMode', label: 'Concise Review Mode', tooltip: 'Keep theatrical intros but compress findings to terse bullets; allow the agent to summarise trivial fixes', default: false },
         { id: 'reviewerCompactPlanUpdate', label: 'Compact Plan Update', tooltip: 'Append a brief summary to the plan file instead of reproducing full sections', default: false },
         { id: 'gitProhibition', label: 'Git Prohibition', tooltip: 'Include git prohibition directive', default: true },
         { id: 'clearAntigravityContext', label: 'Clear Antigravity Context', tooltip: 'Instruct agent to ignore previous checkpoint summaries from prior sessions', default: false },
