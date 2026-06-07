@@ -119,4 +119,38 @@ Key risks: None. This is a trivial string replacement in UI metadata. The only r
 
 ---
 
+## Review Findings
+
+**Reviewer:** In-place review pass (2026-06-07)
+
+### Stage 1 Findings (Grumpy)
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | PASS | Old tooltip string `'Compress responses to reduce tokens by 65-75% while maintaining accuracy'` — zero occurrences remain in `sharedDefaults.js` |
+| 2 | PASS | New tooltip string `'Compress responses to reduce output tokens'` — 11 occurrences in `sharedDefaults.js`, matching plan's expected count |
+| 3 | PASS | `kanban.html` — zero occurrences of old tooltip. Defensive check passes |
+| 4 | NIT | Plan dependency note says "should be applied before reviewer-verbosity-controls plan" — resolved in practice; reviewer's `cavemanOutput` entry already uses corrected tooltip |
+
+### Stage 2 Synthesis
+
+No code fixes needed. All findings are PASS or NIT.
+
+### Files Changed
+
+None.
+
+### Validation Results
+
+- `grep -r "65-75% while maintaining accuracy" src/` → zero matches (verified)
+- `grep -c "Compress responses to reduce output tokens" src/webview/sharedDefaults.js` → 11 matches (verified)
+- No typecheck needed (pure string change in JS metadata, no TS type implications).
+- No automated tests run (per SKIP TESTS directive).
+
+### Remaining Risks
+
+- `dist/` artifact still contains old tooltip until next build. This is expected and documented in the plan's existing Risks section.
+
+---
+
 **Recommendation:** Complexity 2 → Send to Intern

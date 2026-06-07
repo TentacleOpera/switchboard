@@ -133,4 +133,37 @@ Key risks: None. This is a trivial HTML reorder within a flex container. All but
 
 ---
 
+## Review Findings
+
+**Reviewer:** In-place review pass (2026-06-07)
+
+### Stage 1 Findings (Grumpy)
+
+| # | Severity | Finding |
+|---|----------|---------|
+| 1 | PASS | Button reorder matches plan exactly: `btn-autoban` → spacer → `btn-cli-triggers` → `btn-collapse-coders` → `pairProgrammingModeSelect` |
+| 2 | PASS | `is-off` class preserved on `btn-collapse-coders` (line 2344) |
+| 3 | PASS | No IDs, classes, tooltips, or event handlers changed. All JS references use `getElementById` |
+| 4 | NIT | "Right Side: Automation and view controls" comment slightly misleading — `btn-autoban` is also automation but sits left of spacer |
+| 5 | NIT | Plan line numbers reference pre-implementation state — stale but not a code issue |
+
+### Stage 2 Synthesis
+
+No code fixes needed. All NITs are cosmetic/structural and not worth the churn.
+
+### Files Changed
+
+None.
+
+### Validation Results
+
+- No typecheck needed (pure HTML change, no TS files touched).
+- No automated tests run (per SKIP TESTS directive).
+
+### Remaining Risks
+
+None beyond the negligible risk already documented in the plan.
+
+---
+
 **Recommendation:** Complexity 2 → Send to Intern
