@@ -3301,26 +3301,6 @@ export class PlanningPanelProvider {
             try {
                 const docContent = await fs.promises.readFile(resolvedPath, 'utf8');
 
-                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
-                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
-                if (docContent === lastContent) {
-                    // Cache hit — notify frontend for user-initiated requests only
-                    if (requestId >= 0) {
-                        this._panel?.webview.postMessage({
-                            type: 'previewReady',
-                            sourceId,
-                            requestId,
-                            webviewUri,
-                            content: docContent,
-                            docName: path.basename(resolvedPath),
-                            isAutoRefreshed: false,
-                            filePath: resolvedPath
-                        });
-                    }
-                    return;
-                }
-                this._lastPreviewContentByPath.set(cacheKey, docContent);
-
                 // Map extension to a preview category
                 // Unmapped extensions default to 'text'
                 const fileTypeMap: Record<string, string> = {
@@ -3343,6 +3323,28 @@ export class PlanningPanelProvider {
                         // Will be handled as error on frontend — send raw content only
                     }
                 }
+
+                const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
+                const lastContent = this._lastPreviewContentByPath.get(cacheKey);
+                if (docContent === lastContent) {
+                    // Cache hit — notify frontend for user-initiated requests only
+                    if (requestId >= 0) {
+                        this._panel?.webview.postMessage({
+                            type: 'previewReady',
+                            sourceId,
+                            requestId,
+                            webviewUri,
+                            content: docContent,
+                            docName: path.basename(resolvedPath),
+                            fileType,
+                            parsedJson,
+                            isAutoRefreshed: false,
+                            filePath: resolvedPath
+                        });
+                    }
+                    return;
+                }
+                this._lastPreviewContentByPath.set(cacheKey, docContent);
 
                 this._panel?.webview.postMessage({
                     type: 'previewReady',

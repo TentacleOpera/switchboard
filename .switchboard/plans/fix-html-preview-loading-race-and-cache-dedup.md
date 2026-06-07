@@ -334,3 +334,48 @@ Manual verification required per plan:
 - Auto-refresh dedup preserved via `requestId >= 0` guard
 - Source-type-specific handling applied (html-folder omits content, design/local-folder include content)
 - Cache reset applies to both creation and reveal paths in `open()`
+
+---
+
+## Reviewer Pass
+
+**Date:** 2025-06-07
+
+### Stage 1: Adversarial Findings
+
+| # | Finding | Severity | Status |
+|---|---------|----------|--------|
+| 1 | `open()` cache clear — correctly placed before reveal early-return | ✅ PASS | Keep |
+| 2 | html-folder cache-hit response — `requestId >= 0` guard, no `htmlContent`, correct | ✅ PASS | Keep |
+| 3 | html-folder frontend cache-hit branch — `iframe.srcdoc` check safe (loading transition does NOT clear srcdoc, confirmed at line 1003) | ✅ PASS | Keep |
+| 4 | **design-folder cache-hit response MISSING `fileType` and `parsedJson`** — frontend routes on `msg.fileType`; without it, JSON/YAML/CSS/XML files fall into default markdown branch on cache hit | 🔴 CRITICAL | **Fixed** |
+| 5 | local-folder cache-hit response — no `fileType` needed (frontend renders as markdown) | ✅ PASS | Keep |
+| 6 | `dispose()` doesn't clear `_lastPreviewContentByPath` — harmless since `open()` clears on both paths | NIT | Defer |
+
+### Stage 2: Balanced Synthesis
+
+- **Finding #4** is the only material issue. The `fileType` and `parsedJson` computation was placed *after* the cache check, so the cache-hit response couldn't include them. Fix: move `fileType`/`parsedJson` computation before the cache check and include both fields in the cache-hit `previewReady` message.
+- All other findings are correct as implemented. No other code changes needed.
+
+### Code Fix Applied
+
+**File:** `src/services/PlanningPanelProvider.ts` — design-folder section (lines ~3301-3347)
+
+- Moved `fileTypeMap`, `fileType`, and `parsedJson` computation **before** the cache dedup check
+- Added `fileType` and `parsedJson` to the cache-hit `previewReady` message for `design-folder`
+- The normal (non-cache-hit) response is unchanged — it already included these fields
+
+### Validation
+
+- **srcdoc clearing risk** (from plan's Remaining Risks): ✅ CONFIRMED SAFE — the user click handler at `planning.js:1003` only sets `previewFrame.style.display = 'none'`, does NOT clear `srcdoc`. Cache-hit reveal path works correctly.
+- **requestId convention** (from plan's Remaining Risks): ✅ All user-initiated requests use incrementing positive IDs (`state.previewRequestId++`), auto-refreshes use `-1`. Guard is correct.
+- **TypeScript compilation**: Skipped per session instructions (project assumed pre-compiled).
+- **Automated tests**: Skipped per session instructions (test suite run separately).
+
+### Files Changed by Review
+
+- `src/services/PlanningPanelProvider.ts` — moved `fileType`/`parsedJson` computation before cache check; added both fields to design-folder cache-hit response
+
+### Remaining Risks
+
+- None beyond the original plan's risks, which have been validated as safe (see Validation above).
