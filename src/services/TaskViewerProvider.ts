@@ -17404,10 +17404,10 @@ What would you like to find?`;
 
         try {
             // 1. Scaffold airlock directory
-            const baseAirlockDir = path.join(workspaceRoot, '.switchboard', 'airlock');
+            const baseAirlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
             await fs.promises.mkdir(baseAirlockDir, { recursive: true });
 
-            // 2. Run the bundler (writes timestamped bundle to .switchboard/airlock/)
+            // 2. Run the bundler (writes timestamped bundle to .switchboard/NotebookLM/)
             const { outputDir: airlockDir, timestamp } = await bundleWorkspaceContext(workspaceRoot);
 
             // 3. Write timestamped how_to_plan.md
@@ -17443,7 +17443,6 @@ What would you like to find?`;
             }
 
             this._view?.webview.postMessage({ type: 'airlock_exportComplete' });
-            this._showTemporaryNotification('Airlock: Bundle exported → .switchboard/airlock/');
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_exportError', message: msg });
@@ -17495,7 +17494,7 @@ What would you like to find?`;
 
         try {
             // Save the patch as a markdown file
-            const airlockDir = path.join(workspaceRoot, '.switchboard', 'airlock');
+            const airlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
             fs.mkdirSync(airlockDir, { recursive: true });
 
             const stamp = new Date().toISOString().replace(/[:.]/g, '-').replace('T', '_').substring(0, 19);
@@ -17519,7 +17518,6 @@ What would you like to find?`;
             }, 'airlock');
 
             this._view?.webview.postMessage({ type: 'airlock_coderSent' });
-            this._showTemporaryNotification(`Airlock: Patch dispatched to ${targetAgent}`);
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_coderError', message: msg });
@@ -17531,7 +17529,6 @@ What would you like to find?`;
         try {
             await this._performGitSync();
             this._view?.webview.postMessage({ type: 'airlock_syncComplete' });
-            this._showTemporaryNotification('Airlock: Repository synced to cloud successfully.');
         } catch (err: any) {
             const msg = err?.message || String(err);
             this._view?.webview.postMessage({ type: 'airlock_syncError', message: msg });
@@ -17589,12 +17586,12 @@ What would you like to find?`;
     private async _handleAirlockOpenFolder(): Promise<void> {
         const workspaceRoot = this._resolveWorkspaceRoot();
         if (!workspaceRoot) {
-            vscode.window.showWarningMessage('Airlock: No workspace open.');
+            vscode.window.showWarningMessage('NotebookLM: No workspace open.');
             return;
         }
-        const airlockDir = path.join(workspaceRoot, '.switchboard', 'airlock');
+        const airlockDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
         if (!fs.existsSync(airlockDir)) {
-            vscode.window.showWarningMessage('Airlock: Folder does not exist yet. Click BUNDLE CODE first.');
+            vscode.window.showWarningMessage('NotebookLM: Folder does not exist yet. Click BUNDLE CODE first.');
             return;
         }
         // Target a file inside the folder so the OS explorer focuses INSIDE the directory

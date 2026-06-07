@@ -4703,8 +4703,13 @@ DEPTH: Deep (50-100+ sources)`;
         // Back buttons
         backToParentButton?.addEventListener('click', () => {
             const parentId = backToParentButton.dataset.parentId;
+            const provider = backToParentButton.dataset.parentProvider;
             if (parentId) {
-                loadLinearTaskDetails(parentId);
+                if (provider === 'clickup') {
+                    loadClickUpTaskDetails(parentId);
+                } else {
+                    loadLinearTaskDetails(parentId);
+                }
             }
         });
 
@@ -4949,6 +4954,7 @@ DEPTH: Deep (50-100+ sources)`;
             if (backToParentButton) {
                 backToParentButton.style.display = 'none';
                 delete backToParentButton.dataset.parentId;
+                delete backToParentButton.dataset.parentProvider;
             }
             return;
         }
@@ -4963,9 +4969,11 @@ DEPTH: Deep (50-100+ sources)`;
             if (parentId) {
                 backToParentButton.style.display = '';
                 backToParentButton.dataset.parentId = parentId;
+                backToParentButton.dataset.parentProvider = 'linear';
             } else {
                 backToParentButton.style.display = 'none';
                 delete backToParentButton.dataset.parentId;
+                delete backToParentButton.dataset.parentProvider;
             }
         }
 
@@ -5353,7 +5361,7 @@ DEPTH: Deep (50-100+ sources)`;
     function renderTicketsClickUpTaskDetail() {
         if (!isTicketsTabActive()) return;
 
-        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton } = getTicketsTabElements();
+        const { detailTitle, detailStatus, detailAssignee, detailDescription, detailSubtasks, detailComments, detailAttachments, detailImportButton, detailRefineButton, detailAskAgentButton, backToParentButton } = getTicketsTabElements();
         if (!detailTitle || !detailStatus || !detailAssignee || !detailDescription) return;
 
         if (!selectedClickUpIssue) {
@@ -5379,6 +5387,11 @@ DEPTH: Deep (50-100+ sources)`;
             }
             if (detailAskAgentButton) {
                 detailAskAgentButton.disabled = true;
+            }
+            if (backToParentButton) {
+                backToParentButton.style.display = 'none';
+                delete backToParentButton.dataset.parentId;
+                delete backToParentButton.dataset.parentProvider;
             }
             return;
         }
@@ -5462,6 +5475,18 @@ DEPTH: Deep (50-100+ sources)`;
         }
         if (detailAskAgentButton) {
             detailAskAgentButton.disabled = false;
+        }
+        if (backToParentButton) {
+            const parentId = task.parentId;
+            if (parentId) {
+                backToParentButton.style.display = '';
+                backToParentButton.dataset.parentId = parentId;
+                backToParentButton.dataset.parentProvider = 'clickup';
+            } else {
+                backToParentButton.style.display = 'none';
+                delete backToParentButton.dataset.parentId;
+                delete backToParentButton.dataset.parentProvider;
+            }
         }
     }
 

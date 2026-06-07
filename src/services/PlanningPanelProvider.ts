@@ -1427,7 +1427,7 @@ export class PlanningPanelProvider {
                 break;
             }
             case 'airlock_openFolder': {
-                const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'integration'));
+                const folderUri = vscode.Uri.file(path.join(workspaceRoot, '.switchboard', 'NotebookLM'));
                 await vscode.commands.executeCommand('revealFileInOS', folderUri);
                 break;
             }
@@ -4267,7 +4267,7 @@ export class PlanningPanelProvider {
 
     private async _handleAirlockExport(workspaceRoot: string): Promise<{ success: boolean; message: string }> {
         try {
-            const integrationDir = path.join(workspaceRoot, '.switchboard', 'integration');
+            const integrationDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
             if (!fs.existsSync(integrationDir)) {
                 fs.mkdirSync(integrationDir, { recursive: true });
             }

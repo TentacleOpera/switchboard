@@ -62,7 +62,7 @@ function isExcludedDir(relativePath: string): boolean {
 }
 
 export async function bundleWorkspaceContext(workspaceRoot: string): Promise<{ outputDir: string; timestamp: string }> {
-    const outputDir = path.join(workspaceRoot, '.switchboard', 'integration');
+    const outputDir = path.join(workspaceRoot, '.switchboard', 'NotebookLM');
 
     // 1. Purge old bundles to prevent disk bloat, but preserve the directory handle for OS Explorer
     if (fs.existsSync(outputDir)) {
@@ -76,7 +76,7 @@ export async function bundleWorkspaceContext(workspaceRoot: string): Promise<{ o
 
     const repoName = path.basename(workspaceRoot);
 
-    // 2. Git-first file listing; hard-exclude .switchboard/integration to prevent bundling previous output
+    // 2. Git-first file listing; hard-exclude .switchboard/NotebookLM to prevent bundling previous output
     let files: string[];
     try {
         const stdout = cp.execSync('git ls-files --cached --others --exclude-standard', {
@@ -88,7 +88,7 @@ export async function bundleWorkspaceContext(workspaceRoot: string): Promise<{ o
         files = stdout.split('\n').map(f => f.trim()).filter(Boolean);
         files = files.filter(f => {
             const normalized = f.replace(/\\/g, '/');
-            return !normalized.startsWith('.switchboard/integration/') && normalized !== '.switchboard/integration';
+            return !normalized.startsWith('.switchboard/NotebookLM/') && normalized !== '.switchboard/NotebookLM';
         });
     } catch {
         // Fallback: basic recursive scan with EXCLUDED_DIRS safeguard against node_modules traversal
