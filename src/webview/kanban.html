@@ -1827,7 +1827,7 @@
         }
 
 
-        /* Dependency Tree and UAT Styles */
+        /* UAT Styles */
         #uat-tab-content {
             overflow: hidden;
         }
@@ -4657,7 +4657,6 @@
                 const countEl = document.getElementById('count-' + col);
                 const items = buckets[col];
                 if (!container || !countEl) return;
-                // Only apply dependency sorting to planning columns
                 const sortedItems = [...items].sort((a, b) => {
                     const tsDiff = (b._ts || 0) - (a._ts || 0);
                     if (tsDiff !== 0) return tsDiff;
@@ -4820,13 +4819,6 @@
         function categoryToCssClass(category) {
             return category.toLowerCase().replace(' ', '-');
         }
-
-        // Resolve a card's declared dependency strings (sessionIds or topics) against
-        // the currently-loaded board. Used to drive the red "blocked by" tooltip.
-        // Mirrors the resolver logic in sortColumnByDependencies, but scoped to
-        // all currentCards (not just one column) so cross-column deps still display
-        // meaningful tooltips.
-
 
         function createCardHtml(card) {
             const timeAgo = formatTimeAgo(card.lastActivity);
@@ -8072,7 +8064,7 @@
             postKanbanMessage({ type: 'getSafetySession', workspaceRoot: currentWorkspaceRoot });
         }
 
-        // Add listeners for the dependencies tab buttons
+        // Initialize DOM event listeners
         window.addEventListener('DOMContentLoaded', () => {
             const statusMsgEl = document.getElementById('status-message');
             if (statusMsgEl) {

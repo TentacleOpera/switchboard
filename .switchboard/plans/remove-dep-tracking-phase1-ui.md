@@ -96,3 +96,7 @@ Key risks: (1) Card HTML generation has interleaved dependency badge code — re
 - CREATED and PLAN REVIEWED columns sort alphabetically (not topologically)
 
 **Recommendation: Send to Coder** (Complexity 4 — multi-site UI removal with one sort fallback replacement)
+
+## Review Findings
+
+All plan requirements verified implemented. Four stale comments referencing removed dependency-tracking functions were found and fixed: misleading sort comment (line 4660), orphan comment block above `createCardHtml` (lines 4824–4828), incorrect DOMContentLoaded comment (line 8075), and CSS section header referencing "Dependency Tree" (line 1830). Files changed: `src/webview/kanban.html`. No remaining references to removed functions/variables exist. Analyst role description at lines 2431/2821 still mentions "plan dependencies" — deferred as out of scope (feature description, not UI control). No functional risks remain.
