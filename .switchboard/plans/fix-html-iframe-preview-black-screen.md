@@ -186,3 +186,7 @@ None — root cause is confirmed and fix is minimal.
 ## Recommendation
 
 **Complexity: 3 → Send to Intern.** Two single-line insertions matching existing patterns. No architectural changes, no new logic branches, no test infrastructure needed.
+
+## Review Findings
+
+All four planned changes confirmed present in code. Two MAJOR issues found and fixed: `removeAttribute('srcdoc')` + immediate `srcdoc = newContent` in same sync block risks Chromium batching the remove+reassign as a no-op (plan's own adversarial synthesis flagged this). Replaced with `iframe.srcdoc = ''` at `planning.js:2273` and `planning.js:2604` — explicit empty-doc navigation is harder for Chromium to optimize away. Image/fallback paths (lines 2264, 2294) correctly retain `removeAttribute` since they don't re-set srcdoc. Race guards in `PlanningPanelProvider.ts` (lines 3299, 3315, 3350) verified correct. Remaining risk: `design-folder`/`local-folder` branches still lack post-async race guards (tracked as follow-up per plan scope).

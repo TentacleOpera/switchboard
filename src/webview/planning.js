@@ -2270,7 +2270,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (iframe) {
                     iframe.style.display = '';
                     iframe.removeAttribute('src');
-                    iframe.removeAttribute('srcdoc');
+                    iframe.srcdoc = '';  // Force iframe to about:blank before new content (prevents black screen on HTML-to-HTML transition)
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
                     console.log('[PlanningPanel] Setting srcdoc for HTML preview, length:', htmlWithBase.length, 'hasNonce:', /nonce="/.test(htmlWithBase));
                     iframe.srcdoc = htmlWithBase;
@@ -2601,7 +2601,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (iframe) {
                 iframe.style.display = '';
                 iframe.removeAttribute('src');  // Clear any src-based navigation
-                iframe.removeAttribute('srcdoc');
+                iframe.srcdoc = '';  // Force iframe to about:blank before error page (prevents black screen)
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
             return;
