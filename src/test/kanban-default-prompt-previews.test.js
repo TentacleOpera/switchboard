@@ -20,7 +20,6 @@ async function run() {
         // Mocked method settings
         promptsConfig: {
             plannerWorkflowPath: '.agent/workflows/improve-plan.md',
-            dependencyCheckEnabled: true,
             aggressivePairProgramming: true,
             advancedReviewerEnabled: true,
             leadChallengeEnabled: true,
@@ -98,7 +97,6 @@ async function run() {
                         localDocsPath: role === 'researcher' ? promptsConfig.localDocsPath : undefined,
                         // Planner-specific options (matching _generateBatchPlannerPrompt pattern)
                         plannerWorkflowPath: role === 'planner' ? promptsConfig.plannerWorkflowPath : undefined,
-                        dependencyCheckEnabled: role === 'planner' ? promptsConfig.dependencyCheckEnabled : undefined,
                         aggressivePairProgramming: role === 'planner' ? promptsConfig.aggressivePairProgramming : undefined,
                         skipCompilation: promptsConfig.skipCompilationByRole?.[role] ?? false,
                         skipTests: promptsConfig.skipTestsByRole?.[role] ?? false,
@@ -122,7 +120,6 @@ async function run() {
     // TEST 1: Default configuration
     // Verify default options are passed correctly
     KanbanProvider.promptsConfig.plannerWorkflowPath = '.agent/workflows/improve-plan.md';
-    KanbanProvider.promptsConfig.dependencyCheckEnabled = false;
     KanbanProvider.promptsConfig.aggressivePairProgramming = false;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = false;
     KanbanProvider.promptsConfig.leadChallengeEnabled = false;
@@ -133,7 +130,6 @@ async function run() {
     
     // Check planner workflow path defaults (should have the default workflow string)
     assert.ok(previews.planner.includes('Read .agent/workflows/improve-plan.md and follow it step-by-step'), 'Planner preview should include default workflow path instructions');
-    assert.ok(!previews.planner.includes('DEPENDENCY CHECK ENABLED'), 'Planner preview should not include dependency check when disabled');
     assert.ok(!previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should not include aggressive pair programming when disabled');
     assert.ok(!previews.reviewer.includes('ADVANCED REGRESSION ANALYSIS'), 'Reviewer preview should not include advanced regression block when disabled');
     assert.ok(!previews.lead.includes('adversarial review'), 'Lead preview should not include inline challenge when disabled');
@@ -143,7 +139,6 @@ async function run() {
 
     // TEST 2: Custom / Enabled options
     KanbanProvider.promptsConfig.plannerWorkflowPath = '.custom/workflows/my-planner.md';
-    KanbanProvider.promptsConfig.dependencyCheckEnabled = true;
     KanbanProvider.promptsConfig.aggressivePairProgramming = true;
     KanbanProvider.promptsConfig.advancedReviewerEnabled = true;
     KanbanProvider.promptsConfig.leadChallengeEnabled = true;
@@ -154,7 +149,6 @@ async function run() {
 
     // Check planner custom options are reflected
     assert.ok(previews.planner.includes('Read .custom/workflows/my-planner.md and follow it step-by-step'), 'Planner preview should reflect custom workflow path');
-    assert.ok(previews.planner.includes('DEPENDENCY CHECK ENABLED'), 'Planner preview should reflect enabled dependency check');
     assert.ok(previews.planner.includes('PAIR PROGRAMMING OPTIMISATION'), 'Planner preview should reflect enabled aggressive pair programming');
 
     // Check reviewer custom options are reflected

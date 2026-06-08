@@ -12,7 +12,6 @@ function testDefaultPromptIsMinimal() {
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
         aggressivePairProgramming: false,
-        dependencyCheckEnabled: false,
         gitProhibitionEnabled: false
     });
 
@@ -21,7 +20,6 @@ function testDefaultPromptIsMinimal() {
     assert.ok(!prompt.includes('Metadata section'), 'Prompt should not include hardcoded Metadata section instruction');
     assert.ok(!prompt.includes('Scoring guide'), 'Prompt should not include hardcoded Scoring guide');
     assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not include git prohibition when disabled');
-    assert.ok(!prompt.includes('DEPENDENCY CHECK'), 'Prompt should not include dependency check when disabled');
     console.log('  PASS: Default prompt is minimal');
 }
 
@@ -32,7 +30,6 @@ function testNoAddOnsByDefault() {
     });
 
     assert.ok(!prompt.includes('GIT POLICY'), 'Prompt should not include git prohibition by default');
-    assert.ok(!prompt.includes('DEPENDENCY CHECK'), 'Prompt should not include dependency check by default');
     assert.ok(!prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Prompt should not include aggressive pair programming by default');
     console.log('  PASS: No add-ons are included by default');
 }
@@ -41,12 +38,10 @@ function testAddOnsAreAppendedWhenEnabled() {
     console.log('Testing add-ons are appended when enabled...');
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
-        aggressivePairProgramming: true,
-        dependencyCheckEnabled: true
+        aggressivePairProgramming: true
     });
 
     assert.ok(prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Prompt should include aggressive pair programming directive');
-    assert.ok(prompt.includes('DEPENDENCY CHECK ENABLED'), 'Prompt should include dependency check directive');
     console.log('  PASS: Add-ons are appended when enabled');
 }
 

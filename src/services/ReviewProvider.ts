@@ -52,7 +52,6 @@ export type ReviewTicketData = {
     column: string;
     isCompleted: boolean;
     complexity: string;
-    dependencies: string[];
     planText: string;
     renderedHtml?: string;
     planMtimeMs: number;
@@ -62,11 +61,10 @@ export type ReviewTicketData = {
 };
 
 export type ReviewTicketUpdateRequest = {
-    type: 'setColumn' | 'setComplexity' | 'setDependencies' | 'setTopic' | 'savePlanText';
+    type: 'setColumn' | 'setComplexity' | 'setTopic' | 'savePlanText';
     sessionId?: string;
     column?: string;
     complexity?: string;
-    dependencies?: string[];
     topic?: string;
     content?: string;
     expectedMtimeMs?: number;
@@ -233,7 +231,6 @@ export class ReviewProvider implements vscode.Disposable {
             }
             case 'setColumn':
             case 'setComplexity':
-            case 'setDependencies':
             case 'setTopic':
             case 'savePlanText':
                 await this._applyTicketUpdate(msg as ReviewTicketUpdateRequest);
@@ -413,7 +410,6 @@ export class ReviewProvider implements vscode.Disposable {
             column: '',
             isCompleted: false,
             complexity: 'Unknown',
-            dependencies: [],
             planText,
             renderedHtml,
             planMtimeMs: stats.mtimeMs,

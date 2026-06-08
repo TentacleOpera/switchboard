@@ -118,6 +118,22 @@
         return String(value || '').replace(/"/g, '&quot;');
     }
 
+    function showTicketsStatus(text, isError) {
+        const toolbar = document.querySelector('.tickets-toolbar');
+        if (toolbar) {
+            let statusSpan = toolbar.querySelector('.tickets-action-status');
+            if (!statusSpan) {
+                statusSpan = document.createElement('span');
+                statusSpan.className = 'tickets-action-status';
+                statusSpan.style.cssText = 'font-size:11px; margin-left:8px;';
+                toolbar.appendChild(statusSpan);
+            }
+            statusSpan.style.color = isError ? 'var(--vscode-errorForeground, #ff6b6b)' : 'var(--vscode-editorInfo-foreground, #3794ff)';
+            statusSpan.textContent = text;
+            setTimeout(() => { statusSpan.textContent = ''; }, 2000);
+        }
+    }
+
     function getTicketsTabElements() {
         return {
             listView: document.getElementById('tree-pane-tickets'),
@@ -259,21 +275,12 @@
 
             // Check dirty flags
             if (state.dirtyFlags.local && tabName !== 'local') {
-                if (!confirm('You have unsaved changes in Local Docs. Discard them?')) {
-                    return;
-                }
                 exitEditMode('local', true);
             }
             if (state.dirtyFlags.kanban && tabName !== 'kanban') {
-                if (!confirm('You have unsaved changes in Kanban Plans. Discard them?')) {
-                    return;
-                }
                 exitEditMode('kanban', true);
             }
             if (state.dirtyFlags.design && tabName !== 'design') {
-                if (!confirm('You have unsaved changes in Design System. Discard them?')) {
-                    return;
-                }
                 exitEditMode('design', true);
             }
 
@@ -557,6 +564,76 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         return trimmed;
     }
 
+    function renderInlineMarkdown(text) {
+        if (!text) return '';
+        return text
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.+?)\*/g, '<em>$1</em>')
+            .replace(/`([^`]+)`/g, '<code>$1</code>')
+            .replace(/\[([^\]]+)\]\(([^)]+)\)/g, (_match, t, url) => {
+                const safeUrl = escapeAttr(sanitizeUrl(url));
+                return `<a href="${safeUrl}">${t}</a>`;
+            })
+            .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
+    }
+
+    function parseTableBlock(lines) {
+        if (lines.length < 2) return '';
+        // Find separator row index (typically 1, but we scan to be robust)
+        let sepIdx = -1;
+        const sepRegex = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+        for (let i = 0; i < lines.length; i++) {
+            if (sepRegex.test(lines[i])) {
+                sepIdx = i;
+                break;
+            }
+        }
+        if (sepIdx === -1) return '';
+
+        const splitRow = (row) => {
+            const trimmed = row.trim();
+            let rawCells = trimmed.split('|');
+            if (trimmed.startsWith('|')) rawCells.shift();
+            if (trimmed.endsWith('|') && rawCells.length > 0) rawCells.pop();
+            return rawCells.map(c => c.trim());
+        };
+
+        const headerCells = splitRow(lines[0]);
+        const sepCells = splitRow(lines[sepIdx]);
+        const alignments = sepCells.map(cell => {
+            const left = cell.startsWith(':');
+            const right = cell.endsWith(':');
+            if (left && right) return 'center';
+            if (right) return 'right';
+            if (left) return 'left';
+            return '';
+        });
+
+        let html = '<div class="table-wrapper"><table><thead><tr>';
+        for (let i = 0; i < headerCells.length; i++) {
+            const align = alignments[i] || '';
+            const style = align ? ` style="text-align: ${align}"` : '';
+            html += `<th${style}>${renderInlineMarkdown(headerCells[i])}</th>`;
+        }
+        html += '</tr></thead><tbody>';
+
+        for (let i = sepIdx + 1; i < lines.length; i++) {
+            const cells = splitRow(lines[i]);
+            // GFM spec: if line is entirely empty and starts/ends with no content, it might split weirdly or be skipped,
+            // but we process all accumulated lines.
+            html += '<tr>';
+            for (let j = 0; j < headerCells.length; j++) {
+                const align = alignments[j] || '';
+                const style = align ? ` style="text-align: ${align}"` : '';
+                const cellContent = j < cells.length ? cells[j] : '';
+                html += `<td${style}>${renderInlineMarkdown(cellContent)}</td>`;
+            }
+            html += '</tr>';
+        }
+        html += '</tbody></table></div>';
+        return html;
+    }
+
     // Simple markdown renderer with header deduplication
     function renderMarkdown(markdown) {
         if (!markdown) return '';
@@ -615,10 +692,55 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         if (inBlockquote) { groupedLines.push({ type: 'blockquote', lines: blockquoteLines }); }
 
         const processedLines = [];
+        let inCodeFence = false;
+        let tableBlockLines = [];
+
+        const flushTableBlock = () => {
+            if (tableBlockLines.length >= 2) {
+                let hasSep = false;
+                const sepRegex = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+                for (const l of tableBlockLines) {
+                    if (sepRegex.test(l)) {
+                        hasSep = true;
+                        break;
+                    }
+                }
+                if (hasSep) {
+                    const tableHtml = parseTableBlock(tableBlockLines);
+                    processedLines.push(`HTML_TABLE_START${tableHtml}HTML_TABLE_END`);
+                } else {
+                    for (const l of tableBlockLines) {
+                        processedLines.push(l);
+                    }
+                }
+            } else {
+                for (const l of tableBlockLines) {
+                    processedLines.push(l);
+                }
+            }
+            tableBlockLines = [];
+        };
+
         for (const item of groupedLines) {
             if (typeof item === 'string') {
-                processedLines.push(item);
+                if (item.trim().startsWith('```')) {
+                    flushTableBlock();
+                    inCodeFence = !inCodeFence;
+                    processedLines.push(item);
+                } else if (inCodeFence) {
+                    processedLines.push(item);
+                } else {
+                    // Table line detection
+                    const isTableLine = item.trim().startsWith('|') || item.includes('|');
+                    if (isTableLine) {
+                        tableBlockLines.push(item);
+                    } else {
+                        flushTableBlock();
+                        processedLines.push(item);
+                    }
+                }
             } else if (item && item.type === 'blockquote') {
+                flushTableBlock();
                 const content = item.lines.join('\n');
                 const alertMatch = content.match(/^\s*\[!(NOTE|TIP|IMPORTANT|WARNING|CAUTION)\]\s*([\s\S]*)$/i);
                 if (alertMatch) {
@@ -631,6 +753,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 }
             }
         }
+        flushTableBlock();
 
         processed = processedLines.join('\n');
 
@@ -673,6 +796,9 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         html = html.replace(/<p>\s*<\/p>/g, '');
 
         // Replace placeholders
+        html = html.replace(/HTML_TABLE_START([\s\S]*?)HTML_TABLE_END/g, (_, tableHtml) => {
+            return `</p>${tableHtml}<p>`;
+        });
         html = html.replace(/HTML_ALERT_START_([a-z]+)_([A-Za-z]+)HTML_ALERT_CONTENT([\s\S]*?)HTML_ALERT_END/g, (_, type, title, body) => {
             return `</p><div class="markdown-alert alert-${type}"><div class="markdown-alert-title">${title}</div><div>${body}</div></div><p>`;
         });
@@ -829,6 +955,11 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     btn.textContent = action === 'Link Doc' ? '🔗' : '×';
                     btn.title = action === 'Link Doc' ? 'Copy validated document path' : 'Delete';
                     btn.setAttribute('aria-label', action === 'Link Doc' ? 'Link to document' : 'Delete document');
+                } else if (action === 'Serve & Open') {
+                    btn.className = 'card-icon-btn';
+                    btn.textContent = '🌐';
+                    btn.title = 'Start local server and open in browser';
+                    btn.setAttribute('aria-label', 'Open in browser via local server');
                 } else {
                     // Text button (Set Context, Import, Sync)
                     btn.className = 'planning-card-btn';
@@ -852,6 +983,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                             docId: nodeId,
                             docName: title,
                             sourceFolder: nodeMetadata ? nodeMetadata.sourceFolder : undefined
+                        });
+                    } else if (action === 'Serve & Open') {
+                        vscode.postMessage({
+                            type: 'serveAndOpenHtml',
+                            docId: nodeId,
+                            docName: title,
+                            absolutePath: nodeMetadata?.absolutePath,
+                            sourceFolder: nodeMetadata?.sourceFolder
                         });
                     } else if (action === 'Delete') {
                         if (deleteHandler) {
@@ -949,7 +1088,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             } else if (sourceId === 'design-folder') {
                 actions = ['Set Context', 'Link Doc'];
             } else if (sourceId === 'html-folder') {
-                actions = ['Link Doc'];
+                actions = ['Serve & Open', 'Link Doc'];
             } else {
                 actions = ['Import', 'Link Doc'];
             }
@@ -1024,9 +1163,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         }
         if (sourceId === 'design-folder') {
             if (state.dirtyFlags.design) {
-                if (!confirm('You have unsaved changes in Design System. Discard them?')) {
-                    return;
-                }
                 exitEditMode('design', true);
             }
 
@@ -1081,9 +1217,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             return;
         }
         if (state.dirtyFlags.local) {
-            if (!confirm('You have unsaved changes in Local Docs. Discard them?')) {
-                return;
-            }
             exitEditMode('local', true);
         }
 
@@ -2137,6 +2270,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 if (iframe) {
                     iframe.style.display = '';
                     iframe.removeAttribute('src');
+                    iframe.removeAttribute('srcdoc');
                     const htmlWithBase = injectBaseTag(htmlContent, webviewUri);
                     console.log('[PlanningPanel] Setting srcdoc for HTML preview, length:', htmlWithBase.length, 'hasNonce:', /nonce="/.test(htmlWithBase));
                     iframe.srcdoc = htmlWithBase;
@@ -2467,6 +2601,7 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             if (iframe) {
                 iframe.style.display = '';
                 iframe.removeAttribute('src');  // Clear any src-based navigation
+                iframe.removeAttribute('srcdoc');
                 iframe.srcdoc = `<html><body style="background:#000;color:#e0e0e0;font-family:sans-serif;padding:2em"><p>Error: ${error.replace(/</g, '&lt;')}</p></body></html>`;
             }
             return;
@@ -2967,7 +3102,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         switch (msg.type) {
             case 'error':
                 console.error('[PlanningPanel Webview] Backend error:', msg.message);
-                alert('Planning Panel Error: ' + msg.message);
                 break;
             case 'cyberAnimationSetting': {
                 document.body.classList.toggle('cyber-animation-disabled', msg.disabled);
@@ -3400,36 +3534,26 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         }
                     }
                 } else if (conflict) {
-                    const overwrite = confirm('Save Conflict! The file has been modified on disk by another process. Overwrite disk changes with your edits? (Click Cancel to reload from disk instead)');
-                    if (overwrite) {
-                        const filePath = (tab === 'local' || tab === 'design') ? state.activeDocFilePath : (_kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null);
-                        vscode.postMessage({
-                            type: 'saveFileContent',
-                            filePath,
-                            content: textarea.value,
-                            originalContent: diskContent,
-                            tab
-                        });
-                    } else {
-                        if (tab === 'local') {
-                            state.activeDocContent = diskContent;
-                            textarea.value = diskContent;
-                            state.editOriginalContent.local = diskContent;
-                            state.dirtyFlags.local = false;
-                        } else if (tab === 'design') {
-                            state.activeDocContent = diskContent;
-                            textarea.value = diskContent;
-                            state.editOriginalContent.design = diskContent;
-                            state.dirtyFlags.design = false;
-                        } else {
-                            state.editOriginalContent.kanban = diskContent;
-                            textarea.value = diskContent;
-                            state.dirtyFlags.kanban = false;
-                        }
-                        alert('Reloaded from disk.');
+                    const filePath = (tab === 'local' || tab === 'design') ? state.activeDocFilePath : (_kanbanSelectedPlan ? _kanbanSelectedPlan.planFile : null);
+                    vscode.postMessage({
+                        type: 'saveFileContent',
+                        filePath,
+                        content: textarea.value,
+                        originalContent: diskContent,
+                        tab
+                    });
+                    const statusEl = document.getElementById(tab === 'local' ? 'status' : (tab === 'design' ? 'status-design' : null));
+                    if (statusEl) {
+                        statusEl.textContent = 'Conflict detected, overwriting...';
+                        statusEl.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
                     }
                 } else {
-                    alert('Error saving file: ' + (error || 'Unknown error'));
+                    console.error('Error saving file:', error || 'Unknown error');
+                    const statusEl = document.getElementById(tab === 'local' ? 'status' : (tab === 'design' ? 'status-design' : null));
+                    if (statusEl) {
+                        statusEl.textContent = 'Error saving: ' + (error || 'Unknown');
+                        statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                    }
                 }
                 break;
             }
@@ -3517,7 +3641,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     submitBtn.textContent = 'Create';
                 }
                 if (msg.success) {
-                    alert('Ticket created successfully!');
                     const modal = document.getElementById('create-ticket-modal');
                     if (modal) modal.style.display = 'none';
                     const titleInput = document.getElementById('create-ticket-title');
@@ -3526,7 +3649,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (descInput) descInput.value = '';
                     loadClickUpProject(true);
                 } else {
-                    alert('Failed to create ticket: ' + (msg.error || 'Unknown error'));
+                    console.error('Failed to create ClickUp ticket:', msg.error);
+                    showTicketsStatus('Failed to create ticket', true);
                 }
                 break;
             }
@@ -3537,7 +3661,6 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     submitBtn.textContent = 'Create';
                 }
                 if (msg.success) {
-                    alert('Ticket created successfully!');
                     const modal = document.getElementById('create-ticket-modal');
                     if (modal) modal.style.display = 'none';
                     const titleInput = document.getElementById('create-ticket-title');
@@ -3546,7 +3669,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                     if (descInput) descInput.value = '';
                     loadLinearProject(true);
                 } else {
-                    alert('Failed to create ticket: ' + (msg.error || 'Unknown error'));
+                    console.error('Failed to create Linear ticket:', msg.error);
+                    showTicketsStatus('Failed to create ticket', true);
                 }
                 break;
             }
@@ -3555,17 +3679,19 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 const { detailImportButton } = getTicketsTabElements();
                 if (detailImportButton) detailImportButton.disabled = false;
                 if (msg.success) {
-                    alert('Task imported successfully!');
+                    showTicketsStatus('Imported ✓', false);
                 } else {
-                    alert('Import failed: ' + (msg.error || 'Unknown error'));
+                    console.error('Import failed:', msg.error);
+                    showTicketsStatus('Import failed', true);
                 }
                 break;
             case 'linearTaskRefined':
             case 'clickupTaskRefined':
                 if (msg.success) {
-                    alert('Task refined successfully!');
+                    showTicketsStatus('Refined ✓', false);
                 } else {
-                    alert('Refine failed: ' + (msg.error || 'Unknown error'));
+                    console.error('Refine failed:', msg.error);
+                    showTicketsStatus('Refine failed', true);
                 }
                 break;
         }
@@ -4022,9 +4148,6 @@ DEPTH: Deep (50-100+ sources)`;
             // Row selection
             itemDiv.addEventListener('click', (e) => {
                 if (state.dirtyFlags.kanban) {
-                    if (!confirm('You have unsaved changes in Kanban Plans. Discard them?')) {
-                        return;
-                    }
                     exitEditMode('kanban', true);
                 }
                 if (state.reviewMode.kanban) {
@@ -4332,7 +4455,7 @@ DEPTH: Deep (50-100+ sources)`;
 
     function handleKanbanContextSet(msg) {
         if (!msg.success) {
-            alert('Failed to set active context: ' + (msg.error || 'Unknown error'));
+            console.error('Failed to set active context:', msg.error || 'Unknown error');
         }
     }
 
@@ -4455,11 +4578,7 @@ DEPTH: Deep (50-100+ sources)`;
     }
 
     function exitEditMode(tab, discard) {
-        if (!discard && state.dirtyFlags[tab]) {
-            if (!confirm('You have unsaved changes. Discard them?')) {
-                return false;
-            }
-        }
+        // No confirmation needed; proceed with exit
 
         const previewPane = tab === 'local' ? document.getElementById('preview-pane') : (tab === 'design' ? document.getElementById('preview-pane-design') : document.getElementById('kanban-preview-pane'));
         if (previewPane) {
@@ -4879,7 +4998,7 @@ DEPTH: Deep (50-100+ sources)`;
 
             if (askAgentBtn) {
                 // Show "not yet implemented" stub
-                alert('Ask Agent feature is not yet implemented in the Planning panel.');
+                console.log('Ask Agent feature is not yet implemented in the Planning panel.');
             }
         });
 
@@ -4936,7 +5055,14 @@ DEPTH: Deep (50-100+ sources)`;
             const description = descInput ? descInput.value.trim() : '';
 
             if (!title) {
-                alert('Please enter a ticket title.');
+                if (titleInput) {
+                    titleInput.style.borderColor = 'var(--vscode-errorForeground, #ff6b6b)';
+                    titleInput.placeholder = 'Title is required';
+                    setTimeout(() => {
+                        titleInput.style.borderColor = '';
+                        titleInput.placeholder = 'Enter ticket title';
+                    }, 2000);
+                }
                 return;
             }
 
@@ -4966,6 +5092,13 @@ DEPTH: Deep (50-100+ sources)`;
             renderTicketsLinearPanel();
         } else if (lastIntegrationProvider === 'clickup') {
             renderTicketsClickUpPanel();
+        } else {
+            // No integration configured — disable create button
+            const { createButton } = getTicketsTabElements();
+            if (createButton) {
+                createButton.disabled = true;
+                createButton.title = 'Configure an integration in Setup first';
+            }
         }
     }
 

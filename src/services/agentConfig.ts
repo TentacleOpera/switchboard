@@ -14,7 +14,6 @@ export interface CustomAgentAddons {
     advancedReviewerEnabled?: boolean;
     reviewerConciseModeEnabled?: boolean;
     reviewerCompactPlanUpdateEnabled?: boolean;
-    dependencyCheckEnabled?: boolean;
     researchEnabled?: boolean; // NEW: enable deep research mode
     complexityScoringSkill?: boolean; // NEW: invoke complexity scoring before split
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
@@ -23,6 +22,7 @@ export interface CustomAgentAddons {
     useSubagents?: boolean;
     subagentPolicy?: 'default' | 'noSubagents' | 'useSubagents' | 'customSubagent';
     customSubagentName?: string;
+    useWorktreesPerPlan?: boolean;
 
     // Design doc
     designDoc?: boolean;
@@ -42,7 +42,7 @@ export interface CustomAgentConfig {
     role: string;
     name: string;
     startupCommand: string;
-    promptInstructions: string;
+    promptInstructions?: string;
     includeInKanban: boolean;
     kanbanOrder: number;
     dragDropMode: 'cli' | 'prompt' | 'disabled';
@@ -161,7 +161,6 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
     if (s.advancedReviewerEnabled === true) a.advancedReviewerEnabled = true;
     if (s.reviewerConciseModeEnabled === true) a.reviewerConciseModeEnabled = true;
     if (s.reviewerCompactPlanUpdateEnabled === true) a.reviewerCompactPlanUpdateEnabled = true;
-    if (s.dependencyCheckEnabled === true) a.dependencyCheckEnabled = true;
     if (s.researchEnabled === true) a.researchEnabled = true;
     if (s.complexityScoringSkill === true) a.complexityScoringSkill = true;
     if (s.ticketUpdateMode && ['disabled', 'comment-only', 'refine-ticket', 'research-and-refine'].includes(s.ticketUpdateMode as string)) {
@@ -182,6 +181,7 @@ export function parseCustomAgentAddons(raw: unknown): CustomAgentAddons | undefi
         const sanitized = String(s.customSubagentName).replace(/[^a-zA-Z0-9_]/g, '').trim();
         if (sanitized) a.customSubagentName = sanitized;
     }
+    if (s.useWorktreesPerPlan === true) a.useWorktreesPerPlan = true;
     if (s.designDoc === true) a.designDoc = true;
     if (s.designDocLink) a.designDocLink = String(s.designDocLink).trim();
     if (!a.designDoc && s.designDocLink) a.designDoc = true;

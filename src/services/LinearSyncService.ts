@@ -1681,8 +1681,8 @@ export class LinearSyncService {
     stateId?: string;
   }): Promise<{ id: string; identifier: string }> {
     const config = await this.loadConfig();
-    if (!config || !config.teamId) {
-      throw new Error("Linear integration not configured or missing teamId.");
+    if (!config || !config.setupComplete || !config.teamId) {
+      throw new Error("Linear integration not configured. Complete setup in the Setup panel first.");
     }
     const result = await this.retry(() => this.graphqlRequest(`
       mutation($input: IssueCreateInput!) {
@@ -1711,7 +1711,7 @@ export class LinearSyncService {
         identifier: result.data.issueCreate.issue.identifier
       };
     } else {
-      throw new Error(result.errors?.[0]?.message || "Failed to create Linear issue.");
+      throw new Error("Failed to create Linear issue.");
     }
   }
 

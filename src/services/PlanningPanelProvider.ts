@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as os from 'os';
 import * as crypto from 'crypto';
 import * as fs from 'fs';
+import * as http from 'http';
 import {
     ResearchImportService,
     TreeNode,
@@ -79,6 +80,7 @@ export class PlanningPanelProvider {
     private _watcherGeneration: number = 0;
     private _activeDesignDocSourceId: string | null = null;
     private _activeDesignDocId: string | null = null;
+    private _htmlServers = new Map<string, { server: http.Server; port: number; timeoutId: NodeJS.Timeout }>();
 
     private _resolvedConfigCache: {
         configPath: string | null;
@@ -795,6 +797,11 @@ export class PlanningPanelProvider {
         );
         htmlContent = htmlContent.replace(/\{\{PLANNING_JS_URI\}\}/g, planningJsUri.toString());
 
+        const geistPixelFontUri = webview.asWebviewUri(
+            vscode.Uri.joinPath(this._extensionUri, 'designs', 'GeistPixel-Square.woff2')
+        );
+        htmlContent = htmlContent.replace(/\{\{GEIST_PIXEL_FONT_URI\}\}/g, geistPixelFontUri.toString());
+
         return htmlContent;
     }
 
@@ -1441,6 +1448,14 @@ export class PlanningPanelProvider {
             }
             case 'linkToDocument': {
                 await this._handleLinkToDocument(workspaceRoot, msg.sourceId, msg.docId, msg.docName, msg.sourceFolder);
+                break;
+            }
+            case 'serveAndOpenHtml': {
+                await this._handleServeAndOpenHtml(
+                    msg.absolutePath as string,
+                    msg.docName as string,
+                    msg.sourceFolder as string | undefined
+                );
                 break;
             }
             case 'resolveDuplicate': {
@@ -2400,7 +2415,7 @@ export class PlanningPanelProvider {
                     let projectId: string | undefined;
                     if (msg.projectName) {
                         const projects = await linear.getAvailableProjects();
-                        const matching = projects.find(p => p.name === msg.projectName || p.id === msg.projectName);
+                        const matching = projects.find((p: any) => p.name === msg.projectName || p.id === msg.projectName);
                         if (matching) {
                             projectId = matching.id;
                         } else {
@@ -2611,14 +2626,18 @@ export class PlanningPanelProvider {
         try {
             let docPath: string | null = null;
 
-            if (sourceId === 'local-folder' || sourceId === 'design-folder') {
+            if (sourceId === 'local-folder' || sourceId === 'design-folder' || sourceId === 'html-folder') {
                 if (!sourceFolder) {
                     throw new Error('sourceFolder is required');
                 }
                 const localFolderService = this._getLocalFolderServiceForFolder(sourceFolder, workspaceRoot, sourceId)
                     || this._getLocalFolderService(workspaceRoot);
                 const resolvedSourceFolder = localFolderService.resolveFolderPath(sourceFolder);
-                const allowedPaths = sourceId === 'design-folder' ? localFolderService.getDesignFolderPaths() : localFolderService.getFolderPaths();
+                const allowedPaths = sourceId === 'design-folder'
+                    ? localFolderService.getDesignFolderPaths()
+                    : (sourceId === 'html-folder'
+                        ? localFolderService.getHtmlFolderPaths()
+                        : localFolderService.getFolderPaths());
                 if (!allowedPaths.includes(resolvedSourceFolder)) {
                     throw new Error('sourceFolder is not a configured folder path');
                 }
@@ -2781,6 +2800,7 @@ export class PlanningPanelProvider {
         const localResourceRoots = [
             vscode.Uri.joinPath(this._extensionUri, 'dist'),
             vscode.Uri.joinPath(this._extensionUri, 'webview'),
+            vscode.Uri.joinPath(this._extensionUri, 'designs'),
             vscode.Uri.joinPath(this._extensionUri, 'node_modules'),
             ...(vscode.workspace.workspaceFolders || []).map(folder => folder.uri),
             ...folderUris
@@ -3276,6 +3296,7 @@ export class PlanningPanelProvider {
 
             if (isImage) {
                 // Skip UTF-8 read for binary image files
+                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
                     sourceId,
@@ -3290,6 +3311,8 @@ export class PlanningPanelProvider {
 
             try {
                 const htmlContent = await fs.promises.readFile(resolvedPath, 'utf8');
+
+                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
 
                 // Dedup: compare raw content before CSP injection (nonce may rotate)
                 const cacheKey = this._getPreviewCacheKey(sourceId, docId, sourceFolder);
@@ -3324,6 +3347,7 @@ export class PlanningPanelProvider {
                 });
             } catch (err: any) {
                 // If file read fails, fall back to webviewUri-only delivery
+                if (requestId !== this._latestRequestIds.get(sourceId)) { return; }
                 this._panel?.webview.postMessage({
                     type: 'previewReady',
                     sourceId,
@@ -4558,6 +4582,15 @@ export class PlanningPanelProvider {
             try { watcher.dispose(); } catch (e) {}
         }
         this._kanbanPlansWatchers = [];
+        // Clean up HTML preview servers
+        for (const [sourceFolder, entry] of this._htmlServers) {
+            try {
+                clearTimeout(entry.timeoutId);
+                entry.server.close();
+            } catch (e) {}
+        }
+        this._htmlServers.clear();
+
         this._disposables.forEach(d => d.dispose());
         this._disposables = [];
         if (this._panel) {
@@ -4646,5 +4679,124 @@ export class PlanningPanelProvider {
             if (occupiedColumns.has(col.id)) return true;
             return false;
         });
+    }
+
+    private async _handleServeAndOpenHtml(absolutePath: string, docName: string, sourceFolder: string | undefined): Promise<void> {
+        if (!absolutePath) {
+            vscode.window.showErrorMessage('Cannot serve file: no absolute path available.');
+            return;
+        }
+
+        // Derive sourceFolder from absolutePath if not provided
+        const resolvedSourceFolder = sourceFolder || path.dirname(absolutePath);
+
+        // Reuse existing server for this sourceFolder
+        const existing = this._htmlServers.get(resolvedSourceFolder);
+        if (existing) {
+            // Refresh inactivity timeout
+            clearTimeout(existing.timeoutId);
+            existing.timeoutId = this._createServerTimeout(resolvedSourceFolder);
+            const filename = path.basename(absolutePath);
+            const url = `http://127.0.0.1:${existing.port}/${encodeURIComponent(filename)}`;
+            await vscode.env.openExternal(vscode.Uri.parse(url));
+            return;
+        }
+
+        // Start new server
+        const server = http.createServer((req, res) => {
+            this._handleHtmlServerRequest(req, res, resolvedSourceFolder);
+        });
+
+        server.listen(0, '127.0.0.1', () => {
+            const address = server.address() as { port: number };
+            const port = address.port;
+            const filename = path.basename(absolutePath);
+            const url = `http://127.0.0.1:${port}/${encodeURIComponent(filename)}`;
+
+            const timeoutId = this._createServerTimeout(resolvedSourceFolder);
+            this._htmlServers.set(resolvedSourceFolder, { server, port, timeoutId });
+
+            console.log(`[PlanningPanel] HTML server started on port ${port} for ${resolvedSourceFolder}`);
+            vscode.env.openExternal(vscode.Uri.parse(url));
+        });
+
+        server.on('error', (err: any) => {
+            console.error('[PlanningPanel] HTML server error:', err);
+            vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
+        });
+    }
+
+    private _handleHtmlServerRequest(req: http.IncomingMessage, res: http.ServerResponse, sourceFolder: string): void {
+        const parsedUrl = new URL(req.url || '/', `http://127.0.0.1`);
+        const requestedPath = decodeURIComponent(parsedUrl.pathname);
+
+        // Resolve and validate path is within sourceFolder
+        const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1)); // strip leading /
+        const normalizedSource = path.normalize(sourceFolder);
+        const normalizedResolved = path.normalize(resolvedPath);
+
+        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden: path traversal denied');
+            return;
+        }
+
+        // Serve file
+        fs.readFile(resolvedPath, (err, data) => {
+            if (err) {
+                res.writeHead(404, { 'Content-Type': 'text/plain' });
+                res.end('Not Found');
+                return;
+            }
+            const contentType = this._getMimeType(resolvedPath);
+            res.writeHead(200, { 'Content-Type': contentType });
+            res.end(data);
+        });
+
+        // Refresh inactivity timeout on each request
+        const entry = this._htmlServers.get(sourceFolder);
+        if (entry) {
+            clearTimeout(entry.timeoutId);
+            entry.timeoutId = this._createServerTimeout(sourceFolder);
+        }
+    }
+
+    private _getMimeType(filePath: string): string {
+        const ext = path.extname(filePath).toLowerCase();
+        const mimeMap: Record<string, string> = {
+            '.html': 'text/html; charset=utf-8',
+            '.htm': 'text/html; charset=utf-8',
+            '.css': 'text/css; charset=utf-8',
+            '.js': 'application/javascript; charset=utf-8',
+            '.mjs': 'application/javascript; charset=utf-8',
+            '.json': 'application/json; charset=utf-8',
+            '.png': 'image/png',
+            '.jpg': 'image/jpeg',
+            '.jpeg': 'image/jpeg',
+            '.gif': 'image/gif',
+            '.svg': 'image/svg+xml; charset=utf-8',
+            '.ico': 'image/x-icon',
+            '.webp': 'image/webp',
+            '.woff': 'font/woff',
+            '.woff2': 'font/woff2',
+            '.ttf': 'font/ttf',
+            '.eot': 'application/vnd.ms-fontobject',
+            '.webmanifest': 'application/manifest+json',
+            '.xml': 'application/xml',
+            '.txt': 'text/plain; charset=utf-8',
+            '.pdf': 'application/pdf',
+        };
+        return mimeMap[ext] || 'application/octet-stream';
+    }
+
+    private _createServerTimeout(sourceFolder: string): NodeJS.Timeout {
+        return setTimeout(() => {
+            const entry = this._htmlServers.get(sourceFolder);
+            if (entry) {
+                entry.server.close();
+                this._htmlServers.delete(sourceFolder);
+                console.log(`[PlanningPanel] HTML server auto-shutdown for ${sourceFolder}`);
+            }
+        }, 5 * 60 * 1000); // 5 minutes
     }
 }

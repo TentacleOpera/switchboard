@@ -268,11 +268,6 @@
           "default": "",
           "description": "URL or path to the Design Doc / PRD to append to planner prompts. Only used when designDocEnabled is true."
         },
-        "switchboard.planner.dependencyCheckEnabled": {
-          "type": "boolean",
-          "default": true,
-          "description": "When enabled, the /improve-plan workflow includes instructions to query active Kanban plans for dependencies and conflicts."
-        },
         "switchboard.integrations.preferredProvider": {
           "type": "string",
           "enum": [

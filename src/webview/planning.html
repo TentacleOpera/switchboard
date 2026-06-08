@@ -3,13 +3,19 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: about:srcdoc blob: data:;">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'nonce-{{NONCE}}' 'unsafe-inline' 'unsafe-eval'; script-src-attr 'unsafe-inline'; style-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: 'unsafe-inline'; img-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: data:; font-src {{WEBVIEW_CSP_SOURCE}} https:; connect-src https:; frame-src {{WEBVIEW_CSP_SOURCE}} vscode-webview: vscode-webview-resource: vscode-resource: https: about:srcdoc blob: data:;">
     <title>Switchboard Research</title>
     <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         @keyframes spin {
             from { transform: rotate(0deg); }
             to { transform: rotate(360deg); }
+        }
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('{{GEIST_PIXEL_FONT_URI}}') format('woff2');
+            font-weight: normal;
+            font-style: normal;
         }
         :root {
             /* Kanban dark theme - matching kanban screen */
@@ -24,6 +30,7 @@
             --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
             --accent-teal-bright: #5ce8e6;
             --accent-orange: #d18616;
+            --accent-neon: var(--accent-teal);
             --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
 
             /* Card/container backgrounds */
@@ -132,23 +139,74 @@
             background: rgba(255, 255, 255, 0.05);
         }
 
-        /* Afterburner Updated — brighter cyan, Hanken Grotesk, refined surfaces */
+        /* Afterburner Updated — Hanken Grotesk font only */
         body.theme-afterburner-updated {
-            --panel-bg: #101414;
-            --panel-bg2: #0b0f0f;
-            --border-color: #1d2323;
-            --border-bright: #363a3a;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: rgba(0, 229, 255, 0.4);
-            --accent-teal-bright: #00e5ff;
-            --glow-teal: 0 0 10px rgba(0, 229, 255, 0.4);
-            --accent-orange: #d18616;
-            --card-bg: #0b0f0f;
-            --card-bg-hover: #1a1a1a;
-            --card-border: 1px solid #1d2323;
-            --text-primary: #ffffff;
-            --text-secondary: #a0a6a6;
             --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        /* Afterburner Updated — body matches prototype (#101414) so glass effect works */
+        body.theme-afterburner-updated.cyber-theme-enabled {
+            background-color: #101414;
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — scanline overlay at spec 7% opacity (default is 15%) */
+        body.theme-afterburner-updated.cyber-theme-enabled .cyber-scanlines {
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+        }
+        /* Afterburner Updated — sweep beam uses #00e5ff instead of hardcoded #3ddbd9 */
+        body.theme-afterburner-updated.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(0, 229, 255, 0.03) 10%,
+                rgba(0, 229, 255, 0.07) 50%,
+                rgba(0, 229, 255, 0.03) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+        }
+        /* Afterburner Updated — cyber glassmorphism borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .research-tab-bar {
+            border-bottom-color: rgba(0, 229, 255, 0.25);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled .controls-strip {
+            border-bottom-color: rgba(0, 229, 255, 0.20);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-tickets {
+            border-right-color: rgba(0, 229, 255, 0.20);
+        }
+        /* Afterburner Updated — preview pane grid lines updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-tickets {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #kanban-preview-pane {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — planning card borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .planning-card {
+            border-color: rgba(0, 229, 255, 0.20);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
         }
 
         * {
@@ -986,7 +1044,7 @@
             padding: 0 26px; /* Match VS Code's markdown.css default */
             max-width: 800px; /* Clarification: kept for readability, VS Code uses full width */
             margin: 0 auto;
-            font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+            font-family: var(--font-family);
             font-size: 13px;
             line-height: 1.5;
             word-wrap: break-word;
@@ -995,7 +1053,7 @@
 
         /* Kanban preview pane: inherits font/text styling but keeps its own layout */
         #kanban-preview-pane {
-            font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+            font-family: var(--font-family);
             font-size: 13px;
             line-height: 1.5;
             word-wrap: break-word;
@@ -1014,6 +1072,33 @@
             color: #ffffff;
         }
 
+        /* Afterburner Updated — doc preview matches prototype */
+        body.theme-afterburner-updated #markdown-preview,
+        body.theme-afterburner-updated #markdown-preview-online,
+        body.theme-afterburner-updated #markdown-preview-design {
+            font-family: 'Hanken Grotesk', sans-serif;
+            padding: 26px;
+        }
+        body.theme-afterburner-updated #kanban-preview-pane {
+            font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+        }
+        body.theme-afterburner-updated #markdown-preview h1, body.theme-afterburner-updated #markdown-preview h2, body.theme-afterburner-updated #markdown-preview h3, body.theme-afterburner-updated #markdown-preview h4, body.theme-afterburner-updated #markdown-preview h5, body.theme-afterburner-updated #markdown-preview h6,
+        body.theme-afterburner-updated #markdown-preview-online h1, body.theme-afterburner-updated #markdown-preview-online h2, body.theme-afterburner-updated #markdown-preview-online h3, body.theme-afterburner-updated #markdown-preview-online h4, body.theme-afterburner-updated #markdown-preview-online h5, body.theme-afterburner-updated #markdown-preview-online h6,
+        body.theme-afterburner-updated #markdown-preview-design h1, body.theme-afterburner-updated #markdown-preview-design h2, body.theme-afterburner-updated #markdown-preview-design h3, body.theme-afterburner-updated #markdown-preview-design h4, body.theme-afterburner-updated #markdown-preview-design h5, body.theme-afterburner-updated #markdown-preview-design h6,
+        body.theme-afterburner-updated #kanban-preview-pane h1, body.theme-afterburner-updated #kanban-preview-pane h2, body.theme-afterburner-updated #kanban-preview-pane h3, body.theme-afterburner-updated #kanban-preview-pane h4, body.theme-afterburner-updated #kanban-preview-pane h5, body.theme-afterburner-updated #kanban-preview-pane h6 {
+            font-family: 'GeistPixel', 'Hanken Grotesk', sans-serif;
+            letter-spacing: -0.05em;
+            font-stretch: 90%;
+            line-height: 1.1;
+        }
+        /* Afterburner Updated — doc preview h2-h6 use brighter cyan like prototype */
+        body.theme-afterburner-updated #markdown-preview h2, body.theme-afterburner-updated #markdown-preview h3, body.theme-afterburner-updated #markdown-preview h4, body.theme-afterburner-updated #markdown-preview h5, body.theme-afterburner-updated #markdown-preview h6,
+        body.theme-afterburner-updated #markdown-preview-online h2, body.theme-afterburner-updated #markdown-preview-online h3, body.theme-afterburner-updated #markdown-preview-online h4, body.theme-afterburner-updated #markdown-preview-online h5, body.theme-afterburner-updated #markdown-preview-online h6,
+        body.theme-afterburner-updated #markdown-preview-design h2, body.theme-afterburner-updated #markdown-preview-design h3, body.theme-afterburner-updated #markdown-preview-design h4, body.theme-afterburner-updated #markdown-preview-design h5, body.theme-afterburner-updated #markdown-preview-design h6,
+        body.theme-afterburner-updated #kanban-preview-pane h2, body.theme-afterburner-updated #kanban-preview-pane h3, body.theme-afterburner-updated #kanban-preview-pane h4, body.theme-afterburner-updated #kanban-preview-pane h5, body.theme-afterburner-updated #kanban-preview-pane h6 {
+            color: #00e5ff;
+        }
+
         #markdown-preview h1,
         #markdown-preview-online h1,
         #markdown-preview-design h1,
@@ -1024,6 +1109,7 @@
             border-bottom: 1px solid var(--accent-teal-dim);
             border-left: 3px solid var(--accent-teal-dim);
             padding-left: 8px;
+            text-transform: uppercase;
         }
 
         #markdown-preview h2,
@@ -1035,6 +1121,28 @@
             border-bottom: 1px solid var(--accent-teal-dim);
             border-left: 2px solid var(--accent-teal-dim);
             padding-left: 6px;
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3,
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4,
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5,
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6 {
+            text-transform: uppercase;
+            color: var(--accent-teal);
         }
 
         #markdown-preview h3,
@@ -1184,6 +1292,15 @@
         #markdown-preview-design tr:hover td,
         #kanban-preview-pane tr:hover td {
             background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
+        }
+
+        #markdown-preview .table-wrapper,
+        #markdown-preview-online .table-wrapper,
+        #markdown-preview-design .table-wrapper,
+        #kanban-preview-pane .table-wrapper {
+            overflow-x: auto;
+            max-width: 100%;
+            margin-bottom: 16px;
         }
 
         /* Subtle, Interactive Links */
@@ -1650,6 +1767,9 @@
             background: #f14c4c;
             border-color: #f14c4c;
             color: white;
+        }
+        .card-icon-btn[title*="browser"]:hover {
+            color: var(--accent-teal);
         }
         .card-icon-btn:disabled {
             opacity: 0.5;
@@ -3040,7 +3160,7 @@
                 <select id="tickets-project-picker" style="display:none"></select>
                 <select id="tickets-state-filter" style="display:none"></select>
                 <select id="tickets-status-filter" style="display:none"></select>
-                <button id="tickets-create" class="strip-btn">+ New Ticket</button>
+                <button id="tickets-create" class="strip-btn" disabled title="Configure an integration in Setup first">+ New Ticket</button>
                 <button id="tickets-refresh" class="strip-btn">Refresh</button>
                 <div id="tickets-hierarchy-nav" style="display:none; flex-wrap: wrap;"></div>
             </div>

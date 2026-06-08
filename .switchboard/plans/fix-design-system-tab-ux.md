@@ -213,3 +213,7 @@ After editing `src/webview/planning.html` and `src/webview/planning.js`, copy th
 - **Risk:** The `getDocType` helper may misclassify files with no extension. **Mitigation:** Files with unrecognized extensions fall into `'other'` and are rendered without a subheader, preserving current behavior.
 
 **Recommendation:** Complexity 6 → **Send to Coder**
+
+## Review Findings
+
+All three requirements verified as correctly implemented: doc-type subheaders in both `renderDesignDocs()` and `renderHtmlDocs()`, `#markdown-preview-design` added to all unified markdown CSS selectors and cyber-theme overrides, and stuck loading state fixed via `activeDocContent = null` reset plus missing assignment in CSS/XML/text branch. No CRITICAL or MAJOR issues found. Dist files synced. One NIT: type subheaders share `folder-subheader` class with folder-name subheaders (no distinguishing class for future styling), deferred as plan doesn't require it.

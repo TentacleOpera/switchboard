@@ -248,3 +248,7 @@ Key risks: `createIssueSimple()` bypassing sync map may cause auto-pull re-impor
 - [ ] Create button is re-enabled after success or failure.
 
 **Recommendation:** Complexity 5 → **Send to Coder**
+
+## Review Findings
+
+Two issues found and fixed: (1) CRITICAL — button was enabled when no integration configured (`lastIntegrationProvider` null), because HTML lacked `disabled` attribute and `renderTicketsTab()` had no null-provider guard; fixed by adding `disabled` to the button element and an else-branch that disables it with tooltip. (2) MAJOR — `createIssueSimple()` skipped `setupComplete` check; fixed by adding it to the guard clause. Files changed: `src/webview/planning.html:3043`, `src/webview/planning.js:4962-4976`, `src/services/LinearSyncService.ts:1683-1686`, plus dist sync. Remaining risk: Linear project name→ID fallback uses raw name as ID when no match found, which may produce confusing API errors (acceptable per plan's adversarial synthesis).

@@ -89,8 +89,7 @@ export interface PromptBuilderOptions {
     reviewerConciseModeEnabled?: boolean;
     /** When true, reviewer appends a brief summary to the plan file instead of reproducing full sections. */
     reviewerCompactPlanUpdateEnabled?: boolean;
-    /** Whether dependency check instructions are injected (planner role). */
-    dependencyCheckEnabled?: boolean;
+
     /** Path to the workflow file for the planner role. Defaults to .agent/workflows/improve-plan.md */
     plannerWorkflowPath?: string;
     /** When present, appends a Design Doc / PRD link to planner prompts. */
@@ -127,8 +126,9 @@ export interface PromptBuilderOptions {
     noSubagentsEnabled?: boolean;
     /** When present and non-empty, injects directive authorizing use of this specific custom subagent. Overrides useSubagentsEnabled. */
     customSubagentName?: string;
-    /** When true (default), includes DEPENDENCY ORDER section in prompts when plans have dependencies. */
-    includeDependencyInstructions?: boolean;
+    /** When true, instructs the agent to use native subagent/worktree capabilities to isolate each plan. */
+    useWorktreesPerPlanEnabled?: boolean;
+
     /** Controls ticket update behavior: disabled, comment-only, refine-ticket, or research-and-refine */
     ticketUpdateMode?: 'disabled' | 'comment-only' | 'refine-ticket' | 'research-and-refine';
     /** When false (explicitly), splitter omits the complexity-scoring step. Defaults to enabled (undefined). */
@@ -286,7 +286,7 @@ export const TICKET_RESEARCH_REFINE_DIRECTIVE =
     `If no ticket number is found, skip the ticket update and notify the user.`;
 
 
-export const DEPENDENCY_CHECK_DIRECTIVE = `[DEPENDENCY CHECK ENABLED]\nWhen loading the plan, also query active Kanban plans for dependencies using kanban_operations skill: run \`node .agent/skills/kanban_operations/get-state.js <workspace_id>\`. Inspect New and Planned columns for conflicts; exclude Completed, Intern, Lead Coder, Coder, and Reviewed columns. If query fails, note uncertainty in Edge-Case & Dependency Audit. Emit dependencies in plan's \`## Dependencies\` section as \`sess_XXXXXXXXXXXXX — <topic>\` lines, or \`None\` if none.`;
+
 
 export const ADVANCED_REVIEWER_DIRECTIVE = `ADVANCED REGRESSION ANALYSIS (enabled):
 1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
@@ -366,7 +366,6 @@ export function buildKanbanBatchPrompt(
     const advancedReviewerEnabled = options?.advancedReviewerEnabled ?? false;
     const reviewerConciseModeEnabled = options?.reviewerConciseModeEnabled ?? false;
     const reviewerCompactPlanUpdateEnabled = options?.reviewerCompactPlanUpdateEnabled ?? false;
-    const dependencyCheckEnabled = options?.dependencyCheckEnabled ?? false;
     const gitProhibitionEnabled = options?.gitProhibitionEnabled ?? true;
     const switchboardSafeguardsEnabled = options?.switchboardSafeguardsEnabled ?? true;
     const sourceColumnLabel = options?.sourceColumnLabel;
@@ -378,7 +377,7 @@ export function buildKanbanBatchPrompt(
     const useSubagentsEnabled = options?.useSubagentsEnabled ?? false;
     const noSubagentsEnabled = options?.noSubagentsEnabled ?? false;
     const customSubagentName = options?.customSubagentName?.replace(/[^a-zA-Z0-9_]/g, '').trim() || undefined;
-    const includeDependencyInstructions = options?.includeDependencyInstructions ?? false;
+    const useWorktreesPerPlanEnabled = options?.useWorktreesPerPlanEnabled ?? false;
 
     let subagentBlock = '';
     if (noSubagentsEnabled) {
@@ -390,6 +389,11 @@ export function buildKanbanBatchPrompt(
         }
     } else if (plans.length > 1 && useSubagentsEnabled) {
         subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
+    }
+
+    if (useWorktreesPerPlanEnabled) {
+        const worktreeDirective = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + worktreeDirective : worktreeDirective;
     }
 
     const batchExecutionRules = `CRITICAL INSTRUCTIONS:
@@ -414,18 +418,7 @@ export function buildKanbanBatchPrompt(
         if (p.sessionId) sessionIdToTopic.set(p.sessionId, p.topic);
     });
 
-    const plansWithDeps = plans.filter(p => p.dependencies);
-    const depSection = includeDependencyInstructions && plansWithDeps.length > 0
-        ? `\n\nDEPENDENCY ORDER: Execute in order; do not start a plan until its dependencies are implemented:\n${
-            plansWithDeps.map((p, i) => {
-                const depIds = (p.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
-                const resolvedDeps = depIds.map(depId => {
-                    const resolved = sessionIdToTopic.get(depId);
-                    return resolved || depId;
-                });
-                return `${i + 1}. [${p.topic}] depends on: ${resolvedDeps.join(', ')}`;
-            }).join('\n')}\n`
-        : '';
+
 
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
 
@@ -466,9 +459,7 @@ export function buildKanbanBatchPrompt(
         if (aggressivePairProgramming) {
             plannerBase += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
         }
-        if (dependencyCheckEnabled) {
-            plannerBase += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
-        }
+
         if (skipCompilation) {
             plannerBase += '\n\n' + SKIP_COMPILATION_DIRECTIVE;
         }
@@ -476,7 +467,7 @@ export function buildKanbanBatchPrompt(
             plannerBase += '\n\n' + SKIP_TESTS_DIRECTIVE;
         }
         if (cavemanOutputEnabled) {
-            plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
+            plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to reasoning and discussion only. Preserve the theatrical Grumpy voice defined in the workflow for adversarial critique sections. The generated plan artifact (.md file) must remain fully detailed, well-structured, and complete.';
         }
         if (workspaceTypeBlock) {
             plannerBase += '\n\n' + workspaceTypeBlock;
@@ -560,20 +551,18 @@ CRITICAL: Do not stop after Stage 1. Complete the Grumpy review, the Balanced sy
             }
         }
 
-        // Inject worktree path instructions for reviewer
-        let worktreeInstructionBlock = '';
+        let safetySessionBlock = '';
         for (const plan of plans) {
             if (plan.worktreePath) {
-                worktreeInstructionBlock += `\nWorktree path: ${plan.worktreePath}\n` +
-                    `IMPORTANT: This work was done in a git worktree at ${plan.worktreePath}. ` +
-                    `Read the plan file from that location (not the main directory). ` +
-                    `Make your review changes to the worktree plan file. ` +
-                    `The merge will bring both code and plan changes to the main branch.\n`;
+                safetySessionBlock += `\nIMPORTANT: You are reviewing work done in a safety session. The worktree directory is: ${plan.worktreePath}\n` +
+                    `Read the plan file and code changes from that location (not the main directory).\n`;
             }
         }
-        if (worktreeInstructionBlock) {
-            baseInstructions += '\n\n' + worktreeInstructionBlock.trim();
+        if (safetySessionBlock) {
+            baseInstructions += '\n\n' + safetySessionBlock.trim();
         }
+
+
 
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
@@ -669,6 +658,19 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
+        let safetySessionBlock = '';
+        for (const plan of plans) {
+            if (plan.worktreePath) {
+                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
+                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
+                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `from the parent directory — that is the main branch and will corrupt it.\n`;
+            }
+        }
+        if (safetySessionBlock) {
+            baseInstructions += '\n\n' + safetySessionBlock.trim();
+        }
+
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
         const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
@@ -683,7 +685,6 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            depSection.trim(),
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -709,6 +710,19 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
+        let safetySessionBlock = '';
+        for (const plan of plans) {
+            if (plan.worktreePath) {
+                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
+                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
+                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `from the parent directory — that is the main branch and will corrupt it.\n`;
+            }
+        }
+        if (safetySessionBlock) {
+            baseInstructions += '\n\n' + safetySessionBlock.trim();
+        }
+
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
         const suffixBlock = [dispatchContextPrefix, focusBlock, gitBlock, antigravityBlock, skipBlock, subagentBlock]
@@ -723,7 +737,6 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            depSection.trim(),
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -742,6 +755,19 @@ For each plan:
             baseInstructions += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE;
         }
 
+        let safetySessionBlock = '';
+        for (const plan of plans) {
+            if (plan.worktreePath) {
+                safetySessionBlock += `\nIMPORTANT: You are working in a safety session. All file operations and git commands\n` +
+                    `must be run from inside the worktree directory: ${plan.worktreePath}\n` +
+                    `Navigate into this directory before making any changes. Do NOT run git commands\n` +
+                    `from the parent directory — that is the main branch and will corrupt it.\n`;
+            }
+        }
+        if (safetySessionBlock) {
+            baseInstructions += '\n\n' + safetySessionBlock.trim();
+        }
+
         const safeguardsBlock = switchboardSafeguardsEnabled ? batchExecutionRules : '';
         const focusBlock = switchboardSafeguardsEnabled ? FOCUS_DIRECTIVE : '';
         const gitBlock = gitProhibitionEnabled ? GIT_PROHIBITION_DIRECTIVE : '';
@@ -756,7 +782,6 @@ For each plan:
             baseInstructions,
             suffixBlock,
             `PLANS TO PROCESS:\n${planList}`,
-            depSection.trim(),
             suppressWalkthroughBlock
         ].filter(Boolean).join('\n\n');
 
@@ -1229,6 +1254,11 @@ export function buildCustomAgentPrompt(
         subagentBlock = `If your platform supports parallel sub-agents, dispatch one sub-agent per plan to execute them concurrently. If not, process them sequentially.`;
     }
 
+    if (addons?.useWorktreesPerPlan) {
+        const worktreeDirective = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
+        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + worktreeDirective : worktreeDirective;
+    }
+
     // Build safeguards block (batch rules + focus directive)
     const safeguardsBlock = addons?.switchboardSafeguards
         ? `CRITICAL INSTRUCTIONS:
@@ -1255,7 +1285,7 @@ export function buildCustomAgentPrompt(
     if (addons?.pairProgrammingEnabled) prompt += `\n\nPAIR PROGRAMMING NOTE: Focus only on Complex / Risky (Band B) implementation steps. A separate Coder agent is handling Routine (Band A) tasks.`;
     if (addons?.aggressivePairProgramming) prompt += '\n\n' + AGGRESSIVE_PAIR_PROGRAMMING_DIRECTIVE;
     if (addons?.advancedReviewerEnabled) prompt += '\n\n' + ADVANCED_REVIEWER_DIRECTIVE;
-    if (addons?.dependencyCheckEnabled) prompt += '\n\n' + DEPENDENCY_CHECK_DIRECTIVE;
+
     if (addons?.ticketUpdateMode && addons.ticketUpdateMode !== 'disabled') {
         const directive = addons.ticketUpdateMode === 'refine-ticket'
             ? TICKET_REFINE_DIRECTIVE

@@ -296,20 +296,15 @@ function run() {
     );
     expectRegex(
         kanbanSource,
-        /data-tab="dependencies"/,
-        'Expected dependencies tab to still exist'
-    );
-    expectRegex(
-        kanbanSource,
         /data-tab="setup"/,
         'Expected setup tab to still exist'
     );
 
-    // Verify position of DEPENDENCIES tab
+    // Verify position of AUTOMATION and SETUP tabs
     expectRegex(
         kanbanSource,
-        /data-tab="automation"[\s\S]*?data-tab="dependencies"[\s\S]*?data-tab="setup"/,
-        'Expected DEPENDENCIES tab to be positioned between AUTOMATION and SETUP'
+        /data-tab="automation"[\s\S]*?data-tab="setup"/,
+        'Expected AUTOMATION tab to be positioned before SETUP'
     );
 
     console.log('✓ Test 6 passed\n');
@@ -458,12 +453,7 @@ function run() {
         'Expected <h2>Prompt Configuration</h2> to be removed from prompts tab'
     );
 
-    // Verify subsection headers exist in all tabs
-    expectRegex(
-        kanbanSource,
-        /<div class="subsection-header"><span>Plan Dependencies<\/span><\/div>/,
-        'Expected "Plan Dependencies" subsection header in Dependencies tab'
-    );
+    // Verify subsection headers exist in remaining tabs
     expectRegex(
         kanbanSource,
         /<div class="subsection-header"><span>User Acceptance Testing<\/span><\/div>/,
@@ -476,11 +466,6 @@ function run() {
     );
 
     // Verify action buttons are in .subsection-actions rows
-    expectRegex(
-        kanbanSource,
-        /<div class="subsection-actions">[\s\S]*?btn-copy-deps-prompt/,
-        'Expected Dependencies tab action buttons in .subsection-actions row'
-    );
     expectRegex(
         kanbanSource,
         /<div class="subsection-actions">[\s\S]*?btn-refresh-uat/,

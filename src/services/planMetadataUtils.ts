@@ -26,7 +26,6 @@ export interface PlanMetadata {
     kanbanColumn?: string;
     complexity: string;
     tags: string;
-    dependencies: string;
     project?: string;
 }
 
@@ -91,24 +90,6 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         tags = sanitizeTags(tagsMatch[1]);
     }
 
-    // Extract dependencies
-    let dependencies: string = '';
-    const sectionMatch = content.match(/^#{1,4}\s+Dependencies\b[^\n]*$/im);
-    if (sectionMatch && sectionMatch.index !== undefined) {
-        const afterHeading = content.slice(sectionMatch.index + sectionMatch[0].length);
-        const nextHeadingMatch = afterHeading.match(/^\s*#{1,4}\s+/m);
-        const sectionBody = nextHeadingMatch
-            ? afterHeading.slice(0, nextHeadingMatch.index)
-            : afterHeading;
-        const deps = sectionBody
-            .split(/\r?\n/)
-            .map(line => line.trim())
-            .map(line => line.replace(/^[-*+]\s+/, '').replace(/^\d+\.\s+/, '').trim())
-            .filter(line => line.length > 0)
-            .filter(line => !/^(none|n\/a|na|unknown)$/i.test(line));
-        dependencies = [...new Set(deps)].join(', ');
-    }
-
     let project: string | undefined;
     const projectMatch = content.match(/^\*\*Project(?:\*\*:\s*|:\*\*)\s*(.+)$/im);
     if (projectMatch) {
@@ -120,7 +101,6 @@ export async function parsePlanMetadata(content: string, planFile: string): Prom
         kanbanColumn: columnMatch?.[1],
         complexity,
         tags,
-        dependencies,
         project
     };
 }

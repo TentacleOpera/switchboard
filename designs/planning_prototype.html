@@ -1,0 +1,3185 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Local Docs Preview - Afterburner Updated Theme</title>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+    <style>
+        @font-face {
+            font-family: 'GeistPixel';
+            src: url('GeistPixel-Square.woff2') format('woff2');
+            font-weight: normal;
+            font-style: normal;
+        }
+        @keyframes spin {
+            from { transform: rotate(0deg); }
+            to { transform: rotate(360deg); }
+        }
+        :root {
+            /* Kanban dark theme - matching kanban screen */
+            --kanban-bg: #000000;
+            --panel-bg: #000000;
+            --panel-bg2: #0a0a0a;
+            --border-color: #333333;
+            --border-bright: #444444;
+
+            /* Accent colors - matching kanban screen */
+            --accent-teal: #3ddbd9;
+            --accent-teal-dim: color-mix(in srgb, var(--accent-teal) 40%, transparent);
+            --accent-teal-bright: #5ce8e6;
+            --accent-orange: #d18616;
+            --glow-teal: 0 0 10px color-mix(in srgb, var(--accent-teal) 50%, transparent);
+
+            /* Card/container backgrounds */
+            --card-bg: #0d0d0d;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #333333;
+
+            /* Semantic text colors */
+            --text-primary: #e0e0e0;
+            --text-secondary: #888888;
+            --font-family: var(--vscode-font-family, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif);
+            --font-mono: var(--vscode-editor-font-family, 'SF Mono', Monaco, 'Cascadia Code', monospace);
+
+            /* Spacing rhythm */
+            --spacing-unit: 8px;
+            --spacing-xs: calc(var(--spacing-unit) / 2);  /* 4px */
+            --spacing-sm: var(--spacing-unit);            /* 8px */
+            --spacing-md: calc(var(--spacing-unit) * 1.5); /* 12px */
+            --spacing-lg: calc(var(--spacing-unit) * 2);  /* 16px */
+
+            /* Shadows for depth */
+            --shadow-sm: 0 2px 4px rgba(0, 0, 0, 0.2);
+            --shadow-md: 0 4px 12px rgba(0, 0, 0, 0.25);
+
+        }
+
+        /* Claude Terracotta — warm terracotta accent on professional dark surfaces */
+        body.theme-claude-terracotta {
+            --panel-bg: #121212;          /* Sidebar/Panels — Left sidebar and bottom terminal */
+            --panel-bg2: #1A1A1A;         /* Secondary surface */
+            --border-color: #2D2D2D;      /* Section Dividers */
+            --border-bright: #2D2D2D;
+            --accent-teal: #D97757;
+            --accent-teal-dim: color-mix(in srgb, #D97757 40%, transparent);
+            --accent-teal-bright: #E08868;
+            --glow-teal: 0 0 10px color-mix(in srgb, #D97757 50%, transparent);
+            --accent-orange: #D97757;
+            --card-bg: #121212;
+            --card-bg-hover: #1A1A1A;
+            --card-border: 1px solid #2D2D2D;
+            --text-primary: #FFFFFF;      /* Headings/Active Text */
+            --text-secondary: #A0A0A0;   /* Secondary/Body Text */
+        }
+        /* Claude Terracotta — button/action element overrides in planning panel */
+        body.theme-claude-terracotta .action-btn {
+            background: #A35941;          /* Muted Terracotta solid fill */
+            border-color: #A35941;
+            color: #FFFFFF;
+        }
+        body.theme-claude-terracotta .action-btn:hover:not(:disabled) {
+            background: #D97757;          /* Primary Terracotta on hover */
+            border-color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn {
+            border-color: color-mix(in srgb, #D97757 60%, transparent);  /* Ghost style at 60% opacity */
+            color: #D97757;
+        }
+        body.theme-claude-terracotta .secondary-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, #D97757 10%, transparent);
+            border-color: #D97757;
+            color: #FFFFFF;
+        }
+
+        /* Slightly Darker Black — minimalist monochrome with tonal depth and luminance */
+        body.theme-slightly-darker-black {
+            --panel-bg: #0A0A0A;          /* Deepest black */
+            --panel-bg2: #141414;         /* Secondary Surface — Slightly lighter for sidebars and terminal panels */
+            --border-color: #1F1F1F;      /* Subtle Dividers */
+            --border-bright: #333333;     /* Interactive Outlines */
+            --accent-teal: #E0E0E0;       /* Active States — Light gray for active tabs/borders */
+            --accent-teal-dim: color-mix(in srgb, #E0E0E0 40%, transparent);
+            --accent-teal-bright: #FFFFFF;
+            --glow-teal: 0 0 10px color-mix(in srgb, #E0E0E0 30%, transparent);
+            --accent-orange: #E0E0E0;
+            --card-bg: #0A0A0A;
+            --card-bg-hover: #141414;
+            --card-border: 1px solid #1F1F1F;
+            --text-primary: #F5F5F5;      /* Primary Text — High contrast */
+            --text-secondary: #666666;    /* De-emphasized Text — Metadata, timestamps, inactive labels */
+        }
+        /* Slightly Darker Black — button/action element overrides in planning panel */
+        body.theme-slightly-darker-black .action-btn {
+            background: #FFFFFF;          /* White on black for primary CTAs */
+            border-color: #FFFFFF;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .action-btn:hover:not(:disabled) {
+            background: #E0E0E0;
+            border-color: #E0E0E0;
+            color: #0A0A0A;
+        }
+        body.theme-slightly-darker-black .secondary-btn {
+            border-color: #333333;        /* Interactive Outlines */
+            color: #E0E0E0;
+        }
+        body.theme-slightly-darker-black .secondary-btn:hover:not(:disabled) {
+            background: rgba(255, 255, 255, 0.05);  /* Semi-transparent white overlay for hover on dark surfaces */
+            border-color: #E0E0E0;
+            color: #F5F5F5;
+        }
+        /* Slightly Darker Black — special hover effects */
+        body.theme-slightly-darker-black .strip-btn:hover:not(:disabled),
+        body.theme-slightly-darker-black .tab-btn:hover,
+        body.theme-slightly-darker-black .db-radio-option:hover,
+        body.theme-slightly-darker-black .db-action-btn:hover {
+            background: rgba(255, 255, 255, 0.05);
+        }
+
+        /* Afterburner Updated — brighter cyan, Hanken Grotesk, refined surfaces per afterburner_Design.md */
+        body.theme-afterburner-updated {
+            --kanban-bg: #101414;
+            --panel-bg: #101414;
+            --panel-bg2: #0b0f0f;
+            --border-color: #1d2323;
+            --border-bright: #363a3a;
+            --accent-teal: #00e5ff;
+            --accent-teal-dim: rgba(0, 229, 255, 0.4);
+            --accent-teal-bright: #00e5ff;
+            --accent-neon: #00e5ff;
+            --glow-teal: 0 0 10px rgba(0, 229, 255, 0.4);
+            --accent-orange: #d18616;
+            --card-bg: #0b0f0f;
+            --card-bg-hover: #1a1a1a;
+            --card-border: 1px solid #1d2323;
+            --text-primary: #ffffff;
+            --text-secondary: #a0a6a6;
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
+        /* Afterburner Updated — immersive background with spec-correct grid lines */
+        body.theme-afterburner-updated.cyber-theme-enabled {
+            background-color: #101414;
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.03) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.03) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — scanline overlay at spec 7% opacity (default is 15%) */
+        body.theme-afterburner-updated.cyber-theme-enabled .cyber-scanlines {
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.07) 2px,
+                rgba(0, 0, 0, 0.07) 4px
+            );
+        }
+        /* Afterburner Updated — sweep beam uses #00e5ff instead of hardcoded #3ddbd9 */
+        body.theme-afterburner-updated.cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(0, 229, 255, 0.03) 10%,
+                rgba(0, 229, 255, 0.07) 50%,
+                rgba(0, 229, 255, 0.03) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+        }
+        /* Afterburner Updated — cyber glassmorphism borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .research-tab-bar {
+            border-bottom-color: rgba(0, 229, 255, 0.25);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled .controls-strip {
+            border-bottom-color: rgba(0, 229, 255, 0.20);
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #tree-pane-tickets {
+            border-right-color: rgba(0, 229, 255, 0.20);
+        }
+        /* Afterburner Updated — preview pane grid lines updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-online,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-design,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-html,
+        body.theme-afterburner-updated.cyber-theme-enabled #preview-pane-tickets {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        body.theme-afterburner-updated.cyber-theme-enabled #kanban-preview-pane {
+            background-image:
+                linear-gradient(rgba(0, 229, 255, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(0, 229, 255, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+        /* Afterburner Updated — planning card borders updated to #00e5ff */
+        body.theme-afterburner-updated.cyber-theme-enabled .planning-card {
+            border-color: rgba(0, 229, 255, 0.20);
+            box-shadow: 0 0 12px rgba(0, 229, 255, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+        }
+
+        body {
+            font-family: var(--font-family);
+            font-size: 13px;
+            color: var(--text-primary);
+            background: var(--panel-bg);
+            height: 100vh;
+            overflow: hidden;
+        }
+
+        .container {
+            display: flex;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+        }
+
+        /* Tab Bar - Kanban Dark Theme */
+        .research-tab-bar {
+            display: flex;
+            flex-direction: row;
+            border-bottom: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            height: 40px;
+            overflow-x: auto;
+        }
+
+        .research-tab-btn {
+            flex-shrink: 0;
+            white-space: nowrap;
+            padding: 0 16px;
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            background: transparent;
+            color: var(--text-secondary);
+            border: 1px solid transparent;
+            border-bottom: none;
+            border-radius: 3px 3px 0 0;
+            position: relative;
+            top: 1px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .research-tab-btn:hover {
+            color: var(--text-primary);
+            background: color-mix(in srgb, var(--accent-teal) 5%, transparent);
+        }
+
+        .research-tab-btn.active {
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border-color: var(--border-color);
+            border-bottom-color: var(--panel-bg2);
+        }
+
+        /* Tab Content Areas */
+        .research-tab-content {
+            display: none;
+            flex: 1;
+            overflow: hidden;
+        }
+
+        .research-tab-content.active {
+            display: block;
+        }
+
+        #local-content,
+        #online-content,
+        #kanban-content,
+        #design-content,
+        #html-preview-content,
+        #tickets-content {
+            display: none;
+            flex-direction: column;
+            height: calc(100vh - 40px);
+            background: var(--panel-bg);
+        }
+
+        #local-content.active,
+        #online-content.active,
+        #kanban-content.active,
+        #design-content.active,
+        #html-preview-content.active,
+        #tickets-content.active {
+            display: flex;
+        }
+
+        .controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 12px;
+            background: var(--panel-bg2);
+            border-bottom: 1px solid var(--border-color);
+            flex-shrink: 0;
+        }
+
+        .workspace-filter-select {
+            font-size: 11px;
+            font-family: var(--font-mono);
+            letter-spacing: 0.5px;
+            padding: 3px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            cursor: pointer;
+            max-width: 160px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+        }
+        .workspace-filter-select:hover {
+            border-color: var(--accent-teal-dim);
+        }
+        .workspace-filter-select:focus {
+            outline: 1px solid var(--accent-teal);
+        }
+
+        .strip-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 10px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            padding: 4px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .strip-btn:hover:not(:disabled) {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+
+        .strip-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .content-row {
+            display: flex;
+            flex: 1;
+            overflow: hidden;
+        }
+        .content-row > * {
+            transition: flex 0.2s ease;
+        }
+        .content-row > :first-child {
+            flex: 1;
+            overflow-y: auto;
+        }
+        .content-row > :last-child {
+            flex: 3;
+            overflow-y: auto;
+        }
+
+        .content-row.collapsed > :first-child {
+            flex: 0 0 40px !important;
+        }
+        .content-row.collapsed > :last-child {
+            flex: 1 !important;
+        }
+
+        .content-row.collapsed #tree-pane,
+        .content-row.collapsed #tree-pane-online,
+        .content-row.collapsed #tree-pane-design,
+        .content-row.collapsed #tree-pane-html,
+        .content-row.collapsed #tree-pane-tickets {
+            padding: 4px;
+            overflow: hidden;
+        }
+
+        .content-row.collapsed .file-name,
+        .content-row.collapsed .label,
+        .content-row.collapsed .folder-subheader,
+        .content-row.collapsed .source-header,
+        .content-row.collapsed .folder-config,
+        .content-row.collapsed .source-header-row,
+        .content-row.collapsed .imported-docs-header,
+        .content-row.collapsed .imported-docs-doc-subheader,
+        .content-row.collapsed .last-synced,
+        .content-row.collapsed .sync-btn,
+        .content-row.collapsed .source-badge,
+        .content-row.collapsed .card-text,
+        .content-row.collapsed .card-actions,
+        .content-row.collapsed .card-subtitle {
+            display: none !important;
+        }
+
+        .content-row.collapsed .tree-node-container {
+            margin-left: 0 !important;
+        }
+
+        .content-row.collapsed .tree-node {
+            justify-content: center;
+            padding: 8px 0;
+            margin-left: 0 !important;
+        }
+
+        .content-row.collapsed .tree-node .icon {
+            margin: 0;
+            font-size: 16px;
+        }
+
+        .sidebar-toggle-row {
+            display: flex;
+            justify-content: flex-end;
+            align-items: center;
+            gap: 8px;
+            margin-bottom: 8px;
+        }
+
+        .sidebar-toggle-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 2px 6px;
+            border-radius: 3px;
+            font-size: 14px;
+            line-height: 1;
+            transition: all 0.15s;
+        }
+
+        .sidebar-folders-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            cursor: pointer;
+            padding: 4px 8px;
+            border-radius: 3px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            line-height: 1.2;
+            transition: all 0.15s;
+            margin-right: auto;
+            display: flex;
+            align-items: center;
+        }
+
+        .cyber-theme-enabled .sidebar-folders-btn:hover {
+            color: var(--accent-neon);
+            border-color: var(--accent-neon);
+            box-shadow: 0 0 5px color-mix(in srgb, var(--accent-neon) 40%, transparent);
+            background: color-mix(in srgb, var(--accent-neon) 10%, transparent);
+        }
+
+        .sidebar-folders-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .sidebar-toggle-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+
+        .content-row.collapsed .sidebar-toggle-row {
+            position: static;
+            display: flex;
+            justify-content: center;
+            margin-bottom: 8px;
+        }
+
+        .content-row.collapsed .sidebar-folders-btn {
+            display: none !important;
+        }
+
+        /* Active Design Doc Header */
+        .active-doc-banner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--accent-teal-dim);
+            border-bottom: 1px solid var(--accent-teal);
+            flex-shrink: 0;
+        }
+
+        .active-doc-banner.inactive {
+            background: var(--panel-bg2);
+            border-bottom-color: var(--border-color);
+        }
+
+        .active-doc-info {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            font-size: 12px;
+        }
+
+        .active-doc-label {
+            color: var(--text-secondary);
+        }
+
+        .active-doc-name {
+            color: var(--accent-teal);
+            font-weight: 500;
+            max-width: 300px;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .active-doc-banner.inactive .active-doc-name {
+            color: var(--text-secondary);
+        }
+
+        .btn-disable-doc {
+            background: transparent;
+            border: 1px solid var(--accent-teal);
+            color: var(--accent-teal);
+            font-size: 10px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 3px 10px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+        }
+
+        .btn-disable-doc:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .active-doc-banner.inactive .btn-disable-doc {
+            display: none;
+        }
+
+        #notebook-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        #notebook-content.active {
+            display: flex;
+        }
+
+        /* Planning Cards */
+        .planning-card {
+            border: var(--card-border);
+            border-radius: 6px;
+            padding: 16px;
+            background: var(--card-bg);
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            box-shadow: var(--shadow-md);
+            margin-bottom: 16px;
+            transition: all 0.15s;
+        }
+
+
+        .planning-card-header {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+            border-bottom: 1px solid var(--accent-teal-dim);
+        }
+
+        .planning-card-description {
+            font-size: 12px;
+            line-height: 1.5;
+            color: var(--text-primary);
+        }
+
+        .planning-card-section {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        /* Add separator between consecutive card sections */
+        .planning-card-section + .planning-card-section {
+            margin-top: 8px;
+            border-top: 1px solid var(--accent-teal-dim);
+            padding-top: 16px;
+        }
+
+        .planning-card-section-title {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--accent-teal);
+            margin-top: 12px;
+            margin-bottom: 8px;
+        }
+
+        .planning-status {
+            font-size: 10px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            padding: 4px 0;
+        }
+
+        /* Controls & Buttons */
+        .planning-controls {
+            display: flex;
+            flex-direction: row;
+            gap: 8px;
+            flex-wrap: wrap;
+            margin-top: 12px;
+            justify-content: flex-start;
+        }
+
+        .planning-button {
+            padding: 8px 16px;
+            font-size: 11px;
+            font-family: var(--font-family);
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 3px;
+            transition: all 0.15s;
+        }
+
+        .planning-button:active {
+            box-shadow: 0 1px 3px rgba(0, 0, 0, 0.2);
+        }
+
+        .planning-button:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+            box-shadow: var(--glow-teal);
+        }
+
+        .planning-button:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        .planning-button.secondary {
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+        }
+
+        .planning-button.secondary:hover:not(:disabled) {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+            box-shadow: none;
+        }
+
+        /* Form Elements */
+        .planning-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        .planning-input {
+            width: 100%;
+            font-size: 12px;
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            box-sizing: border-box;
+        }
+
+        .planning-custom-row {
+            padding: 4px 0;
+        }
+
+        .planning-hint {
+            font-size: 9px;
+            color: var(--text-secondary);
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            padding: 4px 0;
+        }
+
+        .planning-preview {
+            margin: 4px 0;
+            font-size: 10px;
+            color: var(--text-secondary);
+            padding: 8px;
+            background: var(--card-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+            white-space: pre-line;
+            line-height: 1.4;
+        }
+
+        .empty-state {
+            padding: 12px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .planning-error {
+            min-height: 0;
+            padding: 4px 0;
+            color: #f14c4c;
+            font-size: 10px;
+            font-family: 'SF Mono', Monaco, 'Cascadia Code', monospace;
+        }
+
+        #tree-pane,
+        #tree-pane-online,
+        #tree-pane-html,
+        #tree-pane-tickets {
+            position: relative;
+            background: var(--panel-bg2);
+            border-right: 1px solid var(--border-color);
+            overflow-y: auto;
+            padding: 12px;
+            min-height: 100%;
+        }
+
+        .source-header {
+            font-weight: 600;
+            padding: 8px 0 4px 0;
+            margin-top: 8px;
+            margin-bottom: 8px;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            font-size: 10px;
+            letter-spacing: 1px;
+            border-bottom: 1px solid var(--border-color);
+        }
+
+        .source-header:first-of-type {
+            margin-top: 0;
+        }
+
+        .folder-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+        }
+
+        .folder-subheader:first-of-type {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .source-folder-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 11px;
+            font-weight: 700;
+            color: var(--accent-teal);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin: 8px 0 4px 0;
+        }
+
+        .folder-import-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+            margin-left: auto;
+            line-height: 1;
+        }
+        .folder-import-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+
+        .source-header-row {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 8px 10px;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg2));
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            margin: 4px 0;
+        }
+
+        .source-controls {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .source-refresh-btn {
+            font-size: 11px;
+            padding: 2px 6px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .source-refresh-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+        .source-folder-header:first-of-type {
+            margin-top: 4px;
+        }
+
+        /* Reset margin on first folder-subheader after a source-folder header */
+        .source-folder-header + .folder-subheader {
+            margin-top: 0;
+            padding-top: 8px;
+        }
+
+        .file-item {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            cursor: pointer;
+            border-radius: 2px;
+            font-size: 12px;
+            color: var(--text-primary);
+        }
+
+        .file-item:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .file-item .file-icon {
+            flex-shrink: 0;
+            font-size: 12px;
+        }
+
+        .file-item .file-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-node-container {
+            /* No visual styling — purely structural wrapper */
+        }
+
+        .tree-node {
+            position: relative;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+            padding: 8px 10px;
+            border-radius: 4px;
+            margin: 3px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .tree-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .tree-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        /* Document cards: vertical column layout matching Kanban plan cards */
+        .tree-node:has(.card-text) {
+            flex-direction: column;
+            align-items: stretch;
+            padding: 10px 12px;
+            gap: 8px;
+        }
+        .tree-node:has(.card-text) .card-actions {
+            margin-top: 0;
+        }
+
+        .tree-node.folder-subheader {
+            background: transparent;
+            border: none;
+            border-left: none;
+            box-shadow: none;
+            padding: 12px 8px 4px 8px;
+            margin: 0;
+            border-radius: 0;
+        }
+        .tree-node.folder-subheader:hover {
+            background: transparent;
+            border-color: transparent;
+            border-left-color: transparent;
+            box-shadow: none;
+        }
+
+        .tree-node .icon {
+            flex-shrink: 0;
+            width: 16px;
+            height: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 12px;
+        }
+
+        .tree-node .label {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .tree-children {
+            margin-left: 16px;
+        }
+
+        .tree-placeholder {
+            color: var(--text-secondary);
+            font-style: italic;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+
+        #preview-pane,
+        #preview-pane-online,
+        #preview-pane-tickets {
+            display: flex;
+            flex-direction: column;
+            background: var(--panel-bg, #000000);
+            /* Removed dot-pattern — VS Code preview uses solid backgrounds */
+            overflow-y: auto;
+            padding: 0 16px 16px 16px;
+            height: 100%;
+        }
+
+        #preview-pane-design {
+            background: var(--panel-bg);
+        }
+        #preview-pane-html {
+            background: var(--panel-bg);
+        }
+
+        .preview-content-wrapper {
+            display: flex;
+            flex-direction: column;
+            flex: 1;
+        }
+
+        #status {
+            margin-left: auto;
+            font-size: 12px;
+            color: var(--text-secondary);
+        }
+
+        /* Custom Scrollbars for Dark Mode Immersion */
+        ::-webkit-scrollbar {
+            width: 6px;
+            height: 6px;
+        }
+        ::-webkit-scrollbar-track {
+            background: transparent;
+        }
+        ::-webkit-scrollbar-thumb {
+            background: var(--vscode-scrollbarSlider-background, var(--border-bright));
+            border-radius: 3px;
+            border: none;
+        }
+        ::-webkit-scrollbar-thumb:hover {
+            background: var(--vscode-scrollbarSlider-hoverBackground, var(--text-secondary));
+        }
+
+        /* Sidebar Hierarchy Fix */
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary); /* Subdued from accent-teal */
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        /* Unified Markdown Preview Styling (Local, Online & Design) */
+        #markdown-preview,
+        #markdown-preview-online,
+        #markdown-preview-design {
+            flex: 1;
+            overflow-y: auto;
+            padding: 26px; /* Match VS Code's markdown.css default - added top/bottom padding */
+            max-width: 800px; /* Clarification: kept for readability, VS Code uses full width */
+            margin: 0 auto;
+            font-family: 'Hanken Grotesk', sans-serif;
+            font-size: 13px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+        }
+
+        /* Kanban preview pane: inherits font/text styling but keeps its own layout */
+        #kanban-preview-pane {
+            font-family: 'Hanken Grotesk', var(--vscode-font-family, -apple-system, BlinkMacSystemFont, "Segoe WPC", "Segoe UI", system-ui, "Ubuntu", "Droid Sans", sans-serif);
+            font-size: 13px;
+            line-height: 1.5;
+            word-wrap: break-word;
+            color: var(--vscode-editor-foreground, #cccccc);
+            padding: 8px 16px;
+        }
+
+        #markdown-preview h1, #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h1, #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #markdown-preview-design h1, #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
+        #kanban-preview-pane h1, #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
+            margin-top: 24px;
+            margin-bottom: 12px;
+            font-weight: 600;
+            line-height: 1.1;
+            color: #ffffff;
+            letter-spacing: -0.05em;
+            font-stretch: 90%;
+            font-family: 'GeistPixel', 'Hanken Grotesk', sans-serif;
+        }
+
+        #markdown-preview h2, #markdown-preview h3, #markdown-preview h4, #markdown-preview h5, #markdown-preview h6,
+        #markdown-preview-online h2, #markdown-preview-online h3, #markdown-preview-online h4, #markdown-preview-online h5, #markdown-preview-online h6,
+        #markdown-preview-design h2, #markdown-preview-design h3, #markdown-preview-design h4, #markdown-preview-design h5, #markdown-preview-design h6,
+        #kanban-preview-pane h2, #kanban-preview-pane h3, #kanban-preview-pane h4, #kanban-preview-pane h5, #kanban-preview-pane h6 {
+            text-transform: uppercase;
+            color: var(--accent-teal);
+        }
+
+        #markdown-preview h1,
+        #markdown-preview-online h1,
+        #markdown-preview-design h1,
+        #kanban-preview-pane h1 {
+            font-size: 2em; /* 2em relative to 13px base = 26px */
+            margin-top: 0;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 3px solid var(--accent-teal-dim);
+            padding-left: 8px;
+            text-transform: uppercase;
+        }
+
+        #markdown-preview h2,
+        #markdown-preview-online h2,
+        #markdown-preview-design h2,
+        #kanban-preview-pane h2 {
+            font-size: 1.5em; /* 1.5em relative to 13px base = 19.5px */
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            border-left: 2px solid var(--accent-teal-dim);
+            padding-left: 6px;
+        }
+
+        #markdown-preview h3,
+        #markdown-preview-online h3,
+        #markdown-preview-design h3,
+        #kanban-preview-pane h3 {
+            font-size: 1.25em; /* 1.25em relative to 13px base = 16.25px */
+        }
+
+        #markdown-preview h4,
+        #markdown-preview-online h4,
+        #markdown-preview-design h4,
+        #kanban-preview-pane h4 {
+            font-size: 1em;
+        }
+
+        #markdown-preview h5,
+        #markdown-preview-online h5,
+        #markdown-preview-design h5,
+        #kanban-preview-pane h5 {
+            font-size: 0.875em;
+        }
+
+        #markdown-preview h6,
+        #markdown-preview-online h6,
+        #markdown-preview-design h6,
+        #kanban-preview-pane h6 {
+            font-size: 0.85em;
+        }
+
+        #markdown-preview p,
+        #markdown-preview-online p,
+        #markdown-preview-design p,
+        #kanban-preview-pane p {
+            margin-bottom: 16px;
+            line-height: inherit; /* Inherits from container's 1.5 */
+            color: var(--text-primary, #e0e0e0);
+            font-size: inherit; /* Inherits from container's 13px */
+        }
+
+        #markdown-preview li,
+        #markdown-preview-online li,
+        #markdown-preview-design li,
+        #kanban-preview-pane li {
+            margin-bottom: 6px; /* Tighter list item spacing */
+            line-height: inherit;
+            color: var(--vscode-editor-foreground, #cccccc);
+            font-size: inherit;
+        }
+
+        #markdown-preview li p,
+        #markdown-preview-online li p,
+        #markdown-preview-design li p,
+        #kanban-preview-pane li p {
+            margin-bottom: 0; /* Paragraphs inside list items: zero extra margin (li already spaced) */
+        }
+
+        #markdown-preview pre,
+        #markdown-preview-online pre,
+        #markdown-preview-design pre,
+        #kanban-preview-pane pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 3px;
+            overflow-x: auto;
+            padding: 16px; /* VS Code default */
+            margin: 16px 0;
+        }
+
+        #markdown-preview pre code,
+        #markdown-preview-online pre code,
+        #markdown-preview-design pre code,
+        #kanban-preview-pane pre code {
+            background: none;
+            padding: 0;
+            border: none;
+            display: inline-block;
+            color: var(--vscode-editor-foreground, #cccccc);
+            tab-size: 4;
+        }
+
+        #markdown-preview code,
+        #markdown-preview-online code,
+        #markdown-preview-design code,
+        #kanban-preview-pane code {
+            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-size: 1em; /* Match VS Code: inline code is same size as surrounding text */
+            line-height: 1.357em;
+            color: var(--accent-teal);
+            background-color: color-mix(in srgb, var(--accent-teal) 12%, transparent);
+            border: 1px solid var(--accent-teal-dim);
+            padding: 2px 6px;
+            border-radius: 3px;
+        }
+
+        #markdown-preview blockquote,
+        #markdown-preview-online blockquote,
+        #markdown-preview-design blockquote,
+        #kanban-preview-pane blockquote {
+            margin: 0;
+            padding: 0 16px 0 10px; /* Match VS Code's markdown.css */
+            border-left: 5px solid var(--vscode-textBlockQuote-border, var(--border-color));
+            border-radius: 2px;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            background: transparent;
+        }
+
+        #markdown-preview ul, #markdown-preview ol,
+        #markdown-preview-online ul, #markdown-preview-online ol,
+        #markdown-preview-design ul, #markdown-preview-design ol,
+        #kanban-preview-pane ul, #kanban-preview-pane ol {
+            margin-bottom: 16px; /* Match VS Code's tighter list spacing */
+            padding-left: 2em;
+        }
+
+        /* Table Styling */
+        #markdown-preview table,
+        #markdown-preview-online table,
+        #markdown-preview-design table,
+        #kanban-preview-pane table {
+            border-collapse: collapse;
+            margin-bottom: 0.7em;
+            font-size: inherit; /* Inherits from container */
+        }
+
+        #markdown-preview th,
+        #markdown-preview-online th,
+        #markdown-preview-design th,
+        #kanban-preview-pane th {
+            text-align: left;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.69));
+            font-weight: 600;
+            padding: 5px 10px;
+        }
+
+        #markdown-preview td,
+        #markdown-preview-online td,
+        #markdown-preview-design td,
+        #kanban-preview-pane td {
+            padding: 5px 10px;
+            border-top: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+            color: var(--vscode-editor-foreground, var(--text-primary));
+        }
+
+        #markdown-preview tr:hover td,
+        #markdown-preview-online tr:hover td,
+        #markdown-preview-design tr:hover td,
+        #kanban-preview-pane tr:hover td {
+            background: var(--vscode-list-hoverBackground, var(--card-bg-hover));
+        }
+
+        /* Subtle, Interactive Links */
+        #markdown-preview a,
+        #markdown-preview-online a,
+        #markdown-preview-design a,
+        #kanban-preview-pane a {
+            color: var(--vscode-textLink-foreground, var(--accent-teal));
+            text-decoration: none;
+        }
+
+        #markdown-preview a:hover,
+        #markdown-preview-online a:hover,
+        #markdown-preview-design a:hover,
+        #kanban-preview-pane a:hover {
+            color: var(--vscode-textLink-activeForeground, var(--accent-teal-bright));
+            text-decoration: underline;
+        }
+
+        #markdown-preview hr,
+        #markdown-preview-online hr,
+        #markdown-preview-design hr,
+        #kanban-preview-pane hr {
+            border: 0;
+            height: 1px;
+            border-bottom: 1px solid var(--vscode-widget-border, rgba(255, 255, 255, 0.18));
+        }
+
+        #markdown-preview img,
+        #markdown-preview-online img,
+        #markdown-preview-design img,
+        #kanban-preview-pane img {
+            max-width: 100%;
+            max-height: 100%;
+        }
+
+        #markdown-preview .empty-state,
+        #markdown-preview-online .empty-state,
+        #markdown-preview-design .empty-state,
+        #kanban-preview-pane .empty-state {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            height: 100%;
+            color: var(--vscode-editor-foreground, var(--text-secondary));
+            font-size: inherit; /* Inherits from container's 14px */
+            opacity: 0.5;
+        }
+
+        .error-state {
+            color: #f14c4c;
+            padding: 16px;
+        }
+
+        .filter-row {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            flex-direction: column;
+            align-items: stretch;
+            gap: 6px;
+        }
+
+        .filter-select {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config {
+            padding: 4px 4px 8px 4px;
+            display: flex;
+            align-items: center;
+            gap: 6px;
+        }
+
+        .folder-config input {
+            flex: 1;
+            font-size: 12px;
+            padding: 2px 4px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-family);
+        }
+
+        .folder-config button {
+            font-size: 11px;
+            padding: 2px 8px;
+            border: 1px solid var(--border-color);
+            background: var(--card-bg);
+            color: var(--text-primary);
+            cursor: pointer;
+            border-radius: 2px;
+        }
+
+        .folder-config button:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .folder-list {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            max-height: 120px;
+            overflow-y: auto;
+            margin-top: 4px;
+        }
+
+        .folder-list-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: var(--panel-bg2);
+            padding: 3px 6px;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            font-size: 11px;
+            gap: 8px;
+        }
+
+        .folder-path {
+            flex: 1;
+            white-space: nowrap;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            color: var(--text-primary);
+        }
+
+        .folder-list-remove-btn {
+            background: transparent;
+            border: none;
+            color: #ff5555;
+            cursor: pointer;
+            font-size: 10px;
+            padding: 2px 4px;
+            border-radius: 2px;
+        }
+
+        .folder-list-remove-btn:hover {
+            background: rgba(255, 85, 85, 0.1);
+        }
+
+        .folder-list-empty {
+            font-size: 11px;
+            color: var(--text-secondary);
+            padding: 6px;
+            text-align: center;
+            font-style: italic;
+        }
+
+        .source-doc-list {
+            margin-left: 0;
+        }
+
+        /* Imported Docs Section */
+        .imported-docs-section {
+            margin-top: 16px;
+            padding-top: 12px;
+            border-top: 1px solid var(--accent-teal-dim);
+        }
+
+        .imported-docs-header {
+            font-size: 10px;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            color: var(--text-secondary);
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .imported-docs-doc-subheader {
+            padding: 6px 8px 2px;
+            font-size: 11px;
+            color: var(--text-primary);
+            font-weight: 500;
+            border-top: 1px solid var(--border-color);
+            margin-top: 4px;
+        }
+
+        .imported-doc-row {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 6px 8px;
+            border-radius: 2px;
+            font-size: 12px;
+        }
+
+        .imported-doc-row:hover {
+            background: var(--card-bg-hover);
+        }
+
+        .source-badge {
+            font-size: 9px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--accent-teal);
+            background: var(--panel-bg2);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            padding: 1px 4px;
+            flex-shrink: 0;
+        }
+
+        .imported-doc-name {
+            flex: 1;
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+
+        .last-synced {
+            font-size: 10px;
+            color: var(--text-secondary);
+            flex-shrink: 0;
+        }
+
+        .sync-btn {
+            font-size: 10px;
+            padding: 2px 8px;
+            border: 1px solid var(--accent-teal-dim);
+            background: var(--panel-bg2);
+            color: var(--accent-teal);
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            flex-shrink: 0;
+        }
+
+        .sync-btn:hover:not(:disabled) {
+            background: var(--accent-teal);
+            color: #111111;
+        }
+
+        .sync-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+            border-color: var(--border-color);
+            color: var(--text-secondary);
+        }
+
+        /* Duplicate Modal */
+        .duplicate-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.5);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .duplicate-modal .modal-content {
+            background: var(--panel-bg);
+            padding: 24px;
+            border-radius: 8px;
+            max-width: 400px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+        }
+        .duplicate-modal .modal-content h3 { margin: 0 0 12px 0; color: var(--text-primary); }
+        .duplicate-modal .modal-content p { margin: 0 0 8px 0; color: var(--text-secondary); }
+        .duplicate-modal .modal-actions { display: flex; gap: 12px; margin-top: 16px; }
+        .duplicate-modal button {
+            flex: 1; padding: 8px 16px;
+            border: 1px solid var(--border-color);
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border-radius: 4px; cursor: pointer; font-size: 13px;
+        }
+        .duplicate-modal button:hover { background: var(--accent-teal-dim); }
+        .duplicate-modal .modal-btn-replace { border-color: var(--accent-teal); color: var(--accent-teal); }
+
+        /* Research Tab Content */
+        #research-content {
+            flex-direction: column;
+            padding: 16px;
+            gap: 16px;
+            overflow-y: auto;
+            height: 100%;
+            background: var(--panel-bg);
+        }
+
+        #research-content.active {
+            display: flex;
+        }
+
+        /* Prompt Buttons Container */
+        .prompt-buttons-container {
+            display: flex;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        /* Segmented Control */
+        .segmented-control {
+            display: flex;
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            overflow: hidden;
+            margin-top: 12px;
+        }
+
+        .segmented-btn {
+            flex: 1;
+            padding: 8px 16px;
+            background: var(--panel-bg2);
+            border: none;
+            border-right: 1px solid var(--border-color);
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-secondary);
+            transition: all 0.15s;
+        }
+
+        .segmented-btn:last-child {
+            border-right: none;
+        }
+
+        .segmented-btn.active {
+            background: var(--accent-teal-dim);
+            color: var(--accent-teal);
+            font-weight: 600;
+        }
+
+        .segmented-btn:hover:not(.active) {
+            background: var(--card-bg-hover);
+        }
+
+        /* Radio Group */
+        .radio-group {
+            display: flex;
+            flex-direction: column;
+            gap: 8px;
+            margin-top: 12px;
+        }
+
+        .radio-option {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            cursor: pointer;
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .radio-option input[type="radio"] {
+            cursor: pointer;
+            accent-color: var(--accent-teal);
+        }
+
+        /* Toggle Switch */
+        .toggle-container {
+            display: flex;
+            align-items: center;
+            gap: 12px;
+            margin-top: 12px;
+        }
+
+        .toggle-switch {
+            position: relative;
+            display: inline-block;
+            width: 44px;
+            height: 24px;
+        }
+
+        .toggle-switch input {
+            opacity: 0;
+            width: 0;
+            height: 0;
+        }
+
+        .toggle-slider {
+            position: absolute;
+            cursor: pointer;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            background-color: var(--border-color);
+            transition: 0.2s;
+            border-radius: 24px;
+        }
+
+        .toggle-slider:before {
+            position: absolute;
+            content: "";
+            height: 18px;
+            width: 18px;
+            left: 3px;
+            bottom: 3px;
+            background-color: var(--text-primary);
+            transition: 0.2s;
+            border-radius: 50%;
+        }
+
+        .toggle-switch input:checked + .toggle-slider {
+            background-color: var(--accent-teal-dim);
+        }
+
+        .toggle-switch input:checked + .toggle-slider:before {
+            transform: translateX(20px);
+            background-color: var(--accent-teal);
+        }
+
+        .toggle-label {
+            font-size: 13px;
+            color: var(--text-primary);
+        }
+
+        .antigravity-artifact-node {
+            margin-left: 12px; /* Indent under date header */
+        }
+
+        .planning-card-btn {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-family: var(--font-family);
+            font-size: 9px;
+            letter-spacing: 0.5px;
+            text-transform: uppercase;
+            padding: 2px 6px;
+            cursor: pointer;
+            border-radius: 2px;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .planning-card-btn:hover {
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+            border-color: var(--accent-teal-dim);
+            color: var(--accent-teal);
+        }
+        .planning-card-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+        .card-icon-btn {
+            flex-shrink: 0;
+            width: 22px;
+            height: 22px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: transparent;
+            border: 1px solid var(--border-color);
+            border-radius: 3px;
+            color: var(--text-secondary);
+            font-size: 12px;
+            line-height: 1;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .card-icon-btn:hover {
+            color: var(--accent-teal);
+            border-color: var(--accent-teal-dim);
+            background: color-mix(in srgb, var(--accent-teal) 8%, transparent);
+        }
+        .card-icon-btn.card-delete-btn:hover {
+            background: #f14c4c;
+            border-color: #f14c4c;
+            color: white;
+        }
+        .card-icon-btn:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+        }
+        .antigravity-date-subheader {
+            font-size: 10px;
+            font-weight: 600;
+            color: var(--text-secondary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            padding: 12px 8px 4px 8px;
+            margin-top: 8px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .antigravity-date-subheader:first-child {
+            margin-top: 0;
+            padding-top: 4px;
+        }
+        .tree-node .card-title {
+            font-size: 12px;
+            font-weight: 500;
+            color: var(--text-primary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-subtitle {
+            font-size: 10px;
+            color: var(--text-secondary);
+            overflow: hidden;
+            text-overflow: ellipsis;
+            white-space: nowrap;
+        }
+        .tree-node .card-actions {
+            display: flex;
+            gap: 4px;
+            margin-top: 4px;
+            flex-wrap: wrap;
+        }
+        .tree-node .card-text {
+            flex: 1;
+            min-width: 0;
+            display: flex;
+            flex-direction: column;
+            gap: 2px;
+        }
+
+        details.planning-card summary.planning-card-header {
+            border-bottom: none;
+            margin-bottom: 0;
+            padding-bottom: 0;
+        }
+        details.planning-card[open] summary.planning-card-header {
+            border-bottom: 1px solid var(--accent-teal-dim);
+            margin-bottom: 8px;
+            padding-bottom: 8px;
+        }
+
+        /* Kanban Plans Tab */
+        .kanban-controls-strip {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            padding: 8px;
+            border-bottom: 1px solid var(--border-color, rgba(255,255,255,0.08));
+        }
+        .kanban-controls-strip select,
+        .kanban-controls-strip input {
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: inherit;
+            border-radius: 4px;
+            padding: 4px 8px;
+            font-size: 12px;
+        }
+        #kanban-search { flex: 1; }
+        #kanban-refresh-btn {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: inherit;
+            border-radius: 4px;
+            cursor: pointer;
+            padding: 4px 8px;
+        }
+        #kanban-content-row { display: flex; gap: 0; height: 100%; overflow: hidden; }
+        #kanban-list-pane { flex: 1; overflow-y: auto; }
+        .kanban-preview-pane { overflow-y: auto; padding: 12px; border-left: 1px solid var(--border-color, rgba(255,255,255,0.08)); background: var(--panel-bg, #000000); }
+        .kanban-plan-item {
+            position: relative;
+            display: flex;
+            align-items: flex-start;
+            gap: 10px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            /* Match kanban board card gradient */
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+        .kanban-plan-item:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+        .kanban-plan-item.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+        .kanban-plan-topic { font-size: 13px; font-weight: 500; flex: 1; }
+        .kanban-column-badge {
+            font-size: 10px;
+            padding: 2px 7px;
+            border-radius: 10px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.04em;
+            /* Neutral grey/black for all status labels */
+            background: rgba(255, 255, 255, 0.08);
+            color: var(--text-secondary);
+            border: 1px solid var(--border-color);
+        }
+        .kanban-column-badge[data-column="CREATED"] { background: rgba(61, 219, 217, 0.2); color: #3ddbd9; border-color: rgba(61, 219, 217, 0.3); }
+        .kanban-column-badge[data-column="PLAN_REVIEWED"] { background: rgba(187, 134, 252, 0.2); color: #bb86fc; border-color: rgba(187, 134, 252, 0.3); }
+        .kanban-column-badge[data-column="CODED"] { background: rgba(255, 183, 77, 0.2); color: #ffb74d; border-color: rgba(255, 183, 77, 0.3); }
+        .kanban-column-badge[data-column="CODE_REVIEWED"] { background: rgba(255, 138, 101, 0.2); color: #ff8a65; border-color: rgba(255, 138, 101, 0.3); }
+        .kanban-column-badge[data-column="COMPLETED"] { background: rgba(102, 187, 106, 0.2); color: #66bb6a; border-color: rgba(102, 187, 106, 0.3); }
+        /* Fallback for custom columns */
+        .kanban-column-badge:not([data-column="CREATED"]):not([data-column="PLAN_REVIEWED"]):not([data-column="CODED"]):not([data-column="CODE_REVIEWED"]):not([data-column="COMPLETED"]) {
+            background: rgba(255, 255, 255, 0.08); color: var(--text-secondary); border: 1px solid var(--border-color);
+        }
+
+        .markdown-alert { padding: 8px 12px; border-left: 4px solid; border-radius: 4px; margin: 12px 0; }
+        .markdown-alert-title { font-weight: 600; font-size: 12px; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+        .alert-note { border-left-color: var(--accent-teal); background: color-mix(in srgb, var(--accent-teal) 8%, transparent); }
+        .alert-note .markdown-alert-title { color: var(--accent-teal); }
+        .alert-tip { border-left-color: #66bb6a; background: rgba(102, 187, 106, 0.08); }
+        .alert-tip .markdown-alert-title { color: #66bb6a; }
+        .alert-important { border-left-color: #bb86fc; background: rgba(187, 134, 252, 0.08); }
+        .alert-important .markdown-alert-title { color: #bb86fc; }
+        .alert-warning { border-left-color: #ffb74d; background: rgba(255, 183, 77, 0.08); }
+        .alert-warning .markdown-alert-title { color: #ffb74d; }
+        .alert-caution { border-left-color: #ff8a65; background: rgba(255, 138, 101, 0.08); }
+        .alert-caution .markdown-alert-title { color: #ff8a65; }
+
+        .cyber-scanlines {
+            display: none; /* Hidden by default; shown only when .cyber-theme-enabled is on body */
+            position: absolute;
+            inset: 0;
+            pointer-events: none; /* CRITICAL: must not block interaction with content below */
+            background: repeating-linear-gradient(
+                0deg,
+                transparent,
+                transparent 2px,
+                rgba(0, 0, 0, 0.15) 2px,
+                rgba(0, 0, 0, 0.15) 4px
+            );
+            z-index: 5;
+        }
+        .cyber-theme-enabled .cyber-scanlines { display: block; }
+
+        /* Animated CRT rolling sweep beam — only active when animation is not disabled */
+        .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+            content: " ";
+            display: block;
+            position: absolute;
+            background: linear-gradient(
+                to bottom,
+                rgba(255, 255, 255, 0) 0%,
+                rgba(61, 219, 217, 0.03) 10%,
+                rgba(61, 219, 217, 0.07) 50%,
+                rgba(61, 219, 217, 0.03) 90%,
+                rgba(255, 255, 255, 0) 100%
+            );
+            width: 100%;
+            height: 80px;
+            pointer-events: none;
+            z-index: 6;
+            animation: scanline-sweep 8s linear infinite;
+        }
+
+        @keyframes scanline-sweep {
+            0% { transform: translateY(-80px); }
+            100% { transform: translateY(100vh); }
+        }
+
+        /* Respect reduced-motion preference — suppress ONLY the sweep animation,
+           not the static scanline texture. Selector matches the animated rule precisely. */
+        @media (prefers-reduced-motion: reduce) {
+            .cyber-theme-enabled:not(.cyber-animation-disabled) .cyber-scanlines::before {
+                animation: none;
+                display: none;
+            }
+        }
+
+        /* ── Cyber Panel Theme: Neon Glow Effects ── */
+        /* Headings: bright teal glow */
+        .cyber-theme-enabled .preview-panel-wrapper h1 {
+            text-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 60%, transparent),
+                         0 0 20px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h2 {
+            text-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 50%, transparent),
+                         0 0 16px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h3 {
+            text-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 40%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h4 {
+            text-shadow: 0 0 5px color-mix(in srgb, var(--accent-teal) 35%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h5 {
+            text-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+        .cyber-theme-enabled .preview-panel-wrapper h6 {
+            text-shadow: 0 0 3px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        /* Preview panel wrapper: subtle outer glow border */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            box-shadow: inset 0 0 30px color-mix(in srgb, var(--accent-teal) 6%, transparent);
+        }
+
+        /* Inline code: neon glow */
+        .cyber-theme-enabled #markdown-preview code,
+        .cyber-theme-enabled #markdown-preview-online code,
+        .cyber-theme-enabled #markdown-preview-design code,
+        .cyber-theme-enabled #kanban-preview-pane code {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 25%, transparent);
+        }
+
+        /* Code blocks: subtle glow border */
+        .cyber-theme-enabled #markdown-preview pre,
+        .cyber-theme-enabled #markdown-preview-online pre,
+        .cyber-theme-enabled #markdown-preview-design pre,
+        .cyber-theme-enabled #kanban-preview-pane pre {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent),
+                        inset 0 0 12px rgba(0, 0, 0, 0.3);
+        }
+
+        /* Blockquotes: glowing left border */
+        .cyber-theme-enabled #markdown-preview blockquote,
+        .cyber-theme-enabled #markdown-preview-online blockquote,
+        .cyber-theme-enabled #markdown-preview-design blockquote,
+        .cyber-theme-enabled #kanban-preview-pane blockquote {
+            border-left-color: var(--accent-teal);
+            box-shadow: -4px 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        /* Markdown alerts: enhanced glow */
+        .cyber-theme-enabled .alert-note { box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent); }
+        .cyber-theme-enabled .alert-tip { box-shadow: 0 0 8px rgba(102, 187, 106, 0.15); }
+        .cyber-theme-enabled .alert-important { box-shadow: 0 0 8px rgba(187, 134, 252, 0.15); }
+        .cyber-theme-enabled .alert-warning { box-shadow: 0 0 8px rgba(255, 183, 77, 0.15); }
+        .cyber-theme-enabled .alert-caution { box-shadow: 0 0 8px rgba(255, 138, 101, 0.15); }
+
+        /* Kanban plan items: neon glow on selection/hover */
+        .cyber-theme-enabled .kanban-plan-item.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .kanban-plan-item:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Tree node items: neon glow on selection/hover */
+        .cyber-theme-enabled .tree-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .tree-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Column badges: neon glow matching their color */
+        .cyber-theme-enabled .kanban-column-badge[data-column="CREATED"] { box-shadow: 0 0 6px rgba(61, 219, 217, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="PLAN_REVIEWED"] { box-shadow: 0 0 6px rgba(187, 134, 252, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODED"] { box-shadow: 0 0 6px rgba(255, 183, 77, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="CODE_REVIEWED"] { box-shadow: 0 0 6px rgba(255, 138, 101, 0.3); }
+        .cyber-theme-enabled .kanban-column-badge[data-column="COMPLETED"] { box-shadow: 0 0 6px rgba(102, 187, 106, 0.3); }
+
+        /* Active tab: glow accent */
+        .cyber-theme-enabled .research-tab-btn.active {
+            box-shadow: 0 -2px 8px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        /* Controls strip buttons: glow on hover */
+        .cyber-theme-enabled .strip-btn:hover:not(:disabled) {
+            box-shadow: var(--glow-teal);
+        }
+
+        /* ── Cyber Panel Theme: Immersive Background ── */
+        /* NOTE: body.cyber-theme-enabled (not .cyber-theme-enabled body) because the class is
+           applied directly to document.body via classList.add — body cannot be a descendant of itself. */
+        body.cyber-theme-enabled {
+            background-color: #1a1a1a;
+            background-image:
+                /* Subtle cyan grid lines */
+                linear-gradient(rgba(61, 219, 217, 0.04) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.04) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+        }
+
+        /* Tab bar */
+        .cyber-theme-enabled .research-tab-bar {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.25);
+        }
+
+        /* Controls strip */
+        .cyber-theme-enabled .controls-strip {
+            background: rgba(10, 10, 10, 0.65);
+            backdrop-filter: blur(10px);
+            -webkit-backdrop-filter: blur(10px);
+            border-bottom-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Sidebar tree panes */
+        .cyber-theme-enabled #tree-pane,
+        .cyber-theme-enabled #tree-pane-online,
+        .cyber-theme-enabled #tree-pane-design,
+        .cyber-theme-enabled #tree-pane-html,
+        .cyber-theme-enabled #tree-pane-tickets {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-right-color: rgba(61, 219, 217, 0.20);
+        }
+
+        /* Kanban list pane */
+        .cyber-theme-enabled #kanban-list-pane {
+            background: rgba(10, 10, 10, 0.70);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+        }
+
+        /* Preview panel wrapper — transparent passthrough in cyber mode.
+           The wrapper has overflow: hidden (base CSS) which kills backdrop-filter on children;
+           we make it a transparent container and apply glass directly on the scroll panes. */
+        .cyber-theme-enabled .preview-panel-wrapper {
+            background: transparent;
+        }
+
+        /* Apply glassmorphism directly on the scroll containers where overflow-y:auto is set.
+           These sit directly above the body grid with no opaque ancestor in the way. */
+        .cyber-theme-enabled #preview-pane,
+        .cyber-theme-enabled #preview-pane-online,
+        .cyber-theme-enabled #preview-pane-design,
+        .cyber-theme-enabled #preview-pane-html,
+        .cyber-theme-enabled #preview-pane-tickets {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Kanban preview — same direct-glass approach */
+        .cyber-theme-enabled #kanban-preview-pane {
+            background-color: rgba(255, 255, 255, 0.015);
+            background-image:
+                linear-gradient(rgba(61, 219, 217, 0.08) 1px, transparent 1px),
+                linear-gradient(90deg, rgba(61, 219, 217, 0.08) 1px, transparent 1px);
+            background-size: 40px 40px, 40px 40px;
+            backdrop-filter: blur(6px);
+            -webkit-backdrop-filter: blur(6px);
+        }
+
+        /* Tab content wrappers — solid backgrounds that block the body grid */
+        .cyber-theme-enabled #research-content,
+        .cyber-theme-enabled #notebook-content {
+            background: transparent;
+        }
+
+        /* Kanban board content area */
+        .cyber-theme-enabled #kanban-content {
+            background: transparent;
+        }
+
+        /* Local and online content views */
+        .cyber-theme-enabled #local-content,
+        .cyber-theme-enabled #online-content,
+        .cyber-theme-enabled #design-content,
+        .cyber-theme-enabled #html-preview-content {
+            background: transparent;
+        }
+
+        /* Planning cards */
+        .cyber-theme-enabled .planning-card {
+            background: rgba(13, 13, 13, 0.60);
+            backdrop-filter: blur(8px);
+            -webkit-backdrop-filter: blur(8px);
+            border-color: rgba(61, 219, 217, 0.20);
+            box-shadow: 0 0 12px rgba(61, 219, 217, 0.06), 0 4px 12px rgba(0, 0, 0, 0.4);
+        }
+
+        /* Duplicate modal */
+        .cyber-theme-enabled .duplicate-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border: 1px solid rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Folder modal */
+        .cyber-theme-enabled .folder-modal .modal-content {
+            background: rgba(10, 10, 10, 0.88);
+            backdrop-filter: blur(12px);
+            -webkit-backdrop-filter: blur(12px);
+            border-color: rgba(61, 219, 217, 0.25);
+            box-shadow: 0 0 24px rgba(61, 219, 217, 0.12), 0 8px 32px rgba(0, 0, 0, 0.5);
+        }
+
+        /* Primary planning buttons: brighter neon border in cyber mode */
+        .cyber-theme-enabled .planning-button {
+            border-color: rgba(61, 219, 217, 0.45);
+            box-shadow: 0 0 6px rgba(61, 219, 217, 0.10);
+        }
+        .cyber-theme-enabled .planning-button:hover:not(:disabled) {
+            box-shadow: 0 0 14px rgba(61, 219, 217, 0.45);
+        }
+
+        /* Secondary planning buttons */
+        .cyber-theme-enabled .planning-button.secondary {
+            border-color: rgba(61, 219, 217, 0.20);
+            background: rgba(10, 10, 10, 0.50);
+        }
+        .cyber-theme-enabled .planning-button.secondary:hover:not(:disabled) {
+            border-color: rgba(61, 219, 217, 0.35);
+            background: rgba(61, 219, 217, 0.06);
+        }
+
+        /* Select and input controls */
+        .cyber-theme-enabled .planning-select,
+        .cyber-theme-enabled .planning-input {
+            background: rgba(10, 10, 10, 0.70);
+            border-color: rgba(61, 219, 217, 0.20);
+        }
+        .cyber-theme-enabled .planning-select:focus,
+        .cyber-theme-enabled .planning-input:focus {
+            border-color: rgba(61, 219, 217, 0.50);
+            box-shadow: 0 0 8px rgba(61, 219, 217, 0.15);
+        }
+
+        /* Cyan scrollbar thumbs in cyber mode */
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb {
+            background: rgba(61, 219, 217, 0.25);
+        }
+        .cyber-theme-enabled ::-webkit-scrollbar-thumb:hover {
+            background: rgba(61, 219, 217, 0.45);
+        }
+
+        .cyber-theme-enabled .kanban-controls-strip {
+            background: transparent;
+        }
+
+        .cyber-theme-enabled .markdown-editor {
+            background: transparent;
+        }
+
+        .preview-panel-wrapper {
+            position: relative;
+            flex: 3;
+            height: 100%;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+        .kanban-plan-meta { font-size: 11px; opacity: 0.55; }
+        .kanban-plan-actions { display: flex; gap: 6px; margin-top: 4px; }
+        .kanban-plan-copy-link {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 7px;
+            cursor: pointer;
+            border-radius: 10px;
+            transition: all 0.15s;
+            margin-left: auto;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-link:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-plan-copy-prompt {
+            background: transparent;
+            border: 1px solid var(--border-color);
+            color: var(--text-secondary);
+            font-size: 10px;
+            font-family: var(--font-family);
+            padding: 2px 8px;
+            border-radius: 10px;
+            cursor: pointer;
+            transition: all 0.15s;
+            white-space: nowrap;
+        }
+        .kanban-plan-copy-prompt:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+        .kanban-column-badge.clickable {
+            cursor: pointer;
+        }
+        .kanban-column-badge.clickable:hover {
+            opacity: 0.8;
+        }
+        .kanban-column-dropdown {
+            position: absolute;
+            background: var(--panel-bg2);
+            border: 1px solid var(--border-color);
+            border-radius: 4px;
+            padding: 2px;
+            z-index: 100;
+            font-size: 11px;
+            color: var(--text-primary);
+            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+        }
+        .kanban-empty-state { padding: 32px; text-align: center; opacity: 0.5; font-size: 13px; }
+
+        .markdown-editor {
+            width: 100%;
+            height: 100%;
+            background: var(--panel-bg);
+            color: var(--text-primary);
+            font-family: var(--font-mono);
+            font-size: 13px;
+            border: none;
+            padding: 16px;
+            resize: none;
+            outline: none;
+            white-space: pre;
+            tab-size: 4;
+            box-sizing: border-box;
+        }
+        #json-preview-container-design {
+            font-size: 12px;
+            line-height: 1.6;
+        }
+        .json-node { margin-left: 16px; }
+        .json-row { display: flex; gap: 4px; padding: 1px 0; }
+        .json-key { color: #9cdcfe; }
+        .json-string { color: #ce9178; }
+        .json-number { color: #b5cea8; }
+        .json-boolean { color: #569cd6; }
+        .json-null { color: #569cd6; font-style: italic; }
+        .json-bracket { color: #d4d4d4; cursor: pointer; }
+        .json-error { color: var(--vscode-errorForeground, #ff6b6b); padding: 12px; }
+        .json-error button { margin-top: 8px; padding: 4px 12px; cursor: pointer; }
+        .edit-mode #markdown-preview,
+        .edit-mode #markdown-preview-design,
+        .edit-mode #kanban-preview-content {
+            display: none !important;
+        }
+        .edit-mode #image-preview-container-design,
+        .edit-mode #json-preview-container-design {
+            display: none !important;
+        }
+        .edit-mode .markdown-editor {
+            display: block !important;
+        }
+        .comment-popup {
+            position: fixed;
+            z-index: 999;
+            width: min(420px, calc(100vw - 24px));
+            background: var(--panel-bg, #000000);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 6px;
+            padding: 10px;
+            box-shadow: 0 4px 16px rgba(0,0,0,0.4);
+            display: none;
+        }
+        .comment-popup.visible {
+            display: block;
+        }
+        .popup-label {
+            font-size: 11px;
+            color: var(--text-secondary, #888);
+            margin-bottom: 6px;
+            font-family: var(--font-mono, monospace);
+        }
+        .selected-preview {
+            font-size: 12px;
+            color: var(--text-primary, #ccc);
+            background: rgba(61, 219, 217, 0.08);
+            border: 1px solid rgba(61, 219, 217, 0.22);
+            border-radius: 4px;
+            padding: 8px;
+            margin-bottom: 8px;
+            max-height: 80px;
+            overflow: auto;
+        }
+        .comment-popup textarea {
+            width: 100%;
+            min-height: 76px;
+            resize: vertical;
+            background: var(--input-bg, rgba(255,255,255,0.06));
+            color: var(--text-primary, #ccc);
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            border-radius: 4px;
+            padding: 8px;
+            font-family: var(--font-family, sans-serif);
+            font-size: 13px;
+            margin-bottom: 10px;
+        }
+        .popup-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 8px;
+        }
+        .popup-actions button {
+            background: transparent;
+            border: 1px solid var(--border-color, rgba(255,255,255,0.12));
+            color: var(--text-secondary, #888);
+            padding: 4px 12px;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 12px;
+        }
+        .popup-actions button.primary {
+            background: var(--accent-teal, #3ddbd9);
+            color: #000;
+            border-color: var(--accent-teal, #3ddbd9);
+        }
+        /* Folder Modal */
+        .folder-modal {
+            position: fixed;
+            top: 0; left: 0; right: 0; bottom: 0;
+            background: rgba(0, 0, 0, 0.6);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            z-index: 1000;
+        }
+        .folder-modal .modal-content {
+            background: var(--panel-bg);
+            border: 1px solid var(--border-color);
+            border-radius: 8px;
+            max-width: 500px;
+            width: 90%;
+            max-height: 80vh;
+            display: flex;
+            flex-direction: column;
+            box-shadow: 0 8px 24px rgba(0, 0, 0, 0.4);
+        }
+        .folder-modal .modal-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 16px 20px;
+            border-bottom: 1px solid var(--border-color);
+        }
+        .folder-modal .modal-header h3 {
+            margin: 0;
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+        .folder-modal .modal-close-btn {
+            background: transparent;
+            border: none;
+            color: var(--text-secondary);
+            font-size: 24px;
+            cursor: pointer;
+            padding: 0;
+            width: 32px;
+            height: 32px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 4px;
+            transition: all 0.15s;
+        }
+        .folder-modal .modal-close-btn:hover {
+            background: var(--card-bg-hover);
+            color: var(--text-primary);
+        }
+        .folder-modal .modal-body {
+            padding: 20px;
+            overflow-y: auto;
+            flex: 1;
+        }
+        .folder-modal .modal-section {
+            margin-bottom: 20px;
+        }
+        .folder-modal .modal-section:last-child {
+            margin-bottom: 0;
+        }
+        .folder-modal .section-header {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            margin-bottom: 12px;
+        }
+        .folder-modal .section-title {
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: var(--text-secondary);
+        }
+        .folder-modal .section-actions {
+            display: flex;
+            gap: 8px;
+        }
+        .folder-modal .folder-list {
+            max-height: none;
+        }
+
+        /* Tickets Tab Styles */
+        #controls-strip-tickets input {
+            flex: 1;
+            min-width: 200px;
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        #controls-strip-tickets input:focus {
+            outline: none;
+            border-color: var(--accent-teal);
+        }
+
+        #controls-strip-tickets select {
+            padding: 6px 10px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 11px;
+        }
+
+        .ticket-node {
+            position: relative;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+            padding: 10px 12px;
+            border-radius: 4px;
+            margin: 4px 0;
+            border: 1px solid var(--border-color);
+            background: linear-gradient(180deg, color-mix(in srgb, var(--accent-teal) 12%, var(--panel-bg2)) 0%, color-mix(in srgb, var(--accent-teal) 4%, var(--panel-bg)) 100%);
+            border-left: 3px solid var(--accent-teal-dim);
+            cursor: pointer;
+            user-select: none;
+            font-size: 12px;
+            line-height: 1.4;
+            transition: all 0.15s;
+        }
+
+        .ticket-node:hover {
+            border-color: color-mix(in srgb, var(--accent-teal) 50%, transparent);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 4px 12px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .ticket-node.selected {
+            border-color: var(--accent-teal);
+            border-left-color: var(--accent-teal);
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 35%, transparent),
+                        inset 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            color: var(--accent-teal);
+        }
+
+        .cyber-theme-enabled .ticket-node.selected {
+            box-shadow: 0 0 12px color-mix(in srgb, var(--accent-teal) 40%, transparent),
+                        inset 0 0 6px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+        .cyber-theme-enabled .ticket-node:hover {
+            box-shadow: 0 0 10px color-mix(in srgb, var(--accent-teal) 30%, transparent);
+        }
+
+        .ticket-node .tickets-issue-title {
+            font-size: 12px;
+            font-weight: 700;
+            color: var(--text-primary);
+        }
+
+        .ticket-node .tickets-issue-meta {
+            font-size: 11px;
+            color: var(--text-secondary);
+            line-height: 1.5;
+            font-family: var(--font-mono);
+        }
+
+        .ticket-node .tickets-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            padding: 2px 8px;
+            font-size: 9px;
+            font-family: var(--font-mono);
+            cursor: pointer;
+            letter-spacing: 0.5px;
+        }
+
+        .ticket-node .tickets-issue-import-btn:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        .ticket-node .tickets-issue-import-btn:disabled {
+            opacity: 0.4;
+            cursor: not-allowed;
+        }
+
+        /* ── Ticket Detail Preview Pane ── */
+        /* Matches #markdown-preview typography and spacing */
+        #preview-pane-tickets {
+            font-size: 13px;
+            line-height: 1.5;
+            color: var(--text-primary);
+            padding: 0;
+        }
+
+        .tickets-detail-banner-inner {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: var(--accent-teal-dim);
+            border-bottom: 1px solid var(--accent-teal);
+            flex-shrink: 0;
+        }
+
+        .tickets-detail-banner-info {
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tickets-detail-title {
+            font-size: 14px;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin: 0;
+        }
+
+        .tickets-detail-meta {
+            display: flex;
+            gap: 8px;
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .tickets-detail-banner-actions {
+            display: flex;
+            gap: 8px;
+        }
+
+        .tickets-detail-section {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            padding: 0 26px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+
+        #tickets-detail-description.tickets-detail-section {
+            padding-top: 16px;
+        }
+
+        /* Section headers inside ticket preview — match markdown h2/h3 */
+        .tickets-section-header {
+            font-size: 1.25em;
+            font-weight: 600;
+            color: var(--text-primary);
+            margin-top: 24px;
+            margin-bottom: 12px;
+            padding-bottom: 0.3em;
+            border-bottom: 1px solid var(--accent-teal-dim);
+            letter-spacing: 0.3px;
+        }
+
+        /* Ticket detail description inherits markdown preview text styles */
+        #tickets-detail-description p,
+        #tickets-detail-description li {
+            margin-bottom: 16px;
+            line-height: inherit;
+        }
+
+        #tickets-detail-description pre {
+            background-color: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.04));
+            border: 1px solid var(--vscode-widget-border, rgba(127, 127, 127, 0.35));
+            border-radius: 4px;
+            padding: 8px 12px;
+            overflow-x: auto;
+            margin: 16px 0;
+        }
+
+        #tickets-detail-description code {
+            font-family: var(--vscode-editor-font-family, 'SF Mono', Monaco, Menlo, Consolas, monospace);
+            font-size: 1em;
+            background: var(--vscode-textCodeBlock-background, rgba(255,255,255,0.06));
+            padding: 1px 4px;
+            border-radius: 3px;
+        }
+
+        #tickets-detail-description pre code {
+            background: none;
+            padding: 0;
+        }
+
+        /* Subtask items — clean list style matching markdown, not .planning-card */
+        .tickets-subtask-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+
+        .tickets-subtask-item:hover {
+            border-left-color: var(--accent-teal);
+            background: color-mix(in srgb, var(--accent-teal) 10%, var(--panel-bg));
+        }
+
+        .tickets-subtask-title {
+            font-size: 13px;
+            font-weight: 600;
+            color: var(--text-primary);
+        }
+
+        .tickets-subtask-status {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+        }
+
+        .tickets-subtask-actions {
+            display: flex;
+            justify-content: flex-end;
+            gap: 4px;
+            margin-top: 4px;
+        }
+
+        .tickets-subtask-actions .tickets-issue-import-btn {
+            display: inline-block;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal);
+            padding: 2px 8px;
+            font-size: 9px;
+            border-radius: 3px;
+            cursor: pointer;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .tickets-subtask-actions .tickets-issue-import-btn:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+        }
+
+        /* Comment items — clean list style */
+        .tickets-comment-item {
+            padding: 8px 12px;
+            margin-bottom: 8px;
+            border-left: 3px solid var(--accent-teal-dim);
+            border-radius: 0 4px 4px 0;
+            background: color-mix(in srgb, var(--accent-teal) 6%, var(--panel-bg));
+        }
+
+        .tickets-comment-author {
+            font-size: 12px;
+            font-weight: 600;
+            color: var(--accent-teal);
+        }
+
+        .tickets-comment-date {
+            font-size: 11px;
+            color: var(--text-secondary);
+            font-family: var(--font-mono);
+            margin-left: 8px;
+        }
+
+        .tickets-comment-body {
+            font-size: 13px;
+            color: var(--text-primary);
+            line-height: 1.5;
+            margin-top: 4px;
+        }
+
+        /* Attachment items — inline link style */
+        .tickets-attachment-item {
+            display: inline-block;
+            padding: 4px 10px;
+            margin: 0 4px 4px 0;
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 3px;
+            background: transparent;
+            color: var(--accent-teal);
+            font-size: 12px;
+            cursor: pointer;
+            transition: all 0.15s;
+        }
+
+        .tickets-attachment-item:hover {
+            background: var(--accent-teal);
+            color: var(--panel-bg);
+            border-color: var(--accent-teal);
+        }
+
+        /* Cyber theme overrides for ticket detail preview */
+        .cyber-theme-enabled .tickets-detail-banner-inner {
+            box-shadow: 0 0 8px color-mix(in srgb, var(--accent-teal) 15%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-subtask-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-subtask-item:hover {
+            box-shadow: 0 0 6px color-mix(in srgb, var(--accent-teal) 20%, transparent);
+        }
+
+        .cyber-theme-enabled .tickets-comment-item {
+            background: rgba(13, 13, 13, 0.40);
+            backdrop-filter: blur(4px);
+            -webkit-backdrop-filter: blur(4px);
+        }
+
+        .cyber-theme-enabled .tickets-attachment-item {
+            box-shadow: 0 0 4px color-mix(in srgb, var(--accent-teal) 10%, transparent);
+        }
+
+        /* Hierarchy nav styles */
+        .tickets-hierarchy-nav {
+            display: flex;
+            gap: 8px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        .tickets-hierarchy-nav select {
+            padding: 4px 8px;
+            background: var(--panel-bg2);
+            color: var(--text-primary);
+            border: 1px solid var(--border-color);
+            border-radius: 2px;
+            font-family: var(--font-mono);
+            font-size: 10px;
+        }
+
+        .tickets-hierarchy-nav button {
+            padding: 4px 8px;
+            background: transparent;
+            color: var(--accent-teal);
+            border: 1px solid var(--accent-teal-dim);
+            border-radius: 2px;
+            cursor: pointer;
+            font-size: 9px;
+            font-family: var(--font-mono);
+        }
+
+        .tickets-hierarchy-nav button:hover {
+            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
+            border-color: var(--accent-teal);
+        }
+    </style>
+</head>
+<body class="cyber-theme-enabled theme-afterburner-updated">
+    <div class="preview-panel-wrapper">
+        <div id="preview-pane" style="flex: 1; width: 100%; box-sizing: border-box;">
+            <div class="preview-content-wrapper">
+                <div id="markdown-preview">
+                    <h1>Comparative Analysis of Amplitude and Mixpanel</h1>
+                    
+                    <h2>Executive Summary and Market Context</h2>
+                    <p>In the contemporary digital economy, the capacity to capture, process, and derive actionable intelligence from user behavioral data is a fundamental prerequisite for commercial success. As software-as-a-service (SaaS), e-commerce, and direct-to-consumer platforms mature, organizations are moving beyond traditional pageview-centric web analytics to sophisticated, event-driven product analytics platforms. Within this highly competitive ecosystem, two platforms have emerged as the definitive market leaders: Amplitude and Mixpanel. Both solutions provide robust foundational capabilities designed to map user journeys, measure long-term retention, and optimize conversion funnels. However, beneath these shared operational goals, Amplitude and Mixpanel diverge significantly in their architectural philosophies, data governance frameworks, artificial intelligence integration, and economic models.</p>
+                    
+                    <p>As of 2026, the expectations placed upon product analytics platforms have escalated dramatically. Modern enterprise environments require these tools to integrate natively with cloud data warehouses, deploy advanced artificial intelligence to automate complex diagnostic queries, and embed analytical insights directly into collaborative workspaces such as Slack and Microsoft Teams. Furthermore, the convergence of analytics with customer data platforms (CDPs) and feature management systems has fundamentally altered the total cost of ownership (TCO) calculation for prospective buyers.</p>
+                    
+                    <p>This exhaustive research report evaluates Amplitude and Mixpanel across five critical dimensions: core analytical capabilities and behavioral intelligence, data export and warehouse-native architectures, artificial intelligence and autonomous reasoning, workflow integrations via ChatOps, and comprehensive pricing models. The subsequent analysis provides the granular, third-order intelligence required for enterprise data architects, product leaders, and engineering directors to select the platform that optimally aligns with their specific data maturity, go-to-market strategy, and growth trajectory.</p>
+                    
+                    <h2>Core Analytics Capabilities and Behavioral Intelligence</h2>
+                    <p>At the foundation of both Amplitude and Mixpanel is the event-based data model. In contrast to legacy session-based analytics, the event-based model captures discrete user actions—such as "Account Created," "Item Added to Cart," or "Subscription Upgraded"—and ties these actions deterministically to a specific user or account identifier. This methodology enables highly granular behavioral analysis, allowing organizations to track users across devices and platforms. While both platforms excel at core reporting functions, their approaches to advanced analytics diverge based on their intended primary users. Mixpanel prioritizes rapid time-to-insight and accessibility for non-technical users, whereas Amplitude is engineered for deep, rigorous behavioral data analysis.</p>
+                    
+                    <h3>Funnel Analysis, Drop-off Diagnostics, and User Journeys</h3>
+                    <p>Funnel analysis serves as the operational cornerstone of product optimization. It allows teams to measure the sequential conversion of users through a defined set of actions, identifying the precise moments where users abandon multi-step journeys.</p>
+                    
+                    <p>Mixpanel's funnel visualization is consistently praised for its intuitive interface, enabling cross-functional teams to build dynamic funnels without requiring SQL expertise. Users can establish flexible conversion windows, apply breakdown dimensions to segment funnel performance by demographic or technographic properties, and conduct historical comparisons. To supplement traditional funnels, Mixpanel offers a Flows visualization tool, which excels in exploratory discovery by charting the top paths users take before or after a specific event. This allows product managers to rapidly identify unexpected user behaviors or navigation loops. Furthermore, Mixpanel supports unlimited funnel steps and provides real-time updates, making it highly effective for monitoring live product launches or marketing campaigns.</p>
+                    
+                    <p>Amplitude approaches funnel and journey analysis with a higher degree of analytical complexity and customization. While it offers standard funnel visualizations, Amplitude's Journeys feature is specifically designed to handle complex, multi-path analytical requirements that often overwhelm simpler tools. Its Pathfinder capability provides an algorithmic view of the most commonly taken event paths, offering deeper behavioral clustering than Mixpanel's equivalent features. Amplitude also features a proprietary Microscope tool, which fundamentally enhances drop-off diagnostics. Within any funnel chart, an analyst can click on a specific drop-off point to instantly generate a behavioral cohort of the users who failed to convert. This cohort can then be scrutinized for anomalies, exported for qualitative research, or synced to a marketing automation platform for immediate re-engagement campaigns. Amplitude also provides extensive flexibility in funnel construction, allowing users to define both "ordered" and "unordered" funnels, calculate average and median times between steps, and set conversion windows ranging from a single second to ninety days.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Analytical Capability</th>
+                                <th>Amplitude</th>
+                                <th>Mixpanel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Primary User Persona</strong></td>
+                                <td>Data Analysts, Technical Product Managers</td>
+                                <td>Growth Marketers, General Product Managers</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Journey Mapping</strong></td>
+                                <td>Pathfinder (Advanced multi-path algorithmic clustering)</td>
+                                <td>Flows (Intuitive top-path exploratory visualization)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Funnel Flexibility</strong></td>
+                                <td>Ordered/Unordered, 1-second to 90-day windows</td>
+                                <td>Unlimited funnel steps, real-time conversion updates</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Drop-off Diagnostics</strong></td>
+                                <td>Microscope tool for instant cohort creation</td>
+                                <td>Seamless integration with native Session Replay</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Account-Level Analytics</strong></td>
+                                <td>Group Behavior Analysis (Strong for user cohorts)</td>
+                                <td>Group Analytics Add-on (Company Profiles & KPIs)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h3>Retention Analysis and Behavioral Cohorting</h3>
+                    <p>Retention analysis is the ultimate measure of product-market fit, calculating the percentage of users who return to an application over time. If a retention curve fails to flatten, it indicates structural issues with user value realization. Both platforms provide robust capabilities for N-Day (Return On) and unbounded (Return On or After) retention tracking.</p>
+                    
+                    <p>The concept of a cohort—a group of users who share specific characteristics or performed a specific action during the same time period—is central to retention analysis. Mixpanel allows teams to build dynamic cohorts based on a precise set of conditions, linking behaviors with demographic data (e.g., users from the US who watched a video in the last 7 days). These cohorts automatically update as user behavior changes and can be applied as filters across Insights, Funnels, and Retention reports.</p>
+                    
+                    <p>Amplitude, however, maintains a distinct structural advantage in the depth of its cohorting capabilities. Beyond standard behavioral and acquisition cohorts, Amplitude's paid tiers include predictive cohorts. Utilizing advanced machine learning algorithms, Amplitude calculates a user's future propensity to churn or convert based on historical event sequences. This transforms analytics from a retrospective exercise into a proactive operational tool. Additionally, Amplitude's Compass feature assists data scientists in identifying the specific product behaviors that are most highly correlated with long-term retention, allowing product teams to reverse-engineer the "a-ha" moment for new users.</p>
+                    
+                    <h3>Metric Trees and Organizational Alignment</h3>
+                    <p>A highly differentiated feature within Mixpanel's ecosystem is the Metric Trees module. Recognizing that a proliferation of isolated dashboards often fails to drive coherent business strategy, Mixpanel developed Metric Trees to align cross-functional teams. This feature allows organizations to map high-level strategic outcomes, such as Annual Recurring Revenue (ARR), directly to operational product metrics, such as feature adoption rates or sign-up conversions, in a visual, hierarchical structure. When an executive questions a dip in revenue, the Metric Tree provides a diagnostic map to trace the decline down to the specific user behavior causing the anomaly.</p>
+                    
+                    <p>Amplitude does not currently offer a native visual equivalent to Metric Trees. Instead, it relies on highly customizable executive dashboards, Notebooks for narrative data storytelling, and the North Star framework methodology to align organizational KPIs. While highly effective for data teams, Mixpanel's Metric Trees offer a more immediate, visual translation of strategy for business leaders.</p>
+                    
+                    <h3>Qualitative Insights: Session Replay and Heatmaps</h3>
+                    <p>Quantitative data illuminates what users are doing, but qualitative data is frequently required to understand why. Historically, organizations using event-based analytics relied on third-party integrations (such as FullStory, Hotjar, or Microsoft Clarity) for session replay and heatmapping. Recently, both Amplitude and Mixpanel have aggressively expanded their native qualitative toolsets.</p>
+                    
+                    <p>Mixpanel has invested heavily in integrating Session Replay and Heatmaps directly into its core platform. Mixpanel's replays are intrinsically tied to its analytics, meaning a product manager analyzing a funnel drop-off can immediately transition from viewing a statistical decline to watching the actual screen recordings of users experiencing friction at that exact step. Mixpanel's native solution eliminates the need for expensive point solutions and provides up to 500,000 session replays per month on custom paid plans, with 20,000 replays included in the standard Growth plan.</p>
+                    
+                    <p>Amplitude has similarly incorporated Session Replay and Heatmaps (including click, scroll, and selector maps) into its platform. Amplitude's implementation allows analysts to filter replays by specific cohorts, experiment variants, or user properties. This creates a continuous feedback loop where an analyst can observe a drop-off in Pathfinder, watch the corresponding session replay, and immediately design an experiment to rectify the user experience.</p>
+                    
+                    <h3>Experimentation, Feature Management, and In-App Engagement</h3>
+                    <p>The transition from data observation to product intervention is where the architectural philosophies of the two platforms diverge most sharply. Amplitude has systematically consolidated the product growth stack, building Amplitude Experiment and Amplitude Feature Management directly into its core platform. This native integration allows engineering and product teams to create feature flags, execute sophisticated A/B/n tests with multi-armed bandit algorithms, and measure the statistical significance of those tests against long-term behavioral cohorts without ever exporting data or switching interfaces. Furthermore, Amplitude offers native in-app engagement tools through Amplitude Guides and Surveys, permitting teams to deploy tooltips, modals, and Net Promoter Score (NPS) surveys directly to specific user cohorts without writing code.</p>
+                    
+                    <p>Conversely, Mixpanel maintains a focused "best-of-breed" ecosystem approach. While Mixpanel does offer basic experimentation analysis, it lacks native feature flag management, in-app guides, and visual A/B testing editors. Organizations utilizing Mixpanel typically rely on established integrations with dedicated feature management tools like LaunchDarkly or Split, and engagement platforms like Appcues or Pendo. While this allows companies to utilize specialized tools, it fragments the workflow and necessitates the procurement and maintenance of multiple software contracts, complicating the overall technology stack.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Feature Expansion</th>
+                                <th>Amplitude</th>
+                                <th>Mixpanel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Session Replay</strong></td>
+                                <td>Native (Tied to cohorts and experiments)</td>
+                                <td>Native (Integrated with funnels and flows)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>A/B Testing</strong></td>
+                                <td>Native robust A/B/n testing and multi-armed bandits</td>
+                                <td>Basic tracking; relies heavily on external tools</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Feature Flags</strong></td>
+                                <td>Native (Unlimited on all plans)</td>
+                                <td>Requires third-party tools (LaunchDarkly, Optimizely)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>In-App Engagement</strong></td>
+                                <td>Native (Guides, Modals, Surveys)</td>
+                                <td>Requires third-party tools (Appcues, Pendo, Userpilot)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Strategic Alignment</strong></td>
+                                <td>Dashboards, Notebooks, North Star Framework</td>
+                                <td>Native visual Metric Trees</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h2>Data Export, Ecosystem Integration, and Warehouse-Native Architectures</h2>
+                    <p>As enterprise data ecosystems mature, product analytics platforms are no longer permitted to operate as isolated data silos. Organizations increasingly demand that behavioral data flows seamlessly into centralized cloud data warehouses—such as Snowflake, Google BigQuery, and Amazon Redshift—for synthesis with financial records, CRM data, and operational metrics. Both Amplitude and Mixpanel accommodate these requirements, but they employ divergent methodologies for data extraction, schema management, and architectural integration.</p>
+                    
+                    <h3>Raw Data Export Capabilities and API Formatting</h3>
+                    <p>For organizations operating custom data pipelines, data lakes, or proprietary machine learning models, the ability to extract raw event streams is critical. Both platforms offer robust Export APIs, but their formatting and constraints differ.</p>
+                    
+                    <p>Mixpanel facilitates raw data extraction primarily through its Raw Event Export API. Data queried via this API is returned exclusively in JSONL (JSON Lines) format, where each line represents a discrete, valid JSON object containing the event timestamp, distinct ID, and associated properties. Mixpanel imposes a rate limit of 60 queries per hour, 3 queries per second, and a maximum of 100 concurrent queries to ensure system stability. For continuous, large-scale extraction to object storage (such as Amazon S3, Google Cloud Storage, or Azure Blob Storage), Mixpanel offers a Data Pipelines add-on. This service automates the delivery of JSON files to partitioned bucket directories, structured by year, month, and day, facilitating subsequent ingestion by downstream systems.</p>
+                    
+                    <p>Amplitude offers comparable API export functionalities but provides superior formatting optimization for large-scale data environments. Through Amplitude's Amazon S3 or Google Cloud Storage integrations, data engineering teams can configure exports in Apache Parquet and Apache Avro formats, in addition to standard JSON. Parquet is an open-source, column-oriented storage format that utilizes highly efficient compression and encoding schemes. For organizations querying exported data using engines like Amazon Athena or BigQuery, Parquet dramatically reduces query execution times, lowers cloud compute costs, and minimizes network bandwidth consumption compared to Mixpanel's row-based JSON outputs. Amplitude's Export API is subject to a 4GB size limit per request and typically processes data within a two-hour latency window from the time of server ingestion. Due to the 4GB API constraint, Amplitude explicitly recommends utilizing its automated Amazon S3 export for high-volume backfills or continuous data extraction.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Export & Integration Feature</th>
+                                <th>Amplitude</th>
+                                <th>Mixpanel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Object Storage Export</strong></td>
+                                <td>Amazon S3, Google Cloud Storage</td>
+                                <td>Amazon S3, Azure Blob Storage, Google Cloud Storage</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Raw Export Formats</strong></td>
+                                <td>JSON, Apache Parquet, Apache Avro</td>
+                                <td>JSONL (JSON Lines)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Export API Limits</strong></td>
+                                <td>4GB per request, hourly window limits recommended</td>
+                                <td>60 queries/hour, 3 queries/second</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Cloud Data Warehouses</strong></td>
+                                <td>Snowflake, BigQuery, Redshift, Databricks</td>
+                                <td>Snowflake, BigQuery, Redshift, Databricks</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h3>Data Warehouse Integrations and "Warehouse-Native" Models</h3>
+                    <p>The industry is currently undergoing a paradigm shift toward "warehouse-native" analytics, driven by a desire to eliminate the latency, redundancy, and maintenance costs associated with traditional Extract, Transform, Load (ETL) pipelines.</p>
+                    
+                    <p>Mixpanel addresses this demand via its Warehouse Connectors capability. This feature allows Mixpanel to natively import and synchronize data directly from Snowflake, BigQuery, Databricks, and Redshift. A highly lauded technical achievement within Mixpanel's architecture is its "Mirror mode." Utilizing Mixpanel's proprietary Arb database, Mirror mode retroactively updates user properties and events within Mixpanel if those records are altered or deleted in the central data warehouse. This retroactive flexibility ensures that the product analytics platform remains in perfect synchronization with the central source of truth, effectively eliminating the redundancy of storing outdated records and ensuring compliance with strict data deletion protocols (e.g., GDPR) without requiring complex manual API interventions.</p>
+                    
+                    <p>Amplitude, recognizing the same market trajectory, offers Snowflake Native Amplitude (SNA). Unlike traditional pipelines that copy data from Snowflake into Amplitude's proprietary servers, SNA allows Amplitude to query data directly where it resides within the Snowflake AI Data Cloud. This zero-ETL approach represents a true warehouse-native posture, providing enterprise clients with maximum data security, eliminating data duplication, and ensuring that analytical queries are always executing against the most current dataset. For standard integrations outside of SNA, Amplitude supports bi-directional syncing, including a robust "Reverse ETL" capability natively built into its Audiences feature. This allows marketing and growth teams to dynamically sync behavioral cohorts directly from the warehouse into advertising platforms like Facebook Ads, LinkedIn Ads, or marketing automation tools like HubSpot and Braze.</p>
+                    
+                    <h3>Data Governance and Taxonomy Management</h3>
+                    <p>The sophisticated analytical capabilities of both platforms are heavily dependent on the quality and structure of the underlying data. As event volumes scale, maintaining a clean data taxonomy becomes a critical operational challenge.</p>
+                    
+                    <p>Amplitude mandates strict upfront schema planning and taxonomy governance. Its dedicated data management suite, Amplitude Govern, enforces taxonomy rules, allowing data administrators to validate events, block unapproved data schemas, and manage user permissions meticulously. While this rigorous framework creates an exceptionally clean long-term dataset, it introduces a steeper learning curve and frequently requires dedicated data engineering resources for initial implementation.</p>
+                    
+                    <p>Mixpanel utilizes a tool called Lexicon to catalog events and properties. While Lexicon provides excellent visibility into the data dictionary, it does not historically enforce taxonomy rules with the same draconian rigidity as Amplitude Govern. Mixpanel's model is slightly more forgiving of evolving schemas, allowing non-technical teams to achieve faster initial setup times, but potentially requiring more frequent data clean-up efforts as the organizational complexity scales.</p>
+                    
+                    <h2>Artificial Intelligence and Autonomous Analytical Agents</h2>
+                    <p>The integration of Large Language Models (LLMs) and specialized machine learning algorithms is actively transforming the product analytics sector. The operational paradigm is shifting from manual SQL querying and drag-and-drop dashboard construction toward natural language processing (NLP) and autonomous reasoning agents. Both platforms have launched major AI initiatives, though their architectural approaches and ultimate capabilities present a stark contrast in ambition and functionality.</p>
+                    
+                    <h3>Mixpanel Spark AI: Natural Language Querying (NLQ)</h3>
+                    <p>Mixpanel's artificial intelligence strategy is centralized around Spark AI, an integration powered by OpenAI's generative models. Spark AI operates primarily on a Natural Language Querying (NLQ) model, effectively acting as an intelligent "ask-to-chart" translation layer. Users can input plain English queries into the Mixpanel interface—such as, "What does our signup trend look like in the past year broken down by geography?" or "How many videos were watched for the age groups 18-24, 25-29, and 30-34?"—and Spark AI will automatically generate the corresponding Insights, Funnels, Retention, or Flows report.</p>
+                    
+                    <p>This implementation prioritizes speed, simplicity, and accessibility. By removing the requirement to manually search through event dictionaries or configure complex breakdown parameters, Spark AI drastically reduces the time-to-value for non-technical stakeholders. Furthermore, Mixpanel ensures absolute transparency by allowing users to view, edit, and modify the underlying query parameters generated by the AI, successfully mitigating the "black box" effect common in generative analytics. From a privacy and compliance perspective, Mixpanel requires explicit administrative opt-in for customer data to be utilized for model training, and the Spark feature is disabled by default for customers operating under the EU data residency program or those bound by HIPAA Business Associate Addenda (BAAs).</p>
+                    
+                    <p>While highly effective at descriptive analytics (answering <em>what</em> happened), Spark AI is fundamentally reactive; it requires a human operator to formulate the initial hypothesis, ask the right questions, and interpret the strategic implications of the generated charts.</p>
+                    
+                    <h3>Amplitude Global Agent and Ask Amplitude: Autonomous Reasoning</h3>
+                    <p>Amplitude has pursued a vastly more ambitious, agentic approach to artificial intelligence. While the platform includes standard NLQ capabilities via "Ask Amplitude" (which functions similarly to Spark AI by allowing users to create charts via text prompts), the platform's introduction of the Amplitude Global Agent represents a fundamental shift toward autonomous, multi-step reasoning.</p>
+                    
+                    <p>The Amplitude Global Agent is engineered to operate as an always-on data scientist. It moves beyond simple descriptive analytics into diagnostic, predictive, and prescriptive tasks. According to Amplitude's task-based evaluation frameworks, the agent executes an eight-step workflow: interpreting natural language intent, querying the correct taxonomy, building the analytical workflow, performing subroutines, applying domain-aware context, surfacing actionable insights, presenting reliable results, and supporting prescriptive iteration.</p>
+                    
+                    <p>In practice, the Global Agent actively monitors dashboards and event streams to detect statistically significant anomalies. When a metric deviation occurs—for example, an unexpected 15% drop in day-seven retention following a product update—the Global Agent autonomously queries the underlying taxonomy, investigates root causes across various dimensions, and provides a plain-language explanation of the behavioral drivers causing the drop. It distinguishes between summarizing a trend ("Signup conversion is down") and diagnosing a root cause.</p>
+                    
+                    <p>Because Amplitude's AI is tightly coupled with its predictive analytics engine, the Global Agent can suggest prescriptive actions, such as recommending the launch of a specific in-app guide via Amplitude Guides, or identifying an optimal holdout group for an A/B test via Amplitude Experiment. This high degree of autonomy is heavily dependent on strict data governance. Amplitude explicitly notes that the AI's efficacy requires well-maintained event taxonomies and business context definitions to prevent "garbage in, garbage out" (GIGO) scenarios. To mitigate this, Amplitude AI includes automated features to identify and clean stale events and test data.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>AI Capability</th>
+                                <th>Amplitude Global Agent & Ask Amplitude</th>
+                                <th>Mixpanel Spark AI</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Core Interaction Model</strong></td>
+                                <td>Free-text Q&A with autonomous agent reasoning</td>
+                                <td>Natural Language Querying (NLQ) / Ask-to-chart</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Primary Function</strong></td>
+                                <td>Descriptive, Diagnostic, Predictive, Prescriptive</td>
+                                <td>Descriptive Analytics (Chart Generation)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Autonomous Anomaly Detection</strong></td>
+                                <td>Yes (Dashboard Monitoring Agent actively scans for deviations)</td>
+                                <td>No (Requires user-initiated queries)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Root Cause Analysis</strong></td>
+                                <td>Yes (Autonomously investigates metric drivers)</td>
+                                <td>Basic (Requires manual iteration on AI prompts)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Underlying Model Architecture</strong></td>
+                                <td>Proprietary multi-agent workflow integrated with predictive ML</td>
+                                <td>Powered by OpenAI generative models</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h2>Workflow Integration: ChatOps and Slack Functionality</h2>
+                    <p>In modern agile engineering and product management environments, analytics must intersect directly with daily communication workflows. ChatOps—the integration of operational monitoring and deployment tools into chat platforms—accelerates cross-functional decision-making and reduces context switching. Both Amplitude and Mixpanel integrate deeply with Slack, but their specific feature sets reflect their broader architectural capabilities.</p>
+                    
+                    <h3>Mixpanel's Slack Integration: Unfurling and Alerting</h3>
+                    <p>Mixpanel's official Slack application is meticulously optimized for report sharing, collaborative visibility, and anomaly alerting. When a team member pastes a URL linking to a Mixpanel Insights, Funnels, Flows, or Retention report into a Slack channel, the application automatically unfurls the link, generating a high-quality image preview of the specific chart alongside relevant metadata. To ensure strict adherence to organizational data privacy protocols, Mixpanel requires individual users to authenticate their Mixpanel accounts within Slack. This user-level authentication ensures that only individuals with the appropriate Mixpanel permissions can unfurl and view sensitive report previews in public or private Slack channels.</p>
+                    
+                    <p>Additionally, Mixpanel leverages Slack as a primary vector for automated governance and operational monitoring. Users on paid plans (Growth and Enterprise) can configure Custom Alerts based on anomaly detection algorithms or static numerical thresholds. They can also establish Board Subscriptions to route automated reporting summaries directly to designated Slack channels. If a critical conversion metric drops below an acceptable baseline, or if an error rate spikes, the Slack alert provides immediate, high-visibility notification to the engineering or product team, drastically accelerating incident response times.</p>
+                    
+                    <h3>Amplitude's Slack Integration: Conversational Intelligence</h3>
+                    <p>Amplitude's Slack integration encompasses standard operational features—such as link unfurling (though it notably does not unfurl highly complex Pathfinder, Compass, or Persona charts) and alert routing for experiment status changes—but it introduces a significantly more advanced paradigm via the Amplitude Global Agent.</p>
+                    
+                    <p>By embedding the Global Agent directly into Slack and Microsoft Teams, Amplitude effectively places an interactive AI data analyst inside the communication channel. Stakeholders can ask natural language questions directly within a Slack thread. For example, a product manager can ask, "How is sign-up-to-purchase conversion trending this month?" or "Why did conversion dip yesterday?" The Amplitude bot will not only answer the query using natural language, but will actively generate a new chart on the fly, supply a deep link to the underlying data view within the Amplitude platform, and provide diagnostic explanations regarding why a trend occurred.</p>
+                    
+                    <p>This conversational integration fundamentally alters the analytics workflow. It mitigates the persistent "time-to-answer" bottleneck, allowing product managers, marketers, and executives to query behavioral data during live discussions without issuing a formal ticket to an overloaded central data science team. Every claim made by the Global Agent in Slack is backed by verifiable Amplitude data, ensuring that the AI acts as a product analytics specialist rather than a generic chatbot hallucinating responses. It is critical to note, however, that due to the computational intensity and platform constraints of interacting with Large Language Models, the Amplitude AskAI conversational feature within Slack requires an organization to be on a paid Slack plan.</p>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Slack Integration Feature</th>
+                                <th>Amplitude</th>
+                                <th>Mixpanel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Link Unfurling (Chart Previews)</strong></td>
+                                <td>Yes (Excludes Pathfinder, Compass, Persona)</td>
+                                <td>Yes (Insights, Funnels, Flows, Retention)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Automated Alerts & Anomaly Routing</strong></td>
+                                <td>Yes</td>
+                                <td>Yes (Custom Alerts and Board Subscriptions)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Authentication & Privacy</strong></td>
+                                <td>Platform-level and user-level constraints</td>
+                                <td>Strict user-level authentication required to view unfurls</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Conversational AI Querying via Slack</strong></td>
+                                <td>Yes (Amplitude Global Agent answers questions & creates charts)</td>
+                                <td>No (Requires accessing the Mixpanel web UI for Spark AI)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h2>Economic Models and Total Cost of Ownership (TCO) in 2026</h2>
+                    <p>The ultimate decision between Amplitude and Mixpanel frequently pivots on economics. The two platforms utilize fundamentally different pricing philosophies—Monthly Tracked Users (MTU) versus Event-Volume—which yield wildly disparate Total Cost of Ownership (TCO) profiles depending entirely on a product's specific user behavior, scale, and business model.</p>
+                    
+                    <h3>The Event-Based Model: Mixpanel Pricing Dynamics</h3>
+                    <p>Mixpanel's pricing architecture is explicitly anchored to event volume, calculating monthly costs based on the total number of data points tracked across all projects within an organization (excluding specific non-qualifying system events such as $identify, $merge, or session recording checkpoints).</p>
+                    
+                    <p>Mixpanel's entry-level strategy is highly aggressive and startup-friendly. As of the 2025/2026 pricing updates, the Mixpanel Free plan allows for up to 1 million monthly tracked events, grants access to core analytics reports (Insights, Funnels, Flows, Retention), and includes an impressive 10,000 session replays per month. Upon exceeding the 1 million event threshold, organizations automatically transition to the Growth plan. This tier effectively costs ~$20 per month as a baseline, charging roughly $0.28 per 1,000 events beyond the first million (with volume discounts significantly scaling down the unit cost as data ingestion grows). At a scale of 10 million events per month, the Mixpanel Growth plan scales to approximately $2,520 per month (or roughly $30,000 annually). Enterprise plans, which unlock advanced data governance, single sign-on (SSO), and unlimited monitoring alerts, require custom negotiated contracts generally starting north of $14,000 to $25,000 annually depending on volume.</p>
+                    
+                    <p><strong>Strategic Advantage:</strong> Mixpanel's pricing is exceptionally favorable for B2B SaaS companies, financial dashboards, or utility applications characterized by high user counts but low event frequency. Because organizations only pay for discrete actions taken, platforms that do not generate massive streams of background interactions maintain highly predictable and affordable analytics budgets.</p>
+                    
+                    <h3>The MTU-Based Model: Amplitude Pricing Dynamics</h3>
+                    <p>Amplitude utilizes a hybrid model primarily driven by Monthly Tracked Users (MTUs), with secondary contractual guardrails placed on total event volume. An MTU is counted as any unique individual who triggers at least one event in a given calendar month, regardless of whether that individual subsequently generates one event or ten thousand events.</p>
+                    
+                    <p>Amplitude's Free Starter tier is extraordinarily generous for early-stage startups aiming to implement complex behavioral tracking early in their lifecycle. The Starter tier permits up to 50,000 MTUs and a massive 10 million events per month, alongside access to session replay, unlimited feature flags, and basic web experimentation. The entry-level paid tier, Amplitude Plus, begins at $49 per month, supporting up to 300,000 MTUs or 25 million events, unlocking essential behavioral cohorts and custom audiences. However, the transition to Amplitude's Growth or Enterprise tiers represents a steep financial escalation. Mid-market Growth plans (supporting 100K–250K MTUs) typically require custom contracts ranging from $30,000 to $80,000 annually, while large-scale Enterprise configurations routinely exceed $100,000 to $250,000 per year.</p>
+                    
+                    <p><strong>Strategic Advantage:</strong> Amplitude's MTU-focused economics are highly advantageous for B2C applications, mobile gaming, media streaming, and rich e-commerce platforms. In these specific verticals, a single active user might generate hundreds of events in a single session (e.g., clicking, swiping, adjusting volume, video buffering states). Under an event-based model like Mixpanel's, this high-cardinality event stream would cause costs to spiral exponentially. Under Amplitude's model, a power user generating 1,000 events costs the exact same as a passive user generating a single event, encouraging organizations to track highly granular micro-interactions without fear of unpredictable variable data overages.</p>
+                    
+                    <h3>Hidden Costs and TCO Considerations</h3>
+                    <p>When evaluating the true Total Cost of Ownership, software licensing fees represent only a baseline portion of the overarching expenditure. Enterprise procurement must calculate several hidden operational costs:</p>
+                    
+                    <ol>
+                        <li><strong>Implementation and Instrumentation Debt:</strong> Amplitude requires stringent upfront schema planning and taxonomy governance. Correctly deploying Amplitude often demands 20 to 40 hours of dedicated data engineering time to plan user identification strategies and validate event taxonomies. Mixpanel's slightly more forgiving JSON structure allows for faster initial deployments and quicker time-to-insight for non-technical teams, reducing early-stage engineering costs.</li>
+                        <li><strong>Add-on Architecture:</strong> Mixpanel charges supplementary premiums for advanced modules. Utilizing Data Pipelines incurs a 20% surcharge based on ingested data volume, and deploying Group Analytics (which is absolutely essential for B2B account-level tracking) adds a 40% surcharge to the base pricing. Amplitude bundles many of these features (including unlimited feature flags, web experimentation, and complex cohorting) into its core Plus and Growth tiers, potentially neutralizing its higher baseline cost if an organization intends to utilize a comprehensive suite of product tools.</li>
+                        <li><strong>Compute Costs:</strong> Exporting massive volumes of raw data to Snowflake or BigQuery incurs compute and storage fees on the warehouse side. Amplitude's Snowflake Native direct-query architecture can mitigate redundant storage costs and ETL pipeline maintenance, providing long-term infrastructure savings for heavy enterprise deployments.</li>
+                    </ol>
+                    
+                    <table>
+                        <thead>
+                            <tr>
+                                <th>Pricing Component</th>
+                                <th>Amplitude</th>
+                                <th>Mixpanel</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            <tr>
+                                <td><strong>Primary Pricing Model</strong></td>
+                                <td>MTU-based (Monthly Tracked Users)</td>
+                                <td>Event-based (Pay per interaction)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Free Tier Limits</strong></td>
+                                <td>50,000 MTUs, up to 10M events/month</td>
+                                <td>1 Million events/month, 10K replays</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Entry Paid Tier</strong></td>
+                                <td>Plus: Starts at $49/month (up to 300K MTUs)</td>
+                                <td>Growth: Starts at ~$20/month (usage scales)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Enterprise / Custom Tier</strong></td>
+                                <td>Typically $30K – $100K+ annually</td>
+                                <td>Custom pricing (From ~$14K – $25K+ annually)</td>
+                            </tr>
+                            <tr>
+                                <td><strong>Ideal Economic Fit</strong></td>
+                                <td>B2C, Gaming, Media (High events per user)</td>
+                                <td>B2B SaaS, Utilities (Low events per user)</td>
+                            </tr>
+                        </tbody>
+                    </table>
+                    
+                    <h2>Strategic Synthesis and Final Determinations</h2>
+                    <p>The comparative evaluation of Amplitude and Mixpanel reveals two exceptionally capable digital analytics platforms engineered for distinct operational philosophies, go-to-market strategies, and stages of organizational data maturity. The enterprise procurement process must circumvent simple feature-matching and instead focus on foundational data architecture, internal team composition, and long-term financial modeling.</p>
+                    
+                    <p><strong>Mixpanel</strong> represents the optimal strategic choice for organizations prioritizing speed, accessibility, and ecosystem flexibility. Its event-based pricing model is incredibly favorable for B2B SaaS and low-event platforms. The introduction of Spark AI's natural language querying, combined with an exceptionally intuitive user interface (specifically Flows and Funnels), ensures that decentralized product managers and marketers can achieve rapid time-to-insight without relying on a central data science bottleneck. Furthermore, the native Metric Trees feature provides unparalleled executive visibility, elegantly linking daily active product usage directly to corporate revenue KPIs. Mixpanel's philosophy is clear: provide the best possible analytical visualization while relying on external tools for complex experimentation and data warehousing.</p>
+                    
+                    <p><strong>Amplitude</strong>, conversely, institutionalizes product intelligence through rigorous governance, unparalleled predictive depth, and an all-in-one execution engine. It is the premier choice for data-mature enterprises, high-volume B2C platforms, and data science teams requiring algorithmic journey mapping (Pathfinder) and strict schema validation (Govern). The MTU-based pricing model protects high-engagement consumer apps from spiraling event costs. Organizations seeking to deprecate standalone tools for feature flagging, A/B testing, and in-app surveys will find immense ROI in Amplitude's natively integrated suite. Finally, the Amplitude Global Agent's ability to proactively diagnose retention drops, prescribe interventions, and interface autonomously within Slack represents the leading edge of enterprise product analytics.</p>
+                    
+                    <p>Ultimately, aligning these fundamental platform characteristics with an organization's specific technical architecture and strategic objectives will ensure that behavioral data successfully transforms from a passive operational dashboard into an active, predictive driver of continuous commercial growth.</p>
+                </div>
+            </div>
+        </div>
+        <div class="cyber-scanlines"></div>
+    </div>
+</body>
+</html>

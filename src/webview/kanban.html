@@ -25,6 +25,10 @@
             --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
         }
+        /* Afterburner Updated — Hanken Grotesk font only */
+        body.theme-afterburner-updated {
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+        }
 
         /* Claude Terracotta — warm terracotta accent on professional dark surfaces */
         body.theme-claude-terracotta {
@@ -126,25 +130,6 @@
         body.theme-slightly-darker-black .db-radio-option:hover,
         body.theme-slightly-darker-black .db-action-btn:hover {
             background: rgba(255, 255, 255, 0.05);
-        }
-
-        /* Afterburner Updated — brighter cyan, Hanken Grotesk, refined surfaces */
-        body.theme-afterburner-updated {
-            --bg-color: #101414;
-            --panel-bg: #101414;
-            --panel-bg2: #0b0f0f;
-            --border-color: #1d2323;
-            --border-bright: #363a3a;
-            --accent-teal: #00e5ff;
-            --accent-teal-dim: rgba(0, 229, 255, 0.4);
-            --accent-teal-bright: #00e5ff;
-            --glow-teal: 0 0 10px rgba(0, 229, 255, 0.4);
-            --accent-green: #3ef06d;
-            --accent-red: #ff4747;
-            --accent-orange: #d18616;
-            --text-primary: #ffffff;
-            --text-secondary: #a0a6a6;
-            --font-family: 'Hanken Grotesk', var(--vscode-font-family), 'Segoe UI', 'Roboto', sans-serif;
         }
 
         * {
@@ -806,22 +791,7 @@
             white-space: nowrap;
         }
 
-        .dependency-warning {
-            position: absolute;
-            top: 6px;
-            right: 6px;
-            width: 16px;
-            height: 16px;
-            background: var(--accent-red, #e53935);
-            color: white;
-            font-size: 11px;
-            font-weight: bold;
-            border-radius: 50%;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            z-index: 10;
-        }
+
 
         /* During drag, prevent child elements from interfering with drop targets */
         .column-body.drag-over .kanban-card,
@@ -1874,7 +1844,7 @@
 
 
         /* Dependency Tree and UAT Styles */
-        #dependencies-tab-content, #uat-tab-content {
+        #uat-tab-content {
             overflow: hidden;
         }
 
@@ -2329,7 +2299,7 @@
         <button class="kanban-tab-btn" data-tab="prompts">PROMPTS</button>
         <button class="kanban-tab-btn" data-tab="automation">AUTOMATION</button>
         <button class="kanban-tab-btn" data-tab="worktrees">WORKTREES</button>
-        <button class="kanban-tab-btn" data-tab="dependencies">DEPENDENCIES</button>
+
         <button class="kanban-tab-btn" data-tab="uat">test</button>
         <button class="kanban-tab-btn" data-tab="setup">SETUP</button>
     </div>
@@ -2402,36 +2372,7 @@
         <div id="automation-panel-root" class="automation-panel"></div>
     </div>
 
-    <!-- Dependencies Tab Content -->
-    <div id="dependencies-tab-content" class="kanban-tab-content">
-        <div style="padding:12px; overflow-y:auto; height:100%;">
-            <div class="db-subsection">
-                <div class="subsection-header"><span>Plan Dependencies</span></div>
-                <div class="subsection-actions">
-                    <button class="strip-btn" id="btn-copy-deps-prompt" data-tooltip="Copy analyst prompt to clipboard">Copy dependency ordering prompt</button>
-                    <button class="strip-btn" id="btn-rebuild-deps" data-tooltip="Send to analyst terminal">SEND TO ANALYST</button>
-                    <button class="strip-btn" id="btn-refresh-deps" data-tooltip="Reload dependency map from database">REFRESH</button>
-                </div>
-            </div>
-            <div class="dep-tree-container" id="dep-tree-container">
-                <div class="empty-state">No plans in CREATED or PLAN REVIEWED columns. Create a plan to see dependencies here.</div>
-            </div>
-            <div class="dep-legend">
-                <div class="legend-item">
-                    <div class="legend-box created"></div>
-                    <span>CREATED</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box planned"></div>
-                    <span>PLAN REVIEWED</span>
-                </div>
-                <div class="legend-item">
-                    <div class="legend-box blocking"></div>
-                    <span>⚠️ BLOCKED</span>
-                </div>
-            </div>
-        </div>
-    </div>
+
 
     <!-- UAT Tab Content -->
     <div id="uat-tab-content" class="kanban-tab-content">
@@ -2570,65 +2511,9 @@
             <input id="agents-tab-custom-agent-name" class="modal-input" type="text" placeholder="e.g. Refactor Specialist">
             <label class="modal-label" for="agents-tab-custom-agent-command">Startup command</label>
             <input id="agents-tab-custom-agent-command" class="modal-input" type="text" placeholder="e.g. claude --dangerously-skip-permissions">
-            <label class="modal-label" for="agents-tab-custom-agent-prompt">Prompt instructions</label>
-            <textarea id="agents-tab-custom-agent-prompt" class="modal-textarea" placeholder="Extra instructions to append when this agent is dispatched"></textarea>
-            <div id="agents-tab-custom-agent-addons" style="margin-top:10px;">
-              <div class="modal-label" style="margin-bottom:4px;">Prompt Add-ons</div>
-              <div style="padding:8px 0; display:flex; flex-direction:column; gap:4px;">
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-switchboard-safeguards" style="width:auto;margin:0;"> Switchboard Safeguards</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-git-prohibition" style="width:auto;margin:0;"> Git Prohibition</label>                <label class="checkbox-label"><input type="checkbox" id="ca-addon-workspace-detection" style="width:auto;margin:0;"> Workspace Type Detection</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-inline-challenge" style="width:auto;margin:0;"> Inline Adversarial Challenge</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-accuracy" style="width:auto;margin:0;"> Accuracy Mode</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-suppress-walkthrough" style="width:auto;margin:0;"> Suppress Walkthrough Artifact</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-pair-programming" style="width:auto;margin:0;"> Pair Programming (Complex only)</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-aggressive-pair" style="width:auto;margin:0;"> Aggressive Pair Programming</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-advanced-reviewer" style="width:auto;margin:0;"> Advanced Regression Analysis</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-caveman-output" style="width:auto;margin:0;"> Caveman Output</label>
-                <label class="checkbox-label"><input type="checkbox" id="ca-addon-dependency-check" style="width:auto;margin:0;"> Dependency Check</label>
-                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="ca-addon-complexity-scoring" style="width:auto;margin:0;">
-                  <span>Apply Complexity Scoring (if plan lacks Complexity Audit)</span>
-                </label>
-                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
-                  <span>Ticket Update Mode:</span>
-                  <select id="ca-addon-ticket-update-mode" style="background:#0a0a0a;color:var(--text-primary);border:1px solid var(--border-color);border-radius:3px;padding:2px 4px;font-size:10px;font-family:var(--font-mono);">
-                    <option value="disabled">Disabled</option>
-                    <option value="comment-only">Comment Only</option>
-                    <option value="refine-ticket">Refine Ticket</option>
-                    <option value="research-and-refine">Research & Refine</option>
-                  </select>
-                </label>
-                <label class="checkbox-label" style="display:flex;align-items:center;gap:6px;">
-                  <input type="checkbox" id="ca-addon-research" style="width:auto;margin:0;">
-                <div style="margin-top:8px;">
-                  <label class="modal-label" style="margin-bottom:4px;">Subagent Policy</label>
-                  <div style="display:flex; flex-direction:column; gap:4px; margin-bottom:8px;">
-                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
-                      <input type="radio" name="ca-subagent-policy" value="default" style="width:auto; margin:0;" checked>
-                      <span>Not Specified</span>
-                    </label>
-                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
-                      <input type="radio" name="ca-subagent-policy" value="noSubagents" style="width:auto; margin:0;">
-                      <span>No Subagents</span>
-                    </label>
-                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px;">
-                      <input type="radio" name="ca-subagent-policy" value="useSubagents" style="width:auto; margin:0;">
-                      <span>Yes (Use Subagents)</span>
-                    </label>
-                    <label class="checkbox-label" style="display:flex; align-items:center; gap:6px; flex-wrap:wrap;">
-                      <input type="radio" name="ca-subagent-policy" value="customSubagent" style="width:auto; margin:0;">
-                      <span>Custom Subagent</span>
-                      <input id="ca-addon-custom-subagent-name" class="modal-input" type="text" placeholder="Custom subagent name..." style="margin-bottom:0; width:150px; display:none; padding:2px 4px; font-size:11px; margin-left:8px;">
-                    </label>
-                  </div>
-                </div>
-
-                <div style="margin-top:8px;">
-                  <label class="checkbox-label"><input type="checkbox" id="ca-addon-design-doc" style="width:auto;margin:0;"> Design Doc Reference</label>
-                </div>
-                
-              </div>
-            </div>
+            <p style="font-size:10px; color:var(--text-secondary); margin-top:8px; line-height:1.4;">
+              Configure prompt add-ons and custom instructions in the <strong>PROMPTS</strong> tab after saving this agent.
+            </p>
             <div id="agents-tab-custom-agent-error" style="min-height:16px; color: var(--accent-red); font-size: 11px; margin-top: 6px;"></div>
             <div class="flex gap-2" style="margin-top: 10px;">
               <button id="agents-tab-btn-save-custom-agent" class="modal-btn-primary">SAVE AGENT</button>
@@ -2713,11 +2598,7 @@
                   <span class="tooltip">Include batch execution rules and focus directive</span>
                 </label>
                 
-                <label class="checkbox-item" title="Query Kanban for dependencies between active plans">
-                  <input type="checkbox" id="plannerAddonDependencyCheck">
-                  <span>Dependency Check</span>
-                  <span class="tooltip">Query Kanban for cross-plan dependencies</span>
-                </label>
+
                 
                 <label class="checkbox-item" title="Append design doc/PRD as context for planning">
                   <input type="checkbox" id="plannerAddonDesignDoc">
@@ -3047,7 +2928,7 @@
                 document.getElementById('plannerWorkflowEnabled').checked = plannerWorkflowEnabled;
                 document.getElementById('plannerWorkflowFilePathGroup').style.display = plannerWorkflowEnabled ? 'block' : 'none';
                 document.getElementById('plannerAddonSwitchboardSafeguards').checked = config.addons?.switchboardSafeguards !== false;
-                document.getElementById('plannerAddonDependencyCheck').checked = !!config.addons?.dependencyCheck;
+
                 document.getElementById('plannerAddonDesignDoc').checked = !!config.addons?.designDoc;
                 document.getElementById('plannerAddonAggressivePairProgramming').checked = !!config.addons?.aggressivePairProgramming;
                 document.getElementById('plannerAddonGitProhibition').checked = !!config.addons?.gitProhibition;
@@ -3097,7 +2978,10 @@
 
             let addons = ROLE_ADDONS[role] || [];
             if (addons.length === 0 && role.startsWith('custom_agent_')) {
-                addons = [{ id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false }];
+                addons = [
+                    { id: 'workflowFilePath', label: 'Workflow File', tooltip: 'Read a workflow file and follow it step-by-step', type: 'file', default: false },
+                    { id: 'useWorktreesPerPlan', label: 'Worktrees Per Plan', tooltip: 'Instruct the agent to use its native subagent/orchestration capabilities to process each plan in an isolated git worktree', default: false }
+                ];
             }
 
             if (addons.length === 0) {
@@ -3296,37 +3180,7 @@
           document.getElementById('agents-tab-inline-form-title').textContent = agent ? `Edit: ${agent.name}` : 'New Custom Agent';
           document.getElementById('agents-tab-custom-agent-name').value = agent?.name || '';
           document.getElementById('agents-tab-custom-agent-command').value = agent?.startupCommand || '';
-          document.getElementById('agents-tab-custom-agent-prompt').value = agent?.promptInstructions || '';
 
-          // Load addons
-          const addons = agent?.addons || {};
-          document.getElementById('ca-addon-switchboard-safeguards').checked = addons.switchboardSafeguards === true;
-          document.getElementById('ca-addon-git-prohibition').checked = addons.gitProhibitionEnabled === true;          document.getElementById('ca-addon-workspace-detection').checked = addons.workspaceTypeDetection === true;
-          document.getElementById('ca-addon-inline-challenge').checked = addons.includeInlineChallenge === true;
-          document.getElementById('ca-addon-accuracy').checked = addons.accurateCodingEnabled === true;
-          document.getElementById('ca-addon-suppress-walkthrough').checked = addons.suppressWalkthrough === true;
-          document.getElementById('ca-addon-pair-programming').checked = addons.pairProgrammingEnabled === true;
-          document.getElementById('ca-addon-aggressive-pair').checked = addons.aggressivePairProgramming === true;
-          document.getElementById('ca-addon-advanced-reviewer').checked = addons.advancedReviewerEnabled === true;
-          document.getElementById('ca-addon-caveman-output').checked = addons.cavemanOutput === true;
-          document.getElementById('ca-addon-dependency-check').checked = addons.dependencyCheckEnabled === true;
-          document.getElementById('ca-addon-complexity-scoring').checked = addons.complexityScoringSkill === true;
-          const ticketUpdateMode = addons.ticketUpdateMode || (addons.ticketUpdateEnabled === true ? 'comment-only' : 'disabled');
-          document.getElementById('ca-addon-ticket-update-mode').value = ticketUpdateMode;
-          document.getElementById('ca-addon-research').checked = addons.researchEnabled === true;
-          document.getElementById('ca-addon-design-doc').checked = addons.designDoc === true || !!addons.designDocLink;
-
-          const subagentPolicy = addons.subagentPolicy || 'default';
-          const customSubagentName = addons.customSubagentName || '';
-          const subagentRadios = document.getElementsByName('ca-subagent-policy');
-          subagentRadios.forEach(radio => {
-            radio.checked = radio.value === subagentPolicy;
-          });
-          const customNameInput = document.getElementById('ca-addon-custom-subagent-name');
-          if (customNameInput) {
-            customNameInput.value = customSubagentName;
-            customNameInput.style.display = subagentPolicy === 'customSubagent' ? 'inline-block' : 'none';
-          }
 
           document.getElementById('agents-tab-custom-agent-error').textContent = '';
           document.getElementById('agents-tab-custom-agent-form').classList.remove('hidden');
@@ -3354,30 +3208,18 @@
             role,
             name,
             startupCommand,
-            promptInstructions: document.getElementById('agents-tab-custom-agent-prompt').value.trim(),
             includeInKanban: false,
             kanbanOrder: 0,
             dragDropMode: 'cli',
-            addons: {
-                switchboardSafeguards: document.getElementById('ca-addon-switchboard-safeguards').checked,
-                gitProhibitionEnabled: document.getElementById('ca-addon-git-prohibition').checked,
-                workspaceTypeDetection: document.getElementById('ca-addon-workspace-detection').checked,
-                includeInlineChallenge: document.getElementById('ca-addon-inline-challenge').checked,
-                accurateCodingEnabled: document.getElementById('ca-addon-accuracy').checked,
-                suppressWalkthrough: document.getElementById('ca-addon-suppress-walkthrough').checked,
-                pairProgrammingEnabled: document.getElementById('ca-addon-pair-programming').checked,
-                aggressivePairProgramming: document.getElementById('ca-addon-aggressive-pair').checked,
-                advancedReviewerEnabled: document.getElementById('ca-addon-advanced-reviewer').checked,
-                cavemanOutput: document.getElementById('ca-addon-caveman-output').checked,
-                dependencyCheckEnabled: document.getElementById('ca-addon-dependency-check').checked,
-                complexityScoringSkill: document.getElementById('ca-addon-complexity-scoring').checked,
-                ticketUpdateMode: document.getElementById('ca-addon-ticket-update-mode')?.value || 'disabled',
-                researchEnabled: document.getElementById('ca-addon-research').checked,
-                designDoc: document.getElementById('ca-addon-design-doc').checked,
-                subagentPolicy: Array.from(document.getElementsByName('ca-subagent-policy')).find(r => r.checked)?.value || 'default',
-                customSubagentName: document.getElementById('ca-addon-custom-subagent-name')?.value.trim() || '',
-            }
           };
+          // Preserve existing agent's prompt config (backward compat)
+          if (agentsTabEditingAgentId) {
+            const existing = agentsTabCustomAgents.find(a => a.id === agentsTabEditingAgentId);
+            if (existing) {
+              if (existing.promptInstructions) nextAgent.promptInstructions = existing.promptInstructions;
+              if (existing.addons) nextAgent.addons = existing.addons;
+            }
+          }
 
           const duplicate = agentsTabCustomAgents.find(agent =>
             (agentsTabEditingAgentId ? agent.id !== agentsTabEditingAgentId : true) &&
@@ -3705,10 +3547,7 @@
                   postKanbanMessage({ type: 'getCustomAgents' });
                 }
 
-                // Hydrate DEPENDENCIES tab when activated
-                if (tabName === 'dependencies') {
-                  postKanbanMessage({ type: 'getDependencyMapData' });
-                }
+
 
                 // Hydrate UAT tab when activated
                 if (tabName === 'uat') {
@@ -3724,8 +3563,8 @@
 
                 // Hydrate WORKTREES tab when activated
                 if (tabName === 'worktrees') {
-                  loadWorktrees();
-                  renderWorktreePanel();
+                  loadSafetySession();
+                  renderSafetySessionPanel();
                 }
             });
         });
@@ -3819,7 +3658,7 @@
             }
 
             // Planner specific add-on listeners
-            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDependencyCheck', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
+            ['plannerAddonSwitchboardSafeguards', 'plannerAddonDesignDoc', 'plannerAddonAggressivePairProgramming', 'plannerAddonGitProhibition', 'plannerAddonClearAntigravityContext', 'plannerAddonCavemanOutput', 'plannerAddonSkipCompilation', 'plannerAddonSkipTests'].forEach(id => {
                 const el = document.getElementById(id);
                 if (el) {
                     el.addEventListener('change', (e) => {
@@ -4894,20 +4733,16 @@
                 const items = buckets[col];
                 if (!container || !countEl) return;
                 // Only apply dependency sorting to planning columns
-                const PLANNING_COLUMNS = ['CREATED', 'PLAN REVIEWED'];
-                const isPlanningColumn = PLANNING_COLUMNS.includes(col);
-                const sortedItems = isPlanningColumn
-                    ? sortColumnByDependencies(items)
-                    : [...items].sort((a, b) => {
-                        const tsDiff = (b._ts || 0) - (a._ts || 0);
-                        if (tsDiff !== 0) return tsDiff;
-                        // Secondary tiebreaker: createdAt descending (for cards with no lastActivity/same lastActivity)
-                        let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-                        let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-                        if (isNaN(createdA)) createdA = 0;
-                        if (isNaN(createdB)) createdB = 0;
-                        return createdB - createdA;
-                    });
+                const sortedItems = [...items].sort((a, b) => {
+                    const tsDiff = (b._ts || 0) - (a._ts || 0);
+                    if (tsDiff !== 0) return tsDiff;
+                    // Secondary tiebreaker: createdAt descending (for cards with no lastActivity/same lastActivity)
+                    let createdA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+                    let createdB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+                    if (isNaN(createdA)) createdA = 0;
+                    if (isNaN(createdB)) createdB = 0;
+                    return createdB - createdA;
+                });
                 countEl.textContent = items.length;
 
                 if (items.length === 0) {
@@ -5126,29 +4961,7 @@
         // Mirrors the resolver logic in sortColumnByDependencies, but scoped to
         // all currentCards (not just one column) so cross-column deps still display
         // meaningful tooltips.
-        function resolveCardDependencies(card) {
-            const raw = Array.isArray(card && card.dependencies) ? card.dependencies : [];
-            const resolved = [];
-            const pool = Array.isArray(currentCards) ? currentCards : [];
-            for (const rawDep of raw) {
-                const key = String(rawDep || '').trim();
-                if (!key) continue;
-                const isSessToken = /^sess_\d+$/.test(key);
-                let hit = null;
-                if (isSessToken) {
-                    hit = pool.find(c => c && c.sessionId === key) || null;
-                } else {
-                    const lower = key.toLowerCase();
-                    hit = pool.find(c => c && (c.sessionId === key || String(c.topic || '').trim().toLowerCase() === lower)) || null;
-                }
-                if (hit && hit.sessionId !== card.sessionId) {
-                    resolved.push({ raw: key, card: hit });
-                }
-                // Unresolved deps (no matching card) are silently dropped —
-                // cross-column blocking is surfaced via hasBlockingDependencies.
-            }
-            return { resolved };
-        }
+
 
         function createCardHtml(card) {
             const timeAgo = formatTimeAgo(card.lastActivity);
@@ -5233,23 +5046,11 @@
                     : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
                            <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
                        </button>`;
-            const depInfo = resolveCardDependencies(card);
-            const blockingList = depInfo.resolved
-                .filter(r => r.card.column !== 'COMPLETED' && r.card.column !== 'CODE REVIEWED')
-                .map(r => `• ${r.card.topic || r.card.sessionId} (${r.card.column})`);
-            const redTitle = card.hasBlockingDependencies
-                ? (blockingList.length > 0
-                    ? `Blocked by:\n${blockingList.join('\n')}`
-                    : 'Has dependencies not yet ready')
-                : '';
-            const depWarningHtml = card.hasBlockingDependencies
-                ? `<span class="dependency-warning" title="${escapeAttr(redTitle)}">!</span>`
-                : '';
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
                     ${worktreeIconHtml}
-                    <div class="card-topic">${depWarningHtml}${escapeHtml(shortTopic)}${branchInfo}</div>
+                    <div class="card-topic">${escapeHtml(shortTopic)}${branchInfo}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
@@ -5387,74 +5188,7 @@
             return Math.floor(hrs / 24) + 'd ago';
         }
 
-        function sortColumnByDependencies(cards) {
-            if (cards.length <= 1) return cards;
-            // Build a dual-keyed lookup: planId (primary), sessionId (legacy), AND
-            // normalized topic all map to the same card. Lets us resolve legacy
-            // topic-form deps and new sessionId-form deps uniformly before DFS.
-            const keyToCard = new Map();
-            for (const c of cards) {
-                const cardKey = c.planId || c.sessionId || '';
-                if (cardKey) keyToCard.set(cardKey, c);
-                if (c.sessionId) keyToCard.set(c.sessionId, c); // legacy dep resolution
-                const topicKey = String(c.topic || '').trim().toLowerCase();
-                if (topicKey) keyToCard.set(topicKey, c);
-            }
 
-            // Resolve each card's raw dep strings to canonical planIds. Drop
-            // unresolved ones (cross-column or deleted targets — cross-column
-            // blocking is separately surfaced via hasBlockingDependencies).
-            const canonicalDepsFor = new Map();
-            for (const c of cards) {
-                const resolved = [];
-                const rawDeps = Array.isArray(c.dependencies) ? c.dependencies : [];
-                for (const raw of rawDeps) {
-                    const key = String(raw || '').trim();
-                    if (!key) continue;
-                    const sessTokenMatch = key.match(/^sess_\d+$/);
-                    const lookup = sessTokenMatch
-                        ? keyToCard.get(key)
-                        : (keyToCard.get(key) || keyToCard.get(key.toLowerCase()));
-                    const lookupKey = lookup ? (lookup.planId || lookup.sessionId || '') : '';
-                    const cardKey = c.planId || c.sessionId || '';
-                    if (lookupKey && lookupKey !== cardKey) {
-                        resolved.push(lookupKey);
-                    }
-                }
-                canonicalDepsFor.set(c.planId || c.sessionId || '', Array.from(new Set(resolved)));
-            }
-
-            const sorted = [];
-            const visited = new Set();
-            const visiting = new Set();
-
-            function visit(card) {
-                const cardKey = card ? (card.planId || card.sessionId || '') : '';
-                if (!cardKey) return;
-                if (visited.has(cardKey)) return;
-                if (visiting.has(cardKey)) {
-                    // Cycle detected — mark visited to break traversal but do NOT
-                    // push here. The outer visit() frame that's still on the stack
-                    // will push this card exactly once when it finishes.
-                    visited.add(cardKey);
-                    return;
-                }
-                visiting.add(cardKey);
-                const deps = canonicalDepsFor.get(cardKey) || [];
-                for (const depKey of deps) {
-                    const dep = keyToCard.get(depKey);
-                    if (dep) visit(dep);
-                }
-                visiting.delete(cardKey);
-                visited.add(cardKey);
-                sorted.push(card);
-            }
-
-            for (const card of cards) {
-                visit(card);
-            }
-            return sorted;
-        }
 
         // Recover Selected handler
         document.addEventListener('click', (e) => {
@@ -5883,11 +5617,7 @@
         let autobanPanelInteractionTimer = null;
         let lastAntigravityAgent = '';
         let lastAntigravityColumn = '';
-        let lastWorktreeModeEnabled = false;
-        let lastWorktreeMaxCap = 10;
-        let lastWorktreeDefaultMergeStrategy = 'squash';
-        let lastControlPlaneConfigured = true;
-        let lastWorktrees = [];
+        let lastSafetySession = null;
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
@@ -6015,13 +5745,9 @@
                     }
                     break;
                 }
-                case 'worktrees': {
-                    lastWorktrees = msg.worktrees || [];
-                    lastWorktreeModeEnabled = msg.worktreeModeEnabled || false;
-                    lastWorktreeMaxCap = msg.worktreeMaxCap || 10;
-                    lastWorktreeDefaultMergeStrategy = msg.worktreeDefaultMergeStrategy || 'squash';
-                    lastControlPlaneConfigured = msg.controlPlaneConfigured !== false;
-                    renderWorktreePanel();
+                case 'safetySession': {
+                    lastSafetySession = msg.session;
+                    renderSafetySessionPanel();
                     break;
                 }
                 case 'antigravityPrompt': {
@@ -6095,38 +5821,8 @@
                         renderAutobanPanel();
                     }
                     break;
-                case 'dependencyMapData':
-                    renderDependencyTree(msg.plans);
-                    if (msg.prompt) {
-                        const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
-                        if (btnCopyDepsPrompt) {
-                            navigator.clipboard.writeText(msg.prompt).then(() => {
-                                btnCopyDepsPrompt.textContent = 'COPIED!';
-                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'Copy dependency ordering prompt'; }, 2000);
-                            }).catch(err => {
-                                console.error('[kanban webview] failed to copy prompt:', err);
-                                btnCopyDepsPrompt.textContent = 'COPY FAILED';
-                                setTimeout(() => { btnCopyDepsPrompt.textContent = 'Copy dependency ordering prompt'; }, 2000);
-                            });
-                            btnCopyDepsPrompt.disabled = false;
-                        }
-                    }
-                    break;
                 case 'uatData':
                     renderUATChecklist(msg.plans);
-                    break;
-                case 'actionTriggered':
-                    if (msg.role === 'analystMap') {
-                        const btnRebuild = document.getElementById('btn-rebuild-deps');
-                        if (btnRebuild) {
-                            btnRebuild.disabled = false;
-                            btnRebuild.textContent = 'REBUILD MAP';
-                            if (msg.success === false) {
-                                btnRebuild.textContent = 'REBUILD FAILED';
-                                setTimeout(() => { btnRebuild.textContent = 'REBUILD MAP'; }, 3000);
-                            }
-                        }
-                    }
                     break;
                 case 'updateAgentNames':
                     lastAgentNames = msg.agentNames || {};
@@ -8350,169 +8046,7 @@
 
         // Signal to extension that webview is ready to receive data
         postKanbanMessage({ type: 'ready' });
-        // ─── Dependency Tree Visualization ──────────────────────────────────────────
 
-        function extractReadableTitle(depId) {
-            if (depId.includes('/') || depId.endsWith('.md')) {
-                const filename = depId.split('/').pop();
-                const nameWithoutExt = filename.replace(/\.md$/, '');
-                return nameWithoutExt
-                    .replace(/[_-]/g, ' ')
-                    .replace(/([a-z])([A-Z])/g, '$1 $2')
-                    .replace(/\b\w/g, l => l.toUpperCase());
-            }
-            if (/^sess_\d+$/.test(depId)) {
-                return `Plan (${depId.slice(0, 12)}…)`;
-            }
-            return depId;
-        }
-
-        function renderDependencyTree(plans) {
-            const container = document.getElementById('dep-tree-container');
-            if (!container) return;
-
-            if (!plans || plans.length === 0) {
-                container.innerHTML = '<div class="empty-state">No plans in New or Planned columns. Create a plan to see dependencies here.</div>';
-                return;
-            }
-
-            const DEP_NODE_LIMIT = 50;
-            const html = [];
-            const planMap = new Map();
-            const planFileMap = new Map();
-            plans.forEach(p => {
-                planMap.set(p.sessionId, p);
-                if (p.planFile) {
-                    planFileMap.set(p.planFile, p);
-                }
-            });
-
-            // Detect cycles to highlight them
-            const cycles = detectCyclesForDeps(plans);
-
-            const renderPlan = (plan) => {
-                const isCreated = plan.kanbanColumn === 'CREATED';
-                const statusClass = isCreated ? 'created' : 'planned';
-                
-                const deps = (plan.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
-                const blockingDeps = deps.filter(d => planMap.has(d) || planFileMap.has(d));
-                const isBlocking = blockingDeps.length > 0;
-                const isCycling = cycles.has(plan.sessionId);
-                const blockingClass = (isBlocking || isCycling) ? 'blocking' : '';
-
-                const safeSessionId = escapeAttr(plan.sessionId);
-                const safeTopic = escapeHtml(plan.topic);
-                const safeTopicAttr = escapeAttr(plan.topic);
-                const safeColumn = escapeHtml(plan.kanbanColumn);
-
-                let planHtml = `
-                    <div class="plan-node ${statusClass} ${blockingClass}" data-session-id="${safeSessionId}" onclick="postKanbanMessage({ type: 'selectPlan', sessionId: '${safeSessionId}' })">
-                        <div class="plan-title" title="${safeTopicAttr}">${safeTopic}</div>
-                        <div class="plan-status-tag">${safeColumn}${isBlocking ? ' ⚠️ BLOCKED' : ''}${isCycling ? ' 🔄 CYCLE' : ''}</div>
-                    </div>
-                `;
-
-                if (deps.length > 0) {
-                    deps.forEach(depId => {
-                        const depPlan = planMap.get(depId) || planFileMap.get(depId);
-                        let depTitle;
-                        let clickAttr;
-                        
-                        if (depPlan) {
-                            depTitle = escapeHtml(depPlan.topic);
-                            clickAttr = `data-dep-session="${escapeAttr(depPlan.sessionId)}"`;
-                        } else {
-                            depTitle = extractReadableTitle(depId);
-                            // Only make path-like deps clickable
-                            if (depId.includes('/') || depId.endsWith('.md')) {
-                                clickAttr = `data-dep-path="${escapeAttr(depId)}"`;
-                            } else {
-                                clickAttr = '';
-                            }
-                        }
-                        
-                        const clickClass = clickAttr ? 'dep-link' : '';
-                        planHtml += `
-                            <div class="dep-connector">
-                                <span class="${clickClass}" style="font-size: 10px; color: var(--text-secondary);" ${clickAttr}>Depends on: ${escapeHtml(depTitle)}</span>
-                            </div>
-                        `;
-                    });
-                }
-                return planHtml;
-            };
-
-            const displayPlans = plans.length > DEP_NODE_LIMIT ? plans.slice(0, DEP_NODE_LIMIT) : plans;
-
-            html.push('<div class="dep-tree">');
-            displayPlans.forEach(plan => {
-                html.push(renderPlan(plan));
-            });
-            if (plans.length > DEP_NODE_LIMIT) {
-                html.push(`<div class="empty-state" style="text-align:center; padding:10px;">Showing ${DEP_NODE_LIMIT} of ${plans.length} plans. <button class="strip-btn" onclick="_depShowAll()" style="font-size:10px; padding:2px 8px;">Show All</button></div>`);
-            }
-            html.push('</div>');
-
-            container.innerHTML = html.join('');
-
-            container.onclick = function(e) {
-                const target = e.target.closest('[data-dep-session], [data-dep-path]');
-                if (!target) return;
-                if (target.dataset.depSession) {
-                    postKanbanMessage({ type: 'selectPlan', sessionId: target.dataset.depSession });
-                } else if (target.dataset.depPath) {
-                    postKanbanMessage({ type: 'openPlanByPath', planPath: target.dataset.depPath });
-                }
-            };
-
-            // Expose full list for "Show All" button
-            window._depAllPlans = plans;
-            window._depShowAll = () => {
-                const c = document.getElementById('dep-tree-container');
-                if (!c) return;
-                const allHtml = ['<div class="dep-tree">'];
-                plans.forEach(plan => { allHtml.push(renderPlan(plan)); });
-                allHtml.push('</div>');
-                c.innerHTML = allHtml.join('');
-            };
-        }
-
-        function detectCyclesForDeps(plans) {
-            const adj = new Map();
-            plans.forEach(p => {
-                const deps = (p.dependencies || '').split(',').map(d => d.trim()).filter(Boolean);
-                // Only include edges to plans that exist in the current set
-                adj.set(p.sessionId, deps.filter(id => plans.some(q => q.sessionId === id)));
-            });
-
-            const visited = new Set();
-            const recStack = new Set();
-            const cycleNodes = new Set();
-
-            function dfs(u) {
-                visited.add(u);
-                recStack.add(u);
-
-                const deps = adj.get(u) || [];
-                for (const v of deps) {
-                    if (!visited.has(v)) {
-                        dfs(v);
-                    } else if (recStack.has(v)) {
-                        cycleNodes.add(u);
-                        cycleNodes.add(v);
-                    }
-                }
-
-                recStack.delete(u);
-            }
-
-            for (const planId of adj.keys()) {
-                if (!visited.has(planId)) {
-                    dfs(planId);
-                }
-            }
-            return cycleNodes;
-        }
 
         function renderUATChecklist(plans) {
             const container = document.getElementById('uat-checklist-container');
@@ -8565,289 +8099,166 @@
             });
         }
 
-        function createWorktreePanel() {
+        function createSafetySessionPanel(session) {
             const container = document.createElement('div');
-            container.style.cssText = 'padding: 8px; display: flex; flex-direction: column; gap: 12px;';
+            container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
             if (!lastControlPlaneConfigured) {
                 const warningBanner = document.createElement('div');
                 warningBanner.style.cssText = 'padding:8px; background:rgba(229,85,85,0.15); border:1px solid var(--accent-red, #e55); color:var(--accent-red, #e55); border-radius:4px; font-size:10px; font-weight:bold; line-height:1.4;';
-                warningBanner.textContent = '⚠️ Control plane not configured. Worktree mode requires an explicit control plane or kanban database. Configure one in the workspace selector.';
+                warningBanner.textContent = '⚠️ Control plane not configured. Safety session requires an explicit control plane or kanban database. Configure one in the workspace selector.';
                 container.appendChild(warningBanner);
             }
 
-            // ── Mode Toggle & Rules Section ──
+            // Description / Overview Header
             const configSection = document.createElement('div');
             configSection.className = 'db-subsection';
 
             const configHeader = document.createElement('div');
             configHeader.className = 'subsection-header';
             const configSpan = document.createElement('span');
-            configSpan.textContent = 'WORKTREE MODE & RULES';
+            configSpan.textContent = 'SAFETY SESSION';
             configHeader.appendChild(configSpan);
             configSection.appendChild(configHeader);
 
             const descriptionDiv = document.createElement('div');
             descriptionDiv.style.cssText = 'padding:8px; font-size:10px; color:var(--text-secondary); line-height:1.4;';
-            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want isolated coding environments per plan — useful for parallel work, safe experimentation, or keeping changes separate until review.<br><br>' +
-                '<strong>Setup:</strong> Enable this toggle, then bulk-move plans to coder columns. Worktrees are auto-created in the control plane context. A MERGE column appears between CODE REVIEWED and COMPLETED.<br><br>' +
-                '<strong>Merge column role:</strong> Drag completed plans here to merge worktree changes back to main manually. Merging must be triggered using the Merge All or Merge Selected buttons in the MERGE column header.';
+            descriptionDiv.innerHTML = '<strong>When to use:</strong> When you want a single git worktree covering all agent work for a sprint or batch. Coder prompts reference the worktree path so agents edit code inside the worktree instead of the control plane root.<br><br>' +
+                '<strong>Workflow:</strong> Create a safety session, let agents implement changes, then merge the session branch back when you are satisfied.';
             configSection.appendChild(descriptionDiv);
-
-            const configRow = document.createElement('div');
-            configRow.style.cssText = 'display:flex; flex-direction:column; gap:12px; padding:8px; font-family:var(--font-mono); font-size:10px; color:var(--text-secondary);';
-
-            // Toggle
-            const toggleWrapper = document.createElement('div');
-            toggleWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
-            const toggleDiv = document.createElement('div');
-            toggleDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
-            const toggleLabel = document.createElement('span');
-            toggleLabel.style.cssText = 'color:var(--text-primary);';
-            toggleLabel.textContent = 'ENABLE WORKTREE MODE:';
-            const toggleInput = document.createElement('input');
-            toggleInput.type = 'checkbox';
-            toggleInput.checked = lastWorktreeModeEnabled || false;
-            toggleInput.addEventListener('change', () => {
-                postKanbanMessage({
-                    type: 'setWorktreeMode',
-                    enabled: toggleInput.checked,
-                    workspaceRoot: currentWorkspaceRoot
-                });
-            });
-            toggleDiv.appendChild(toggleLabel);
-            toggleDiv.appendChild(toggleInput);
-            toggleWrapper.appendChild(toggleDiv);
-            const toggleDesc = document.createElement('div');
-            toggleDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
-            toggleDesc.textContent = 'When on, automatically creates a dedicated git worktree for each plan when it moves to a coder column.';
-            toggleWrapper.appendChild(toggleDesc);
-            configRow.appendChild(toggleWrapper);
-
-            // Cap
-            const capWrapper = document.createElement('div');
-            capWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
-            const capDiv = document.createElement('div');
-            capDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
-            const capLabel = document.createElement('span');
-            capLabel.style.cssText = 'color:var(--text-primary);';
-            capLabel.textContent = 'MAX WORKTREE CAP:';
-            const capInput = document.createElement('input');
-            capInput.type = 'number';
-            capInput.min = '1';
-            capInput.max = '50';
-            capInput.value = lastWorktreeMaxCap || '10';
-            capInput.style.cssText = 'width:56px; background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px; text-align:center;';
-            capInput.addEventListener('change', () => {
-                saveRules();
-            });
-            capDiv.appendChild(capLabel);
-            capDiv.appendChild(capInput);
-            capWrapper.appendChild(capDiv);
-            const capDesc = document.createElement('div');
-            capDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
-            capDesc.textContent = 'Maximum number of worktrees that can exist simultaneously. Bulk moves will fail if this cap is reached.';
-            capWrapper.appendChild(capDesc);
-            configRow.appendChild(capWrapper);
-
-            // Merge Strategy
-            const mergeWrapper = document.createElement('div');
-            mergeWrapper.style.cssText = 'display:flex; flex-direction:column; gap:4px;';
-            const mergeDiv = document.createElement('div');
-            mergeDiv.style.cssText = 'display:flex; align-items:center; justify-content:space-between; width:100%;';
-            const mergeLabel = document.createElement('span');
-            mergeLabel.style.cssText = 'color:var(--text-primary);';
-            mergeLabel.textContent = 'DEFAULT MERGE STRATEGY:';
-            const mergeSelect = document.createElement('select');
-            mergeSelect.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--text-primary); font-family:var(--font-mono); font-size:10px; padding:2px 4px; border-radius:3px;';
-            ['squash', 'merge', 'ff-only'].forEach(strategy => {
-                const opt = document.createElement('option');
-                opt.value = strategy;
-                opt.textContent = strategy.toUpperCase();
-                if (strategy === (lastWorktreeDefaultMergeStrategy || 'squash')) {
-                    opt.selected = true;
-                }
-                mergeSelect.appendChild(opt);
-            });
-            mergeSelect.addEventListener('change', () => {
-                saveRules();
-            });
-            mergeDiv.appendChild(mergeLabel);
-            mergeDiv.appendChild(mergeSelect);
-            mergeWrapper.appendChild(mergeDiv);
-            const mergeDesc = document.createElement('div');
-            mergeDesc.style.cssText = 'font-size:9px; color:var(--text-muted);';
-            mergeDesc.textContent = 'SQUASH: Single commit from worktree. MERGE: Standard merge commit. FF-ONLY: Fast-forward only, fails if not possible.';
-            mergeWrapper.appendChild(mergeDesc);
-            configRow.appendChild(mergeWrapper);
-            function saveRules() {
-                postKanbanMessage({
-                    type: 'setWorktreeRules',
-                    maxCap: parseInt(capInput.value, 10) || 10,
-                    defaultMergeStrategy: mergeSelect.value,
-                    workspaceRoot: currentWorkspaceRoot
-                });
-            }
-
-            configSection.appendChild(configRow);
             container.appendChild(configSection);
 
-            // ── Create Section removed — worktrees are auto-created per plan when worktree mode is enabled ──
+            // Active / Inactive states
+            if (!session) {
+                // No active session
+                const actionSection = document.createElement('div');
+                actionSection.className = 'db-subsection';
+                actionSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 8px; border: 1px dashed var(--border-color); border-radius: 6px;';
 
-            // ── Pools Section ──
-            const poolsSection = document.createElement('div');
-            poolsSection.className = 'db-subsection';
+                const stateTitle = document.createElement('div');
+                stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--text-muted);';
+                stateTitle.textContent = 'NO ACTIVE SAFETY SESSION';
+                actionSection.appendChild(stateTitle);
 
-            const poolsHeader = document.createElement('div');
-            poolsHeader.className = 'subsection-header';
-            const poolsSpan = document.createElement('span');
-            poolsSpan.textContent = 'WORKTREE POOLS';
-            poolsHeader.appendChild(poolsSpan);
-            poolsSection.appendChild(poolsHeader);
+                const startBtn = document.createElement('button');
+                startBtn.className = 'complexity-routing-btn';
+                startBtn.style.cssText = 'width: 100%; text-align: center; justify-content: center;';
+                startBtn.textContent = 'START SAFETY SESSION';
+                startBtn.addEventListener('click', () => {
+                    postKanbanMessage({ type: 'startSafetySession', workspaceRoot: currentWorkspaceRoot });
+                });
+                actionSection.appendChild(startBtn);
 
-            const chipStyle = 'display:inline-flex; align-items:center; gap:4px; border:1px solid var(--border-color); border-radius:999px; padding:1px 6px; font-size:9px; color:var(--text-secondary);';
+                container.appendChild(actionSection);
+            } else {
+                // Active session
+                const activeSection = document.createElement('div');
+                activeSection.className = 'db-subsection';
+                activeSection.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 12px; border: 1px solid var(--accent-teal, #00ad9f); border-radius: 6px; background: rgba(0, 173, 159, 0.05);';
 
-            const roles = ['coder', 'lead', 'intern'];
-            roles.forEach(role => {
-                const roleWorktrees = (lastWorktrees || []).filter(wt => wt.coderAgentId === role);
-                const roleBlock = document.createElement('div');
-                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2); margin-bottom:8px;';
+                const stateTitle = document.createElement('div');
+                stateTitle.style.cssText = 'font-size: 11px; font-weight: bold; color: var(--accent-teal, #00ad9f); display: flex; align-items: center; gap: 6px;';
+                stateTitle.innerHTML = '● ACTIVE SAFETY SESSION';
+                activeSection.appendChild(stateTitle);
 
-                const roleHeader = document.createElement('div');
-                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
+                const detailsList = document.createElement('div');
+                detailsList.style.cssText = 'display: flex; flex-direction: column; gap: 6px; font-family: var(--font-mono); font-size: 10px; color: var(--text-secondary);';
 
-                const roleTitle = document.createElement('span');
-                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                roleTitle.textContent = role.charAt(0).toUpperCase() + role.slice(1);
+                const branchRow = document.createElement('div');
+                branchRow.innerHTML = `<span style="color:var(--text-muted)">Branch:</span> <span style="color:var(--text-primary); font-weight:bold;">${session.branch}</span>`;
+                detailsList.appendChild(branchRow);
 
-                const roleCapacity = document.createElement('span');
-                roleCapacity.style.cssText = chipStyle;
-                roleCapacity.textContent = roleWorktrees.length + ' WORKTREE' + (roleWorktrees.length !== 1 ? 'S' : '');
+                const pathRow = document.createElement('div');
+                pathRow.style.cssText = 'word-break: break-all;';
+                pathRow.innerHTML = `<span style="color:var(--text-muted)">Path:</span> <span style="color:var(--text-primary)">${session.path}</span>`;
+                detailsList.appendChild(pathRow);
 
-                roleHeader.appendChild(roleTitle);
-                roleHeader.appendChild(roleCapacity);
-                roleBlock.appendChild(roleHeader);
+                const startedRow = document.createElement('div');
+                const timeStr = session.startedAt ? new Date(session.startedAt).toLocaleString() : 'Unknown';
+                startedRow.innerHTML = `<span style="color:var(--text-muted)">Started:</span> <span style="color:var(--text-primary)">${timeStr}</span>`;
+                detailsList.appendChild(startedRow);
 
-                if (roleWorktrees.length === 0) {
-                    const emptyState = document.createElement('div');
-                    emptyState.style.cssText = 'font-family:var(--font-mono); font-size:9px; color:var(--text-secondary);';
-                    emptyState.textContent = 'No worktrees for this role.';
-                    roleBlock.appendChild(emptyState);
-                } else {
-                    roleWorktrees.forEach(wt => {
-                        const wtRow = document.createElement('div');
-                        wtRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
+                activeSection.appendChild(detailsList);
 
-                        const left = document.createElement('div');
-                        left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
+                if (!session.pathExists) {
+                    const warningBanner = document.createElement('div');
+                    warningBanner.style.cssText = 'padding: 8px; margin-top: 8px; background: rgba(229,85,85,0.1); border: 1px solid var(--accent-red, #e55); color: var(--accent-red, #e55); border-radius: 4px; font-size: 10px; line-height: 1.4;';
+                    warningBanner.textContent = '⚠️ Worktree directory not found on disk. It may have been deleted manually.';
+                    activeSection.appendChild(warningBanner);
 
-                        const branchSpan = document.createElement('span');
-                        branchSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                        branchSpan.textContent = wt.branch;
-
-                        const pathBadge = document.createElement('span');
-                        pathBadge.style.cssText = chipStyle;
-                        pathBadge.textContent = wt.path || 'Unknown path';
-
-                        left.appendChild(branchSpan);
-                        left.appendChild(pathBadge);
-
-                        const right = document.createElement('div');
-                        right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                        const deleteBtn = document.createElement('button');
-                        deleteBtn.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--accent-red, #e55); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
-                        deleteBtn.textContent = 'DELETE';
-                        deleteBtn.addEventListener('click', () => {
-                            postKanbanMessage({ type: 'deleteWorktree', worktreeId: wt.id, workspaceRoot: currentWorkspaceRoot });
-                        });
-                        right.appendChild(deleteBtn);
-
-                        wtRow.appendChild(left);
-                        wtRow.appendChild(right);
-                        roleBlock.appendChild(wtRow);
+                    const clearBtn = document.createElement('button');
+                    clearBtn.className = 'complexity-routing-btn';
+                    clearBtn.style.cssText = 'margin-top: 8px; border-color: var(--accent-red); color: var(--accent-red);';
+                    clearBtn.textContent = 'CLEAR SESSION RECORD';
+                    clearBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'clearSafetySessionRecord', workspaceRoot: currentWorkspaceRoot });
                     });
+                    activeSection.appendChild(clearBtn);
+                } else {
+                    const btnGroup = document.createElement('div');
+                    btnGroup.style.cssText = 'display: flex; flex-direction: column; gap: 8px; margin-top: 8px;';
+
+                    const mergeBtn = document.createElement('button');
+                    mergeBtn.className = 'complexity-routing-btn';
+                    mergeBtn.style.cssText = 'background: var(--accent-teal, #00ad9f); color: #fff; text-align: center; justify-content: center;';
+                    mergeBtn.textContent = 'MERGE BACK';
+                    mergeBtn.addEventListener('click', () => {
+                        postKanbanMessage({ type: 'mergeSafetySession', workspaceRoot: currentWorkspaceRoot });
+                    });
+                    btnGroup.appendChild(mergeBtn);
+
+                    const askAgentBtn = document.createElement('button');
+                    askAgentBtn.className = 'complexity-routing-btn';
+                    askAgentBtn.style.cssText = 'text-align: center; justify-content: center;';
+                    askAgentBtn.textContent = 'ASK AGENT TO MERGE';
+                    askAgentBtn.addEventListener('click', () => {
+                        const promptText = `Please merge the safety session worktree back to main.\nSteps:\n1. From the control plane directory, run: git merge --no-ff ${session.branch}\n2. If there are conflicts, resolve them, then git add . && git commit\n3. Run: git worktree remove --force ${session.path}\n4. Run: git branch -D ${session.branch}\n5. Confirm that main now contains the merged changes.`;
+                        navigator.clipboard.writeText(promptText).then(() => {
+                            askAgentBtn.textContent = 'PROMPT COPIED!';
+                            setTimeout(() => {
+                                askAgentBtn.textContent = 'ASK AGENT TO MERGE';
+                            }, 2000);
+                        }).catch(err => {
+                            console.error('Failed to copy prompt:', err);
+                        });
+                    });
+                    btnGroup.appendChild(askAgentBtn);
+
+                    const abandonBtn = document.createElement('button');
+                    abandonBtn.className = 'complexity-routing-btn';
+                    abandonBtn.style.cssText = 'border-color: var(--accent-red, #e55); color: var(--accent-red, #e55); text-align: center; justify-content: center;';
+                    abandonBtn.textContent = 'ABANDON SESSION';
+                    abandonBtn.addEventListener('click', () => {
+                        if (confirm('Are you sure you want to abandon this safety session? All worktree changes and the branch will be deleted!')) {
+                            postKanbanMessage({ type: 'abandonSafetySession', workspaceRoot: currentWorkspaceRoot });
+                        }
+                    });
+                    btnGroup.appendChild(abandonBtn);
+
+                    activeSection.appendChild(btnGroup);
                 }
 
-                poolsSection.appendChild(roleBlock);
-            });
-
-            const unassignedWorktrees = (lastWorktrees || []).filter(wt => !roles.includes(wt.coderAgentId));
-            if (unassignedWorktrees.length > 0) {
-                const roleBlock = document.createElement('div');
-                roleBlock.style.cssText = 'display:flex; flex-direction:column; gap:6px; padding:6px 8px; border:1px solid var(--border-color); border-radius:6px; background:var(--panel-bg2); margin-bottom:8px;';
-
-                const roleHeader = document.createElement('div');
-                roleHeader.style.cssText = 'display:flex; align-items:center; justify-content:space-between; gap:8px;';
-
-                const roleTitle = document.createElement('span');
-                roleTitle.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                roleTitle.textContent = 'Unassigned';
-
-                const roleCapacity = document.createElement('span');
-                roleCapacity.style.cssText = chipStyle;
-                roleCapacity.textContent = unassignedWorktrees.length + ' WORKTREE' + (unassignedWorktrees.length !== 1 ? 'S' : '');
-
-                roleHeader.appendChild(roleTitle);
-                roleHeader.appendChild(roleCapacity);
-                roleBlock.appendChild(roleHeader);
-
-                unassignedWorktrees.forEach(wt => {
-                    const wtRow = document.createElement('div');
-                    wtRow.style.cssText = 'display:flex; align-items:center; gap:6px; justify-content:space-between; flex-wrap:wrap;';
-
-                    const left = document.createElement('div');
-                    left.style.cssText = 'display:flex; align-items:center; gap:6px; min-width:0; flex-wrap:wrap;';
-
-                    const branchSpan = document.createElement('span');
-                    branchSpan.style.cssText = 'font-family:var(--font-mono); font-size:10px; color:var(--text-primary);';
-                    branchSpan.textContent = wt.branch;
-
-                    const pathBadge = document.createElement('span');
-                    pathBadge.style.cssText = chipStyle;
-                    pathBadge.textContent = wt.path || 'Unknown path';
-
-                    left.appendChild(branchSpan);
-                    left.appendChild(pathBadge);
-
-                    const right = document.createElement('div');
-                    right.style.cssText = 'display:flex; align-items:center; gap:6px;';
-
-                    const deleteBtn = document.createElement('button');
-                    deleteBtn.style.cssText = 'background:var(--panel-bg2); border:1px solid var(--border-color); color:var(--accent-red, #e55); font-family:var(--font-mono); font-size:9px; padding:3px 6px; border-radius:4px; cursor:pointer;';
-                    deleteBtn.textContent = 'DELETE';
-                    deleteBtn.addEventListener('click', () => {
-                        postKanbanMessage({ type: 'deleteWorktree', worktreeId: wt.id, workspaceRoot: currentWorkspaceRoot });
-                    });
-                    right.appendChild(deleteBtn);
-
-                    wtRow.appendChild(left);
-                    wtRow.appendChild(right);
-                    roleBlock.appendChild(wtRow);
-                });
-                poolsSection.appendChild(roleBlock);
+                container.appendChild(activeSection);
             }
 
-            container.appendChild(poolsSection);
             return container;
         }
 
-        // (lastWorktrees, lastWorktreeModeEnabled, lastWorktreeMaxCap, lastWorktreeDefaultMergeStrategy,
-        //  lastControlPlaneConfigured, inFlightMerges are forward-declared above the message listener)
+        // (lastSafetySession, lastControlPlaneConfigured are forward-declared above)
 
-        function renderWorktreePanel() {
+        function renderSafetySessionPanel() {
             try {
                 const root = document.getElementById('worktree-panel-root');
                 if (!root) return;
                 root.innerHTML = '';
-                root.appendChild(createWorktreePanel());
+                root.appendChild(createSafetySessionPanel(lastSafetySession));
             } catch (err) {
-                console.error('[kanban webview] error rendering worktree panel:', err);
+                console.error('[kanban webview] error rendering safety session panel:', err);
             }
         }
 
-        function loadWorktrees() {
-            postKanbanMessage({ type: 'getWorktrees', workspaceRoot: currentWorkspaceRoot });
+        function loadSafetySession() {
+            postKanbanMessage({ type: 'getSafetySession', workspaceRoot: currentWorkspaceRoot });
         }
 
         // Add listeners for the dependencies tab buttons
@@ -8860,39 +8271,7 @@
                 });
             }
 
-            const btnCopyDepsPrompt = document.getElementById('btn-copy-deps-prompt');
-            const btnRebuildDeps = document.getElementById('btn-rebuild-deps');
-            const btnRefreshDeps = document.getElementById('btn-refresh-deps');
 
-            if (btnCopyDepsPrompt) {
-                btnCopyDepsPrompt.addEventListener('click', () => {
-                    btnCopyDepsPrompt.disabled = true;
-                    const originalText = btnCopyDepsPrompt.textContent;
-                    btnCopyDepsPrompt.textContent = 'LOADING...';
-                    postKanbanMessage({ type: 'getDependencyMapData', copyPrompt: true });
-                });
-            }
-
-            if (btnRebuildDeps) {
-                btnRebuildDeps.addEventListener('click', () => {
-                    btnRebuildDeps.disabled = true;
-                    const originalText = btnRebuildDeps.textContent;
-                    btnRebuildDeps.textContent = 'SENDING...';
-                    postKanbanMessage({ type: 'rebuildDependencyMap' });
-                    
-                    // Reset button after 30s timeout or we can wait for a message back
-                    setTimeout(() => {
-                        btnRebuildDeps.disabled = false;
-                        btnRebuildDeps.textContent = originalText;
-                    }, 30000);
-                });
-            }
-
-            if (btnRefreshDeps) {
-                btnRefreshDeps.addEventListener('click', () => {
-                    postKanbanMessage({ type: 'getDependencyMapData' });
-                });
-            }
 
             const btnRefreshUAT = document.getElementById('btn-refresh-uat');
             if (btnRefreshUAT) {
@@ -8901,25 +8280,7 @@
                 });
             }
 
-            // Custom agent subagent policy visibility toggle
-            const subagentRadios = document.getElementsByName('ca-subagent-policy');
-            const customNameInput = document.getElementById('ca-addon-custom-subagent-name');
-            if (subagentRadios && customNameInput) {
-                subagentRadios.forEach(radio => {
-                    radio.addEventListener('change', (e) => {
-                        if (e.target.checked && e.target.value === 'customSubagent') {
-                            customNameInput.style.display = 'inline-block';
-                            customNameInput.focus();
-                        } else {
-                            customNameInput.style.display = 'none';
-                            customNameInput.value = '';
-                        }
-                    });
-                });
-                customNameInput.addEventListener('input', (e) => {
-                    e.target.value = e.target.value.replace(/[^a-zA-Z0-9_]/g, '');
-                });
-            }
+
 
             // Global button click animation listener
             document.addEventListener('click', (e) => {

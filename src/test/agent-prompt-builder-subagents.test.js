@@ -206,12 +206,10 @@ function testCustomWorkflowWithAddons() {
     const customWorkflowPath = '.claude/superpowers/skills/writing-plans.md';
     const prompt = buildKanbanBatchPrompt('planner', plans1, {
         plannerWorkflowPath: customWorkflowPath,
-        aggressivePairProgramming: true,
-        dependencyCheckEnabled: true
+        aggressivePairProgramming: true
     });
     assert.ok(prompt.includes(`Read ${customWorkflowPath} and follow it step-by-step`), 'Custom workflow should generate minimal "Read and follow" prompt');
     assert.ok(prompt.includes('PAIR PROGRAMMING OPTIMISATION'), 'Custom workflow should append aggressive pair programming add-on');
-    assert.ok(prompt.includes('[DEPENDENCY CHECK ENABLED]'), 'Custom workflow should append dependency check add-on');
     console.log('  PASS: Custom workflow with add-ons appends add-on instructions');
 }
 

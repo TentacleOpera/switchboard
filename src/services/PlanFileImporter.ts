@@ -113,7 +113,6 @@ export async function importPlanFiles(workspaceRoot: string, effectiveStateRoot?
             complexity,
             tags,
             repoScope,
-            dependencies: '',
             workspaceId,
             createdAt: now,
             updatedAt: now,

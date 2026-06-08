@@ -2046,7 +2046,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             status: sheet.completed ? 'completed' : 'active',
             complexity,
             tags: '',
-            dependencies: '',
             repoScope,
             workspaceId,
             createdAt,
@@ -2075,7 +2074,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         dispatchedIde: existing.dispatchedIde || '',
                         worktreeId: existing.worktreeId,
                         tags: existing.tags || baseRecord.tags,
-                        dependencies: existing.dependencies || baseRecord.dependencies,
                     };
                 }
             }
@@ -2118,7 +2116,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         const synced = await KanbanMigration.syncPlansMetadata(db, workspaceId, records,
             (planFile) => this._kanbanProvider ? this._kanbanProvider.getComplexityFromPlan(workspaceRoot, planFile) : Promise.resolve('Unknown'),
             (planFile) => this._kanbanProvider ? this._kanbanProvider.getTagsFromPlan(workspaceRoot, planFile) : Promise.resolve(''),
-            (planFile) => this._kanbanProvider ? this._kanbanProvider.getDependenciesFromPlan(workspaceRoot, planFile) : Promise.resolve(''),
             (planFile) => this._kanbanProvider ? this._kanbanProvider.getRepoScopeFromPlan(workspaceRoot, planFile) : Promise.resolve('')
         );
         if (!synced) return null;
@@ -2497,7 +2494,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
             try {
                 let planFile: string | undefined;
                 let topic: string | undefined;
-                let dependencies: string | undefined;
                 let workingDir = '';
                 if (db) {
                     const plan = await db.getPlanBySessionId(sid);
@@ -2533,7 +2529,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                         }
 
                         topic = plan.topic;
-                        dependencies = plan.dependencies;
                         workingDir = resolveWorkingDir(workspaceRoot, plan.repoScope || '');
                     }
                 }
@@ -2550,7 +2545,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                     sessionId: sid,
                     topic: topic || planFile || 'Untitled',
                     absolutePath,
-                    dependencies: dependencies || '',
                     workingDir
                 });
             } catch (err) {
@@ -4434,16 +4428,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
         if (!linked) {
             throw new Error(`Failed to record the Linear issue ID for imported plan ${planFileRelative}.`);
         }
-        if (parentPlanFile) {
-            const parentPlan = await db.getPlanByPlanFile(parentPlanFile, workspaceId);
-            if (parentPlan) {
-                const dependencySaved = await db.updateDependenciesByPlanFile(planFileAbsolute, workspaceId, parentPlan.planFile);
-                if (!dependencySaved) {
-                     throw new Error(`Failed to link imported subtask ${planFileRelative} to parent ${parentPlanFile}.`);
-                }
-            }
-        }
-
         createdPlanFiles.push(planFileRelative);
         for (const child of node.subtasks) {
             await this._createImportedLinearPlan(
@@ -4604,7 +4588,6 @@ export class TaskViewerProvider implements vscode.WebviewViewProvider {
                 );
                 const subtaskPlanFileRelative = path.relative(effectiveRoot, subtaskPlanFile).replace(/\\/g, '/');
                 await db.updateClickUpTaskIdByPlanFile(subtaskPlanFile, workspaceId, subtask.id);
-                await db.updateDependenciesByPlanFile(subtaskPlanFile, workspaceId, rootPlanFileRelative);
                 importedPlanFiles.push(subtaskPlanFileRelative);
             }
 
@@ -9425,7 +9408,6 @@ What would you like to find?`;
                                 const meta = await parsePlanMetadata(mirrorContent, relativeMirror);
                                 await db.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
                                 await db.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
-                                await db.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
                                 await db.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
                                 this._kanbanProvider?.refreshIfShowing(workspaceRoot);
                                 console.log('[TaskViewerProvider] Updated mirror plan metadata via stagingWatcher');
@@ -9484,7 +9466,6 @@ What would you like to find?`;
                             const meta = await parsePlanMetadata(mirrorContent, relativeMirror);
                             await db.updateComplexityByPlanFile(relativeMirror, wsId, meta.complexity);
                             await db.updateTagsByPlanFile(relativeMirror, wsId, meta.tags);
-                            await db.updateDependenciesByPlanFile(relativeMirror, wsId, meta.dependencies);
                             await db.updateTopicByPlanFile(relativeMirror, wsId, meta.topic);
                             this._kanbanProvider?.refreshIfShowing(workspaceRoot);
                             console.log('[TaskViewerProvider] Updated mirror plan metadata via stagingWatcher');
@@ -10128,7 +10109,6 @@ What would you like to find?`;
                 status: status as KanbanPlanRecord['status'],
                 complexity: 'Unknown',
                 tags: '',
-                dependencies: '',
                 repoScope: '',
                 workspaceId: entry.ownerWorkspaceId,
                 createdAt: entry.createdAt || new Date().toISOString(),
@@ -10176,7 +10156,6 @@ What would you like to find?`;
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
                 complexity: existing?.complexity || 'Unknown',
                 tags: existing?.tags || '',
-                dependencies: existing?.dependencies || '',
                 repoScope: existing?.repoScope || '',
                 project: (entry.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : entry.project) ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
@@ -10240,13 +10219,6 @@ What would you like to find?`;
                 } catch { /* Non-critical */ }
             }
 
-            let insertDependencies: string = existing?.dependencies || '';
-            if (!insertDependencies && insertPlanFile && this._kanbanProvider) {
-                try {
-                    insertDependencies = await this._kanbanProvider.getDependenciesFromPlan(workspaceRoot, insertPlanFile);
-                } catch { /* Non-critical */ }
-            }
-
             let insertRepoScope: string = existing?.repoScope || '';
             if (!insertRepoScope && insertPlanFile && this._kanbanProvider) {
                 try {
@@ -10263,7 +10235,6 @@ What would you like to find?`;
                 status: (entry.status === 'orphan' ? 'archived' : entry.status) as KanbanPlanRecord['status'],
                 complexity: insertComplexity,
                 tags: insertTags,
-                dependencies: insertDependencies,
                 repoScope: insertRepoScope,
                 project: (entry.project === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : entry.project) ?? existing?.project ?? '',
                 workspaceId: entry.ownerWorkspaceId,
@@ -11212,7 +11183,6 @@ What would you like to find?`;
                             status: 'deleted',
                             complexity: 'Unknown',
                             tags: '',
-                            dependencies: '',
                             repoScope: '',
                             workspaceId: wsId,
                             createdAt: new Date().toISOString(),
@@ -11260,7 +11230,6 @@ What would you like to find?`;
                     status: 'deleted',
                     complexity: 'Unknown',
                     tags: '',
-                    dependencies: '',
                     repoScope: '',
                     workspaceId: wsId,
                     createdAt: new Date().toISOString(),
@@ -12329,10 +12298,9 @@ What would you like to find?`;
                         ...existingPlan,
                         topic: metadata.topic || existingPlan.topic,
                         complexity: metadata.complexity !== 'Unknown' ? metadata.complexity : existingPlan.complexity,
-                        // Intentional falsy guard: empty tags/dependencies from a plan without those
+                        // Intentional falsy guard: empty tags from a plan without those
                         // headers should NOT overwrite previously scored values in the DB.
                         tags: metadata.tags || existingPlan.tags,
-                        dependencies: metadata.dependencies || existingPlan.dependencies,
                         updatedAt: new Date(mtimeMs).toISOString()
                     };
                     await db.upsertPlans([updatedRecord]);
@@ -12756,10 +12724,6 @@ What would you like to find?`;
         return planFileAbsolute;
     }
 
-    private _parsePlanDependencies(content: string): string[] {
-        return parsePlanDependencies(content).identifiers;
-    }
-
     private _replaceOrAppendMarkdownSection(content: string, heading: string, body: string): string {
         const normalizedContent = content.replace(/\r\n/g, '\n');
         const sectionRegex = new RegExp(`^#{1,4}\\s+${heading.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b[^\\n]*$`, 'im');
@@ -12906,7 +12870,6 @@ What would you like to find?`;
         column: string;
         isCompleted: boolean;
         complexity: string;
-        dependencies: string[];
         planText: string;
         planMtimeMs: number;
         actionLog: { timestamp: string; workflow: string; details: string }[];
@@ -12936,7 +12899,6 @@ What would you like to find?`;
         const columns = this._filterVisibleColumns(allColumns, visibleAgents)
             .map(column => ({ id: column.id, label: column.label }));
         const events: any[] = Array.isArray(sheet.events) ? sheet.events : [];
-        const dependencies = this._parsePlanDependencies(planText);
         const row = await this._getKanbanPlanRecordForSession(workspaceRoot, sessionId);
         let column = this._getEffectiveKanbanColumnForSession(sheet, customAgents, row);
         let complexity: string = 'Unknown';
@@ -12956,7 +12918,6 @@ What would you like to find?`;
             column,
             isCompleted: sheet.completed === true,
             complexity,
-            dependencies,
             planText,
             planMtimeMs: stats.mtimeMs,
             actionLog: this._getReviewLogEntries(events),
@@ -13090,11 +13051,10 @@ What would you like to find?`;
     }
 
     public async updateReviewTicket(request: {
-        type: 'setColumn' | 'setComplexity' | 'setDependencies' | 'setTopic' | 'savePlanText';
+        type: 'setColumn' | 'setComplexity' | 'setTopic' | 'savePlanText';
         sessionId?: string;
         column?: string;
         complexity?: string;
-        dependencies?: string[];
         topic?: string;
         content?: string;
         expectedMtimeMs?: number;
@@ -13178,20 +13138,6 @@ What would you like to find?`;
                         if (wsId) {
                             await db.updateComplexityByPlanFile(planFileAbsolute, wsId, complexity);
                         }
-                    }
-                    break;
-                }
-                case 'setDependencies': {
-                    const dependencies = Array.isArray(request.dependencies)
-                        ? request.dependencies.map(item => String(item || '').trim()).filter(Boolean)
-                        : [];
-                    const currentContent = await fs.promises.readFile(planFileAbsolute, 'utf8');
-                    const body = dependencies.length > 0
-                        ? `\n${dependencies.map(item => `- ${item}`).join('\n')}\n`
-                        : '\n- None\n';
-                    const nextContent = this._replaceOrAppendMarkdownSection(currentContent, 'Dependencies', body);
-                    if (nextContent !== currentContent) {
-                        await fs.promises.writeFile(planFileAbsolute, nextContent, 'utf8');
                     }
                     break;
                 }
@@ -14233,17 +14179,12 @@ What would you like to find?`;
             if (!plan) return;
 
             let changed = false;
-            const updates: { tags?: string; dependencies?: string; repoScope?: string } = {};
+            const updates: { tags?: string; repoScope?: string } = {};
 
             if (this._kanbanProvider) {
                 const newTags = await this._kanbanProvider.getTagsFromPlan(resolvedWorkspaceRoot, relPath);
                 if (newTags !== plan.tags) {
                     updates.tags = newTags;
-                    changed = true;
-                }
-                const newDeps = await this._kanbanProvider.getDependenciesFromPlan(resolvedWorkspaceRoot, relPath);
-                if (newDeps !== plan.dependencies) {
-                    updates.dependencies = newDeps;
                     changed = true;
                 }
                 const newRepoScope = await this._kanbanProvider.getRepoScopeFromPlan(resolvedWorkspaceRoot, relPath);
@@ -14929,12 +14870,6 @@ What would you like to find?`;
         return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.designDocEnabled', false);
     }
 
-    private _isDependencyCheckEnabled(): boolean {
-        const plannerConfig: any = this.getSetting('switchboard.prompts.roleConfig_planner', undefined);
-        if (plannerConfig?.addons?.dependencyCheck !== undefined) return plannerConfig.addons.dependencyCheck;
-        return vscode.workspace.getConfiguration('switchboard').get<boolean>('planner.dependencyCheckEnabled', false);
-    }
-
     private _getDesignDocLink(): string {
         return vscode.workspace.getConfiguration('switchboard').get<string>('planner.designDocLink', '') || '';
     }
@@ -15120,42 +15055,6 @@ What would you like to find?`;
         return true;
     }
 
-    /**
-     * Pre-dispatch dependency gate: checks if all declared dependencies are in a
-     * terminal column (COMPLETED or CODE REVIEWED). Returns true if dispatch can proceed.
-     */
-    private async _checkDependenciesBeforeDispatch(
-        sessionId: string,
-        workspaceRoot: string,
-        headless: boolean = false
-    ): Promise<{ canProceed: boolean; includeInBatch?: string[] }> {
-        const db = await this._getKanbanDb(workspaceRoot);
-        if (!db) return { canProceed: true };
-        const plan = await db.getPlanBySessionId(sessionId);
-        if (!plan || !plan.dependencies) return { canProceed: true };
-
-        const status = await db.getDependencyStatus(plan.dependencies);
-        const blocked = status.filter(d => !d.ready);
-        if (blocked.length === 0) return { canProceed: true };
-
-        if (headless) {
-            console.warn(`[TaskViewerProvider] Plan "${plan.topic}" has unmet deps (autoban — proceeding): ${blocked.map(d => d.topic).join(', ')}`);
-            return { canProceed: true };
-        }
-
-        const notReadyList = blocked.map(d => `• ${d.topic} (${d.column})`).join('\n');
-        const choice = await vscode.window.showWarningMessage(
-            `Plan "${plan.topic}" has unmet dependencies:\n${notReadyList}`,
-            { modal: true },
-            'Include Dependencies in Batch', 'Proceed Anyway', 'Cancel'
-        );
-
-        if (choice === 'Cancel' || !choice) return { canProceed: false };
-        if (choice === 'Include Dependencies in Batch') {
-            const depSessionIds = blocked.map(d => d.sessionId).filter(Boolean);
-            return { canProceed: true, includeInBatch: depSessionIds };
-        }
-        return { canProceed: true };
     }
 
     private async _handleTriggerAgentAction(
@@ -15239,19 +15138,6 @@ What would you like to find?`;
         }
 
         const planFileAbsolute = path.resolve(resolvedWorkspaceRoot, planFileRelative);
-
-        // Dependency gate: warn if upstream plans are not yet complete
-        const depResult = await this._checkDependenciesBeforeDispatch(sessionId, resolvedWorkspaceRoot);
-        if (!depResult.canProceed) {
-            clearDispatchLock();
-            return false;
-        }
-        if (depResult.includeInBatch && depResult.includeInBatch.length > 0) {
-            // User chose to include blocked dependencies — dispatch as a batch
-            clearDispatchLock();
-            const batchSessionIds = [...depResult.includeInBatch, sessionId];
-            return this.handleKanbanBatchTrigger(role, batchSessionIds, instruction, resolvedWorkspaceRoot);
-        }
 
         // Safety invariant: jules_monitor is monitor-only and cannot receive execute dispatches.
         if (role === 'jules_monitor') {
@@ -15468,30 +15354,6 @@ What would you like to find?`;
     }
 
 
-    public async handleRebuildDependencyMap(plans: any[]): Promise<boolean> {
-        if (!plans || plans.length === 0) {
-            return false;
-        }
-
-        let prompt = "## Dependency Map Rebuild Request\n\n";
-        prompt += "Rebuild the dependency relationships for the following plans currently in NEW (CREATED) and PLANNED (PLAN REVIEWED) columns:\n\n";
-        prompt += "**Plans to analyze:**\n";
-        
-        plans.forEach((p, i) => {
-            prompt += `${i + 1}. Session: ${p.sessionId} | Topic: "${p.topic}" | Column: ${p.kanbanColumn} | Current deps: ${p.dependencies || 'none'}\n`;
-        });
-
-        prompt += "\n**Instructions:**\n";
-        prompt += "1. Analyze each plan's content and goals\n";
-        prompt += "2. Identify true dependency relationships based on technical prerequisites, logical sequencing, and resource conflicts\n";
-        prompt += "3. Update the ## Dependencies section in each plan file (.switchboard/plans/*.md) with the identified dependencies (comma-separated session IDs)\n";
-        prompt += "4. Use session IDs for dependency references\n";
-        prompt += "5. Report which plans can proceed (no blocking deps) vs which are blocked\n\n";
-        prompt += "IMPORTANT: Update the plan files directly. The system will automatically sync changes to the database and refresh the dependency map.\n\n";
-        prompt += "Return a summary of updated dependencies, identified chains, and recommended execution order.";
-
-        return this._handleSendAnalystMessage(prompt, 'analystMap');
-    }
 
     private async _handleSendAnalystMessage(
         instruction: string,

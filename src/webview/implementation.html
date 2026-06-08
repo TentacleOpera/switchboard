@@ -6,6 +6,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Switchboard</title>
+    <link href="https://fonts.googleapis.com/css2?family=Hanken+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
     <style>
         :root {
             --bg-color: #0d0d0d;
@@ -35,6 +36,10 @@
 
             --font-family: var(--vscode-font-family, 'Segoe UI', 'Roboto', sans-serif);
             --font-mono: var(--vscode-editor-font-family, 'Consolas', 'Courier New', monospace);
+        }
+        /* Afterburner Updated — Hanken Grotesk font only */
+        body.theme-afterburner-updated {
+            --font-family: 'Hanken Grotesk', var(--vscode-font-family), -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
         }
 
         * {
@@ -3285,6 +3290,14 @@
                             runSheetSelect.classList.remove('loading');
                             if (selectArrow) selectArrow.classList.remove('loading');
                         }
+                    }
+                    break;
+                }
+                case 'switchboardThemeNameSetting':
+                case 'switchboardThemeChanged': {
+                    document.body.classList.remove('theme-claude-terracotta', 'theme-slightly-darker-black', 'theme-afterburner-updated');
+                    if (message.theme && message.theme !== 'afterburner') {
+                        document.body.classList.add(`theme-${message.theme}`);
                     }
                     break;
                 }

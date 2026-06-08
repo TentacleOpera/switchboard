@@ -25,7 +25,6 @@ export interface KanbanPlanRecord {
     status: KanbanPlanStatus;
     complexity: string; // 'Unknown' or string integer '1'-'10'
     tags: string;
-    dependencies: string;
     repoScope: string;
     project?: string;
     workspaceId: string;
@@ -453,11 +452,11 @@ const MIGRATION_V28_SQL = [
  */
 const UPSERT_PLAN_SQL = `
 INSERT INTO plans (
-    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+    plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
     repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
     brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
     clickup_task_id, linear_issue_id, worktree_id
- ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     topic = excluded.topic,
     plan_file = excluded.plan_file,
@@ -467,7 +466,6 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
     END,
     complexity = excluded.complexity,
     tags = excluded.tags,
-    dependencies = excluded.dependencies,
     repo_scope = excluded.repo_scope,
     project = excluded.project,
     workspace_id = excluded.workspace_id,
@@ -487,7 +485,7 @@ ON CONFLICT(plan_file, workspace_id) DO UPDATE SET
 const MIGRATION_VERSION_KEY = 'kanban_db_migration_version';
 const ORPHAN_PURGE_CONFIRMATION_DELAY_MS = 350;
 
-const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+const PLAN_COLUMNS = `plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                        repo_scope, project, workspace_id, created_at, updated_at, last_action, source_type,
                        brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
                        clickup_task_id, linear_issue_id, worktree_id, worktree_status`;
@@ -1144,22 +1142,21 @@ export class KanbanDatabase {
                     record.status,        // 6
                     record.complexity,    // 7
                     record.tags || '',    // 8
-                    record.dependencies || '', // 9
-                    record.repoScope || '', // 10
-                    record.project || '',   // 11
-                    record.workspaceId,   // 12
-                    record.createdAt,     // 13
-                    record.updatedAt,     // 14
-                    record.lastAction,    // 15
-                    record.sourceType,    // 16
-                    this._ensureRelativePlanFile(record.brainSourcePath), // 17
-                    this._ensureRelativePlanFile(record.mirrorPath), // 18
-                    record.routedTo || '',       // 19
-                    record.dispatchedAgent || '', // 20
-                    record.dispatchedIde || '',   // 21
-                    record.clickupTaskId || '',   // 22
-                    record.linearIssueId || '',    // 23
-                    record.worktreeId ?? null       // 24
+                    record.repoScope || '', // 9
+                    record.project || '',   // 10
+                    record.workspaceId,   // 11
+                    record.createdAt,     // 12
+                    record.updatedAt,     // 13
+                    record.lastAction,    // 14
+                    record.sourceType,    // 15
+                    this._ensureRelativePlanFile(record.brainSourcePath), // 16
+                    this._ensureRelativePlanFile(record.mirrorPath), // 17
+                    record.routedTo || '',       // 18
+                    record.dispatchedAgent || '', // 19
+                    record.dispatchedIde || '',   // 20
+                    record.clickupTaskId || '',   // 21
+                    record.linearIssueId || '',    // 22
+                    record.worktreeId ?? null       // 23
                 ]);
             }
             this._db.run('COMMIT');
@@ -1388,20 +1385,6 @@ export class KanbanDatabase {
         return this.updateTagsByPlanFile(plan.planFile, plan.workspaceId, tags);
     }
 
-    public async updateDependenciesByPlanFile(planFile: string, workspaceId: string, dependencies: string): Promise<boolean> {
-        const normalized = this._ensureRelativePlanFile(planFile);
-        return this._persistedUpdate(
-            'UPDATE plans SET dependencies = ?, updated_at = ? WHERE plan_file = ? AND workspace_id = ?',
-            [dependencies, new Date().toISOString(), normalized, workspaceId]
-        );
-    }
-
-    /** @deprecated session_id is no longer the unique key; use updateDependenciesByPlanFile instead. */
-    public async updateDependencies(sessionId: string, dependencies: string): Promise<boolean> {
-        const plan = await this.getPlanBySessionId(sessionId);
-        if (!plan) { return false; }
-        return this.updateDependenciesByPlanFile(plan.planFile, plan.workspaceId, dependencies);
-    }
 
     public async getMeta(key: string): Promise<string | null> {
         if (!(await this.ensureReady()) || !this._db) return null;
@@ -1425,142 +1408,8 @@ export class KanbanDatabase {
         );
     }
 
-    public async createWorktree(branch: string, coderAgentId: string | null): Promise<number> {
-        if (!this._db) return -1;
-        const workspaceId = await this.getWorkspaceId();
-        this._db.run(
-            'INSERT INTO worktrees (branch, coder_agent_id, workspace_id) VALUES (?, ?, ?)',
-            [branch, coderAgentId, workspaceId]
-        );
-        // Retrieve the auto-generated ID by the unique (branch, workspace_id) constraint
-        const stmt = this._db.prepare(
-            'SELECT id FROM worktrees WHERE branch = ? AND workspace_id = ?'
-        );
-        try {
-            stmt.bind([branch, workspaceId]);
-            if (stmt.step()) {
-                return stmt.getAsObject().id as number;
-            }
-            return -1;
-        } finally {
-            stmt.free();
-        }
-    }
 
-    public async getWorktrees(): Promise<Array<{ id: number; branch: string; coderAgentId: string | null }>> {
-        if (!this._db) return [];
-        const stmt = this._db.prepare(
-            'SELECT id, branch, coder_agent_id FROM worktrees WHERE workspace_id = ?'
-        );
-        try {
-            stmt.bind([await this.getWorkspaceId()]);
-            const results: Array<{ id: number; branch: string; coderAgentId: string | null }> = [];
-            while (stmt.step()) {
-                const row = stmt.getAsObject();
-                results.push({
-                    id: row.id as number,
-                    branch: row.branch as string,
-                    coderAgentId: row.coder_agent_id as string | null
-                });
-            }
-            return results;
-        } finally {
-            stmt.free();
-        }
-    }
 
-    public async deleteWorktree(id: number): Promise<void> {
-        if (!this._db) return;
-        // Clear worktree_id on any plans referencing this worktree
-        this._db.run('UPDATE plans SET worktree_id = NULL WHERE worktree_id = ?', [id]);
-        this._db.run('DELETE FROM worktrees WHERE id = ?', [id]);
-        await this._persist();
-    }
-
-    public async assignAgentToWorktree(worktreeId: number, coderAgentId: string): Promise<void> {
-        if (!this._db) return;
-        this._db.run(
-            'UPDATE worktrees SET coder_agent_id = ? WHERE id = ?',
-            [coderAgentId, worktreeId]
-        );
-        await this._persist();
-    }
-
-    public async updatePlanWorktree(sessionId: string, worktreeId: number | null): Promise<void> {
-        if (!this._db) return;
-        const plan = await this.getPlanBySessionId(sessionId);
-        if (!plan) return;
-        this._db.run(
-            'UPDATE plans SET worktree_id = ? WHERE plan_id = ?',
-            [worktreeId, plan.planId]
-        );
-        await this._persist();
-    }
-
-    public async updatePlanWorktreeStatus(sessionId: string, status: 'none' | 'active' | 'merged' | 'deleted'): Promise<void> {
-        if (!this._db) return;
-        const plan = await this.getPlanBySessionId(sessionId);
-        if (!plan) return;
-        this._db.run(
-            'UPDATE plans SET worktree_status = ? WHERE plan_id = ?',
-            [status, plan.planId]
-        );
-        await this._persist();
-    }
-
-    public async getWorktreeById(id: number): Promise<{ id: number; branch: string; coderAgentId: string | null } | null> {
-        if (!this._db) return null;
-        const stmt = this._db.prepare(
-            'SELECT id, branch, coder_agent_id FROM worktrees WHERE id = ?'
-        );
-        try {
-            stmt.bind([id]);
-            if (stmt.step()) {
-                const row = stmt.getAsObject();
-                return {
-                    id: row.id as number,
-                    branch: row.branch as string,
-                    coderAgentId: row.coder_agent_id as string | null
-                };
-            }
-            return null;
-        } finally {
-            stmt.free();
-        }
-    }
-
-    public async getDependencyStatus(
-        dependenciesCsv: string
-    ): Promise<Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }>> {
-        if (!(await this.ensureReady()) || !this._db) return [];
-        const deps = dependenciesCsv.split(',').map(d => d.trim()).filter(Boolean);
-        if (deps.length === 0) return [];
-
-        const results: Array<{ planId: string; sessionId: string; topic: string; column: string; ready: boolean }> = [];
-        for (const depId of deps) {
-            const stmt = this._db.prepare(
-                `SELECT plan_id, session_id, topic, kanban_column FROM plans
-                 WHERE plan_id = ? OR session_id = ? OR LOWER(topic) = LOWER(?)
-                 LIMIT 1`,
-                [depId, depId, depId]
-            );
-            if (stmt.step()) {
-                const row = stmt.getAsObject();
-                const column = String(row.kanban_column || 'CREATED');
-                results.push({
-                    planId: String(row.plan_id || depId),
-                    sessionId: String(row.session_id || ''),
-                    topic: String(row.topic || depId),
-                    column,
-                    ready: column === 'COMPLETED' || column === 'CODE REVIEWED'
-                });
-            } else {
-                results.push({ planId: depId, sessionId: '', topic: depId, column: 'UNKNOWN', ready: true });
-            }
-            stmt.free();
-        }
-        return results;
-    }
 
     public async updateStatusByPlanFile(planFile: string, workspaceId: string, status: KanbanPlanStatus): Promise<boolean> {
         if (!VALID_STATUSES.has(status)) {
@@ -2282,33 +2131,6 @@ export class KanbanDatabase {
         return this._readRows(stmt);
     }
 
-    /**
-     * Get plans with dependency info for a specific workspace and set of columns.
-     * Used by the Dependencies tab.
-     */
-    public async getPlansWithDependencies(
-        workspaceId: string,
-        columns: string[] = ['CREATED', 'PLAN REVIEWED'],
-        projectFilter?: string | null
-    ): Promise<KanbanPlanRecord[]> {
-        if (!(await this.ensureReady()) || !this._db) return [];
-        const placeholders = columns.map(() => '?').join(',');
-        const effectiveProject = projectFilter === KanbanDatabase.UNASSIGNED_PROJECT_FILTER ? '' : projectFilter;
-
-        let sql = `SELECT plan_id, session_id, topic, kanban_column, dependencies 
-                   FROM plans
-                   WHERE workspace_id = ? AND status = 'active' AND kanban_column IN (${placeholders})`;
-        const params: unknown[] = [workspaceId, ...columns];
-
-        if (effectiveProject !== null && effectiveProject !== undefined) {
-            sql += ' AND project = ?';
-            params.push(effectiveProject);
-        }
-
-        sql += ' ORDER BY kanban_column, updated_at DESC';
-        const stmt = this._db.prepare(sql, params);
-        return this._readRows(stmt);
-    }
 
     public async getCompletedPlans(workspaceId: string, limit: number = 100): Promise<KanbanPlanRecord[]> {
         if (!(await this.ensureReady()) || !this._db) return [];
@@ -2529,7 +2351,7 @@ export class KanbanDatabase {
     }
 
     /**
-     * Batch-update topic, planFile, and (optionally) complexity, tags, and dependencies
+     * Batch-update topic, planFile, and (optionally) complexity, tags, and repoScope
      * for multiple plans in one transaction + persist.
      *
      * @param options.preserveTimestamps - Pass `true` for background/system operations
@@ -2542,7 +2364,6 @@ export class KanbanDatabase {
         topic: string;
         complexity?: string;
         tags?: string;
-        dependencies?: string;
         repoScope?: string;
     }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
@@ -2567,10 +2388,6 @@ export class KanbanDatabase {
                 if (typeof u.tags === 'string') {
                     setClauses.push('tags = ?');
                     params.push(u.tags);
-                }
-                if (typeof u.dependencies === 'string') {
-                    setClauses.push('dependencies = ?');
-                    params.push(u.dependencies);
                 }
                 if (typeof u.repoScope === 'string') {
                     setClauses.push('repo_scope = ?');
@@ -2601,7 +2418,6 @@ export class KanbanDatabase {
         planFile: string;
         complexity?: string;
         tags?: string;
-        dependencies?: string;
         repoScope?: string;
     }>, options?: { preserveTimestamps?: boolean }): Promise<boolean> {
         if (!(await this.ensureReady()) || !this._db) return false;
@@ -2628,10 +2444,6 @@ export class KanbanDatabase {
                 if (typeof u.tags === 'string') {
                     setClauses.push('tags = ?');
                     params.push(u.tags);
-                }
-                if (typeof u.dependencies === 'string') {
-                    setClauses.push('dependencies = ?');
-                    params.push(u.dependencies);
                 }
                 if (typeof u.repoScope === 'string') {
                     setClauses.push('repo_scope = ?');
@@ -4114,11 +3926,11 @@ FROM plans
             if (!workspaceId) return;
 
             const stmt = this._db.prepare(
-                `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags, dependencies,
+                `SELECT plan_id, session_id, topic, plan_file, kanban_column, status, complexity, tags,
                         repo_scope, workspace_id, created_at, updated_at, last_action, source_type,
                         brain_source_path, mirror_path, routed_to, dispatched_agent, dispatched_ide,
-                        clickup_task_id, linear_issue_id
-                 FROM plans WHERE workspace_id = ? AND status = 'active'`,
+                        clickup_task_id, linear_issue_id` +
+                ` FROM plans WHERE workspace_id = ? AND status = 'active'`,
                 [workspaceId]
             );
             const plans: any[] = [];
@@ -4196,7 +4008,6 @@ FROM plans
                     status: 'active',
                     complexity: p.complexity || 'Unknown',
                     tags: p.tags || '',
-                    dependencies: p.dependencies || '',
                     repoScope: p.repo_scope || p.repoScope || '',
                     project: p.project || p.project || '',
                     workspaceId,
@@ -4217,7 +4028,7 @@ FROM plans
                 try {
                     this._db.run(UPSERT_PLAN_SQL, [
                         record.planId, record.sessionId, record.topic, record.planFile, record.kanbanColumn,
-                        record.status, record.complexity, record.tags, record.dependencies, record.repoScope,
+                        record.status, record.complexity, record.tags, record.repoScope,
                         record.project,
                         record.workspaceId, record.createdAt, record.updatedAt, record.lastAction, record.sourceType,
                         record.brainSourcePath, record.mirrorPath, record.routedTo, record.dispatchedAgent,
@@ -4694,7 +4505,6 @@ FROM plans
                     status: String(row.status || "active") as KanbanPlanStatus,
                     complexity: String(row.complexity || "Unknown"),
                     tags: String(row.tags || ""),
-                    dependencies: String(row.dependencies || ""),
                     repoScope: String(row.repo_scope || ""),
                     project: String(row.project || ""),
                     workspaceId: String(row.workspace_id || ""),

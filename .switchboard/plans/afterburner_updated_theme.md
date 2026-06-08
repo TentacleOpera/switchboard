@@ -93,3 +93,11 @@ Update `currentSwitchboardTheme` default handling, theme tab init, and radio cha
 - **Font loading:** Google Fonts require external network. VS Code webview CSP may block. Mitigation: include a fallback to `var(--vscode-font-family)`.
 - **CSP:** The `<link>` tag must be explicitly allowed in the CSP header. Current CSP allows `https:` for `style-src` and `font-src`, so it should pass.
 - **Testing needed:** Verify scanline/glow effects render correctly with the brighter `#00e5ff` accent against `#101414` surface.
+
+## Review Findings
+
+**Scope correction**: The original implementation over-spread CSS variable blocks to `setup.html` and `kanban.html` — these panels were not meant to receive visual changes. Removed the CSS blocks, Hanken Grotesk links, and special class handling from both files. The only legitimate change to setup.html is the radio button + JS handler for theme selection (kept).
+
+**planning.html was under-implemented**: The original block only overrode CSS variables, but the cyber-theme-enabled rules use hardcoded `rgba(61, 219, 217, ...)` (old teal `#3ddbd9`) for scanlines, grid lines, glassmorphism borders, and sweep beam — these never picked up the new `#00e5ff` accent. Added: `--kanban-bg` and `--accent-neon` overrides, scanline opacity at spec 7% (was 15%), immersive background grid lines with spec-correct `rgba(0, 229, 255, 0.03)`, sweep beam with `#00e5ff`, and glassmorphism border overrides for tab bar, controls strip, tree panes, preview panes, and planning cards.
+
+**Files changed by review**: `setup.html` (removed CSS block, font link, special class handler), `kanban.html` (removed CSS block, font link, special class handler), `planning.html` (expanded theme block with spec-aligned overrides).

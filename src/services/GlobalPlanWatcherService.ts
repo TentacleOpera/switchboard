@@ -439,7 +439,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     status: 'active',
                     complexity: metadata.complexity,
                     tags: metadata.tags,
-                    dependencies: metadata.dependencies,
                     repoScope: '',
                     project,
                     workspaceId: workspaceId,
@@ -466,7 +465,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                     topic: metadata.topic,
                     complexity: metadata.complexity,
                     tags: metadata.tags,
-                    dependencies: metadata.dependencies,
                     updatedAt: fileMtime
                 };
                 await db.upsertPlans([updatedRecord]);
@@ -490,7 +488,6 @@ export class GlobalPlanWatcherService implements vscode.Disposable {
                             status: plan.status,
                             complexity: plan.complexity,
                             tags: plan.tags,
-                            dependencies: plan.dependencies,
                             createdAt: plan.createdAt,
                             updatedAt: plan.updatedAt,
                             lastAction: plan.lastAction
