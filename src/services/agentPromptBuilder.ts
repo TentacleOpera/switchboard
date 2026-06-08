@@ -254,6 +254,7 @@ export const SUPPRESS_WALKTHROUGH_DIRECTIVE = `SUPPRESS WALKTHROUGH: Do NOT gene
 export const NO_SUBAGENTS_DIRECTIVE = "SUBAGENT POLICY: You are strictly forbidden from spawning or invoking any subagents. Handle all tasks yourself.";
 export const CUSTOM_SUBAGENT_DIRECTIVE_TEMPLATE = (name: string) =>
     `SUBAGENT POLICY: You are authorized to use the "${name}" subagent for this task. Do not spawn or invoke any other subagents.`;
+export const WORKTREES_PER_PLAN_DIRECTIVE = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
 
 export const COMPLEXITY_SCORING_DIRECTIVE =
     `COMPLEXITY SCORING: Before proceeding, invoke the complexity_scoring skill ` +
@@ -392,8 +393,7 @@ export function buildKanbanBatchPrompt(
     }
 
     if (useWorktreesPerPlanEnabled) {
-        const worktreeDirective = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
-        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + worktreeDirective : worktreeDirective;
+        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
     const batchExecutionRules = `CRITICAL INSTRUCTIONS:
@@ -1255,8 +1255,7 @@ export function buildCustomAgentPrompt(
     }
 
     if (addons?.useWorktreesPerPlan) {
-        const worktreeDirective = 'Where possible, process each plan as an isolated unit using your native subagent or orchestration capabilities, creating a dedicated git worktree per plan to prevent file conflicts between concurrent tasks.';
-        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + worktreeDirective : worktreeDirective;
+        subagentBlock = subagentBlock ? subagentBlock + '\n\n' + WORKTREES_PER_PLAN_DIRECTIVE : WORKTREES_PER_PLAN_DIRECTIVE;
     }
 
     // Build safeguards block (batch rules + focus directive)

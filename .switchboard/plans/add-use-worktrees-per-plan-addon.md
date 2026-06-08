@@ -226,3 +226,7 @@ For custom agents, the addon value is already stored in `roleConfig.addons.useWo
 - No automated tests required. Feature is UI-only additive checkbox with text injection. Manual verification via acceptance criteria above.
 
 **Recommendation:** Complexity 2 → Send to Intern
+
+## Review Findings
+
+All 8 implementation steps verified correct. One NIT fixed: extracted duplicated worktree directive string literal into exported `WORKTREES_PER_PLAN_DIRECTIVE` constant in `agentPromptBuilder.ts` (line 257), replacing inline copies at lines 396 and 1258. No CRITICAL or MAJOR issues found. Remaining risk: contradictory prompt if both "No Subagents" and "Worktrees Per Plan" are enabled simultaneously — accepted per plan design (downstream CLI resolves).

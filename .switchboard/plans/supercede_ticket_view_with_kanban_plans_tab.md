@@ -25,7 +25,7 @@ Meanwhile the old view (`review.html`, `ReviewProvider.ts`, and related command 
 - In `_getKanbanPlans()`, include `complexity: plan.complexity || 'Unknown'` when building the summary list.
 - In `planning.js`, update `renderKanbanPlans()` to include the complexity value in the plan data (it's already available from the backend after this change).
 
-### 2. Complexity Dot on Kanban Plan Cards
+### 2. Read-Only Complexity Dot on Kanban Plan List Cards
 
 **Problem:** No visual indication of plan complexity in the Kanban Plans tab list.
 
@@ -40,47 +40,46 @@ Meanwhile the old view (`review.html`, `ReviewProvider.ts`, and related command 
     - `very-low` → `var(--accent-teal)`
     - `unknown` → `#7f848e`
   - Use the `scoreToCategory` / `categoryToCssClass` logic (or inline equivalent) to derive the colour from the complexity string.
-- Clicking the dot opens a small modal (reuse existing modal pattern or a simple `<select>` dropdown) with complexity options: `Unknown`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`.
-- On selection, post a new message type `setKanbanPlanComplexity` with `planFile`, `sessionId`, `workspaceRoot`, `complexity`.
-- In `PlanningPanelProvider.ts`, add a handler for `setKanbanPlanComplexity` that:
-  1. Updates the plan's complexity in the `KanbanDatabase`.
-  2. Optionally updates the plan markdown file's complexity metadata section (reuse existing `planMetadataUtils` logic if available).
-  3. Refreshes the kanban plans list (re-send `kanbanPlansReady`).
+- This dot is **read-only** — clicking it does nothing. Editing happens in the preview pane metadata bar (see Task 3).
 
-### 3. Add Log Button to Kanban Controls Strip
+### 3. Preview Pane Metadata Bar (Column, Complexity, Log, Delete)
 
-**Problem:** No way to view the action log from the Kanban Plans tab.
+**Problem:** No way to edit complexity, view the action log, or delete a plan from the Kanban Plans tab.
+
+**Solution:**
+Add a fixed metadata bar above the markdown preview in `#kanban-preview-pane` that only appears when a plan is selected.
+
+**Layout (wordy badges, not dots):**
+```
+[Column: CREATED ▼]  [Complexity: ● 5 ▼]  [Log]  [Delete]
+```
+
+**Implementation:**
+- In `planning.html`, add a `#kanban-preview-meta-bar` div inside `#kanban-preview-pane`, above `#kanban-preview-content`. Style it as a horizontal bar with gaps. Hidden by default; shown when a plan is selected.
+- In `planning.js`:
+  - On plan selection (inside the existing row click handler), render the meta bar with current values.
+  - **Column badge:** Displays current column label (e.g. "CREATED"). Click opens a dropdown with all available columns + "COMPLETED" + a separator + "Delete Plan".
+    - On column change (including "COMPLETED"), post `moveKanbanPlanColumn` (reuses existing handler).
+    - On "Delete Plan", confirm with `window.confirm('Delete this plan?')`, then post `deleteKanbanPlan` with `planFile`, `sessionId`, `workspaceRoot`.
+  - **Complexity badge:** Displays "Complexity: ● {value}". Click opens a dropdown with options `Unknown`, `1`, `2`, `3`, `4`, `5`, `6`, `7`, `8`, `9`, `10`.
+    - On selection, post `setKanbanPlanComplexity` with `planFile`, `sessionId`, `workspaceRoot`, `complexity`.
+  - **Log button:** Click posts `fetchKanbanPlanLog` with `sessionId`, `workspaceRoot`.
+  - **Delete button:** Standalone button. Click confirms, then posts `deleteKanbanPlan`.
+- In `PlanningPanelProvider.ts`, add handlers for:
+  - `setKanbanPlanComplexity`: Update `KanbanDatabase` record, optionally update plan file metadata, refresh plans list.
+  - `deleteKanbanPlan`: Delete from `KanbanDatabase`, optionally delete plan markdown file, refresh plans list, clear preview pane.
+  - `fetchKanbanPlanLog`: Get run sheet, format events with `_getReviewLogEntries` (extract from `TaskViewerProvider` into shared utility or duplicate), post back `kanbanPlanLogReady`.
+- In `planning.js`, handle `kanbanPlanLogReady`: Render a simple modal/overlay with timestamp, workflow, details per entry, plus a close button.
+
+### 4. Add Log Button to Kanban Controls Strip
+
+**Problem:** Controls strip is crowded and "Import Plans" is verbose.
 
 **Solution:**
 - In `planning.html` kanban controls strip:
   - Rename button text `"Import Plans"` → `"Import"`.
-  - Add a new `"Log"` button next to it.
-- In `planning.js`, add click handler for the Log button.
-  - When clicked, post a new message type `fetchKanbanPlanLog` with `sessionId` and `workspaceRoot`.
-- In `PlanningPanelProvider.ts`, add a handler for `fetchKanbanPlanLog`:
-  - Resolve the workspace root.
-  - Get the run sheet for the session.
-  - Call `_getReviewLogEntries(events)` (extract this from `TaskViewerProvider` into a shared utility, or inline the logic) to format the log.
-  - Post back `kanbanPlanLogReady` with the log entries array.
-- In `planning.js`, handle `kanbanPlanLogReady`:
-  - Render a simple modal / overlay showing timestamp, workflow, and details for each log entry.
-  - Include a close button.
-
-### 4. Add Delete Plan to Column Dropdown
-
-**Problem:** No delete action in the Kanban Plans tab.
-
-**Solution:**
-- In `planning.js` `renderKanbanPlans()`, when building the column `<select>` dropdown for each plan:
-  - Add an `<optgroup label="Actions">` at the end containing one option: `<option value="__DELETE__">Delete Plan</option>`.
-- In the `change` event handler for the dropdown:
-  - If `value === '__DELETE__'`, confirm with `window.confirm('Delete this plan?')`.
-  - On confirm, post a new message type `deleteKanbanPlan` with `planFile`, `sessionId`, `workspaceRoot`.
-  - On cancel, reset the dropdown to the current column and hide it.
-- In `PlanningPanelProvider.ts`, add a handler for `deleteKanbanPlan`:
-  - Delete the plan record from `KanbanDatabase`.
-  - Optionally delete the plan markdown file (or leave it — decide based on user preference; the kanban board delete likely leaves the file).
-  - Refresh the kanban plans list.
+  - Add a new `"Log"` button next to it (also appears in the preview meta bar, but having it in the strip too is useful for quick access).
+- Both Log buttons post `fetchKanbanPlanLog` with the currently selected plan's `sessionId` and `workspaceRoot`.
 
 ### 5. Sidebar Sync on Plan Selection
 
@@ -156,18 +155,19 @@ Meanwhile the old view (`review.html`, `ReviewProvider.ts`, and related command 
 
 ## Verification
 
-1. Open the Kanban Plans tab. Each plan card should show a coloured complexity dot.
-2. Click the dot — a modal appears. Change complexity. The dot colour updates on refresh.
-3. Click the "Log" button with a plan selected — a modal shows the action log.
-4. Click a plan's column badge dropdown — "Delete Plan" appears at the bottom. Selecting it prompts for confirmation and removes the plan.
-5. Select a plan in the Kanban Plans tab — the sidebar tree highlights the corresponding session.
-6. In the kanban board, click "Review Plan" on any card — `planning.html` opens with the Kanban Plans tab active and the correct plan selected and previewed.
-7. Compile the extension (`npm run compile`) — no TypeScript errors.
-8. Grep for `ReviewProvider` across the codebase — zero references remain.
+1. Open the Kanban Plans tab. Each plan card in the left list should show a coloured complexity dot (read-only).
+2. Select a plan. The preview pane shows a metadata bar above the markdown: `[Column: CREATED ▼] [Complexity: ● 5 ▼] [Log] [Delete]`.
+3. Click the Column badge — dropdown with columns + "Delete Plan" option. Changing column moves the plan. Selecting "Delete Plan" prompts and removes it.
+4. Click the Complexity badge — dropdown with 1-10 + Unknown. Changing updates the dot colour on refresh.
+5. Click the Log button — a modal shows timestamp/workflow/details for each action log entry.
+6. Click the Delete button — confirmation dialog, then plan is removed.
+7. Select a plan — the sidebar tree highlights the corresponding session.
+8. In the kanban board, click "Review Plan" on any card — `planning.html` opens with the Kanban Plans tab active and the correct plan selected and previewed.
+9. Compile the extension (`npm run compile`) — no TypeScript errors.
+10. Grep for `ReviewProvider` across the codebase — zero references remain.
 
 ## Risks & Notes
 
-- **Delete Plan UX:** Adding "Delete Plan" inside the column `<select>` is slightly unconventional UX. An alternative is a separate small trash icon button, but the user specifically requested the dropdown approach. We should ensure the option is visually separated (e.g. via `<optgroup>` or `hr`-styled option) so users don't accidentally trigger it.
 - **Action Log Data Format:** The old ticket viewer gets action logs via `TaskViewerProvider.getReviewTicketData()`. When deleting `TaskViewerProvider`'s review methods, the log formatting logic (`_getReviewLogEntries`) must either be moved to a shared utility or duplicated into `PlanningPanelProvider`.
 - **Kanban Board → Planning Panel coupling:** `KanbanProvider` currently delegates review to `TaskViewerProvider`. We'll need to change this to call `PlanningPanelProvider` directly. Ensure `PlanningPanelProvider` is accessible from `KanbanProvider` (either via dependency injection or a static accessor).
 - **Session ID vs Plan File for selection:** When redirecting from the kanban board, we may only have `sessionId`. The kanban plans list is keyed by `planId` (which equals `sessionId`). Ensure the selection logic handles both identifiers.
