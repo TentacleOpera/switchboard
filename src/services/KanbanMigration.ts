@@ -34,12 +34,11 @@ export class KanbanMigration {
     }
 
     private static _toKanbanPlanRecords(snapshotRows: LegacyKanbanSnapshotRow[]): KanbanPlanRecord[] {
-        return snapshotRows.map(row => ({
+        return snapshotRows.map(({ dependencies: _dep, ...row }) => ({
             ...row,
             kanbanColumn: KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction),
             status: 'active',
             tags: row.tags || '',
-            dependencies: row.dependencies || '',
             repoScope: row.repoScope || '',
             brainSourcePath: (row as any).brainSourcePath || '',
             mirrorPath: (row as any).mirrorPath || '',
@@ -112,7 +111,6 @@ export class KanbanMigration {
         snapshotRows: LegacyKanbanSnapshotRow[],
         resolveComplexity?: (planFile: string) => Promise<string>,
         resolveTags?: (planFile: string) => Promise<string>,
-        resolveDependencies?: (planFile: string) => Promise<string>,
         resolveRepoScope?: (planFile: string) => Promise<string>
     ): Promise<boolean> {
         const ready = await db.ensureReady();
@@ -127,7 +125,6 @@ export class KanbanMigration {
                 topic: string;
                 complexity?: string;
                 tags?: string;
-                dependencies?: string;
                 repoScope?: string;
             }> = [];
             const deletedRowsToRevive: Array<{ planFile: string; workspaceId: string }> = [];
@@ -153,13 +150,6 @@ export class KanbanMigration {
                         const parsed = await resolveTags(row.planFile);
                         resolvedTags = parsed || undefined;
                     }
-                    let resolvedDependencies: string | undefined;
-                    if (row.dependencies) {
-                        resolvedDependencies = row.dependencies;
-                    } else if (resolveDependencies) {
-                        const parsed = await resolveDependencies(row.planFile);
-                        resolvedDependencies = parsed || undefined;
-                    }
                     let resolvedRepoScope: string | undefined;
                     if (row.repoScope) {
                         resolvedRepoScope = row.repoScope;
@@ -173,7 +163,6 @@ export class KanbanMigration {
                         topic: row.topic,
                         complexity: resolvedComplexity,
                         tags: resolvedTags,
-                        dependencies: resolvedDependencies,
                         repoScope: resolvedRepoScope
                     });
                 }

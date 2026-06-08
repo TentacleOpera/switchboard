@@ -117,3 +117,7 @@ Key risk: The dispatch flow at lines 15244–15254 has a complex branching struc
 - Mirror sync completes without error
 
 **Recommendation: Send to Lead Coder** (Complexity 7 — 20+ scattered sites in a single very large file, dispatch flow modification)
+
+## Review Findings
+
+All 20+ planned removals in TaskViewerProvider.ts were confirmed implemented. Review uncovered 4 additional issues: (1) CRITICAL — `KanbanMigration.syncPlansMetadata()` still had a `resolveDependencies` parameter, causing the caller's `resolveRepoScope` fn to land in the wrong slot (repo scope never synced); (2) MAJOR — `VALID_DEPENDENCY_COLUMNS` constant and filter in `getReviewOpenPlans` restricted results to CREATED/PLAN REVIEWED columns (dependency-picker artifact); (3) MAJOR — review.html retained full dependency UI (button, modal, JS, CSS, state) that sent unhandled `setDependencies` messages; (4) MAJOR — `KanbanMigration._toKanbanPlanRecords` spread `dependencies` from `LegacyKanbanSnapshotRow` into `KanbanPlanRecord` objects. Fixes applied: removed `resolveDependencies` param and dead logic from KanbanMigration, destructured-out `dependencies` in `_toKanbanPlanRecords`, removed `VALID_DEPENDENCY_COLUMNS` and filter from TaskViewerProvider, stripped dependency UI from review.html, removed dead `getOpenPlans` handler from ReviewProvider. Typecheck passes for all changed files (pre-existing errors in other files are unrelated). Remaining risk: `LegacyKanbanSnapshotRow` type and DB `dependencies` column deferred to Phase 6.

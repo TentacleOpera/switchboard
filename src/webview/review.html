@@ -144,10 +144,6 @@
             min-width: 100px;
         }
 
-        .field.dependencies {
-            flex: 1 1 auto;
-        }
-
         .field label {
             font-size: 11px;
             color: var(--muted);
@@ -219,18 +215,6 @@
         input:disabled {
             opacity: 0.6;
             cursor: not-allowed;
-        }
-
-        .dependency-row {
-            display: flex;
-            align-items: center;
-            gap: 6px;
-            flex-wrap: wrap;
-        }
-
-        .dependency-summary {
-            font-size: 12px;
-            color: var(--muted);
         }
 
         .editor-shell {
@@ -441,19 +425,12 @@
             overflow: auto;
         }
 
-        .deps-list,
         .log-list {
             display: flex;
             flex-direction: column;
             gap: 10px;
         }
 
-        .deps-list {
-            max-height: 50vh;
-            overflow: auto;
-        }
-
-        .deps-item,
         .log-item {
             border: 1px solid var(--border);
             border-radius: 6px;
@@ -461,43 +438,11 @@
             padding: 10px 12px;
         }
 
-        .deps-item {
-            display: flex;
-            gap: 10px;
-            align-items: flex-start;
-        }
-
-        .deps-item input {
-            width: auto;
-            margin-top: 2px;
-        }
-
-        .deps-topic {
-            font-size: 13px;
-            color: var(--text);
-        }
-
-        .deps-meta,
         .log-timestamp,
         .log-details,
         .empty-state {
             font-size: 11px;
             color: var(--muted);
-        }
-
-        .deps-orphaned-header {
-            margin-top: 12px;
-            padding: 6px 8px;
-            font-size: 12px;
-            color: var(--vscode-editorWarning-foreground, #cca700);
-            border-top: 1px solid var(--border);
-        }
-
-        .deps-orphaned-item {
-            padding: 4px 8px 4px 24px;
-            font-size: 12px;
-            color: var(--muted);
-            font-style: italic;
         }
 
         .log-head {
@@ -530,10 +475,6 @@
 
             .field select {
                 width: 100%;
-            }
-
-            .field.dependencies {
-                flex: unset;
             }
         }
 
@@ -592,13 +533,6 @@
                 <option value="10">Very High</option>
             </select>
         </div>
-        <div class="field dependencies">
-            <label>Dependencies</label>
-            <div class="dependency-row">
-                <button id="open-deps-modal">Manage Dependencies</button>
-                <span class="dependency-summary" id="dependencies-summary">No dependencies selected</span>
-            </div>
-        </div>
     </div>
 
     <div class="editor-shell">
@@ -632,19 +566,6 @@
         <div class="popup-actions">
             <button id="cancel-comment">Cancel</button>
             <button class="primary" id="submit-comment">Submit Comment</button>
-        </div>
-    </div>
-
-    <div class="modal-overlay hidden" id="deps-modal">
-        <div class="modal-card">
-            <div class="modal-heading">Manage Dependencies</div>
-            <div class="modal-body">
-                <div class="deps-list" id="deps-list"></div>
-            </div>
-            <div class="modal-actions">
-                <button id="close-deps-modal">Cancel</button>
-                <button class="primary" id="save-deps-modal">Save</button>
-            </div>
         </div>
     </div>
 
@@ -696,7 +617,6 @@
         const headerTitleInputEl = document.getElementById('header-title-input');
         const columnSelectEl = document.getElementById('column-select');
         const complexitySelectEl = document.getElementById('complexity-select');
-        const dependenciesSummaryEl = document.getElementById('dependencies-summary');
         const planEditorEl = document.getElementById('plan-editor');
         const markdownContentEl = document.getElementById('markdown-content');
         const togglePreviewBtn = document.getElementById('toggle-preview');
@@ -710,11 +630,8 @@
         const openLogModalButtonEl = document.getElementById('open-log-modal');
         const completePlanButtonEl = document.getElementById('complete-plan');
         const deletePlanButtonEl = document.getElementById('delete-plan');
-        const openDepsModalButtonEl = document.getElementById('open-deps-modal');
         const editTitleBtnEl = document.getElementById('edit-title-btn');
-        const depsModalEl = document.getElementById('deps-modal');
         const logModalEl = document.getElementById('log-modal');
-        const depsListEl = document.getElementById('deps-list');
         const statusbarEl = document.getElementById('statusbar');
         const statusMessageEl = document.getElementById('status-message');
         const mtimeMessageEl = document.getElementById('mtime-message');
@@ -726,14 +643,12 @@
             column: '',
             isCompleted: false,
             complexity: 'Unknown',
-            dependencies: [],
             planText: '',
             planMtimeMs: 0,
             canEditMetadata: false,
             pendingCount: 0,
             selectedText: '',
-            isPreview: true,
-            openPlans: []
+            isPreview: true
         };
 
         function hidePopup(clear) {
@@ -776,15 +691,6 @@
             }
         }
 
-        function updateDependenciesSummary() {
-            if (!dependenciesSummaryEl) {
-                return;
-            }
-            dependenciesSummaryEl.textContent = state.dependencies.length > 0
-                ? `${state.dependencies.length} dependenc${state.dependencies.length === 1 ? 'y' : 'ies'} selected`
-                : 'No dependencies selected';
-        }
-
         function updateActionButtons() {
             const disabled = state.pendingCount > 0;
             const hasSession = !!state.sessionId;
@@ -803,7 +709,6 @@
             headerTitleInputEl.disabled = !editable;
             columnSelectEl.disabled = !editable;
             complexitySelectEl.disabled = !editable;
-            openDepsModalButtonEl.disabled = !editable;
             planEditorEl.disabled = disabled;
             updateActionButtons();
         }
@@ -874,88 +779,6 @@
             });
         }
 
-        function renderOpenPlans(plans) {
-            state.openPlans = Array.isArray(plans) ? plans.slice() : [];
-            depsListEl.innerHTML = '';
-
-            if (state.openPlans.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = 'No plans in New or Planned columns available as dependencies.';
-                depsListEl.appendChild(empty);
-                return;
-            }
-
-            const normalizedDeps = state.dependencies.map(d => d.trim().toLowerCase());
-            const matchedDeps = new Set();
-
-            state.openPlans.forEach((plan) => {
-                const sessionId = String(plan.sessionId || '').trim();
-                const topic = String(plan.topic || '').trim();
-                // Canonical stored form is sessionId. Topic is fallback only if sessionId is absent.
-                const dependencyValue = sessionId || topic;
-                const wrapper = document.createElement('label');
-                wrapper.className = 'deps-item';
-
-                const checkbox = document.createElement('input');
-                checkbox.type = 'checkbox';
-                checkbox.value = dependencyValue;
-
-                const normalizedSessionId = sessionId.toLowerCase();
-                const normalizedTopic = topic.toLowerCase();
-                // Backward compatibility: detect legacy topic-form values in state.dependencies.
-                const isChecked = normalizedDeps.includes(normalizedSessionId)
-                    || (normalizedTopic && normalizedDeps.includes(normalizedTopic));
-                checkbox.checked = isChecked;
-                if (isChecked) {
-                    normalizedDeps.forEach(nd => {
-                        if (nd === normalizedSessionId || nd === normalizedTopic) {
-                            matchedDeps.add(nd);
-                        }
-                    });
-                }
-
-                const copy = document.createElement('div');
-                copy.innerHTML = `
-                    <div class="deps-topic">${escapeHtml(plan.topic || plan.sessionId || 'Untitled plan')}</div>
-                    <div class="deps-meta">${escapeHtml(plan.column || 'Unknown column')} · ${escapeHtml(plan.planFileAbsolute || '')}</div>
-                `;
-
-                wrapper.appendChild(checkbox);
-                wrapper.appendChild(copy);
-                depsListEl.appendChild(wrapper);
-            });
-
-            // Show orphaned dependencies that didn't match any open plan
-            const orphaned = state.dependencies.filter(d => !matchedDeps.has(d.trim().toLowerCase()));
-            if (orphaned.length > 0) {
-                const divider = document.createElement('div');
-                divider.className = 'deps-orphaned-header';
-                divider.innerHTML = '⚠️ Unmatched dependencies (plan may have been renamed or deleted):';
-                depsListEl.appendChild(divider);
-                orphaned.forEach(dep => {
-                    const item = document.createElement('div');
-                    item.className = 'deps-orphaned-item';
-                    item.textContent = dep;
-                    depsListEl.appendChild(item);
-                });
-            }
-        }
-
-        function openDepsModal() {
-            if (!state.sessionId || !state.canEditMetadata) {
-                setStatus('Dependencies are only available for session-backed tickets.', 'error');
-                return;
-            }
-            depsModalEl.classList.remove('hidden');
-            depsListEl.innerHTML = '<div class="empty-state">Loading open plans...</div>';
-            vscode.postMessage({ type: 'getOpenPlans', sessionId: state.sessionId });
-        }
-
-        function closeDepsModal() {
-            depsModalEl.classList.add('hidden');
-        }
-
         function openLogModal() {
             logModalEl.classList.remove('hidden');
         }
@@ -1002,7 +825,6 @@
             state.column = message.column || '';
             state.isCompleted = message.isCompleted === true;
             state.complexity = message.complexity || 'Unknown';
-            state.dependencies = Array.isArray(message.dependencies) ? message.dependencies.slice() : [];
             state.planText = message.planText || '';
             state.planMtimeMs = Number(message.planMtimeMs || 0);
             state.canEditMetadata = message.canEditMetadata !== false;
@@ -1039,7 +861,6 @@
                 }
             }
             complexitySelectEl.value = selectValue;
-            updateDependenciesSummary();
             planEditorEl.value = state.planText;
             markdownContentEl.innerHTML = message.renderedHtml
                 ? message.renderedHtml
@@ -1176,31 +997,6 @@
         openLogModalButtonEl.addEventListener('click', openLogModal);
         document.getElementById('close-log-modal').addEventListener('click', closeLogModal);
 
-        openDepsModalButtonEl.addEventListener('click', openDepsModal);
-        document.getElementById('close-deps-modal').addEventListener('click', closeDepsModal);
-        document.getElementById('save-deps-modal').addEventListener('click', () => {
-            const nextDependencies = Array.from(depsListEl.querySelectorAll('input[type="checkbox"]:checked'))
-                .map(input => input.value)
-                .filter(Boolean);
-            closeDepsModal();
-            // Normalized comparison: treat as unchanged if the same topics match ignoring case/whitespace
-            const normalize = arr => arr.map(d => d.trim().toLowerCase()).sort().join('\n');
-            if (normalize(nextDependencies) === normalize(state.dependencies)) {
-                return;
-            }
-            postUpdate({
-                type: 'setDependencies',
-                sessionId: state.sessionId,
-                dependencies: nextDependencies
-            });
-        });
-
-        depsModalEl.addEventListener('click', (event) => {
-            if (event.target === depsModalEl) {
-                closeDepsModal();
-            }
-        });
-
         logModalEl.addEventListener('click', (event) => {
             if (event.target === logModalEl) {
                 closeLogModal();
@@ -1295,12 +1091,6 @@
                         setStatus(message.message || 'Failed to send comment.', 'error');
                     }
                     break;
-                case 'openPlansData':
-                    renderOpenPlans(Array.isArray(message.plans) ? message.plans : []);
-                    if (message.error) {
-                        setStatus(message.error, 'error');
-                    }
-                    break;
                 case 'copyPlanLinkResult':
                     if (message.ok) {
                         setStatus(message.message || 'Plan path copied.', 'success');
@@ -1320,7 +1110,6 @@
         });
 
         applyMode();
-        updateDependenciesSummary();
         vscode.postMessage({ type: 'ready' });
     </script>
 </body>

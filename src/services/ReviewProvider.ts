@@ -290,24 +290,6 @@ export class ReviewProvider implements vscode.Disposable {
                 }
                 break;
             }
-            case 'getOpenPlans': {
-                try {
-                    if (!this._currentPlan?.sessionId) {
-                        this._panel.webview.postMessage({ type: 'openPlansData', plans: [] });
-                        break;
-                    }
-                    const plans = await vscode.commands.executeCommand<ReviewOpenPlanOption[]>(
-                        'switchboard.getReviewOpenPlans',
-                        this._currentPlan.sessionId
-                    );
-                    this._panel.webview.postMessage({ type: 'openPlansData', plans: Array.isArray(plans) ? plans : [] });
-                } catch (error) {
-                    const message = error instanceof Error ? error.message : String(error);
-                    this._panel.webview.postMessage({ type: 'openPlansData', plans: [], error: message });
-                }
-                break;
-            }
-            // NOTE: UI button removed from review.html; handler retained for API compatibility
             case 'sendToAgent': {
                 try {
                     if (!this._currentPlan?.sessionId) {

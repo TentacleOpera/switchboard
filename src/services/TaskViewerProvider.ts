@@ -12926,8 +12926,6 @@ What would you like to find?`;
         };
     }
 
-    private static readonly VALID_DEPENDENCY_COLUMNS = ['CREATED', 'PLAN REVIEWED'];
-
     public async getReviewOpenPlans(sessionId: string): Promise<Array<{
         sessionId: string;
         topic: string;
@@ -12974,7 +12972,6 @@ What would you like to find?`;
                 planFileAbsolute: string;
                 lastActivity: string;
             } => !!entry)
-            .filter((entry) => TaskViewerProvider.VALID_DEPENDENCY_COLUMNS.includes(entry.column))
             .sort((a, b) => (b.lastActivity || '').localeCompare(a.lastActivity || ''))
             .slice(0, 50)
             .map(({ lastActivity, ...entry }) => entry);
