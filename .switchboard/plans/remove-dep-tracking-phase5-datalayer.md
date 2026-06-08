@@ -91,3 +91,7 @@ Key risk: SQL column mismatch. If `dependencies` is removed from the INSERT colu
 - Verify no TypeScript compilation errors related to removed interface fields
 
 **Recommendation: Send to Coder** (Complexity 5 — SQL handling requires care but all callers are already gone)
+
+## Review Findings
+
+All in-scope changes verified correct: parser deleted, interfaces cleaned, UPSERT_PLAN_SQL column/placeholder count matches (23/23), ON CONFLICT has no stale `dependencies` reference, `_readRows()` mapping clean, four DB methods removed, KanbanProvider card literals and `KanbanCard` interface clean. Four out-of-scope files had stale `dependencies` references that would block TS compilation: `NotionBackupService.ts` (2 refs), `SessionActionLog.ts` (1 ref), `ArchiveManager.ts` (4 refs across interface/SQL/migration), `ClickUpSyncService.ts` (1 ref in local re-declared interface) — all fixed. Remaining known deferred items: `KanbanMigration.ts` legacy snapshot type (NIT, harmless), test files (Phase 6), DuckDB archive `dependencies` column (SQL schema still has it, no runtime impact).

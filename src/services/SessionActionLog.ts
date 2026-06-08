@@ -513,7 +513,6 @@ export class SessionActionLog {
                         return score > 0 ? String(score) : 'Unknown';
                     })(normalized.complexity),
                     tags: '',
-                    dependencies: '',
                     repoScope: '',
                     workspaceId,
                     createdAt: normalized.createdAt,

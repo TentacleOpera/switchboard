@@ -43,7 +43,6 @@ export interface KanbanPlanRecord {
   status: string;
   complexity: string;
   tags: string;
-  dependencies: string;
   createdAt: string;
   updatedAt: string;
   lastAction: string;
