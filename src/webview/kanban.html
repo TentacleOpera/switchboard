@@ -8103,7 +8103,7 @@
             const container = document.createElement('div');
             container.style.cssText = 'padding: 12px; display: flex; flex-direction: column; gap: 16px;';
 
-            if (!lastControlPlaneConfigured) {
+            if (!currentControlPlaneMode || currentControlPlaneMode === 'none') {
                 const warningBanner = document.createElement('div');
                 warningBanner.style.cssText = 'padding:8px; background:rgba(229,85,85,0.15); border:1px solid var(--accent-red, #e55); color:var(--accent-red, #e55); border-radius:4px; font-size:10px; font-weight:bold; line-height:1.4;';
                 warningBanner.textContent = '⚠️ Control plane not configured. Safety session requires an explicit control plane or kanban database. Configure one in the workspace selector.';
