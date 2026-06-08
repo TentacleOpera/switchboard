@@ -1,4 +1,4 @@
-# Enable Caveman Mode by Default for Planner Role
+# Enable Caveman Mode for Planner Role
 
 ## Goal
 
@@ -117,3 +117,7 @@ Revert the four changes above. All are additive/value flips; no deletions.
 ~10 minutes.
 
 **Recommendation:** Send to Intern (Complexity 2)
+
+## Review Findings
+
+All five planned changes verified as correctly implemented. One MAJOR finding fixed: `agentPromptBuilder.ts:470` had "Grumpy voice" inconsistent with the workflow file's "Grumpy Architect voice" — aligned to "Grumpy Architect voice" for directive consistency. No CRITICAL issues found. The `?? true` fallback in KanbanProvider.ts:2581 correctly preserves existing persisted `cavemanOutput: false` configs (the plan's `parseCustomAgentAddons` reasoning was inaccurate for built-in roles, but the conclusion was correct). Remaining risk: the carve-out is prompt-only text with no structural enforcement — LLMs may still compress the plan artifact, same accepted risk as the reviewer role.

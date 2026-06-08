@@ -467,7 +467,7 @@ export function buildKanbanBatchPrompt(
             plannerBase += '\n\n' + SKIP_TESTS_DIRECTIVE;
         }
         if (cavemanOutputEnabled) {
-            plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to reasoning and discussion only. Preserve the theatrical Grumpy voice defined in the workflow for adversarial critique sections. The generated plan artifact (.md file) must remain fully detailed, well-structured, and complete.';
+            plannerBase += '\n\n' + CAVEMAN_OUTPUT_DIRECTIVE + '\nNote: Caveman style applies to reasoning and discussion only. Preserve the theatrical Grumpy Architect voice defined in the workflow for adversarial critique sections. The generated plan artifact (.md file) must remain fully detailed, well-structured, and complete.';
         }
         if (workspaceTypeBlock) {
             plannerBase += '\n\n' + workspaceTypeBlock;
