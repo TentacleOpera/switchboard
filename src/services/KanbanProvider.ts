@@ -6054,7 +6054,19 @@ FOCUS DIRECTIVE: Each plan file path above is the single source of truth for tha
                         break;
                     }
                     if (!fs.existsSync(fullPath)) {
-                        vscode.window.showErrorMessage(`Worktree directory not found: ${fullPath}`);
+                        const clearAction = 'Clear Session Record Only';
+                        const result = await vscode.window.showErrorMessage(
+                            `Worktree directory not found: ${fullPath}`,
+                            { modal: false },
+                            clearAction
+                        );
+                        if (result === clearAction) {
+                            await db.setMeta('active_safety_session_branch', '');
+                            await db.setMeta('active_safety_session_started_at', '');
+                            await db.setMeta('active_safety_session_path', '');
+                            this._panel?.webview.postMessage({ type: 'safetySession', session: null });
+                            vscode.window.showInformationMessage('Safety session record cleared.');
+                        }
                         break;
                     }
                     try {

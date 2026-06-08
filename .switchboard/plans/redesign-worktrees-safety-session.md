@@ -364,3 +364,7 @@ Key risks: (1) Two private helper methods are called but never defined — runti
 ## Recommendation
 
 **Send to Coder** — Complexity 6. Majority of backend is already implemented. Remaining work is: two small helper methods, one condition fix, one prompt injection addition, deletion of dead code, and a new UI panel. The deletions are safe because most worktree methods are already dead code with zero call sites. The UI work is routine HTML/JS following existing patterns.
+
+## Review Findings
+
+Review found 3 CRITICAL and 3 MAJOR issues; all fixed. **KanbanProvider.ts**: removed 3 orphaned `_mergeColumnCheckCache` call sites (runtime crash on every kanban refresh), added "Clear Session Record Only" option to `mergeSafetySession` when worktree path missing on disk. **kanban.html**: replaced undeclared `lastControlPlaneConfigured` with existing `currentControlPlaneMode` check (warning banner was always showing), deleted all Phase 2 remnants — MERGE column header buttons, card merge/worktree icon rendering, `inFlightMerges`, `updateMergeButtons`, merge event handlers, MERGE/worktree CSS, `ICON_WORKTREE_*` constants. Typecheck passes with zero new errors (pre-existing `KanbanProvider.ts` duplicate `}` and `TaskViewerProvider.ts` errors unchanged). Remaining risk: empty-string meta clear (NIT, mitigated by guard); `worktrees` table and `worktree_id`/`worktree_status` columns left inert per plan.

@@ -763,22 +763,6 @@
             opacity: 0.7;
             border-left: 3px solid var(--vscode-testing-iconPassed, #73c991);
         }
-        .card-worktree-icon {
-            position: absolute;
-            top: 8px;
-            right: 8px;
-            width: 14px;
-            height: 14px;
-            opacity: 0.85;
-            transition: opacity 0.2s;
-            pointer-events: auto;
-        }
-        .card-worktree-icon:hover {
-            opacity: 1;
-        }
-        .card-worktree-icon.merged {
-            opacity: 0.35;
-        }
         .kanban-card.completed:hover {
             opacity: 0.85;
         }
@@ -2248,47 +2232,6 @@
             100% { opacity: 0; }
         }
 
-        .col-merge-btn {
-            background: color-mix(in srgb, var(--panel-bg2) 80%, transparent);
-            border: 1px solid var(--border-color);
-            color: var(--accent-teal);
-            cursor: pointer;
-            padding: 4px 8px;
-            font-size: 11px;
-            font-weight: 500;
-            border-radius: 3px;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            transition: all 0.15s;
-        }
-
-        .col-merge-btn:hover:not(:disabled) {
-            background: color-mix(in srgb, var(--accent-teal) 10%, transparent);
-            border-color: var(--accent-teal);
-        }
-
-        .col-merge-btn:disabled {
-            opacity: 0.5;
-            cursor: not-allowed;
-            color: var(--text-muted);
-            border-color: transparent;
-        }
-
-        .merge-spinner {
-            display: inline-block;
-            width: 10px;
-            height: 10px;
-            border: 2px solid currentColor;
-            border-top-color: transparent;
-            border-radius: 50%;
-            animation: merge-spin 0.6s linear infinite;
-            margin-right: 4px;
-        }
-
-        @keyframes merge-spin {
-            to { transform: rotate(360deg); }
-        }
     </style>
 </head>
 
@@ -3507,8 +3450,7 @@
         const ICON_CHAT = '{{ICON_CHAT}}';
         const ICON_CODE_MAP = '{{ICON_CODE_MAP}}';
         const ICON_ARCHIVE_SELECTED = '{{ICON_41}}';
-        const ICON_WORKTREE_ACTIVE = '{{ICON_WORKTREE_ACTIVE}}';
-        const ICON_WORKTREE_MERGED = '{{ICON_WORKTREE_MERGED}}';
+
 
         // Tab switching logic
         const kanbanTabButtons = document.querySelectorAll('.kanban-tab-btn');
@@ -4152,17 +4094,16 @@
                 const isCreated = def.id === 'CREATED';
                 const isPlanReviewed = def.id === 'PLAN REVIEWED';
                 const isCompleted = def.kind === 'completed';
-                const isMerge = def.kind === 'merge';
                 // Last working column = the column immediately before the completed column
                 const completedIndex = renderDefs.findIndex(d => d.kind === 'completed');
                 const defIndex = renderDefs.indexOf(def);
                 const isLastWorkingColumn = !isCompleted && completedIndex > 0 && defIndex === completedIndex - 1;
-                const hasAgent = !isCreated && !isCompleted && !isMerge;
+                const hasAgent = !isCreated && !isCompleted;
                 
                 const mode = columnDragDropModes[def.id] || 'cli';
                 const modeIcon = mode === 'prompt' ? ICON_PROMPT : ICON_CLI;
                 const modeTitle = mode === 'prompt' ? 'Mode: Copy Prompt (drag cards to copy prompt to clipboard)' : 'Mode: CLI Dispatch (drag cards to trigger CLI agent)';
-                const modeToggle = (!isCreated && !isLastWorkingColumn && !isCompleted && !isMerge) 
+                const modeToggle = (!isCreated && !isLastWorkingColumn && !isCompleted) 
                     ? `<div class="mode-toggle mode-${mode}" data-column="${escapeAttr(def.id)}" data-tooltip="${escapeAttr(modeTitle)}">
                            <img src="${modeIcon}" alt="${mode}">
                        </div>` 
@@ -4216,21 +4157,6 @@
                         </button>
                         <button class="column-icon-btn testing-fail-btn" data-action="testingFailed" data-column="${escapeAttr(def.id)}" data-tooltip="Report testing failure for selected plans">
                             <img src="${ICON_TESTING_FAIL}" alt="Testing Failed" class="testing-fail-icon">
-                        </button>
-                    </div>`;
-                } else if (isMerge) {
-                    buttonArea = `<div class="column-button-area" style="display: flex; gap: 4px; flex-wrap: wrap; justify-content: space-between; padding: 4px 0;">
-                        <button id="btn-merge-all" class="col-merge-btn" style="flex: 1 1 45%; margin-bottom: 4px;" data-tooltip="Merge all plans in MERGE column">
-                            Merge All
-                        </button>
-                        <button id="btn-merge-selected" class="col-merge-btn" style="flex: 1 1 45%; margin-bottom: 4px;" data-tooltip="Merge selected plans">
-                            Merge Selected
-                        </button>
-                        <button id="btn-send-to-agent" class="col-merge-btn" style="flex: 1 1 45%;" data-tooltip="Send selected plans to reviewer agent">
-                            Send to Agent
-                        </button>
-                        <button id="btn-copy-merge-prompt" class="col-merge-btn" style="flex: 1 1 45%;" data-tooltip="Copy merge prompt to clipboard">
-                            Copy Prompt
                         </button>
                     </div>`;
                 } else {
@@ -4682,7 +4608,6 @@
                     selectedCards.delete(key);
                 }
             }
-            inFlightMerges.clear();
             const buckets = {};
             columns.forEach(c => buckets[c] = []);
 
@@ -4856,20 +4781,6 @@
                 });
             });
 
-            document.querySelectorAll('.card-btn.merge-action-btn').forEach(btn => {
-                btn.addEventListener('click', () => {
-                    btn.disabled = true;
-                    btn.textContent = 'Merging…';
-                    postKanbanMessage({
-                        type: 'executeMerge',
-                        sessionId: btn.dataset.session || '',
-                        planId: btn.dataset.planId || '',
-                        rule: lastWorktreeDefaultMergeStrategy || 'squash',
-                        workspaceRoot: currentWorkspaceRoot
-                    });
-                });
-            });
-
             document.querySelectorAll('.pair-program-btn').forEach(btn => {
                 btn.addEventListener('click', () => {
                     const sessionId = btn.dataset.session || '';
@@ -4889,52 +4800,6 @@
                     postKanbanMessage({ type: 'sendToNew', sessionId: btn.dataset.session || '', planId: btn.dataset.planId || '', workspaceRoot: btn.dataset.workspaceRoot });
                 });
             });
-
-            // Column-level Merge handlers
-            const btnMergeAll = document.getElementById('btn-merge-all');
-            if (btnMergeAll) {
-                btnMergeAll.onclick = () => {
-                    const ids = getAllInColumn('MERGE');
-                    if (ids.length === 0) return;
-                    ids.forEach(id => inFlightMerges.add(id));
-                    updateMergeButtons();
-                    postKanbanMessage({ type: 'mergeAll', workspaceRoot: getActiveWorkspaceRoot() });
-                };
-            }
-
-            const btnMergeSelected = document.getElementById('btn-merge-selected');
-            if (btnMergeSelected) {
-                btnMergeSelected.onclick = () => {
-                    const ids = getSelectedInColumn('MERGE');
-                    if (ids.length === 0) return;
-                    ids.forEach(id => inFlightMerges.add(id));
-                    updateMergeButtons();
-                    postKanbanMessage({ type: 'mergeSelected', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                    ids.forEach(id => selectedCards.delete(id));
-                };
-            }
-
-            const btnSendToAgent = document.getElementById('btn-send-to-agent');
-            if (btnSendToAgent) {
-                btnSendToAgent.onclick = () => {
-                    const ids = getSelectedInColumn('MERGE');
-                    if (ids.length === 0) return;
-                    postKanbanMessage({ type: 'sendToAgentFromMerge', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                    ids.forEach(id => selectedCards.delete(id));
-                };
-            }
-
-            const btnCopyMergePrompt = document.getElementById('btn-copy-merge-prompt');
-            if (btnCopyMergePrompt) {
-                btnCopyMergePrompt.onclick = () => {
-                    const ids = getSelectedInColumn('MERGE');
-                    if (ids.length === 0) return;
-                    postKanbanMessage({ type: 'copyMergePrompt', sessionIds: ids, workspaceRoot: getActiveWorkspaceRoot() });
-                    ids.forEach(id => selectedCards.delete(id));
-                };
-            }
-
-            updateMergeButtons();
 
             requestAnimationFrame(() => restoreBoardViewState(viewState));
             updateReassignButtonVisibility();
@@ -4976,24 +4841,10 @@
             // but card-level indicator and action buttons have been removed to reduce clutter.
             // Pause/resume is still available via the card context menu.
 
-            const worktree = card.worktreeId ? (lastWorktrees || []).find(wt => wt.id === card.worktreeId) : null;
-            const branchInfo = worktree ? `<div class="card-branch" style="font-family:var(--font-mono); font-size:8px; color:var(--accent-teal, #4fc3f7); margin-top:2px; text-overflow:ellipsis; overflow:hidden; white-space:nowrap;" title="Branch: ${escapeAttr(worktree.branch)}">🌿 ${escapeHtml(worktree.branch)}</div>` : '';
-
-            // Worktree icon: gated on worktreeStatus (not worktreeId, which is NULLed on deletion)
-            const worktreeStatus = card.worktreeStatus || 'none';
-            const worktreeIconHtml = worktreeStatus !== 'none'
-                ? `<img src="${worktreeStatus === 'active' ? ICON_WORKTREE_ACTIVE : ICON_WORKTREE_MERGED}"
-                     class="card-worktree-icon ${worktreeStatus !== 'active' ? 'merged' : ''}"
-                     alt="Worktree"
-                     title="Worktree: ${worktree ? escapeHtml(worktree.branch) : 'removed'} (${escapeHtml(worktreeStatus)})">`
-                : '';
-
             // For completed cards, show a Recover button instead of Copy Prompt
             let primaryActionBtn;
             if (isCompleted) {
                 primaryActionBtn = `<button class="card-btn recover" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Recover this plan">Recover</button>`;
-            } else if (card.column === 'MERGE') {
-                primaryActionBtn = `<button class="card-btn merge-action-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-tooltip="Execute Git Merge">Merge</button>`;
             } else {
                 let copyLabel = 'Copy Prompt';
                 const CODED_IDS = ['LEAD CODED', 'CODER CODED', 'INTERN CODED'];
@@ -5038,19 +4889,15 @@
                     ? `<button class="card-btn send-to-new-btn" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Move back to New">→ New</button>`
                     : '';
 
-            const isMergeCard = card.column === 'MERGE';
             const completeOrDoneBtn = isCompleted
                 ? `<span class="card-done-badge">✓ Done</span>`
-                : isMergeCard
-                    ? '' // Merge cards use the Merge button to progress to completed
-                    : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
-                           <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
-                       </button>`;
+                : `<button class="card-btn icon-btn complete" data-plan-id="${escapeAttr(card.planId || card.sessionId || '')}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-tooltip="Complete and archive">
+                       <svg width="12" height="12" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3.5 8.5l3 3 6-6"/></svg>
+                   </button>`;
             const cardId = escapeAttr(card.planId || card.sessionId || '');
             return `
                 <div class="kanban-card${completedClass}" draggable="true" data-plan-id="${cardId}" data-session="${escapeAttr(card.sessionId || '')}" data-workspace-root="${escapeAttr(card.workspaceRoot)}" data-project="${escapeAttr(card.project || '')}">
-                    ${worktreeIconHtml}
-                    <div class="card-topic">${escapeHtml(shortTopic)}${branchInfo}</div>
+                    <div class="card-topic">${escapeHtml(shortTopic)}</div>
                     <div class="card-meta">Complexity: <span class="complexity-indicator ${complexityClass}">${category}</span> · ${timeAgo}</div>
                     <div class="card-actions" style="display: flex; justify-content: space-between; align-items: center;">
                         <div style="display: flex; gap: 4px;">
@@ -5621,7 +5468,6 @@
         let currentAutomationMode = 'single-column';
         let lastAntigravityBatchSize = 5;
         let managedTerminalPools = {};
-        const inFlightMerges = new Set();
 
         // Listen for messages from the extension
         window.addEventListener('message', (event) => {
@@ -6237,41 +6083,6 @@
                     btn.disabled = true;
                     btn.textContent = 'ASSIGN';
                 }
-            }
-            updateMergeButtons();
-        }
-
-        function updateMergeButtons() {
-            const btnMergeAll = document.getElementById('btn-merge-all');
-            const btnMergeSelected = document.getElementById('btn-merge-selected');
-            const btnSendToAgent = document.getElementById('btn-send-to-agent');
-            const btnCopyMergePrompt = document.getElementById('btn-copy-merge-prompt');
-
-            const allMerge = getAllInColumn('MERGE');
-            const selectedMerge = getSelectedInColumn('MERGE');
-
-            const isAnyInFlight = inFlightMerges.size > 0;
-
-            if (btnMergeAll) {
-                btnMergeAll.disabled = allMerge.length === 0 || isAnyInFlight;
-                const spinner = isAnyInFlight ? '<span class="merge-spinner"></span>' : '';
-                btnMergeAll.innerHTML = `${spinner}Merge All (${allMerge.length})`;
-            }
-
-            if (btnMergeSelected) {
-                btnMergeSelected.disabled = selectedMerge.length === 0 || isAnyInFlight;
-                const spinner = isAnyInFlight ? '<span class="merge-spinner"></span>' : '';
-                btnMergeSelected.innerHTML = `${spinner}Merge Selected (${selectedMerge.length})`;
-            }
-
-            if (btnSendToAgent) {
-                btnSendToAgent.disabled = selectedMerge.length === 0;
-                btnSendToAgent.innerHTML = `Send to Agent (${selectedMerge.length})`;
-            }
-
-            if (btnCopyMergePrompt) {
-                btnCopyMergePrompt.disabled = selectedMerge.length === 0;
-                btnCopyMergePrompt.innerHTML = `Copy Prompt (${selectedMerge.length})`;
             }
         }
 
@@ -8244,7 +8055,7 @@
             return container;
         }
 
-        // (lastSafetySession, lastControlPlaneConfigured are forward-declared above)
+        // (lastSafetySession is forward-declared above; currentControlPlaneMode is set by workspace message handler)
 
         function renderSafetySessionPanel() {
             try {
