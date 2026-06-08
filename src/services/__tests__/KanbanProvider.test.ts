@@ -23,9 +23,7 @@ suite('KanbanProvider', () => {
             lastActivity: new Date().toISOString(),
             createdAt: new Date().toISOString(),
             complexity: 'medium',
-            workspaceRoot,
-            dependencies: [],
-            hasBlockingDependencies: false
+            workspaceRoot
         }));
 
     setup(() => {

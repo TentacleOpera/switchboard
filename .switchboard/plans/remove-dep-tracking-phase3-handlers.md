@@ -92,3 +92,7 @@ Key risk: KanbanCard interface still requires `dependencies` and `hasBlockingDep
 - ClickUp sync still works (no crash on missing `dependencies` field)
 
 **Recommendation: Send to Coder** (Complexity 6 — multi-file handler removal with KanbanCard interface constraint)
+
+## Review Findings
+
+All planned removals verified complete across KanbanProvider, GlobalPlanWatcherService, and ReviewProvider. The implementation went beyond the plan by also removing `dependencies`/`hasBlockingDependencies` from the `KanbanCard` interface and all card construction literals (originally deferred to Phase 5). One MAJOR fix applied: removed stale `dependencies: []` and `hasBlockingDependencies: false` from test mock in `KanbanProvider.test.ts:27-28` that would have caused a TS compile error. Remaining NITs (dormant `dependencies` DB column, dead `dependencyCheckEnabled` in prompt tests, stale regression test expectation) are deferred to Phase 5/6 per plan. No runtime risks.
