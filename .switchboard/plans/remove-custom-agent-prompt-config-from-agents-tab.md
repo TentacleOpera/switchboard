@@ -222,3 +222,7 @@ Delete lines 8509-8527 — the full listener block:
 - [ ] No runtime errors from orphaned event listeners referencing deleted DOM elements
 
 **Recommendation**: Complexity 4 → Send to Coder
+
+## Review Findings
+
+All plan steps (0–4) implemented correctly. HTML elements, JS load/save entries, and event listeners fully removed with no orphaned references in active source files. Data preservation logic for existing agents' `promptInstructions`/`addons` is present in the save block. `KanbanProvider.ts` correctly wires PROMPTS tab `roleConfigs[role].prompt` into `buildCustomAgentPrompt` with legacy fallback. `agentConfig.ts` `promptInstructions` field is optional. Typecheck passes for all changed files (758 pre-existing errors in unrelated files). Three NIT-level findings deferred: parser always coerces `promptInstructions` to `string` vs `?` interface, double `_getRoleConfig` call, and "Additional Instructions:" label semantic mismatch when source is PROMPTS tab template. No CRITICAL or MAJOR issues. No code changes applied.
