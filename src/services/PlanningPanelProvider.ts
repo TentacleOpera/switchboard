@@ -4707,22 +4707,26 @@ export class PlanningPanelProvider {
             this._handleHtmlServerRequest(req, res, resolvedSourceFolder);
         });
 
-        server.listen(0, '127.0.0.1', () => {
-            const address = server.address() as { port: number };
-            const port = address.port;
-            const filename = path.basename(absolutePath);
-            const url = `http://127.0.0.1:${port}/${encodeURIComponent(filename)}`;
+        await new Promise<void>((resolve, reject) => {
+            server.listen(0, '127.0.0.1', () => {
+                const address = server.address() as { port: number };
+                const port = address.port;
+                const filename = path.basename(absolutePath);
+                const url = `http://127.0.0.1:${port}/${encodeURIComponent(filename)}`;
 
-            const timeoutId = this._createServerTimeout(resolvedSourceFolder);
-            this._htmlServers.set(resolvedSourceFolder, { server, port, timeoutId });
+                const timeoutId = this._createServerTimeout(resolvedSourceFolder);
+                this._htmlServers.set(resolvedSourceFolder, { server, port, timeoutId });
 
-            console.log(`[PlanningPanel] HTML server started on port ${port} for ${resolvedSourceFolder}`);
-            vscode.env.openExternal(vscode.Uri.parse(url));
-        });
+                console.log(`[PlanningPanel] HTML server started on port ${port} for ${resolvedSourceFolder}`);
+                vscode.env.openExternal(vscode.Uri.parse(url));
+                resolve();
+            });
 
-        server.on('error', (err: any) => {
-            console.error('[PlanningPanel] HTML server error:', err);
-            vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
+            server.on('error', (err: any) => {
+                console.error('[PlanningPanel] HTML server error:', err);
+                vscode.window.showErrorMessage(`Failed to start local server: ${err.message}`);
+                reject(err);
+            });
         });
     }
 
@@ -4730,12 +4734,19 @@ export class PlanningPanelProvider {
         const parsedUrl = new URL(req.url || '/', `http://127.0.0.1`);
         const requestedPath = decodeURIComponent(parsedUrl.pathname);
 
+        // Reject bare directory requests (e.g. "/") — this server serves files only
+        if (requestedPath === '/' || requestedPath === '') {
+            res.writeHead(403, { 'Content-Type': 'text/plain' });
+            res.end('Forbidden: directory listing not available');
+            return;
+        }
+
         // Resolve and validate path is within sourceFolder
         const resolvedPath = path.resolve(sourceFolder, requestedPath.substring(1)); // strip leading /
         const normalizedSource = path.normalize(sourceFolder);
         const normalizedResolved = path.normalize(resolvedPath);
 
-        if (!normalizedResolved.startsWith(normalizedSource + path.sep) && normalizedResolved !== normalizedSource) {
+        if (!normalizedResolved.startsWith(normalizedSource + path.sep)) {
             res.writeHead(403, { 'Content-Type': 'text/plain' });
             res.end('Forbidden: path traversal denied');
             return;

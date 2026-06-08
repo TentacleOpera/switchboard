@@ -336,3 +336,7 @@ this._htmlServers.clear();
 - [ ] Manual end-to-end verification
 
 **Recommendation**: Complexity 4 → Send to Coder
+
+## Review Findings
+
+Two MAJOR issues found and fixed in `PlanningPanelProvider.ts`: (1) `_handleServeAndOpenHtml` new-server path returned before server was listening — wrapped `server.listen` + error handler in a `Promise<void>` so the method properly awaits startup; (2) bare directory requests (path `/`) caused EISDIR → 404 — added early 403 rejection for root-path requests and simplified the traversal check to remove dead code. Typecheck passes with zero errors in the modified file (pre-existing errors in unrelated files). Remaining risks: the `await` on `openExternal` is still not checked for failure in the reuse path (cosmetic); `mimeMap` is re-allocated per request (trivial perf).
