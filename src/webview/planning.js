@@ -3542,17 +3542,47 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         originalContent: diskContent,
                         tab
                     });
-                    const statusEl = document.getElementById(tab === 'local' ? 'status' : (tab === 'design' ? 'status-design' : null));
-                    if (statusEl) {
-                        statusEl.textContent = 'Conflict detected, overwriting...';
-                        statusEl.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                    if (tab === 'kanban') {
+                        const kanbanStrip = document.querySelector('.kanban-controls-strip');
+                        if (kanbanStrip) {
+                            let statusKanban = kanbanStrip.querySelector('.kanban-save-status');
+                            if (!statusKanban) {
+                                statusKanban = document.createElement('span');
+                                statusKanban.className = 'kanban-save-status';
+                                statusKanban.style.cssText = 'font-size:11px; margin-left:8px;';
+                                kanbanStrip.appendChild(statusKanban);
+                            }
+                            statusKanban.textContent = 'Conflict detected, overwriting...';
+                            statusKanban.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                        }
+                    } else {
+                        const statusEl = document.getElementById(tab === 'local' ? 'status' : 'status-design');
+                        if (statusEl) {
+                            statusEl.textContent = 'Conflict detected, overwriting...';
+                            statusEl.style.color = 'var(--vscode-editorWarning-foreground, #cca700)';
+                        }
                     }
                 } else {
                     console.error('Error saving file:', error || 'Unknown error');
-                    const statusEl = document.getElementById(tab === 'local' ? 'status' : (tab === 'design' ? 'status-design' : null));
-                    if (statusEl) {
-                        statusEl.textContent = 'Error saving: ' + (error || 'Unknown');
-                        statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                    if (tab === 'kanban') {
+                        const kanbanStrip = document.querySelector('.kanban-controls-strip');
+                        if (kanbanStrip) {
+                            let statusKanban = kanbanStrip.querySelector('.kanban-save-status');
+                            if (!statusKanban) {
+                                statusKanban = document.createElement('span');
+                                statusKanban.className = 'kanban-save-status';
+                                statusKanban.style.cssText = 'font-size:11px; margin-left:8px;';
+                                kanbanStrip.appendChild(statusKanban);
+                            }
+                            statusKanban.textContent = 'Error saving: ' + (error || 'Unknown');
+                            statusKanban.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                        }
+                    } else {
+                        const statusEl = document.getElementById(tab === 'local' ? 'status' : 'status-design');
+                        if (statusEl) {
+                            statusEl.textContent = 'Error saving: ' + (error || 'Unknown');
+                            statusEl.style.color = 'var(--vscode-errorForeground, #ff6b6b)';
+                        }
                     }
                 }
                 break;

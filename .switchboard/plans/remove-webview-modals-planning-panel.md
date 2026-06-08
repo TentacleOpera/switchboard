@@ -334,6 +334,10 @@ Run a final grep over `planning.js` to ensure zero `alert(` and zero `confirm(` 
 10. Import a task.
 11. **Expected:** Status text "Imported ✓" appears briefly in tickets strip.
 
+## Review Findings
+
+All 8 `confirm()` and 14 `alert()` instances removed. Grep verification confirms zero remaining. One CRITICAL issue found and fixed: the plan's own code example passed `null` to `getElementById` for kanban tab in the conflict/error status paths (lines 3545, 3552), making kanban save conflict/error feedback invisible. Fixed by using the same `.kanban-controls-strip` + `.kanban-save-status` pattern already used for kanban success. One NIT deferred: dead code at line 3943 (`if (!exitEditMode(...)) return;` — unreachable after confirm removal). File changed: `src/webview/planning.js`. Remaining risk: auto-discard/auto-overwrite behavior is irreversible without a future non-blocking inline banner safety net.
+
 ## Recommendation
 
 Complexity 4 → **Send to Coder**
