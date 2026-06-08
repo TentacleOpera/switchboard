@@ -88,3 +88,7 @@ Key risk: Surgical test removal. Some tests have dependency assertions embedded 
 - Grep dist files for `dependency` — no matches expected
 
 **Recommendation: Send to Intern** (Complexity 3 — surgical test removals and file copy)
+
+## Review Findings
+
+Review found 4 CRITICAL issues (stale dist files and residual test refs) and 1 MAJOR (plan missed review.html in dist sync list). Deleted test files and 3 of 4 test-file cleanups were already done by prior phases; only `minimal-prompt.test.js` still had 4 `dependencyCheckEnabled`/`DEPENDENCY CHECK ENABLED` references. Dist sync was incomplete — `kanban.html` and `sharedDefaults.js` not copied, and `review.html` was omitted from the plan's dist sync list despite having stale dependency code in dist. All fixes applied: removed 4 dependency refs from `minimal-prompt.test.js`, copied all 3 webview files (kanban.html, sharedDefaults.js, review.html) to dist. Post-fix grep confirms zero `dependency`/`DEPENDENCY`/`dependencyCheck` matches in `src/test/` and `dist/webview/`. Remaining risk: if other dist files (implementation.html, planning.html, etc.) were also updated by prior phases, they may need sync too — but grep showed no dependency refs in those dist files.

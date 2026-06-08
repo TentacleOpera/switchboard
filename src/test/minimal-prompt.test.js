@@ -162,7 +162,6 @@ function testPromptLineBreaksAreNormalized() {
     const plannerPrompt = buildKanbanBatchPrompt('planner', mockPlan, {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
         aggressivePairProgramming: true,
-        dependencyCheckEnabled: true,
         gitProhibitionEnabled: true,
         workspaceRoot: '/path/to/workspace'
     });
@@ -206,7 +205,6 @@ function testNoTripleNewlinesInAnyRole() {
             if (role === 'planner') {
                 promptOpts.plannerWorkflowPath = '.agent/workflows/improve-plan.md';
                 promptOpts.aggressivePairProgramming = true;
-                promptOpts.dependencyCheckEnabled = true;
             }
             if (role === 'reviewer') {
                 promptOpts.advancedReviewerEnabled = true;
@@ -241,7 +239,6 @@ function testConsistentSpacingBetweenDirectives() {
     const prompt = buildKanbanBatchPrompt('planner', mockPlan, {
         plannerWorkflowPath: '.agent/workflows/improve-plan.md',
         aggressivePairProgramming: true,
-        dependencyCheckEnabled: true,
         gitProhibitionEnabled: true,
         switchboardSafeguardsEnabled: true,
         workspaceRoot: '/path/to/workspace',
@@ -252,7 +249,6 @@ function testConsistentSpacingBetweenDirectives() {
     // Each major section should be separated by exactly \n\n
     const sections = [
         'PAIR PROGRAMMING OPTIMISATION',
-        'DEPENDENCY CHECK ENABLED',
         'WORKSPACE TYPE',
         'FOCUS DIRECTIVE',
         'GIT POLICY',
