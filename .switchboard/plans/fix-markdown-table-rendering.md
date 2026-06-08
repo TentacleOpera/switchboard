@@ -197,3 +197,7 @@ Reverting is a matter of removing the table-detection branch from the loop, the 
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
+
+## Review Findings
+
+Implementation reviewed against plan requirements. One MAJOR issue fixed: `item.includes('|')` table detection was too broad (could accumulate non-table lines like list items containing `|` into table blocks, contaminating header rows). Reverted to plan-specified `item.trim().startsWith('|')` only. Also extracted duplicate `sepRegex` into shared `TABLE_SEPARATOR_REGEX` constant. CSS `.table-wrapper` and placeholder restoration verified correct. Dist files synced. Deferred: pipe-less GFM table support (out of plan scope), tables inside blockquotes (pre-existing architectural constraint), silent drop of lines between header and separator when sepIdx > 1 (non-standard GFM).

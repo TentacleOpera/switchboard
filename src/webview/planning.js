@@ -577,13 +577,14 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
             .replace(/\\([\\`*_{}[\]()#+\-.!|])/g, '$1');
     }
 
+    const TABLE_SEPARATOR_REGEX = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
+
     function parseTableBlock(lines) {
         if (lines.length < 2) return '';
         // Find separator row index (typically 1, but we scan to be robust)
         let sepIdx = -1;
-        const sepRegex = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
         for (let i = 0; i < lines.length; i++) {
-            if (sepRegex.test(lines[i])) {
+            if (TABLE_SEPARATOR_REGEX.test(lines[i])) {
                 sepIdx = i;
                 break;
             }
@@ -698,9 +699,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
         const flushTableBlock = () => {
             if (tableBlockLines.length >= 2) {
                 let hasSep = false;
-                const sepRegex = /^\s*\|?\s*:?-+:?\s*(\|\s*:?-+:?\s*)*\|?\s*$/;
                 for (const l of tableBlockLines) {
-                    if (sepRegex.test(l)) {
+                    if (TABLE_SEPARATOR_REGEX.test(l)) {
                         hasSep = true;
                         break;
                     }
@@ -730,8 +730,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                 } else if (inCodeFence) {
                     processedLines.push(item);
                 } else {
-                    // Table line detection
-                    const isTableLine = item.trim().startsWith('|') || item.includes('|');
+                    // Table line detection — only lines starting with '|' (GFM pipe tables with leading pipe)
+                    const isTableLine = item.trim().startsWith('|');
                     if (isTableLine) {
                         tableBlockLines.push(item);
                     } else {
