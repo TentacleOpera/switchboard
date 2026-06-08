@@ -71,3 +71,7 @@ Key risk: The `depSection` variable is concatenated into the prompt string. If r
 - Custom agent prompt should not contain dependency check directive
 
 **Recommendation: Send to Intern** (Complexity 3 — small, focused removal from 2 files)
+
+## Review Findings
+
+All plan-specified removals verified complete. Review found three residual dead-code items: (1) `sessionIdToTopic` map and its "dependency display" comment (lines 415–419) — populated but never read after depSection removal; (2) `dependencies?: string` field in `BatchPromptPlan` interface — never set in any prompt-pipeline path; (3) triple blank lines where `DEPENDENCY_CHECK_DIRECTIVE` was removed. All three fixed. Typecheck passes for modified files (pre-existing errors in KanbanProvider/TaskViewerProvider are unrelated). No remaining dependency-related code in the prompt pipeline.

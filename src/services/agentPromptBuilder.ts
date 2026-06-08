@@ -13,7 +13,6 @@ export interface BatchPromptPlan {
     topic: string;
     absolutePath: string;
     complexity?: string;
-    dependencies?: string;
     workingDir?: string;
     sessionId?: string;
     worktreePath?: string;
@@ -287,8 +286,6 @@ export const TICKET_RESEARCH_REFINE_DIRECTIVE =
     `If no ticket number is found, skip the ticket update and notify the user.`;
 
 
-
-
 export const ADVANCED_REVIEWER_DIRECTIVE = `ADVANCED REGRESSION ANALYSIS (enabled):
 1. Trace all callers and consumers of every modified function. Check whether changes to its signature, return value, side effects, or timing could break callers.
 2. Check for double-trigger bugs: if you add a UI refresh, verify no caller already triggers one.
@@ -411,14 +408,6 @@ export function buildKanbanBatchPrompt(
     ].filter(Boolean).join('\n\n');
     const { planList, dispatchContextBlock } = buildPromptDispatchContext(plans);
     const dispatchContextPrefix = dispatchContextBlock ? `${dispatchContextBlock}\n\n` : '';
-
-    // Build sessionId → topic resolution map for dependency display
-    const sessionIdToTopic = new Map<string, string>();
-    plans.forEach(p => {
-        if (p.sessionId) sessionIdToTopic.set(p.sessionId, p.topic);
-    });
-
-
 
     const executionDirective = `AUTHORIZATION TO EXECUTE: The plans provided are already authorized. You MUST enter EXECUTION mode immediately. Do NOT enter PLANNING mode or generate an implementation_plan.md. Proceed directly to implementing the changes.`;
 
