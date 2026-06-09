@@ -8,7 +8,6 @@ export type LegacyKanbanSnapshotRow = {
     kanbanColumn: string;
     complexity: string;
     tags: string;
-    dependencies: string;
     repoScope: string;
     workspaceId: string;
     createdAt: string;
@@ -34,7 +33,7 @@ export class KanbanMigration {
     }
 
     private static _toKanbanPlanRecords(snapshotRows: LegacyKanbanSnapshotRow[]): KanbanPlanRecord[] {
-        return snapshotRows.map(({ dependencies: _dep, ...row }) => ({
+        return snapshotRows.map((row) => ({
             ...row,
             kanbanColumn: KanbanMigration._normalizeLegacyCodedColumn(row.kanbanColumn, row.lastAction),
             status: 'active',

@@ -1494,16 +1494,9 @@ export class PlanningPanelProvider {
                     });
                     break;
                 }
-                const confirm = await vscode.window.showWarningMessage(
-                    `Move "${docName}" to trash?`,
-                    { modal: true },
-                    'Move to Trash'
-                );
-                if (confirm !== 'Move to Trash') {
-                    break;
-                }
                 const service = this._getLocalFolderService(docRoot);
-                const result = await service.deleteFile(docId, sourceFolder);
+                const cleanDocId = docId.includes(':') ? docId.substring(docId.indexOf(':') + 1) : docId;
+                const result = await service.deleteFile(cleanDocId, sourceFolder);
                 if (result.success) {
                     // Refresh the local docs list
                     await this._sendLocalDocsReady();
@@ -1525,14 +1518,6 @@ export class PlanningPanelProvider {
             case 'deleteImportedDoc': {
                 const slugPrefix = msg.slugPrefix;
                 const docName = msg.docName || slugPrefix;
-                const confirm = await vscode.window.showWarningMessage(
-                    `Delete "${docName}" from local docs?`,
-                    { modal: true },
-                    'Delete'
-                );
-                if (confirm !== 'Delete') {
-                    break;
-                }
                 try {
                     // **CRITICAL FIX**: Look up actual file path from DB
                     let filePath: string | null = null;
@@ -1568,36 +1553,6 @@ export class PlanningPanelProvider {
                     this._panel?.webview.postMessage({
                         type: 'importedDocDeleted',
                         slugPrefix,
-                        success: false,
-                        error: String(err)
-                    });
-                }
-                break;
-            }
-            case 'sendToAnalyst': {
-                const prompt = msg.prompt;
-                if (!prompt) {
-                    this._panel?.webview.postMessage({
-                        type: 'sendToAnalystResult',
-                        success: false,
-                        error: 'No prompt provided'
-                    });
-                    break;
-                }
-
-                try {
-                    const result = await vscode.commands.executeCommand<{ success: boolean; error?: string }>(
-                        'switchboard.sendToAnalystFromPlanningPanel',
-                        prompt
-                    );
-                    this._panel?.webview.postMessage({
-                        type: 'sendToAnalystResult',
-                        success: result?.success ?? false,
-                        error: result?.error
-                    });
-                } catch (err) {
-                    this._panel?.webview.postMessage({
-                        type: 'sendToAnalystResult',
                         success: false,
                         error: String(err)
                     });
@@ -1802,7 +1757,9 @@ export class PlanningPanelProvider {
                     break;
                 }
                 if (planFile) {
-                    const resolvedPlanFile = path.resolve(planFile);
+                    const resolvedPlanFile = path.isAbsolute(planFile)
+                        ? planFile
+                        : path.resolve(wsRoot, planFile);
                     const resolvedRoot = path.resolve(wsRoot);
                     const rel = path.relative(resolvedRoot, resolvedPlanFile);
                     if (rel.startsWith('..') || path.isAbsolute(rel)) {
@@ -1845,7 +1802,16 @@ export class PlanningPanelProvider {
                 const originalContent = String(msg.originalContent || '');
                 const tab = String(msg.tab || '');
                 const allRoots = this._getWorkspaceRoots();
-                const resolved = path.resolve(filePath);
+                let resolved = path.resolve(filePath);
+                if (!path.isAbsolute(filePath)) {
+                    const wsRoot = this._getWorkspaceRoot() || (allRoots.length > 0 ? allRoots[0] : undefined);
+                    if (wsRoot) {
+                        resolved = path.resolve(wsRoot, filePath);
+                    } else {
+                        this._panel?.webview.postMessage({ type: 'saveFileContentResult', success: false, error: 'No workspace root to resolve relative path', tab });
+                        break;
+                    }
+                }
                 let isAllowed = allRoots.some(r => resolved.startsWith(path.resolve(r)));
                 if (!isAllowed) {
                     for (const r of allRoots) {

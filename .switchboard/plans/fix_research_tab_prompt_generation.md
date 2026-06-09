@@ -178,6 +178,10 @@ To:
 
 **Executed** — All phases implemented. Both buttons now copy the same IDE-agent meta-prompt to clipboard. Empty-topic guard flashes "NO TOPIC". Dead auto-dispatch code removed across `planning.js`, `planning.html`, `PlanningPanelProvider.ts`, `TaskViewerProvider.ts`, `extension.ts`, and `agentPromptBuilder.ts`.
 
+## Review Findings
+
+Core implementation verified correct: `generateResearchPrompt()` returns proper meta-prompt, both buttons copy identical output with empty-topic guard, all specified dead code removed. One MAJOR fix applied: removed orphaned `sendToAnalyst` case in `PlanningPanelProvider.ts` that called non-existent command `switchboard.sendToAnalystFromPlanningPanel` (latent runtime error; no webview dispatched it). Two NITs deferred: "Draft with Analyst Agent" button label implies dispatch-not-copy (by design per plan), and overview description text at line 3112 wasn't updated to match Step 1 card description. No remaining risks beyond cosmetic items.
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern**

@@ -54,7 +54,6 @@ import { KanbanDatabase, KanbanPlanRecord, WorkspaceDatabaseMapping } from './Ka
 import { KanbanMigration } from './KanbanMigration';
 import { WorkspaceExcludeService } from './WorkspaceExcludeService';
 import { ensureWorkspaceIdentity, resolveEffectiveWorkspaceRootFromMappings } from './WorkspaceIdentityService';
-import { parsePlanDependencies } from './planDependencyParser';
 import { inferTopicFromPath, parsePlanMetadata } from './planMetadataUtils';
 import {
     type ClickUpAutomationRule,
@@ -14561,8 +14560,6 @@ What would you like to find?`;
         await sendRobustText(terminal, payload, paced);
 
         return true;
-    }
-
     }
 
     private async _handleTriggerAgentAction(

@@ -3981,8 +3981,11 @@ Please draft a comprehensive research prompt optimized for Google AI Studio. The
 - 4-6 targeted SUB-QUESTIONS
 - SOURCE GUIDANCE (authoritative sources, date-checking, separate required/recommended/opinion)
 - SCOPE boundaries
-- OUTPUT format (executive summary, tiered findings, trade-off evaluation, glossary, source list)
-- DEPTH level with source count target
+- OUTPUT format:
+  - A short H1 document title (fewer than 10 words, no colons or extra statements) — this is the title of the research document, not "Executive Summary"
+  - "Executive Summary" as an H2 section heading beneath the title
+  - Tiered findings, trade-off evaluation, glossary, and source list as subsequent sections
+- DEPTH level with a source count target of at least 50 authoritative sources
 
 Do NOT perform the research yourself. Only draft the prompt text that I will paste into Google AI Studio.
 
