@@ -15452,6 +15452,7 @@ What would you like to find?`;
         }
 
         if (overwritten > 0 || created > 0) {
+            await this._syncFilesAndRefreshRunSheets();
             const summary: string[] = [];
             if (overwritten > 0) summary.push(`${overwritten} overwritten`);
             if (created > 0) summary.push(`${created} created`);
@@ -15470,7 +15471,16 @@ What would you like to find?`;
         const workspaceId = await this._getWorkspaceIdForRoot(workspaceRoot);
         const db = await this._getKanbanDb(workspaceRoot);
         if (!db || !workspaceId) return null;
-        return db.getPlanByTopicAndColumn(normalizedTitle, 'CREATED', workspaceId);
+        // Try SQL lookup first (handles case-insensitive match but not whitespace collapse)
+        const sqlResult = await db.getPlanByTopicAndColumn(normalizedTitle, 'CREATED', workspaceId);
+        if (sqlResult) return sqlResult;
+        // Fallback: in-memory scan with full whitespace normalization for DB-side topics
+        const createdPlans = await db.getPlansByColumn(workspaceId, 'CREATED');
+        for (const plan of createdPlans) {
+            const dbNormalized = plan.topic.toLowerCase().replace(/\s+/g, ' ').trim();
+            if (dbNormalized === normalizedTitle) return plan;
+        }
+        return null;
     }
 
     private async _overwriteExistingPlan(record: KanbanPlanRecord, newContent: string): Promise<void> {

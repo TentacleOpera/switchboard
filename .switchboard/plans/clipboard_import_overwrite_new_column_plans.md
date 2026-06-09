@@ -316,3 +316,7 @@ if (importNotebookLMBtn) {
 ## Recommendation
 
 Complexity 5 → **Send to Coder**
+
+## Review Findings
+
+Implementation matches plan across all 6 files (planning.html, planning.js, PlanningPanelProvider.ts, extension.ts, TaskViewerProvider.ts, KanbanDatabase.ts). Two MAJOR issues found and fixed: (1) missing `_syncFilesAndRefreshRunSheets()` call after overwrite loop — without it the Kanban board stays stale since the watcher suppresses the overwrite event; (2) whitespace normalization gap in SQL-only lookup — added in-memory fallback using `getPlansByColumn` with JS-side normalization for DB topics containing multi-space. Typecheck passes (2 pre-existing errors unrelated to this change). Remaining risks: title collision false positives for genuinely different plans with identical normalized titles, and no auto-clear timeout on the `webai-status` import result text.
