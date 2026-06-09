@@ -4954,7 +4954,7 @@ Return ONLY the drafted prompt with no additional commentary.`;
         if (_pendingKanbanSelection) {
             const match = findPendingKanbanMatch(_kanbanPlansCache);
             if (match) {
-                const itemDiv = kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
+                const itemDiv = kanbanListPane && kanbanListPane.querySelector(`.kanban-plan-item[data-plan-id="${match.planId}"]`);
                 if (itemDiv) {
                     itemDiv.scrollIntoView({ behavior: 'smooth', block: 'center' });
                     itemDiv.click();

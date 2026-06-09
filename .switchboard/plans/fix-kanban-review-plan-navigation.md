@@ -257,3 +257,7 @@ if (_pendingKanbanSelection) {
 ## Recommendation
 
 - Complexity 4 → **Send to Coder**
+
+## Review Findings
+
+Implementation matches plan. All four steps executed correctly: `switchToTab` extracted, `findPendingKanbanMatch` unified match logic, click handler refactored, `activateKanbanTabAndSelectPlan` handler fixed with redundant fetch removed. One fix applied during review: added null-safety guard on `kanbanListPane` at `handleKanbanPlansReady` (line 4957) to match the guard in the immediate-match path. Syntax check passed. Known dead code: the compound-match branch in `findPendingKanbanMatch` (workspaceRoot+sessionId) is unreachable since sessionId already failed in the primary match — harmless, deferred.
