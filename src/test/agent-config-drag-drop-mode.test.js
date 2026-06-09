@@ -18,6 +18,43 @@ describe('agentConfig — dragDropMode', () => {
         });
     });
 
+    describe('parseCustomAgentAddons() designSystemDoc fields', () => {
+        it('sets designSystemDoc: true when designSystemDocLink is populated', () => {
+            const addons = parseCustomAgentAddons({ designSystemDocLink: 'https://design.example.com/system' });
+            assert.ok(addons);
+            assert.strictEqual(addons.designSystemDoc, true);
+            assert.strictEqual(addons.designSystemDocLink, 'https://design.example.com/system');
+        });
+
+        it('preserves designSystemDoc: true if already true', () => {
+            const addons = parseCustomAgentAddons({ designSystemDoc: true, designSystemDocLink: 'https://design.example.com/system' });
+            assert.ok(addons);
+            assert.strictEqual(addons.designSystemDoc, true);
+        });
+
+        it('parses designSystemDocContent and truncates at 50K chars', () => {
+            const longContent = 'x'.repeat(55000);
+            const addons = parseCustomAgentAddons({ designSystemDocContent: longContent });
+            assert.ok(addons);
+            assert.strictEqual(addons.designSystemDocContent.length, 50000 + '\n[TRUNCATED]'.length);
+            assert.ok(addons.designSystemDocContent.endsWith('\n[TRUNCATED]'));
+        });
+
+        it('passes through designSystemDocContent under 50K chars unchanged', () => {
+            const shortContent = 'Design system doc content here';
+            const addons = parseCustomAgentAddons({ designSystemDocContent: shortContent });
+            assert.ok(addons);
+            assert.strictEqual(addons.designSystemDocContent, shortContent);
+        });
+
+        it('does not auto-enable designSystemDoc when only designSystemDocContent is provided without a link', () => {
+            const addons = parseCustomAgentAddons({ designSystemDocContent: 'Some content' });
+            assert.ok(addons);
+            assert.strictEqual(addons.designSystemDoc, undefined);
+            assert.strictEqual(addons.designSystemDocContent, 'Some content');
+        });
+    });
+
     describe('parseCustomAgents()', () => {
         const baseAgent = {
             id: 'test_agent',

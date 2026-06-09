@@ -2643,8 +2643,8 @@ export class PlanningPanelProvider {
             console.error('[PlanningPanelProvider] Failed to disable design doc:', err);
             this._panel?.webview.postMessage({
                 type: 'activeDesignDocUpdated',
-                enabled: true,
-                docName: this._getPlanningEpicName(),
+                planningEpic: { enabled: true, docName: this._getPlanningEpicName() || 'None', sourceId: this._activeDesignDocSourceId, docId: this._activeDesignDocId },
+                designSystemDoc: { enabled: this._getDesignSystemDocName() !== null, docName: this._getDesignSystemDocName() || 'None', sourceId: this._activeDesignSystemDocSourceId, docId: this._activeDesignSystemDocId },
                 error: String(err)
             });
         }

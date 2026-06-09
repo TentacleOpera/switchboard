@@ -389,3 +389,7 @@ Key risks: (1) Custom-agent branch silently loses design system doc context — 
 - **Deployment constraint:** The `activeDesignDocUpdated` message contract change and the `planning.js` handler update must ship in the same commit. The kanban.html checkbox rename and sharedDefaults.js update must also ship together.
 
 **Recommendation:** Complexity 6 → Send to Coder
+
+## Review Findings
+
+All 13 plan sections implemented correctly. Two fixes applied during review: (1) Added missing `designSystemDoc` test cases to `agent-config-drag-drop-mode.test.js` covering auto-enable, 50K truncation, and content passthrough. (2) Updated error handler in `PlanningPanelProvider.ts:_handleDisableDesignDoc` to send new nested `activeDesignDocUpdated` format instead of old flat format. Typecheck passes for edited files (pre-existing errors in KanbanProvider.ts/TaskViewerProvider.ts are unrelated). Remaining risks: `designSystemDocLink` prompt block is placed after plan list rather than in `plannerBase` (functionally equivalent, deferred); `package.json` description for `designDocEnabled` still says "Design Doc / PRD" (cosmetic, deferred per plan's "keep existing keys unchanged" directive).
