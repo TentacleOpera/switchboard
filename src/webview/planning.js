@@ -6502,7 +6502,8 @@ Return ONLY the drafted prompt with no additional commentary.`;
 
         if (clickUpSelectedSpaceId) {
             _restoringClickUpHierarchy = true;
-            ticketsLoadedOnce = true;
+            ticketsLoadedOnce = true; // Prevent double-load from tab activation guard
+            loadClickUpSpaces(); // Kick off restore chain — spaces load triggers folder load, etc.
         }
         if (state.linearProjectPickerValue) {
             _restoredLinearProjectPickerValue = state.linearProjectPickerValue;

@@ -308,3 +308,7 @@ The existing code at line 5441-5442 already handles the case where `linearProjec
 Score: **4/10**. The fix is bounded to one file (`planning.js`), requires no schema changes, and the patterns (flags, deferred assignment) are idiomatic in the existing codebase. The `_restoredLinearProjectPickerValue` variable is already declared (just unused). Risk is moderate because the restore chain must not interfere with normal user interaction, and the double-load guard must be handled correctly. No new architectural patterns introduced.
 
 **Recommendation: Send to Coder** (complexity 4-6)
+
+## Review Findings
+
+One CRITICAL bug found and fixed: `restoreTicketsState()` set `ticketsLoadedOnce = true` to prevent the tab activation guard from double-loading, but never called `loadClickUpSpaces()` itself — so the ClickUp restore chain never started (spaces never loaded, `clickupSpacesLoaded` never fired, hierarchy never restored). Fixed by adding `loadClickUpSpaces()` call in `restoreTicketsState()` at line 6506. All other plan steps (flag declaration, handler modifications, user-driven handler flag clears, Linear picker restore) were implemented correctly. File changed: `src/webview/planning.js`. Syntax check passes. Remaining risk: if `loadClickUpSpaces()` is called before DOM init completes on first-ever tab visit, but `initTicketsTab()` runs first (line 424), so this is safe.
