@@ -3665,6 +3665,8 @@ Each plan should have its own H1 title (# Plan Title) and full content. I will c
                         researchStatusTimeout = null;
                     }, 4000);
                 } else {
+                    // Cancel any pending success auto-clear so it doesn't wipe this error
+                    if (researchStatusTimeout) { clearTimeout(researchStatusTimeout); researchStatusTimeout = null; }
                     const errorText = `Error: ${msg.error || 'Failed to import'}`;
                     if (researchStatusEl) {
                         researchStatusEl.style.color = '#f14c4c';

@@ -306,6 +306,10 @@ Key risks: (1) textarea clear may surprise users iterating on the same topic —
 - `src/webview/planning.js`
 - `src/webview/planning.html`
 
+## Review Findings
+
+All five plan items verified as implemented. One MAJOR bug found and fixed: the `importResearchDocResult` error branch lacked `clearTimeout(researchStatusTimeout)`, allowing a lingering success-timeout to wipe persistent error messages — violating acceptance criterion "Error status messages remain persistent." Fix applied at `planning.js:3668-3669`. One NIT deferred: `btn-draft-with-analyst` copies the same prompt but doesn't clear the textarea, creating UX inconsistency with the copy button (out of plan scope). No remaining risks beyond the deferred NIT.
+
 ## Recommendation
 
 Complexity 3 → **Send to Intern**
